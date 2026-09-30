@@ -117,6 +117,13 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--acid); outline-
 .update-toast button { padding: 7px 10px; border: 1px solid var(--acid-dark); background: transparent; color: var(--acid); cursor: pointer; }
 
 .workspace-grid.single { grid-template-columns: 1fr; }
+.sync-controls { min-height: 86px; padding: 18px 2px; display: flex; align-items: center; justify-content: space-between; gap: 24px; border-bottom: 1px solid var(--line); }
+.sync-controls .section-code { margin: 0 0 8px; }
+.sync-controls p { max-width: 610px; margin: 0; color: var(--muted); font-family: 'Hiragino Kaku Gothic ProN', 'Yu Gothic', Meiryo, sans-serif; font-size: 10px; line-height: 1.6; }
+.sync-actions { display: flex; flex: none; gap: 9px; }
+.sync-actions .primary-action { min-width: 140px; justify-content: center; }
+.sync-help { padding: 12px; border-left: 2px solid var(--acid-dark); background: #0c0f12; }
+.sync-help code { color: var(--acid); font-family: inherit; }
 .compact-hero { min-height: 238px; padding: 52px 2px 38px; display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; border-bottom: 1px solid var(--line); }
 .compact-hero h1, .deck-detail-header h1, .session-complete h1 { margin: 0; color: #f1f4ec; font-family: 'Hiragino Kaku Gothic ProN', 'Yu Gothic', Meiryo, sans-serif; font-size: clamp(34px, 5vw, 56px); line-height: 1.08; letter-spacing: -.04em; font-weight: 600; }
 .compact-hero h1 em { color: var(--acid); font-style: normal; font-weight: 500; }
@@ -225,6 +232,9 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--acid); outline-
   .mobile-nav .icon { width: 18px; height: 18px; }
   .update-toast { left: 12px; right: 12px; bottom: 80px; justify-content: space-between; }
   .compact-hero { min-height: 250px; padding: 38px 0 28px; align-items: flex-start; flex-direction: column; }
+  .sync-controls { align-items: flex-start; flex-direction: column; gap: 14px; }
+  .sync-actions { width: 100%; }
+  .sync-actions button { flex: 1; }
   .compact-hero h1, .deck-detail-header h1, .session-complete h1 { font-size: 38px; }
   .deck-grid { grid-template-columns: 1fr; padding-top: 18px; }
   .deck-detail-header { padding-top: 25px; }

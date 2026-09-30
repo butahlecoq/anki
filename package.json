@@ -17,6 +17,7 @@
     "test": "vitest run",
     "server:build": "tsc -p tsconfig.server.json",
     "server:start": "npm run server:build && node --enable-source-maps dist-server/server/index.js",
+    "server:pair": "npm run server:build && node --enable-source-maps dist-server/server/index.js --pairing-code",
     "test:server": "npm run server:build && node --test dist-server/server/**/*.test.js",
     "test:e2e": "playwright test",
     "check": "npm run typecheck && npm run lint && npm run test && npm run test:server && npm run build && npm run test:e2e"

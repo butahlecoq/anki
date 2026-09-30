@@ -3,8 +3,14 @@ import type { createSyncService } from './sync-service.js'
 
 type Service = ReturnType<typeof createSyncService>
 
+const corsHeaders = {
+  'access-control-allow-origin': '*',
+  'access-control-allow-methods': 'GET, POST, OPTIONS',
+  'access-control-allow-headers': 'authorization, content-type',
+}
+
 const send = (response: ServerResponse, status: number, body: unknown) => {
-  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+  response.writeHead(status, { ...corsHeaders, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
   response.end(JSON.stringify(body))
 }
 
@@ -17,6 +23,11 @@ const body = async (request: IncomingMessage) => {
 export function createSyncHttpHandler(service: Service) {
   return async (request: IncomingMessage, response: ServerResponse) => {
     try {
+      if (request.method === 'OPTIONS') {
+        response.writeHead(204, corsHeaders)
+        response.end()
+        return
+      }
       if (request.method === 'GET' && request.url === '/api/health') return send(response, 200, service.health())
       if (request.method === 'POST' && request.url === '/api/pair') {
         const payload = await body(request) as { code?: string; deviceId?: string }

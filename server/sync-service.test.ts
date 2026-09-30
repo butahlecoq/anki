@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
 import { createServer } from 'node:http'
-import { startSyncServer } from './index.js'
+import { createPairingCode, startSyncServer } from './index.js'
 import { createSyncService } from './sync-service.js'
 import { createSyncHttpHandler } from './sync-http.js'
 
@@ -61,6 +61,10 @@ test('serves health, pairing, and authenticated sync over HTTP', async () => {
   const health = await fetch(`${origin}/api/health`)
   assert.deepEqual(await health.json(), { ready: true, schemaVersion: 1, store: 'sqlite' })
 
+  const preflight = await fetch(`${origin}/api/sync`, { method: 'OPTIONS', headers: { origin: 'http://127.0.0.1:4173' } })
+  assert.equal(preflight.status, 204)
+  assert.equal(preflight.headers.get('access-control-allow-origin'), '*')
+
   const code = service.createPairingCode(new Date('2026-10-01T12:00:00.000Z'))
   const paired = await fetch(`${origin}/api/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code, deviceId: 'phone-1' }) })
   const credential = await paired.json() as { token: string }
@@ -80,5 +84,19 @@ test('starts a loopback service with a durable runtime directory', async () => {
   const health = await fetch(`http://127.0.0.1:${running.port}/api/health`)
   assert.equal(health.status, 200)
   assert.deepEqual(await health.json(), { ready: true, schemaVersion: 1, store: 'sqlite' })
+  await running.close()
+})
+
+test('issues a one-time pairing code against the running service store', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
+  const running = await startSyncServer({ runtimeDirectory, host: '127.0.0.1', port: 0 })
+  const code = await createPairingCode({ runtimeDirectory })
+  const paired = await fetch(`http://127.0.0.1:${running.port}/api/pair`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ code, deviceId: 'phone-1' }),
+  })
+
+  assert.equal(paired.status, 201)
   await running.close()
 })

@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest'
-import { foregroundSync, syncCollection } from './sync-client'
+import { foregroundSync, pairCollection, syncCollection } from './sync-client'
 import { createCollection } from './collection'
 
 test('sends pending operations with the local pairing credential', async () => {
@@ -13,6 +13,25 @@ test('sends pending operations with the local pairing credential', async () => {
 test('distinguishes authentication and unreachable service failures', async () => {
   await expect(foregroundSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 }, [], vi.fn().mockResolvedValue(new Response('', { status: 401 })))).resolves.toEqual({ state: 'authentication-required' })
   await expect(foregroundSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 }, [], vi.fn().mockRejectedValue(new TypeError('network')))).resolves.toEqual({ state: 'unreachable' })
+})
+
+test('pairs a collection and persists only the returned device credential', async () => {
+  const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+  const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ deviceId: 'phone-1', token: 'device-token' }), { status: 201 }))
+
+  await expect(pairCollection(collection, 'https://pc.example.test/', 'ABCD1234', fetcher)).resolves.toEqual({ state: 'paired' })
+  await expect(collection.syncSettings()).resolves.toEqual({ endpoint: 'https://pc.example.test', token: 'device-token', cursor: 0 })
+  expect(fetcher).toHaveBeenCalledWith('https://pc.example.test/api/pair', expect.objectContaining({ method: 'POST' }))
+  await collection.delete()
+})
+
+test('keeps existing sync settings when pairing fails', async () => {
+  const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+  await collection.configureSync({ endpoint: 'https://old.example.test', token: 'old-token', cursor: 5 })
+
+  await expect(pairCollection(collection, 'https://pc.example.test', 'wrong', vi.fn().mockResolvedValue(new Response('', { status: 400 })))).resolves.toEqual({ state: 'pairing-error' })
+  await expect(collection.syncSettings()).resolves.toEqual({ endpoint: 'https://old.example.test', token: 'old-token', cursor: 5 })
+  await collection.delete()
 })
 
 test('syncs a configured collection, applies remote reviews, and clears acknowledged operations', async () => {

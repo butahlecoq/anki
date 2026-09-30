@@ -4,6 +4,25 @@ type Fetcher = typeof fetch
 type Change = { cursor: number; opId: string; entityType: string; entityId: string; action: string; occurredAt: string; payload: unknown }
 type Complete = { state: 'complete'; accepted: number; cursor: number; changes: Change[] }
 type SyncResult = Complete | { state: 'authentication-required' } | { state: 'unreachable' }
+export type PairingResult = { state: 'paired' } | { state: 'pairing-error' } | { state: 'unreachable' }
+
+export async function pairCollection(collection: Collection, endpoint: string, code: string, fetcher: Fetcher = fetch): Promise<PairingResult> {
+  const serviceEndpoint = endpoint.trim().replace(/\/$/, '')
+  try {
+    const response = await fetcher(`${serviceEndpoint}/api/pair`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code: code.trim(), deviceId: crypto.randomUUID() }),
+    })
+    if (!response.ok) return { state: 'pairing-error' }
+    const credential = await response.json() as { token?: unknown }
+    if (typeof credential.token !== 'string' || !credential.token) return { state: 'pairing-error' }
+    await collection.configureSync({ endpoint: serviceEndpoint, token: credential.token, cursor: 0 })
+    return { state: 'paired' }
+  } catch {
+    return { state: 'unreachable' }
+  }
+}
 
 export async function foregroundSync(settings: SyncSettings, operations: Partial<SyncOperation>[], fetcher: Fetcher = fetch): Promise<SyncResult> {
   try {
