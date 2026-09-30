@@ -22,6 +22,12 @@ const body = async (request: IncomingMessage) => {
   return JSON.parse(text || '{}') as unknown
 }
 
+const bytes = async (request: IncomingMessage) => {
+  const chunks: Buffer[] = []
+  for await (const chunk of request) chunks.push(Buffer.from(chunk))
+  return new Uint8Array(Buffer.concat(chunks))
+}
+
 export function createSyncHttpHandler(service: Service, { allowedOrigin }: HttpOptions = {}) {
   return async (request: IncomingMessage, response: ServerResponse) => {
     const headers = corsHeaders(request.headers.origin, allowedOrigin)
@@ -44,6 +50,12 @@ export function createSyncHttpHandler(service: Service, { allowedOrigin }: HttpO
         const payload = await body(request) as { cursor?: number; operations?: unknown[] }
         if (typeof payload.cursor !== 'number' || !Array.isArray(payload.operations)) return reply(400, { error: 'A cursor and operations array are required.' })
         return reply(200, service.sync(authorization.slice(7), payload as Parameters<Service['sync']>[1]))
+      }
+      const media = request.url?.match(/^\/api\/media\/([a-f0-9]{64})$/)
+      if (request.method === 'PUT' && media) {
+        const authorization = request.headers.authorization
+        if (!authorization?.startsWith('Bearer ') || !request.headers['content-type']) return reply(401, { error: 'Authentication required.' })
+        return reply(200, await service.putMedia(authorization.slice(7), media[1], request.headers['content-type'], await bytes(request)))
       }
       return reply(404, { error: 'Not found.' })
     } catch (error) {
