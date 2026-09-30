@@ -186,6 +186,7 @@ export class Collection extends Dexie {
   reviewEntries!: EntityTable<ReviewEntry, 'id'>
   outbox!: EntityTable<SyncOperation, 'opId'>
   settings!: EntityTable<{ key: string; value: unknown }, 'key'>
+  receivedOperations!: EntityTable<{ opId: string }, 'opId'>
 
   constructor(name: string) {
     super(name)
@@ -203,7 +204,7 @@ export class Collection extends Dexie {
       outbox: 'opId, entityType, entityId, occurredAt',
     })
     this.version(3).stores({
-      decks: 'id, name, createdAt', notes: 'id, deckId, updatedAt', cards: 'id, deckId, noteId, due, state', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key',
+      decks: 'id, name, createdAt', notes: 'id, deckId, updatedAt', cards: 'id, deckId, noteId, due, state', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId',
     })
   }
 
@@ -352,6 +353,18 @@ export class Collection extends Dexie {
 
   async syncSettings(): Promise<SyncSettings | undefined> {
     return (await this.settings.get('sync'))?.value as SyncSettings | undefined
+  }
+
+  async applyRemoteChanges(changes: SyncOperation[], cursor: number) {
+    await this.transaction('rw', this.reviewEntries, this.receivedOperations, this.settings, async () => {
+      for (const change of changes) {
+        if (await this.receivedOperations.get(change.opId)) continue
+        if (change.entityType === 'review' && change.action === 'create') await this.reviewEntries.put(change.payload as ReviewEntry)
+        await this.receivedOperations.add({ opId: change.opId })
+      }
+      const existing = await this.settings.get('sync')
+      if (existing) await this.settings.put({ key: 'sync', value: { ...(existing.value as SyncSettings), cursor } })
+    })
   }
 }
 

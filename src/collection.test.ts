@@ -51,4 +51,12 @@ describe('local collection', () => {
     await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'device-token', cursor: 4 })
     await expect(collection.syncSettings()).resolves.toEqual({ endpoint: 'https://pc.example.test', token: 'device-token', cursor: 4 })
   })
+
+  test('applies a remote review only once', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const operation = { opId: 'remote-review', entityType: 'review' as const, entityId: 'review-1', action: 'create' as const, occurredAt: '2026-10-01T12:00:00.000Z', payload: { id: 'review-1', cardId: 'card-1', deckId: 'deck-1', rating: 3, state: 0, due: '2026-10-01T12:00:00.000Z', stability: 1, difficulty: 1, elapsedDays: 0, lastElapsedDays: 0, scheduledDays: 0, learningSteps: 0, reviewedAt: '2026-10-01T12:00:00.000Z' } }
+    await collection.applyRemoteChanges([operation], 1)
+    await collection.applyRemoteChanges([operation], 1)
+    await expect(collection.reviewEntries.count()).resolves.toBe(1)
+  })
 })
