@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 
-type ServiceOptions = { databasePath: string }
+type ServiceOptions = { databasePath: string; mediaDirectory?: string }
 type PairRequest = { code: string; deviceId: string }
 type SyncOperation = {
   opId: string
