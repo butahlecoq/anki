@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
 type ServiceOptions = { databasePath: string; mediaDirectory?: string }
@@ -111,6 +111,15 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
       await writeFile(join(mediaDirectory, digest.slice(0, 2), digest), bytes)
       database.prepare('INSERT INTO media_blobs (digest, byte_length, mime_type, created_at) VALUES (?, ?, ?, ?)').run(digest, bytes.byteLength, mimeType, new Date().toISOString())
       return { digest, byteLength: bytes.byteLength, mimeType, deduplicated: false }
+    },
+
+    async getMedia(accessToken: string, digest: string) {
+      const device = database.prepare('SELECT devices.id FROM tokens JOIN devices ON devices.id = tokens.device_id WHERE tokens.hash = ? AND devices.revoked_at IS NULL').get(hash(accessToken))
+      if (!device) throw new Error('Authentication required.')
+      if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error('Media digest is invalid.')
+      const metadata = database.prepare('SELECT byte_length, mime_type FROM media_blobs WHERE digest = ?').get(digest) as { byte_length: number; mime_type: string } | undefined
+      if (!metadata) throw new Error('Media not found.')
+      return { digest, byteLength: metadata.byte_length, mimeType: metadata.mime_type, bytes: await readFile(join(mediaDirectory, digest.slice(0, 2), digest)) }
     },
 
     close() { database.close() },
