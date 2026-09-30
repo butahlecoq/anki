@@ -340,6 +340,10 @@ export class Collection extends Dexie {
     return references.filter((reference) => !available.has(reference.digest))
   }
 
+  async verifiedMediaBlob(digest: string) {
+    return this.mediaBlobs.get(digest)
+  }
+
   async removeMedia(referenceId: string, now = new Date()) {
     await this.transaction('rw', this.noteMedia, this.outbox, async () => {
       const reference = await this.noteMedia.get(referenceId)
