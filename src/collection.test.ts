@@ -95,4 +95,20 @@ describe('local collection', () => {
     await expect(collection.cards.get(card.id)).resolves.toEqual(card)
     await expect(collection.receivedOperations.count()).resolves.toBe(3)
   })
+
+  test('keeps a deleted deck deleted when an offline client later sends an edit', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Japanese foundations')
+    const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'ねこ — cat' })
+    await collection.deleteDeck(deck.id, new Date('2026-10-01T12:01:00.000Z'))
+    const editedNote = { ...note, fields: { front: '猫', back: 'ねこ — feline' }, updatedAt: '2026-10-01T12:02:00.000Z' }
+
+    await collection.applyRemoteChanges([{
+      opId: 'offline-note-edit', entityType: 'note', entityId: note.id, action: 'update', occurredAt: editedNote.updatedAt, payload: editedNote,
+    }], 1)
+
+    await expect(collection.decks.get(deck.id)).resolves.toBeUndefined()
+    await expect(collection.notes.get(note.id)).resolves.toBeUndefined()
+    await expect(collection.cards.where('deckId').equals(deck.id).count()).resolves.toBe(0)
+  })
 })

@@ -38,7 +38,7 @@ export default defineConfig({
     {
       command: 'npm run server:start',
       url: 'http://127.0.0.1:4174/api/health',
-      env: { ...process.env, KIROKU_RUNTIME_DIRECTORY: syncRuntimeDirectory },
+      env: { ...process.env, KIROKU_RUNTIME_DIRECTORY: syncRuntimeDirectory, KIROKU_ALLOWED_ORIGIN: 'http://127.0.0.1:4173' },
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
     },

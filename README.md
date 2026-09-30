@@ -1,8 +1,6 @@
 # Kiroku
 
-Kiroku is a private, offline-first Japanese flashcard workspace. The project is building toward an Anki-capable editor on Windows and an installable iPhone PWA that keeps studying available when both the PC and internet are offline.
-
-The current release is the production PWA shell from [Issue #2](https://github.com/butahlecoq/anki/issues/2). Collection and review behavior is tracked by subsequent tickets; the interface does not pretend those features exist yet.
+Kiroku is a private, offline-first Japanese flashcard workspace with local collection editing, FSRS review scheduling, and PC-to-phone collection sync.
 
 ## Requirements
 
@@ -28,6 +26,27 @@ npm start
 ```
 
 `npm start` type-checks and builds the application before serving it at `http://localhost:4173`. Localhost is suitable for desktop verification. Installing the PWA on an iPhone will require trusted HTTPS; that production deployment is tracked by [Issue #24](https://github.com/butahlecoq/anki/issues/24).
+
+## Run the sync service
+
+For local desktop verification, start the durable SQLite-backed service and print a one-time pairing code in a second terminal:
+
+```powershell
+npm run server:start
+npm run server:pair
+```
+
+The default service listens only on `127.0.0.1:4174`. To pair a phone across the network, provide a trusted TLS key and certificate, an HTTPS app origin, and a network host:
+
+```powershell
+$env:KIROKU_HOST = '0.0.0.0'
+$env:KIROKU_TLS_KEY_PATH = 'C:\certs\kiroku-key.pem'
+$env:KIROKU_TLS_CERT_PATH = 'C:\certs\kiroku-cert.pem'
+$env:KIROKU_ALLOWED_ORIGIN = 'https://study.example.net'
+npm run server:start
+```
+
+Enter the service’s `https://` address and the one-time code in **Connect a PC**. Credentials remain in that browser’s local collection settings and are never included in the web build.
 
 ## Verify
 

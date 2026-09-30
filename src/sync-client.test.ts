@@ -34,6 +34,15 @@ test('keeps existing sync settings when pairing fails', async () => {
   await collection.delete()
 })
 
+test('does not send pairing codes to a non-loopback HTTP endpoint', async () => {
+  const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+  const fetcher = vi.fn()
+
+  await expect(pairCollection(collection, 'http://192.168.1.20:4174', 'code', fetcher)).resolves.toEqual({ state: 'pairing-error' })
+  expect(fetcher).not.toHaveBeenCalled()
+  await collection.delete()
+})
+
 test('syncs a configured collection, applies remote reviews, and clears acknowledged operations', async () => {
   const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
   await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 })

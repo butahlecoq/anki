@@ -93,6 +93,7 @@ export interface SyncOperation {
 }
 
 export interface SyncSettings { endpoint: string; token: string; cursor: number }
+interface DeletionTombstone { key: string; entityType: SyncOperation['entityType']; entityId: string; occurredAt: string }
 
 const scheduler = fsrs({
   request_retention: 0.9,
@@ -105,6 +106,17 @@ const scheduler = fsrs({
 
 function id() {
   return crypto.randomUUID()
+}
+
+const tombstoneKey = (entityType: SyncOperation['entityType'], entityId: string) => `${entityType}:${entityId}`
+
+function relatedEntityIds(change: SyncOperation) {
+  if (!change.payload || typeof change.payload !== 'object') return {}
+  const payload = change.payload as { deckId?: unknown; noteId?: unknown }
+  return {
+    deckId: typeof payload.deckId === 'string' ? payload.deckId : undefined,
+    noteId: typeof payload.noteId === 'string' ? payload.noteId : undefined,
+  }
 }
 
 function requiredText(value: string, label: string) {
@@ -187,6 +199,7 @@ export class Collection extends Dexie {
   outbox!: EntityTable<SyncOperation, 'opId'>
   settings!: EntityTable<{ key: string; value: unknown }, 'key'>
   receivedOperations!: EntityTable<{ opId: string }, 'opId'>
+  deletedEntities!: EntityTable<DeletionTombstone, 'key'>
 
   constructor(name: string) {
     super(name)
@@ -205,6 +218,9 @@ export class Collection extends Dexie {
     })
     this.version(3).stores({
       decks: 'id, name, createdAt', notes: 'id, deckId, updatedAt', cards: 'id, deckId, noteId, due, state', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId',
+    })
+    this.version(4).stores({
+      decks: 'id, name, createdAt', notes: 'id, deckId, updatedAt', cards: 'id, deckId, noteId, due, state', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId', deletedEntities: 'key, entityType, entityId, occurredAt',
     })
   }
 
@@ -232,8 +248,8 @@ export class Collection extends Dexie {
     })
   }
 
-  async deleteDeck(deckId: string): Promise<void> {
-    await this.transaction('rw', this.decks, this.notes, this.cards, this.reviewEntries, this.outbox, async () => {
+  async deleteDeck(deckId: string, now = new Date()): Promise<void> {
+    await this.transaction('rw', [this.decks, this.notes, this.cards, this.reviewEntries, this.outbox, this.deletedEntities], async () => {
       if (!await this.decks.get(deckId)) throw new Error('Deck not found')
       await Promise.all([
         this.decks.delete(deckId),
@@ -241,7 +257,9 @@ export class Collection extends Dexie {
         this.cards.where('deckId').equals(deckId).delete(),
         this.reviewEntries.where('deckId').equals(deckId).delete(),
       ])
-      await this.outbox.add({ opId: id(), entityType: 'deck', entityId: deckId, action: 'delete', occurredAt: new Date().toISOString(), payload: { id: deckId } })
+      const occurredAt = now.toISOString()
+      await this.deletedEntities.put({ key: tombstoneKey('deck', deckId), entityType: 'deck', entityId: deckId, occurredAt })
+      await this.outbox.add({ opId: id(), entityType: 'deck', entityId: deckId, action: 'delete', occurredAt, payload: { id: deckId } })
     })
   }
 
@@ -370,10 +388,23 @@ export class Collection extends Dexie {
   }
 
   async applyRemoteChanges(changes: SyncOperation[], cursor: number) {
-    await this.transaction('rw', [this.decks, this.notes, this.cards, this.reviewEntries, this.receivedOperations, this.settings], async () => {
+    await this.transaction('rw', [this.decks, this.notes, this.cards, this.reviewEntries, this.receivedOperations, this.settings, this.deletedEntities], async () => {
       for (const change of changes) {
         if (await this.receivedOperations.get(change.opId)) continue
+        if (change.action !== 'delete') {
+          const related = relatedEntityIds(change)
+          const deleted = await Promise.all([
+            this.deletedEntities.get(tombstoneKey(change.entityType, change.entityId)),
+            related.deckId ? this.deletedEntities.get(tombstoneKey('deck', related.deckId)) : undefined,
+            related.noteId ? this.deletedEntities.get(tombstoneKey('note', related.noteId)) : undefined,
+          ])
+          if (deleted.some(Boolean)) {
+            await this.receivedOperations.add({ opId: change.opId })
+            continue
+          }
+        }
         if (change.action === 'delete') {
+          await this.deletedEntities.put({ key: tombstoneKey(change.entityType, change.entityId), entityType: change.entityType, entityId: change.entityId, occurredAt: change.occurredAt })
           if (change.entityType === 'deck') {
             await this.decks.delete(change.entityId)
             await this.notes.where('deckId').equals(change.entityId).delete()

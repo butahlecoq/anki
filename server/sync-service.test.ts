@@ -52,7 +52,7 @@ test('accepts a review mutation once when the request is delivered twice', async
 test('serves health, pairing, and authenticated sync over HTTP', async () => {
   runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
   const service = createSyncService({ databasePath: join(runtimeDirectory, 'collection.sqlite') })
-  const server = createServer(createSyncHttpHandler(service))
+  const server = createServer(createSyncHttpHandler(service, { allowedOrigin: 'http://127.0.0.1:4173' }))
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const address = server.address()
   assert.ok(address && typeof address !== 'string')
@@ -63,7 +63,9 @@ test('serves health, pairing, and authenticated sync over HTTP', async () => {
 
   const preflight = await fetch(`${origin}/api/sync`, { method: 'OPTIONS', headers: { origin: 'http://127.0.0.1:4173' } })
   assert.equal(preflight.status, 204)
-  assert.equal(preflight.headers.get('access-control-allow-origin'), '*')
+  assert.equal(preflight.headers.get('access-control-allow-origin'), 'http://127.0.0.1:4173')
+  const rejectedOrigin = await fetch(`${origin}/api/health`, { headers: { origin: 'https://untrusted.example.test' } })
+  assert.equal(rejectedOrigin.headers.get('access-control-allow-origin'), null)
 
   const code = service.createPairingCode(new Date('2026-10-01T12:00:00.000Z'))
   const paired = await fetch(`${origin}/api/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code, deviceId: 'phone-1' }) })
@@ -85,6 +87,11 @@ test('starts a loopback service with a durable runtime directory', async () => {
   assert.equal(health.status, 200)
   assert.deepEqual(await health.json(), { ready: true, schemaVersion: 1, store: 'sqlite' })
   await running.close()
+})
+
+test('requires TLS before binding the service to a network interface', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
+  await assert.rejects(startSyncServer({ runtimeDirectory, host: '0.0.0.0', port: 0 }), /TLS/)
 })
 
 test('issues a one-time pairing code against the running service store', async () => {

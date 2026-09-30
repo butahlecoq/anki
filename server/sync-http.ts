@@ -3,14 +3,16 @@ import type { createSyncService } from './sync-service.js'
 
 type Service = ReturnType<typeof createSyncService>
 
-const corsHeaders = {
-  'access-control-allow-origin': '*',
+type HttpOptions = { allowedOrigin?: string }
+
+const corsHeaders = (origin: string | undefined, allowedOrigin: string | undefined): Record<string, string> => origin && allowedOrigin === origin ? {
+  'access-control-allow-origin': allowedOrigin,
   'access-control-allow-methods': 'GET, POST, OPTIONS',
   'access-control-allow-headers': 'authorization, content-type',
-}
+} : {}
 
-const send = (response: ServerResponse, status: number, body: unknown) => {
-  response.writeHead(status, { ...corsHeaders, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+const send = (response: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}) => {
+  response.writeHead(status, { ...headers, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
   response.end(JSON.stringify(body))
 }
 
@@ -20,31 +22,33 @@ const body = async (request: IncomingMessage) => {
   return JSON.parse(text || '{}') as unknown
 }
 
-export function createSyncHttpHandler(service: Service) {
+export function createSyncHttpHandler(service: Service, { allowedOrigin }: HttpOptions = {}) {
   return async (request: IncomingMessage, response: ServerResponse) => {
+    const headers = corsHeaders(request.headers.origin, allowedOrigin)
+    const reply = (status: number, responseBody: unknown) => send(response, status, responseBody, headers)
     try {
       if (request.method === 'OPTIONS') {
-        response.writeHead(204, corsHeaders)
+        response.writeHead(204, headers)
         response.end()
         return
       }
-      if (request.method === 'GET' && request.url === '/api/health') return send(response, 200, service.health())
+      if (request.method === 'GET' && request.url === '/api/health') return reply(200, service.health())
       if (request.method === 'POST' && request.url === '/api/pair') {
         const payload = await body(request) as { code?: string; deviceId?: string }
-        if (!payload.code || !payload.deviceId) return send(response, 400, { error: 'Pairing code and device ID are required.' })
-        return send(response, 201, service.pair({ code: payload.code, deviceId: payload.deviceId }))
+        if (!payload.code || !payload.deviceId) return reply(400, { error: 'Pairing code and device ID are required.' })
+        return reply(201, service.pair({ code: payload.code, deviceId: payload.deviceId }))
       }
       if (request.method === 'POST' && request.url === '/api/sync') {
         const authorization = request.headers.authorization
-        if (!authorization?.startsWith('Bearer ')) return send(response, 401, { error: 'Authentication required.' })
+        if (!authorization?.startsWith('Bearer ')) return reply(401, { error: 'Authentication required.' })
         const payload = await body(request) as { cursor?: number; operations?: unknown[] }
-        if (typeof payload.cursor !== 'number' || !Array.isArray(payload.operations)) return send(response, 400, { error: 'A cursor and operations array are required.' })
-        return send(response, 200, service.sync(authorization.slice(7), payload as Parameters<Service['sync']>[1]))
+        if (typeof payload.cursor !== 'number' || !Array.isArray(payload.operations)) return reply(400, { error: 'A cursor and operations array are required.' })
+        return reply(200, service.sync(authorization.slice(7), payload as Parameters<Service['sync']>[1]))
       }
-      return send(response, 404, { error: 'Not found.' })
+      return reply(404, { error: 'Not found.' })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Request failed.'
-      return send(response, message === 'Authentication required.' ? 401 : 400, { error: message })
+      return reply(message === 'Authentication required.' ? 401 : 400, { error: message })
     }
   }
 }

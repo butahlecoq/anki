@@ -6,8 +6,18 @@ type Complete = { state: 'complete'; accepted: number; cursor: number; changes: 
 type SyncResult = Complete | { state: 'authentication-required' } | { state: 'unreachable' }
 export type PairingResult = { state: 'paired' } | { state: 'pairing-error' } | { state: 'unreachable' }
 
+function isSafeServiceEndpoint(endpoint: string) {
+  try {
+    const parsed = new URL(endpoint)
+    return parsed.protocol === 'https:' || (parsed.protocol === 'http:' && ['127.0.0.1', '::1', 'localhost'].includes(parsed.hostname))
+  } catch {
+    return false
+  }
+}
+
 export async function pairCollection(collection: Collection, endpoint: string, code: string, fetcher: Fetcher = fetch): Promise<PairingResult> {
   const serviceEndpoint = endpoint.trim().replace(/\/$/, '')
+  if (!isSafeServiceEndpoint(serviceEndpoint)) return { state: 'pairing-error' }
   try {
     const response = await fetcher(`${serviceEndpoint}/api/pair`, {
       method: 'POST',
@@ -25,6 +35,7 @@ export async function pairCollection(collection: Collection, endpoint: string, c
 }
 
 export async function foregroundSync(settings: SyncSettings, operations: Partial<SyncOperation>[], fetcher: Fetcher = fetch): Promise<SyncResult> {
+  if (!isSafeServiceEndpoint(settings.endpoint)) return { state: 'unreachable' }
   try {
     const response = await fetcher(`${settings.endpoint.replace(/\/$/, '')}/api/sync`, {
       method: 'POST',

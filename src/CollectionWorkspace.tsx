@@ -179,7 +179,7 @@ function SyncControls() {
             <form onSubmit={pair}>
               <label>
                 PC service address
-                <input autoFocus inputMode="url" placeholder="http://192.168.1.20:4174" value={endpoint} onChange={(event) => setEndpoint(event.target.value)} required />
+                <input autoFocus inputMode="url" placeholder="https://pc.example.net:4174" value={endpoint} onChange={(event) => setEndpoint(event.target.value)} required />
               </label>
               <label>
                 One-time pairing code

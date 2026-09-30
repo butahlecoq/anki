@@ -1,5 +1,6 @@
 import { createServer } from 'node:http'
-import { mkdir } from 'node:fs/promises'
+import { createServer as createSecureServer } from 'node:https'
+import { mkdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createSyncHttpHandler } from './sync-http.js'
 import { createSyncService } from './sync-service.js'
@@ -14,10 +15,19 @@ export async function createPairingCode({ runtimeDirectory }: { runtimeDirectory
   }
 }
 
-export async function startSyncServer({ runtimeDirectory, host, port }: { runtimeDirectory: string; host: string; port: number }) {
+type TlsOptions = { keyPath: string; certificatePath: string }
+type StartOptions = { runtimeDirectory: string; host: string; port: number; allowedOrigin?: string; tls?: TlsOptions }
+
+const isLoopback = (host: string) => ['127.0.0.1', '::1', 'localhost'].includes(host)
+
+export async function startSyncServer({ runtimeDirectory, host, port, allowedOrigin, tls }: StartOptions) {
+  if (!isLoopback(host) && !tls) throw new Error('TLS key and certificate paths are required before binding the sync service to a network interface.')
   await mkdir(runtimeDirectory, { recursive: true })
   const service = createSyncService({ databasePath: join(runtimeDirectory, 'kiroku-sync.sqlite') })
-  const server = createServer(createSyncHttpHandler(service))
+  const handler = createSyncHttpHandler(service, { allowedOrigin })
+  const server = tls
+    ? createSecureServer({ key: await readFile(tls.keyPath), cert: await readFile(tls.certificatePath) }, handler)
+    : createServer(handler)
   await new Promise<void>((resolve) => server.listen(port, host, resolve))
   const address = server.address()
   if (!address || typeof address === 'string') throw new Error('Service did not bind a TCP port.')
@@ -37,7 +47,10 @@ async function runCommand() {
     return
   }
   const port = Number(process.env.PORT ?? '4174')
-  await startSyncServer({ runtimeDirectory, host: '0.0.0.0', port }).then(({ port: boundPort }) => {
+  const keyPath = process.env.KIROKU_TLS_KEY_PATH
+  const certificatePath = process.env.KIROKU_TLS_CERT_PATH
+  if (Boolean(keyPath) !== Boolean(certificatePath)) throw new Error('Set both KIROKU_TLS_KEY_PATH and KIROKU_TLS_CERT_PATH to enable TLS.')
+  await startSyncServer({ runtimeDirectory, host: process.env.KIROKU_HOST ?? '127.0.0.1', port, allowedOrigin: process.env.KIROKU_ALLOWED_ORIGIN, tls: keyPath && certificatePath ? { keyPath, certificatePath } : undefined }).then(({ port: boundPort }) => {
     process.stdout.write(`Kiroku sync service listening on ${boundPort}\n`)
   })
 }
