@@ -37,6 +37,8 @@ export function App() {
   const online = useOnlineStatus()
   const offlineStatus = useOfflineShellStatus()
   const [updateReady, setUpdateReady] = useState(false)
+  const [hash, setHash] = useState(() => window.location.hash)
+  const onNoteTypes = hash === '#note-types'
   const connection = online
     ? offlineStatus === 'ready' ? 'Offline shell ready' : offlineStatus === 'checking' ? 'Preparing offline shell' : 'Offline cache unavailable'
     : offlineStatus === 'ready' ? 'Offline shell active' : 'Offline shell unavailable'
@@ -45,6 +47,12 @@ export function App() {
     const show = () => setUpdateReady(true)
     window.addEventListener(UPDATE_READY_EVENT, show)
     return () => window.removeEventListener(UPDATE_READY_EVENT, show)
+  }, [])
+
+  useEffect(() => {
+    const update = () => setHash(window.location.hash)
+    window.addEventListener('hashchange', update)
+    return () => window.removeEventListener('hashchange', update)
   }, [])
 
   return (
@@ -56,7 +64,8 @@ export function App() {
         </a>
         <nav className="primary-nav" aria-label="Primary navigation">
           <span className="nav-label">Workspace</span>
-          <a className="nav-item active" href="#decks" aria-current="page"><span>Decks</span></a>
+          <a className={`nav-item${onNoteTypes ? '' : ' active'}`} href="#decks" aria-current={onNoteTypes ? undefined : 'page'}><span>Decks</span></a>
+          <a className={`nav-item${onNoteTypes ? ' active' : ''}`} href="#note-types" aria-current={onNoteTypes ? 'page' : undefined}><span>Note types</span></a>
           <a className="nav-item planned" href="#study" aria-disabled="true" onClick={(event) => event.preventDefault()}>Study</a>
           <a className="nav-item planned" href="#browse" aria-disabled="true" onClick={(event) => event.preventDefault()}>Browse</a>
           <a className="nav-item planned" href="#statistics" aria-disabled="true" onClick={(event) => event.preventDefault()}>Statistics</a>
@@ -69,7 +78,8 @@ export function App() {
         <footer className="footer-line"><span>KIROKU / PRIVATE WORKSPACE</span><span>BUILD 0002</span></footer>
       </main>
       <nav className="mobile-nav" aria-label="Mobile navigation">
-        <a className="active" href="#decks" aria-label="Decks"><span>Decks</span></a>
+        <a className={onNoteTypes ? '' : 'active'} href="#decks" aria-label="Decks"><span>Decks</span></a>
+        <a className={onNoteTypes ? 'active' : ''} href="#note-types" aria-label="Note types"><span>Note types</span></a>
         <a className="planned" href="#study" aria-label="Study (planned)" aria-disabled="true" onClick={(event) => event.preventDefault()}><span>Study</span></a>
         <a className="planned" href="#browse" aria-label="Browse (planned)" aria-disabled="true" onClick={(event) => event.preventDefault()}><span>Browse</span></a>
         <a className="planned" href="#statistics" aria-label="Statistics (planned)" aria-disabled="true" onClick={(event) => event.preventDefault()}><span>Stats</span></a>

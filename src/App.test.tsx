@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, test } from 'vitest'
 import { App } from './App'
 
@@ -6,8 +6,18 @@ const serviceWorkerDescriptor = Object.getOwnPropertyDescriptor(navigator, 'serv
 
 afterEach(() => {
   cleanup()
+  window.location.hash = ''
   if (serviceWorkerDescriptor) Object.defineProperty(navigator, 'serviceWorker', serviceWorkerDescriptor)
   else Reflect.deleteProperty(navigator, 'serviceWorker')
+})
+
+test('navigation marks the note-type manager as the current page', () => {
+  render(<App />)
+  window.location.hash = '#note-types'
+  fireEvent(window, new Event('hashchange'))
+  const navigation = screen.getByRole('navigation', { name: 'Primary navigation' })
+  expect(within(navigation).getByRole('link', { name: 'Note types' })).toHaveAttribute('aria-current', 'page')
+  expect(within(navigation).getByRole('link', { name: 'Decks' })).not.toHaveAttribute('aria-current')
 })
 
 describe('application shell', () => {
@@ -18,6 +28,7 @@ describe('application shell', () => {
     const navigation = screen.getByRole('navigation', { name: 'Primary navigation' })
     expect(navigation).toBeVisible()
     expect(within(navigation).getByRole('link', { name: 'Decks' })).toHaveAttribute('aria-current', 'page')
+    expect(within(navigation).getByRole('link', { name: 'Note types' })).toHaveAttribute('href', '#note-types')
     expect(within(navigation).getByRole('link', { name: 'Study' })).toBeVisible()
     expect(within(navigation).getByRole('link', { name: 'Study' })).toHaveAttribute('aria-disabled', 'true')
     expect(screen.getByRole('status')).toHaveTextContent('Offline cache unavailable')

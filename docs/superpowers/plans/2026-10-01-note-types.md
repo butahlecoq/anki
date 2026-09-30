@@ -75,11 +75,11 @@
 - Consumes collection note-type methods and `renderTemplate`.
 - Produces accessible dialogs for type management and note creation from the selected type.
 
-- [ ] **Step 1: Write failing component and browser assertions** for creating a type, adding/reordering fields, adding a second template, previewing it, and receiving an empty-card warning.
-- [ ] **Step 2: Run the focused Vitest and Playwright tests** and confirm the controls are absent.
-- [ ] **Step 3: Implement the manager and field-aware note dialog.** Require a field-removal choice before save and guide the learner through replacement-type and field-mapping choices before a populated type is deleted.
-- [ ] **Step 4: Implement `TemplatePreview` with a sandboxed iframe** using `srcDoc`, rendered template markup, and the template CSS; prevent access to the parent application.
-- [ ] **Step 5: Run focused tests** and commit `Add note type editor and preview`.
+- [x] **Step 1: Write failing component and browser assertions** for creating a type, adding/reordering fields, adding a second template, previewing it, and receiving an empty-card warning.
+- [x] **Step 2: Run the focused Vitest and Playwright tests** and confirm the controls are absent.
+- [x] **Step 3: Implement the manager and field-aware note dialog.** Require a field-removal choice before save and guide the learner through replacement-type and field-mapping choices before a populated type is deleted.
+- [x] **Step 4: Implement `TemplatePreview` with a sandboxed iframe** using `srcDoc`, rendered template markup, and the template CSS; prevent access to the parent application.
+- [x] **Step 5: Run focused tests** and commit `Add note type editor and preview`.
 
 ### Task 4: Review rendering and final verification
 
