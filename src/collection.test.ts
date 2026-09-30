@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto'
+import Dexie from 'dexie'
 import { afterEach, describe, expect, test } from 'vitest'
-import { createCollection, Rating, type Collection } from './collection'
+import { BASIC_NOTE_TYPE_ID, createCollection, Rating, type Collection } from './collection'
 
 let collection: Collection | undefined
 
@@ -10,6 +11,81 @@ afterEach(async () => {
 })
 
 describe('local collection', () => {
+  test('upgrades v5 Basic data without changing note, card, or review identities', async () => {
+    const databaseName = `kiroku-test-${crypto.randomUUID()}`
+    const old = new Dexie(databaseName)
+    old.version(5).stores({ decks: 'id, name, createdAt', notes: 'id, deckId, updatedAt', cards: 'id, deckId, noteId, due, state', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId', deletedEntities: 'key, entityType, entityId, occurredAt', noteMedia: 'id, noteId, digest, side, kind, updatedAt', mediaBlobs: 'digest, verifiedAt' })
+    await old.table('notes').add({ id: 'note-1', deckId: 'deck-1', type: 'basic', fields: { front: '猫', back: 'cat' }, createdAt: '2026-01-01', updatedAt: '2026-01-01' })
+    await old.table('cards').add({ id: 'legacy-card', deckId: 'deck-1', noteId: 'note-1', due: '2026-01-02', stability: 4, difficulty: 5, elapsedDays: 1, scheduledDays: 2, learningSteps: 0, reps: 2, lapses: 0, state: 2, lastReview: '2026-01-01' })
+    await old.table('reviewEntries').add({ id: 'review-1', cardId: 'legacy-card', deckId: 'deck-1', reviewedAt: '2026-01-01' })
+    old.close()
+
+    collection = createCollection(databaseName)
+    await expect(collection.noteTypes.get(BASIC_NOTE_TYPE_ID)).resolves.toMatchObject({ name: 'Basic', protected: true })
+    await expect(collection.notes.get('note-1')).resolves.toMatchObject({ typeId: BASIC_NOTE_TYPE_ID, fields: { front: '猫', back: 'cat' } })
+    await expect(collection.cards.get('legacy-card')).resolves.toMatchObject({ templateId: 'basic', reps: 2 })
+    await expect(collection.reviewEntries.get('review-1')).resolves.toMatchObject({ cardId: 'legacy-card' })
+    await expect(collection.pendingOperations()).resolves.toHaveLength(0)
+  })
+
+  test('creates one stable card per nonempty template and preserves its schedule on edit', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Vocabulary')
+    const type = await collection.createNoteType({ name: 'Bidirectional', fields: [{ name: 'word' }, { name: 'meaning' }], templates: [
+      { name: 'Forward', front: '{{word}}', back: '{{meaning}}', css: '' },
+      { name: 'Reverse', front: '{{meaning}}', back: '{{word}}', css: '' },
+    ] })
+    const note = await collection.createNote(deck.id, type.id, { word: '猫', meaning: 'cat' })
+    const cards = await collection.cards.where('noteId').equals(note.id).toArray()
+    expect(cards.map((card) => card.id).sort()).toEqual(type.templates.map((template) => `${note.id}:${template.id}`).sort())
+    await collection.answer(cards[0].id, Rating.Good, new Date('2026-10-01T12:00:00Z'))
+    await collection.updateNote(note.id, { word: '犬', meaning: 'dog' })
+    await expect(collection.cards.get(cards[0].id)).resolves.toMatchObject({ reps: 1, templateId: cards[0].templateId })
+    await expect(collection.cards.where('noteId').equals(note.id).count()).resolves.toBe(2)
+    await expect(collection.pendingOperations()).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ entityType: 'noteType', entityId: type.id, action: 'create' }),
+    ]))
+  })
+
+  test('skips an empty template front without creating a study card', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Vocabulary')
+    const type = await collection.createNoteType({ name: 'Conditional', fields: [{ name: 'word' }, { name: 'hint' }], templates: [
+      { name: 'Word', front: '{{word}}', back: 'answer', css: '' },
+      { name: 'Hint', front: '<b>{{hint}}</b>', back: 'answer', css: '' },
+    ] })
+    const note = await collection.createNote(deck.id, type.id, { word: '猫', hint: '' })
+    await expect(collection.cards.where('noteId').equals(note.id).count()).resolves.toBe(1)
+    expect(collection.cardGenerationStatus(type, note.fields).skipped).toEqual([{ templateId: type.templates[1].id, reason: 'Front has no visible field content' }])
+  })
+
+  test('suspends an ineligible generated card and restores its schedule when content returns', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Vocabulary')
+    const type = await collection.createNoteType({ name: 'Hints', fields: [{ name: 'hint' }], templates: [
+      { name: 'Hint', front: '{{hint}}', back: 'answer', css: '' },
+    ] })
+    const note = await collection.createNote(deck.id, type.id, { hint: 'first' })
+    const cardId = `${note.id}:${type.templates[0].id}`
+    await collection.answer(cardId, Rating.Good, new Date('2026-10-01T12:00:00Z'))
+    await collection.updateNote(note.id, { hint: '' })
+    await expect(collection.cards.get(cardId)).resolves.toMatchObject({ suspended: true, reps: 1 })
+    await expect(collection.dueCards(deck.id)).resolves.toHaveLength(0)
+    await collection.updateNote(note.id, { hint: 'restored' })
+    await expect(collection.cards.get(cardId)).resolves.toMatchObject({ id: cardId, templateId: type.templates[0].id, suspended: false, reps: 1 })
+  })
+
+  test('keeps the protected Basic type when an older Basic note syncs in twice', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const basic = await collection.noteTypes.get(BASIC_NOTE_TYPE_ID)
+    const note = { id: 'old-note', deckId: 'remote-deck', type: 'basic', fields: { front: '猫', back: 'cat' }, createdAt: '2026-01-01', updatedAt: '2026-01-01' }
+    const operation = { opId: 'old-note-create', entityType: 'note' as const, entityId: note.id, action: 'create' as const, occurredAt: note.createdAt, payload: note }
+    await collection.applyRemoteChanges([operation], 1)
+    await collection.applyRemoteChanges([operation], 1)
+    await expect(collection.noteTypes.get(BASIC_NOTE_TYPE_ID)).resolves.toEqual(basic)
+    await expect(collection.notes.get(note.id)).resolves.toEqual(note)
+  })
+
   test('creates a Japanese Basic note with one new card in its deck', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
 
