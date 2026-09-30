@@ -143,7 +143,7 @@ function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: Note; on
         <h2 id="note-dialog-title">{note ? `Edit ${noteType?.name ?? ''} note` : `Add a ${noteType?.name ?? ''} note`}</h2>
         <form onSubmit={submit}>
           <label>Note type
-            <select value={typeId} disabled={Boolean(note)} onChange={(event) => { setTypeId(event.target.value); setFields({}) }}>
+            <select value={typeId} disabled={Boolean(note)} onChange={(event) => { setTypeId(event.target.value); setFields({}); setAttachments([]) }}>
               {noteTypes.map((type) => <option value={type.id} key={type.id}>{type.name}</option>)}
             </select>
           </label>
@@ -165,6 +165,11 @@ function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: Note; on
             </div>
           ))}
           {existingMedia.map((media) => <ExistingMedia key={media.id} media={media} />)}
+          {note?.retiredFields && Object.keys(note.retiredFields).length > 0 && <section className="retired-fields" aria-label="Retired fields">
+            <h3>Retired fields</h3>
+            <p>Saved values from fields that are no longer part of this note type.</p>
+            <dl>{Object.entries(note.retiredFields).map(([fieldId, value]) => <div key={fieldId}><dt>Retired field · {fieldId}</dt><dd>{value || '(empty)'}</dd></div>)}</dl>
+          </section>}
           {typeId !== BASIC_NOTE_TYPE_ID && generation && <p className="card-generation-status" aria-live="polite">{generation.eligible.length} {generation.eligible.length === 1 ? 'card' : 'cards'} will be created.</p>}
           {generation?.skipped.map(({ templateId, reason }) => <p className="form-warning" role="status" key={templateId}>{noteType?.templates.find((template) => template.id === templateId)?.name}: {reason}. No card will be created.</p>)}
           {error && <p className="form-error" role="alert">{error}</p>}

@@ -145,7 +145,7 @@ function DeleteTypeDialog({ noteType, types, onClose }: { noteType: NoteType; ty
         {replacement && noteType.fields.map((field) => <label key={field.id}>Map {field.name}<select value={mapping[field.id] ?? ''} onChange={(event) => setMapping((current) => ({ ...current, [field.id]: event.target.value }))}><option value="">Keep as retired data</option>{replacement.fields.filter((target) => !Object.entries(mapping).some(([sourceId, targetId]) => sourceId !== field.id && targetId === target.id)).map((target) => <option value={target.id} key={target.id}>{target.name}</option>)}</select></label>)}
       </> : <p>This type has no saved notes.</p>}
       {error && <p className="form-error" role="alert">{error}</p>}
-      <div className="dialog-actions"><button className="text-button" type="button" onClick={onClose}>Cancel</button><button className="text-button danger" type="submit" disabled={count === undefined}>Delete note type</button></div>
+      <div className="dialog-actions"><button className="text-button" type="button" autoFocus onClick={onClose}>Cancel</button><button className="text-button danger" type="submit" disabled={count === undefined}>Delete note type</button></div>
     </form>
   </section></div>
 }

@@ -202,6 +202,12 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--acid); outline-
 .template-preview iframe { width: 100%; min-height: 190px; border: 1px solid var(--line-strong); background: white; }
 .form-warning { margin: 0; color: var(--amber); font-size: 10px; line-height: 1.5; }
 .card-generation-status { margin: 0; color: var(--acid); font-size: 10px; }
+.retired-fields { padding: 14px; border: 1px solid var(--line-strong); }
+.retired-fields h3 { margin: 0 0 7px; font-size: 12px; font-weight: 500; }
+.retired-fields p { margin: 0 0 12px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.retired-fields dl { margin: 0; display: grid; gap: 10px; }
+.retired-fields dt { color: var(--faint); font-size: 9px; overflow-wrap: anywhere; }
+.retired-fields dd { margin: 4px 0 0; color: var(--text); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .card-image { display: block; width: min(100%, 540px); max-height: 290px; margin-top: 24px; object-fit: contain; }
 .card-audio { width: min(100%, 400px); margin-top: 22px; }
 

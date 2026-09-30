@@ -59,7 +59,10 @@ test('learner manages a note type and previews a second card in isolation', asyn
   await createDeck(page, 'Vocabulary')
   await page.getByRole('button', { name: 'Open Vocabulary' }).click()
   await page.getByRole('button', { name: 'Add note' }).click()
-  await page.getByLabel('Note type', { exact: true }).selectOption({ label: 'Japanese vocabulary' })
+  await page.getByLabel('Images and audio').setInputFiles({ name: 'unused.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL4+QAAAABJRU5ErkJggg==', 'base64') })
+  await expect(page.getByText('unused.png')).toBeVisible()
+  await page.getByRole('combobox', { name: 'Note type' }).selectOption({ label: 'Japanese vocabulary' })
+  await expect(page.getByText('unused.png')).toHaveCount(0)
   await page.getByLabel('Word').fill('<script>parent.pwned = true</script>猫')
   await page.getByLabel('Meaning').fill('cat')
   await page.getByLabel('Reading').fill('ねこ')
@@ -113,6 +116,7 @@ test('empty card warning and type deletion preserve mapped note values', async (
   await page.getByRole('button', { name: 'Save changes' }).click()
 
   await page.getByRole('button', { name: 'Delete Glyph' }).click()
+  await expect(page.getByRole('button', { name: 'Cancel' })).toBeFocused()
   await expect(page.getByText(/1 saved note uses this type/)).toBeVisible()
   await page.getByLabel('Replacement note type').selectOption({ label: 'Basic' })
   await page.getByLabel('Map Character').selectOption({ label: 'front' })
@@ -122,6 +126,9 @@ test('empty card warning and type deletion preserve mapped note values', async (
   await page.getByRole('button', { name: 'Open Glyphs' }).click()
   await page.getByRole('button', { name: 'Edit note' }).click()
   await expect(page.getByLabel('Front')).toHaveValue('猫')
+  const retired = page.getByRole('region', { name: 'Retired fields' })
+  await expect(retired.getByText('cat')).toBeVisible()
+  await expect(retired.getByText(/Retired field · [\da-f-]{36}/)).toBeVisible()
 })
 
 test('learner creates, edits, and reviews a Japanese card offline', async ({ browserName, context, page }) => {
