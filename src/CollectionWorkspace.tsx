@@ -10,6 +10,7 @@ import {
   type Grade,
   type Note,
 } from './collection'
+import { pairCollection, syncCollection } from './sync-client'
 
 type Route =
   | { view: 'decks' }
@@ -125,6 +126,75 @@ function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: Note; on
         </form>
       </section>
     </div>
+  )
+}
+
+function SyncControls() {
+  const settings = useLiveQuery(() => collection.syncSettings(), [], undefined)
+  const [pairing, setPairing] = useState(false)
+  const [endpoint, setEndpoint] = useState('')
+  const [code, setCode] = useState('')
+  const [message, setMessage] = useState('This collection stays on this device until you connect a PC.')
+  const [busy, setBusy] = useState(false)
+
+  async function pair(event: FormEvent) {
+    event.preventDefault()
+    setBusy(true)
+    const result = await pairCollection(collection, endpoint, code)
+    setBusy(false)
+    if (result.state === 'paired') {
+      setPairing(false)
+      setCode('')
+      setMessage('PC connected. Your collections are ready to sync.')
+    } else if (result.state === 'unreachable') setMessage('Your PC service could not be reached. Check its address and that it is running.')
+    else setMessage('That pairing code was not accepted. Create a new code on your PC and try again.')
+  }
+
+  async function sync() {
+    if (!settings) {
+      setPairing(true)
+      return
+    }
+    setBusy(true)
+    setMessage('Syncing your collection…')
+    const result = await syncCollection(collection)
+    setBusy(false)
+    if (result.state === 'complete') setMessage(`Sync complete. ${result.accepted} local change${result.accepted === 1 ? '' : 's'} sent.`)
+    else if (result.state === 'authentication-required') setMessage('This device needs to be paired again before it can sync.')
+    else setMessage('Your PC service could not be reached. Your changes remain on this device and will retry next time.')
+  }
+
+  return (
+    <section className="sync-controls" aria-label="PC sync">
+      <div><span className="section-code">SYNC // {settings ? 'PAIRED' : 'LOCAL ONLY'}</span><p aria-live="polite">{message}</p></div>
+      <div className="sync-actions">
+        {settings && <button className="text-button" type="button" disabled={busy} onClick={() => void sync()}>{busy ? 'Syncing…' : 'Sync now'}</button>}
+        <button className="primary-action" type="button" disabled={busy} onClick={() => setPairing(true)}>{settings ? 'Pair another device' : 'Connect a PC'}</button>
+      </div>
+      {pairing && (
+        <div className="dialog-backdrop">
+          <section className="dialog" role="dialog" aria-modal="true" aria-labelledby="sync-dialog-title">
+            <span className="section-code">SYNC // PAIR DEVICE</span>
+            <h2 id="sync-dialog-title">Connect to your PC</h2>
+            <form onSubmit={pair}>
+              <label>
+                PC service address
+                <input autoFocus inputMode="url" placeholder="https://pc.example.net:4174" value={endpoint} onChange={(event) => setEndpoint(event.target.value)} required />
+              </label>
+              <label>
+                One-time pairing code
+                <input autoCapitalize="characters" value={code} onChange={(event) => setCode(event.target.value)} required />
+              </label>
+              <p className="sync-help">On the PC, run <code>npm run server:pair</code> to create a one-time code.</p>
+              <div className="dialog-actions">
+                <button className="text-button" type="button" disabled={busy} onClick={() => setPairing(false)}>Cancel</button>
+                <button className="primary-action" type="submit" disabled={busy}>{busy ? 'Connecting…' : 'Connect device'}</button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+    </section>
   )
 }
 
@@ -309,6 +379,7 @@ export function CollectionWorkspace() {
 
   return (
     <>
+      <SyncControls />
       {content}
       {newDeck && <DeckDialog onClose={() => setNewDeck(false)} />}
     </>

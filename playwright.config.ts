@@ -1,4 +1,8 @@
 import { defineConfig, devices } from '@playwright/test'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+const syncRuntimeDirectory = join(tmpdir(), 'kiroku-e2e-sync')
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -24,10 +28,19 @@ export default defineConfig({
       use: { ...devices['iPhone 13'] },
     },
   ],
-  webServer: {
-    command: 'npm run build && npm run preview -- --host 127.0.0.1 --port 4173',
-    url: 'http://127.0.0.1:4173',
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-  },
+  webServer: [
+    {
+      command: 'npm run build && npm run preview -- --host 127.0.0.1 --port 4173',
+      url: 'http://127.0.0.1:4173',
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
+    },
+    {
+      command: 'npm run server:start',
+      url: 'http://127.0.0.1:4174/api/health',
+      env: { ...process.env, KIROKU_RUNTIME_DIRECTORY: syncRuntimeDirectory, KIROKU_ALLOWED_ORIGIN: 'http://127.0.0.1:4173' },
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
+    },
+  ],
 })

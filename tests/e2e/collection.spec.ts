@@ -2,8 +2,11 @@ import { expect, test } from '@playwright/test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { execFile as execFileCallback } from 'node:child_process'
+import { promisify } from 'node:util'
 
 const REVIEW_TIME = new Date('2026-09-30T12:00:00.000Z')
+const execFile = promisify(execFileCallback)
 
 async function createDeck(page: import('@playwright/test').Page, name: string) {
   await page.getByRole('button', { name: 'New deck' }).click()
@@ -11,6 +14,22 @@ async function createDeck(page: import('@playwright/test').Page, name: string) {
   await page.getByLabel('Deck name').fill(name)
   await page.getByRole('button', { name: 'Create deck' }).click()
   await expect(page.getByRole('heading', { name })).toBeVisible()
+}
+
+async function pairingCode() {
+  const runtimeDirectory = join(tmpdir(), 'kiroku-e2e-sync')
+  const { stdout } = await execFile(process.execPath, ['dist-server/server/index.js', '--pairing-code'], {
+    env: { ...process.env, KIROKU_RUNTIME_DIRECTORY: runtimeDirectory },
+  })
+  return stdout.trim()
+}
+
+async function pair(page: import('@playwright/test').Page) {
+  await page.getByRole('button', { name: 'Connect a PC' }).click()
+  await page.getByLabel('PC service address').fill('http://127.0.0.1:4174')
+  await page.getByLabel('One-time pairing code').fill(await pairingCode())
+  await page.getByRole('button', { name: 'Connect device' }).click()
+  await expect(page.getByText('PC connected. Your collections are ready to sync.')).toBeVisible()
 }
 
 test.beforeEach(async ({ page }) => {
@@ -140,4 +159,42 @@ test('learner renames and deletes a deck', async ({ page }) => {
   await page.getByRole('button', { name: 'Delete deck' }).click()
   await expect(page.getByRole('heading', { name: 'Start with one deck' })).toBeVisible()
   await expect(page.getByText('JLPT N5')).not.toBeVisible()
+})
+
+test('PC and phone contexts exchange a collection and an FSRS review through the sync service', async ({ browser, page: pc }, testInfo) => {
+  const phoneContext = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
+  const deckName = `Shared Japanese ${testInfo.project.name} ${Date.now()}`
+  try {
+    const phone = await phoneContext.newPage()
+    await phone.clock.setFixedTime(REVIEW_TIME)
+    await phone.goto('http://127.0.0.1:4173/')
+
+    await createDeck(pc, deckName)
+    await pc.getByRole('button', { name: `Open ${deckName}` }).click()
+    await pc.getByRole('button', { name: 'Add note' }).click()
+    await pc.getByLabel('Front').fill('犬')
+    await pc.getByLabel('Back').fill('いぬ · dog')
+    await pc.getByRole('button', { name: 'Save note' }).click()
+
+    await pair(pc)
+    await pair(phone)
+    await pc.getByRole('button', { name: 'Sync now' }).click()
+    await expect(pc.getByText('Sync complete. 3 local changes sent.')).toBeVisible()
+    await phone.getByRole('button', { name: 'Sync now' }).click()
+    await expect(phone.getByRole('button', { name: `Open ${deckName}` })).toBeVisible()
+
+    await phone.getByRole('button', { name: `Open ${deckName}` }).click()
+    await phone.getByRole('button', { name: 'Study now' }).click()
+    await phone.getByRole('button', { name: 'Show answer' }).click()
+    await phone.getByRole('button', { name: /^Good · / }).click()
+    await expect(phone.getByRole('heading', { name: 'Session complete' })).toBeVisible()
+    await phone.getByRole('button', { name: 'Sync now' }).click()
+    await expect(phone.getByText('Sync complete. 2 local changes sent.')).toBeVisible()
+
+    await pc.getByRole('button', { name: 'Sync now' }).click()
+    await expect(pc.getByText('LEARNING 1')).toBeVisible()
+    await expect(pc.getByText('REVIEWS 1')).toBeVisible()
+  } finally {
+    await phoneContext.close()
+  }
 })

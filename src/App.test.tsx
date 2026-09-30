@@ -22,6 +22,7 @@ describe('application shell', () => {
     expect(within(navigation).getByRole('link', { name: 'Study' })).toHaveAttribute('aria-disabled', 'true')
     expect(screen.getByRole('status')).toHaveTextContent('Offline cache unavailable')
     expect(screen.getByRole('button', { name: /new deck/i })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Connect a PC' })).toBeEnabled()
   })
 })
 

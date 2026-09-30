@@ -83,6 +83,18 @@ export interface ReviewChoice {
   interval: string
 }
 
+export interface SyncOperation {
+  opId: string
+  entityType: 'deck' | 'note' | 'card' | 'review'
+  entityId: string
+  action: 'create' | 'update' | 'delete'
+  occurredAt: string
+  payload: unknown
+}
+
+export interface SyncSettings { endpoint: string; token: string; cursor: number }
+interface DeletionTombstone { key: string; entityType: SyncOperation['entityType']; entityId: string; occurredAt: string }
+
 const scheduler = fsrs({
   request_retention: 0.9,
   maximum_interval: 36500,
@@ -94,6 +106,17 @@ const scheduler = fsrs({
 
 function id() {
   return crypto.randomUUID()
+}
+
+const tombstoneKey = (entityType: SyncOperation['entityType'], entityId: string) => `${entityType}:${entityId}`
+
+function relatedEntityIds(change: SyncOperation) {
+  if (!change.payload || typeof change.payload !== 'object') return {}
+  const payload = change.payload as { deckId?: unknown; noteId?: unknown }
+  return {
+    deckId: typeof payload.deckId === 'string' ? payload.deckId : undefined,
+    noteId: typeof payload.noteId === 'string' ? payload.noteId : undefined,
+  }
 }
 
 function requiredText(value: string, label: string) {
@@ -173,6 +196,10 @@ export class Collection extends Dexie {
   notes!: EntityTable<Note, 'id'>
   cards!: EntityTable<CardRecord, 'id'>
   reviewEntries!: EntityTable<ReviewEntry, 'id'>
+  outbox!: EntityTable<SyncOperation, 'opId'>
+  settings!: EntityTable<{ key: string; value: unknown }, 'key'>
+  receivedOperations!: EntityTable<{ opId: string }, 'opId'>
+  deletedEntities!: EntityTable<DeletionTombstone, 'key'>
 
   constructor(name: string) {
     super(name)
@@ -181,6 +208,19 @@ export class Collection extends Dexie {
       notes: 'id, deckId, updatedAt',
       cards: 'id, deckId, noteId, due, state',
       reviewEntries: 'id, cardId, deckId, reviewedAt',
+    })
+    this.version(2).stores({
+      decks: 'id, name, createdAt',
+      notes: 'id, deckId, updatedAt',
+      cards: 'id, deckId, noteId, due, state',
+      reviewEntries: 'id, cardId, deckId, reviewedAt',
+      outbox: 'opId, entityType, entityId, occurredAt',
+    })
+    this.version(3).stores({
+      decks: 'id, name, createdAt', notes: 'id, deckId, updatedAt', cards: 'id, deckId, noteId, due, state', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId',
+    })
+    this.version(4).stores({
+      decks: 'id, name, createdAt', notes: 'id, deckId, updatedAt', cards: 'id, deckId, noteId, due, state', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId', deletedEntities: 'key, entityType, entityId, occurredAt',
     })
   }
 
@@ -191,26 +231,35 @@ export class Collection extends Dexie {
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
     }
-    await this.decks.add(deck)
+    await this.transaction('rw', this.decks, this.outbox, async () => {
+      await this.decks.add(deck)
+      await this.outbox.add({ opId: id(), entityType: 'deck', entityId: deck.id, action: 'create', occurredAt: deck.createdAt, payload: deck })
+    })
     return deck
   }
 
   async renameDeck(deckId: string, name: string, now = new Date()): Promise<void> {
-    const updated = await this.decks.update(deckId, {
-      name: requiredText(name, 'Deck name'),
-      updatedAt: now.toISOString(),
+    await this.transaction('rw', this.decks, this.outbox, async () => {
+      const deck = await this.decks.get(deckId)
+      if (!deck) throw new Error('Deck not found')
+      const updated = { ...deck, name: requiredText(name, 'Deck name'), updatedAt: now.toISOString() }
+      await this.decks.put(updated)
+      await this.outbox.add({ opId: id(), entityType: 'deck', entityId: deckId, action: 'update', occurredAt: updated.updatedAt, payload: updated })
     })
-    if (!updated) throw new Error('Deck not found')
   }
 
-  async deleteDeck(deckId: string): Promise<void> {
-    await this.transaction('rw', this.decks, this.notes, this.cards, this.reviewEntries, async () => {
+  async deleteDeck(deckId: string, now = new Date()): Promise<void> {
+    await this.transaction('rw', [this.decks, this.notes, this.cards, this.reviewEntries, this.outbox, this.deletedEntities], async () => {
+      if (!await this.decks.get(deckId)) throw new Error('Deck not found')
       await Promise.all([
         this.decks.delete(deckId),
         this.notes.where('deckId').equals(deckId).delete(),
         this.cards.where('deckId').equals(deckId).delete(),
         this.reviewEntries.where('deckId').equals(deckId).delete(),
       ])
+      const occurredAt = now.toISOString()
+      await this.deletedEntities.put({ key: tombstoneKey('deck', deckId), entityType: 'deck', entityId: deckId, occurredAt })
+      await this.outbox.add({ opId: id(), entityType: 'deck', entityId: deckId, action: 'delete', occurredAt, payload: { id: deckId } })
     })
   }
 
@@ -231,22 +280,32 @@ export class Collection extends Dexie {
     const emptyCard = createEmptyCard(now)
     const card = serializeCard(emptyCard, { id: id(), deckId, noteId })
 
-    await this.transaction('rw', this.notes, this.cards, async () => {
+    await this.transaction('rw', this.notes, this.cards, this.outbox, async () => {
       await this.notes.add(note)
       await this.cards.add(card)
+      await this.outbox.bulkAdd([
+        { opId: id(), entityType: 'note', entityId: note.id, action: 'create', occurredAt: note.createdAt, payload: note },
+        { opId: id(), entityType: 'card', entityId: card.id, action: 'create', occurredAt: note.createdAt, payload: card },
+      ])
     })
     return note
   }
 
   async updateBasicNote(noteId: string, fields: BasicNoteFields, now = new Date()): Promise<void> {
-    const updated = await this.notes.update(noteId, {
-      fields: {
+    await this.transaction('rw', this.notes, this.outbox, async () => {
+      const note = await this.notes.get(noteId)
+      if (!note) throw new Error('Note not found')
+      const updated = {
+        ...note,
+        fields: {
         front: requiredText(fields.front, 'Front'),
         back: requiredText(fields.back, 'Back'),
       },
-      updatedAt: now.toISOString(),
+        updatedAt: now.toISOString(),
+      }
+      await this.notes.put(updated)
+      await this.outbox.add({ opId: id(), entityType: 'note', entityId: noteId, action: 'update', occurredAt: updated.updatedAt, payload: updated })
     })
-    if (!updated) throw new Error('Note not found')
   }
 
   async counts(deckId: string): Promise<DeckCounts> {
@@ -301,11 +360,76 @@ export class Collection extends Dexie {
       cardId,
       deckId: existing.deckId,
     })
-    await this.transaction('rw', this.cards, this.reviewEntries, async () => {
+    await this.transaction('rw', this.cards, this.reviewEntries, this.outbox, async () => {
       await this.cards.put(card)
       await this.reviewEntries.add(review)
+      await this.outbox.bulkAdd([
+        { opId: id(), entityType: 'card', entityId: card.id, action: 'update', occurredAt: review.reviewedAt, payload: card },
+        { opId: id(), entityType: 'review', entityId: review.id, action: 'create', occurredAt: review.reviewedAt, payload: review },
+      ])
     })
     return review
+  }
+
+  async pendingOperations(): Promise<SyncOperation[]> {
+    return this.outbox.orderBy('occurredAt').toArray()
+  }
+
+  async acknowledgeOperations(opIds: string[]) {
+    await this.outbox.bulkDelete(opIds)
+  }
+
+  async configureSync(settings: SyncSettings) {
+    await this.settings.put({ key: 'sync', value: settings })
+  }
+
+  async syncSettings(): Promise<SyncSettings | undefined> {
+    return (await this.settings.get('sync'))?.value as SyncSettings | undefined
+  }
+
+  async applyRemoteChanges(changes: SyncOperation[], cursor: number) {
+    await this.transaction('rw', [this.decks, this.notes, this.cards, this.reviewEntries, this.receivedOperations, this.settings, this.deletedEntities], async () => {
+      for (const change of changes) {
+        if (await this.receivedOperations.get(change.opId)) continue
+        if (change.action !== 'delete') {
+          const related = relatedEntityIds(change)
+          const deleted = await Promise.all([
+            this.deletedEntities.get(tombstoneKey(change.entityType, change.entityId)),
+            related.deckId ? this.deletedEntities.get(tombstoneKey('deck', related.deckId)) : undefined,
+            related.noteId ? this.deletedEntities.get(tombstoneKey('note', related.noteId)) : undefined,
+          ])
+          if (deleted.some(Boolean)) {
+            await this.receivedOperations.add({ opId: change.opId })
+            continue
+          }
+        }
+        if (change.action === 'delete') {
+          await this.deletedEntities.put({ key: tombstoneKey(change.entityType, change.entityId), entityType: change.entityType, entityId: change.entityId, occurredAt: change.occurredAt })
+          if (change.entityType === 'deck') {
+            await this.decks.delete(change.entityId)
+            await this.notes.where('deckId').equals(change.entityId).delete()
+            await this.cards.where('deckId').equals(change.entityId).delete()
+            await this.reviewEntries.where('deckId').equals(change.entityId).delete()
+          } else if (change.entityType === 'note') {
+            await this.notes.delete(change.entityId)
+            const cardIds = (await this.cards.where('noteId').equals(change.entityId).primaryKeys()) as string[]
+            await this.cards.bulkDelete(cardIds)
+            await this.reviewEntries.where('cardId').anyOf(cardIds).delete()
+          } else if (change.entityType === 'card') {
+            await this.cards.delete(change.entityId)
+            await this.reviewEntries.where('cardId').equals(change.entityId).delete()
+          } else {
+            await this.reviewEntries.delete(change.entityId)
+          }
+        } else if (change.entityType === 'deck') await this.decks.put(change.payload as Deck)
+        else if (change.entityType === 'note') await this.notes.put(change.payload as Note)
+        else if (change.entityType === 'card') await this.cards.put(change.payload as CardRecord)
+        else if (change.entityType === 'review') await this.reviewEntries.put(change.payload as ReviewEntry)
+        await this.receivedOperations.add({ opId: change.opId })
+      }
+      const existing = await this.settings.get('sync')
+      if (existing) await this.settings.put({ key: 'sync', value: { ...(existing.value as SyncSettings), cursor } })
+    })
   }
 }
 
