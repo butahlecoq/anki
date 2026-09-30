@@ -165,6 +165,7 @@ function id() {
 }
 
 const tombstoneKey = (entityType: SyncOperation['entityType'], entityId: string) => `${entityType}:${entityId}`
+const inboundDependencyOrder: Record<SyncOperation['entityType'], number> = { deck: 0, noteType: 1, note: 2, card: 3, review: 4, noteMedia: 5 }
 
 function relatedEntityIds(change: SyncOperation) {
   if (!change.payload || typeof change.payload !== 'object') return {}
@@ -179,6 +180,13 @@ function requiredText(value: string, label: string) {
   const normalized = value.trim()
   if (!normalized) throw new Error(`${label} is required`)
   return normalized
+}
+
+function renameTemplateFields(template: string, renamed: ReadonlyMap<string, string>) {
+  return template.replace(/{{\s*([#^/]?)\s*([^{}]+?)\s*}}/g, (token, marker: string, rawName: string) => {
+    const name = renamed.get(rawName.trim())
+    return name ? `{{${marker}${name}}}` : token
+  })
 }
 
 function canonicalNote(note: LegacyNote): Note {
@@ -369,7 +377,20 @@ export class Collection extends Dexie {
       const oldFieldIds = new Set(previous.fields.map((field) => field.id))
       const oldTemplateIds = new Set(previous.templates.map((template) => template.id))
       const fields = (input.fields ?? previous.fields).map((field) => ({ id: field.id ?? id(), name: requiredText(field.name, 'Field name') }))
-      const templates = (input.templates ?? previous.templates).map((template) => ({ ...template, id: template.id ?? id(), name: requiredText(template.name, 'Template name') }))
+      const renamed = new Map(previous.fields.flatMap((field) => {
+        const newName = fields.find((candidate) => candidate.id === field.id)?.name
+        return newName && newName !== field.name ? [[field.name, newName] as const] : []
+      }))
+      const templates = (input.templates ?? previous.templates).map((template) => {
+        const old = previous.templates.find((candidate) => candidate.id === template.id)
+        return {
+          ...template,
+          id: template.id ?? id(),
+          name: requiredText(template.name, 'Template name'),
+          front: old && template.front === old.front ? renameTemplateFields(template.front, renamed) : template.front,
+          back: old && template.back === old.back ? renameTemplateFields(template.back, renamed) : template.back,
+        }
+      })
       if (!fields.length) throw new Error('A note type needs at least one field')
       if (!templates.length) throw new Error('A note type needs at least one template')
       if (new Set(fields.map((field) => field.id)).size !== fields.length) throw new Error('Field IDs must be unique')
@@ -737,7 +758,8 @@ export class Collection extends Dexie {
 
   async applyRemoteChanges(changes: SyncOperation[], cursor: number) {
     await this.transaction('rw', [this.decks, this.noteTypes, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.receivedOperations, this.settings, this.deletedEntities], async () => {
-      for (const change of changes) {
+      // Resolve type and note changes before their cards, even when equal timestamps arrive in index order.
+      for (const change of [...changes].sort((left, right) => inboundDependencyOrder[left.entityType] - inboundDependencyOrder[right.entityType])) {
         if (await this.receivedOperations.get(change.opId)) continue
         if (change.action !== 'delete') {
           const related = relatedEntityIds(change)
@@ -747,6 +769,43 @@ export class Collection extends Dexie {
             related.noteId ? this.deletedEntities.get(tombstoneKey('note', related.noteId)) : undefined,
           ])
           if (deleted.some(Boolean)) {
+            await this.receivedOperations.add({ opId: change.opId })
+            continue
+          }
+          if (change.entityType === 'note') {
+            const incoming = canonicalNote(change.payload as LegacyNote)
+            if (await this.deletedEntities.get(tombstoneKey('noteType', incoming.typeId))) {
+              await this.receivedOperations.add({ opId: change.opId })
+              continue
+            }
+          }
+          if (change.entityType === 'card') {
+            const incoming = canonicalCard(change.payload as LegacyCard)
+            const note = await this.notes.get(incoming.noteId)
+            const noteType = note && await this.noteTypes.get(note.typeId)
+            const deletedType = note && !noteType && await this.deletedEntities.get(tombstoneKey('noteType', note.typeId))
+            if (note && (deletedType || (noteType && !this.cardGenerationStatus(noteType, note.fields).eligible.some((template) => template.id === incoming.templateId))) && !incoming.suspended) {
+              await this.receivedOperations.add({ opId: change.opId })
+              continue
+            }
+          }
+          if (change.entityType === 'review') {
+            const review = change.payload as ReviewEntry
+            const card = await this.cards.get(review.cardId)
+            const note = card && await this.notes.get(card.noteId)
+            const noteType = note && await this.noteTypes.get(note.typeId)
+            if (card && note && (!noteType || !this.cardGenerationStatus(noteType, note.fields).eligible.some((template) => template.id === card.templateId))) {
+              await this.receivedOperations.add({ opId: change.opId })
+              continue
+            }
+          }
+        }
+        if (change.action === 'delete' && change.entityType === 'card') {
+          const existingCard = await this.cards.get(change.entityId)
+          const note = existingCard && await this.notes.get(existingCard.noteId)
+          const noteType = note && await this.noteTypes.get(note.typeId)
+          const deletedType = note && !noteType && await this.deletedEntities.get(tombstoneKey('noteType', note.typeId))
+          if (existingCard && note && (deletedType || (noteType && !noteType.templates.some((template) => template.id === existingCard.templateId)))) {
             await this.receivedOperations.add({ opId: change.opId })
             continue
           }
@@ -772,7 +831,11 @@ export class Collection extends Dexie {
           } else if (change.entityType === 'noteMedia') {
             await this.noteMedia.delete(change.entityId)
           } else if (change.entityType === 'noteType') {
-            if (change.entityId !== BASIC_NOTE_TYPE_ID) await this.noteTypes.delete(change.entityId)
+            if (change.entityId !== BASIC_NOTE_TYPE_ID) {
+              const noteIds = (await this.notes.where('typeId').equals(change.entityId).primaryKeys()) as string[]
+              if (noteIds.length) await this.cards.where('noteId').anyOf(noteIds).modify({ suspended: true })
+              await this.noteTypes.delete(change.entityId)
+            }
           } else {
             await this.reviewEntries.delete(change.entityId)
           }
