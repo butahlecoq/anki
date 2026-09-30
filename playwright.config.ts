@@ -2,7 +2,8 @@ import { defineConfig, devices } from '@playwright/test'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const syncRuntimeDirectory = join(tmpdir(), 'kiroku-e2e-sync')
+const syncRuntimeDirectory = process.env.KIROKU_RUNTIME_DIRECTORY ?? join(tmpdir(), `kiroku-e2e-sync-${process.pid}`)
+process.env.KIROKU_RUNTIME_DIRECTORY = syncRuntimeDirectory
 
 export default defineConfig({
   testDir: './tests/e2e',

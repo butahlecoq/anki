@@ -7,7 +7,7 @@ import { createSyncService } from './sync-service.js'
 
 export async function createPairingCode({ runtimeDirectory }: { runtimeDirectory: string }) {
   await mkdir(runtimeDirectory, { recursive: true })
-  const service = createSyncService({ databasePath: join(runtimeDirectory, 'kiroku-sync.sqlite') })
+  const service = createSyncService({ databasePath: join(runtimeDirectory, 'kiroku-sync.sqlite'), mediaDirectory: join(runtimeDirectory, 'media') })
   try {
     return service.createPairingCode()
   } finally {
@@ -23,7 +23,7 @@ const isLoopback = (host: string) => ['127.0.0.1', '::1', 'localhost'].includes(
 export async function startSyncServer({ runtimeDirectory, host, port, allowedOrigin, tls }: StartOptions) {
   if (!isLoopback(host) && !tls) throw new Error('TLS key and certificate paths are required before binding the sync service to a network interface.')
   await mkdir(runtimeDirectory, { recursive: true })
-  const service = createSyncService({ databasePath: join(runtimeDirectory, 'kiroku-sync.sqlite') })
+  const service = createSyncService({ databasePath: join(runtimeDirectory, 'kiroku-sync.sqlite'), mediaDirectory: join(runtimeDirectory, 'media') })
   const handler = createSyncHttpHandler(service, { allowedOrigin })
   const server = tls
     ? createSecureServer({ key: await readFile(tls.keyPath), cert: await readFile(tls.certificatePath) }, handler)

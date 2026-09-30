@@ -1,6 +1,7 @@
 import { expect, test, vi } from 'vitest'
 import { foregroundSync, pairCollection, syncCollection } from './sync-client'
 import { createCollection } from './collection'
+import { digestMedia } from './media'
 
 test('sends pending operations with the local pairing credential', async () => {
   const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ accepted: 2, cursor: 2, changes: [] }), { status: 200 }))
@@ -51,5 +52,41 @@ test('syncs a configured collection, applies remote reviews, and clears acknowle
   await expect(syncCollection(collection, fetcher)).resolves.toMatchObject({ state: 'complete', cursor: 1 })
   await expect(collection.reviewEntries.count()).resolves.toBe(1)
   await expect(collection.pendingOperations()).resolves.toHaveLength(0)
+  await collection.delete()
+})
+
+test('reports a media upload failure separately while syncing card changes', async () => {
+  const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+  await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 })
+  const deck = await collection.createDeck('Japanese foundations')
+  const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
+  await collection.attachMedia(note.id, { file: new File(['image'], 'cat.png', { type: 'image/png' }), side: 'front' })
+  const fetcher = vi.fn((url: string) => url.includes('/api/media/')
+    ? Promise.resolve(new Response('', { status: 503 }))
+    : Promise.resolve(new Response(JSON.stringify({ accepted: 3, cursor: 3, changes: [] }), { status: 200 })))
+
+  await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'complete', accepted: 3, media: { uploaded: 0, downloaded: 0, pending: 1, uploadError: 'unreachable' } })
+  expect(fetcher).toHaveBeenCalledWith('https://pc.example.test/api/sync', expect.anything())
+  await expect(collection.pendingOperations()).resolves.toHaveLength(0)
+  await collection.delete()
+})
+
+test('downloads remote media even when an unrelated local upload fails', async () => {
+  const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+  await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 })
+  const deck = await collection.createDeck('Japanese foundations')
+  const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
+  await collection.attachMedia(note.id, { file: new File(['local'], 'local.png', { type: 'image/png' }), side: 'front' })
+  const remoteBytes = new TextEncoder().encode('remote')
+  const remoteDigest = await digestMedia(new Blob([remoteBytes], { type: 'image/png' }))
+  const remoteReference = { id: 'remote-media', noteId: 'remote-note', digest: remoteDigest, kind: 'image' as const, mimeType: 'image/png', displayName: 'remote.png', side: 'front' as const, playback: 'manual' as const, createdAt: '2026-10-01T12:00:00.000Z', updatedAt: '2026-10-01T12:00:00.000Z' }
+  const fetcher = vi.fn((url: string) => {
+    if (url.endsWith(`/api/media/${remoteDigest}`)) return Promise.resolve(new Response(remoteBytes, { status: 200, headers: { 'x-content-sha256': remoteDigest, 'content-type': 'image/png' } }))
+    if (url.includes('/api/media/')) return Promise.resolve(new Response('', { status: 503 }))
+    return Promise.resolve(new Response(JSON.stringify({ accepted: 0, cursor: 1, changes: [{ opId: 'remote-media-op', entityType: 'noteMedia', entityId: remoteReference.id, action: 'create', occurredAt: remoteReference.createdAt, payload: remoteReference }] }), { status: 200 }))
+  })
+
+  await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'complete', media: { uploaded: 0, downloaded: 1, pending: 1, uploadError: 'unreachable' } })
+  await expect(collection.verifiedMediaBlob(remoteDigest)).resolves.toMatchObject({ digest: remoteDigest })
   await collection.delete()
 })

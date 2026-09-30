@@ -62,6 +62,47 @@ describe('local collection', () => {
     ]))
   })
 
+  test('deduplicates verified media bytes while keeping independent note references', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Japanese foundations')
+    const first = await collection.createBasicNote(deck.id, { front: '猫', back: 'ねこ — cat' })
+    const second = await collection.createBasicNote(deck.id, { front: '犬', back: 'いぬ — dog' })
+    const image = new File([new Uint8Array([137, 80, 78, 71])], 'example.png', { type: 'image/png' })
+
+    const firstReference = await collection.attachMedia(first.id, { file: image, side: 'front' })
+    const secondReference = await collection.attachMedia(second.id, { file: image, side: 'back' })
+
+    expect(firstReference.digest).toBe(secondReference.digest)
+    await expect(collection.mediaBlobs.count()).resolves.toBe(1)
+    await expect(collection.mediaForNote(first.id)).resolves.toHaveLength(1)
+    await collection.removeMedia(firstReference.id)
+    await expect(collection.mediaBlobs.count()).resolves.toBe(1)
+    await expect(collection.mediaForNote(second.id)).resolves.toHaveLength(1)
+  })
+
+  test('creates a note and its media references atomically', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Japanese foundations')
+    const image = new File(['image'], 'cat.png', { type: 'image/png' })
+    const note = await collection.createBasicNoteWithMedia(deck.id, { front: '猫', back: 'cat' }, [{ file: image, side: 'front' }, { file: image, side: 'back' }])
+    await expect(collection.mediaForNote(note.id)).resolves.toHaveLength(2)
+    await expect(collection.mediaBlobs.count()).resolves.toBe(1)
+    await expect(collection.createBasicNoteWithMedia(deck.id, { front: '犬', back: 'dog' }, [{ file: new File(['bad'], 'bad.txt', { type: 'text/plain' }), side: 'front' }])).rejects.toThrow('not a supported')
+    await expect(collection.notes.count()).resolves.toBe(1)
+  })
+
+  test('removes media references with their deleted deck while retaining shared bytes', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Japanese foundations')
+    const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'ねこ — cat' })
+    await collection.attachMedia(note.id, { file: new File(['image'], 'cat.png', { type: 'image/png' }), side: 'front' })
+
+    await collection.deleteDeck(deck.id)
+
+    await expect(collection.noteMedia.count()).resolves.toBe(0)
+    await expect(collection.mediaBlobs.count()).resolves.toBe(1)
+  })
+
   test('keeps a paired sync credential in local collection settings', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'device-token', cursor: 4 })
@@ -110,5 +151,20 @@ describe('local collection', () => {
     await expect(collection.decks.get(deck.id)).resolves.toBeUndefined()
     await expect(collection.notes.get(note.id)).resolves.toBeUndefined()
     await expect(collection.cards.where('deckId').equals(deck.id).count()).resolves.toBe(0)
+  })
+
+  test('applies a remote media reference only once', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const reference = { id: 'media-1', noteId: 'note-1', digest: 'a'.repeat(64), kind: 'image' as const, mimeType: 'image/png', displayName: 'cat.png', side: 'front' as const, playback: 'manual' as const, createdAt: '2026-10-01T12:00:00.000Z', updatedAt: '2026-10-01T12:00:00.000Z' }
+    const operation = { opId: 'remote-media', entityType: 'noteMedia' as const, entityId: reference.id, action: 'create' as const, occurredAt: reference.createdAt, payload: reference }
+    await collection.applyRemoteChanges([operation], 1)
+    await collection.applyRemoteChanges([operation], 1)
+    await expect(collection.noteMedia.count()).resolves.toBe(1)
+  })
+
+  test('rejects downloaded media whose bytes do not match its digest', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    await expect(collection.storeDownloadedMedia('a'.repeat(64), new Blob(['wrong'], { type: 'image/png' }))).rejects.toThrow('content digest')
+    await expect(collection.mediaBlobs.count()).resolves.toBe(0)
   })
 })
