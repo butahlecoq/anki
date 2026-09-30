@@ -129,4 +129,13 @@ describe('local collection', () => {
     await expect(collection.notes.get(note.id)).resolves.toBeUndefined()
     await expect(collection.cards.where('deckId').equals(deck.id).count()).resolves.toBe(0)
   })
+
+  test('applies a remote media reference only once', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const reference = { id: 'media-1', noteId: 'note-1', digest: 'a'.repeat(64), kind: 'image' as const, mimeType: 'image/png', displayName: 'cat.png', side: 'front' as const, playback: 'manual' as const, createdAt: '2026-10-01T12:00:00.000Z', updatedAt: '2026-10-01T12:00:00.000Z' }
+    const operation = { opId: 'remote-media', entityType: 'noteMedia' as const, entityId: reference.id, action: 'create' as const, occurredAt: reference.createdAt, payload: reference }
+    await collection.applyRemoteChanges([operation], 1)
+    await collection.applyRemoteChanges([operation], 1)
+    await expect(collection.noteMedia.count()).resolves.toBe(1)
+  })
 })
