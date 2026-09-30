@@ -138,4 +138,10 @@ describe('local collection', () => {
     await collection.applyRemoteChanges([operation], 1)
     await expect(collection.noteMedia.count()).resolves.toBe(1)
   })
+
+  test('rejects downloaded media whose bytes do not match its digest', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    await expect(collection.storeDownloadedMedia('a'.repeat(64), new Blob(['wrong'], { type: 'image/png' }))).rejects.toThrow('content digest')
+    await expect(collection.mediaBlobs.count()).resolves.toBe(0)
+  })
 })

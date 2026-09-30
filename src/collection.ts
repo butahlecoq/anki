@@ -344,6 +344,11 @@ export class Collection extends Dexie {
     return this.mediaBlobs.get(digest)
   }
 
+  async storeDownloadedMedia(digest: string, blob: Blob, now = new Date()) {
+    if (await digestMedia(blob) !== digest) throw new Error('Downloaded media did not match its content digest.')
+    await this.mediaBlobs.put({ digest, blob, byteLength: blob.size, mimeType: blob.type, verifiedAt: now.toISOString() })
+  }
+
   async removeMedia(referenceId: string, now = new Date()) {
     await this.transaction('rw', this.noteMedia, this.outbox, async () => {
       const reference = await this.noteMedia.get(referenceId)
