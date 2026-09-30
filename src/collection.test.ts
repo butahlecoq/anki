@@ -93,6 +93,214 @@ describe('local collection', () => {
     await expect(collection.cards.where('noteId').equals(note.id).count()).resolves.toBe(1)
   })
 
+  test('renames and reorders fields without moving values or resetting a reviewed card', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Words')
+    const type = await collection.createNoteType({ name: 'Words', fields: [{ name: 'Word' }, { name: 'Meaning' }], templates: [{ name: 'Forward', front: '{{Word}}', back: '{{Meaning}}', css: '' }] })
+    const note = await collection.createNote(deck.id, type.id, { [type.fields[0].id]: '猫', [type.fields[1].id]: 'cat' })
+    const cardId = `${note.id}:${type.templates[0].id}`
+    await collection.answer(cardId, Rating.Good, new Date('2026-10-01T12:00:00Z'))
+
+    const updated = await collection.updateNoteType(type.id, { name: 'Vocabulary', fields: [{ ...type.fields[1], name: 'Definition' }, type.fields[0]], templates: [{ ...type.templates[0], back: '{{Definition}}' }] })
+
+    expect(updated.name).toBe('Vocabulary')
+    expect(updated.fields.map((field) => field.id)).toEqual([type.fields[1].id, type.fields[0].id])
+    await expect(collection.notes.get(note.id)).resolves.toMatchObject({ fields: { [type.fields[0].id]: '猫', [type.fields[1].id]: 'cat' } })
+    expect(await collection.cards.get(cardId)).toMatchObject({ reps: 1 })
+    expect((await collection.cards.get(cardId))?.suspended).toBeFalsy()
+    await expect(collection.pendingOperations()).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ entityType: 'noteType', entityId: type.id, action: 'update' })]))
+  })
+
+  test('renames a field and rewrites retained template tokens without an explicit template edit', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Words')
+    const type = await collection.createNoteType({ name: 'Words', fields: [{ name: 'Word' }], templates: [{ name: 'Card', front: '{{#Word}}<b>{{ Word }}</b>{{/Word}}', back: '{{^Word}}empty{{/Word}}{{Word}}', css: '' }] })
+    const note = await collection.createNote(deck.id, type.id, { [type.fields[0].id]: '猫' })
+    const cardId = `${note.id}:${type.templates[0].id}`
+    await collection.answer(cardId, Rating.Good, new Date('2026-10-01T12:00:00Z'))
+
+    const updated = await collection.updateNoteType(type.id, { fields: [{ ...type.fields[0], name: 'Term' }] })
+
+    expect(updated.templates[0].front).toBe('{{#Term}}<b>{{Term}}</b>{{/Term}}')
+    expect(updated.templates[0].back).toBe('{{^Term}}empty{{/Term}}{{Term}}')
+    await expect(collection.notes.get(note.id)).resolves.toMatchObject({ fields: { [type.fields[0].id]: '猫' } })
+    expect((await collection.cards.get(cardId))?.reps).toBe(1)
+    expect((await collection.cards.get(cardId))?.suspended).toBeFalsy()
+    await expect(collection.pendingOperations()).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ entityType: 'noteType', entityId: type.id, action: 'update', payload: expect.objectContaining({ templates: updated.templates }) })]))
+  })
+
+  test('clones a note type with independent field and template identities', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const original = await collection.createNoteType({ name: 'Words', fields: [{ name: 'Word' }], templates: [{ name: 'Card', front: '{{Word}}', back: '{{Word}}', css: '' }] })
+    const clone = await collection.cloneNoteType(original.id, 'Words copy')
+    expect(clone.name).toBe('Words copy')
+    expect(clone.id).not.toBe(original.id)
+    expect(clone.fields[0].id).not.toBe(original.fields[0].id)
+    expect(clone.templates[0].id).not.toBe(original.templates[0].id)
+    await expect(collection.pendingOperations()).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ entityType: 'noteType', entityId: clone.id, action: 'create' })]))
+    await collection.deleteNoteType(clone.id)
+    await expect(collection.noteTypes.get(clone.id)).resolves.toBeUndefined()
+  })
+
+  test('requires an explicit mode for removed fields and retains or discards their values', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Words')
+    const type = await collection.createNoteType({ name: 'Words', fields: [{ name: 'Word' }, { name: 'Hint' }], templates: [{ name: 'Card', front: '{{Word}}', back: '{{Hint}}', css: '' }] })
+    const note = await collection.createNote(deck.id, type.id, { [type.fields[0].id]: '猫', [type.fields[1].id]: 'feline' })
+    const fields = [type.fields[0]]
+    const templates = [{ ...type.templates[0], back: '{{Word}}' }]
+
+    await expect(collection.updateNoteType(type.id, { fields, templates })).rejects.toThrow(/removal mode/i)
+    await expect(collection.updateNoteType(type.id, { fields, templates, removedFields: { [type.fields[1].id]: 'unexpected' as 'discard' } })).rejects.toThrow(/removal mode/i)
+    await expect(collection.noteTypes.get(type.id)).resolves.toEqual(type)
+    await collection.updateNoteType(type.id, { fields, templates, removedFields: { [type.fields[1].id]: 'keep-as-extra' } })
+    await expect(collection.notes.get(note.id)).resolves.toMatchObject({ fields: { [type.fields[0].id]: '猫' }, retiredFields: { [type.fields[1].id]: 'feline' } })
+
+    const disposable = await collection.createNoteType({ name: 'Disposable', fields: [{ name: 'Word' }, { name: 'Hint' }], templates: [{ name: 'Card', front: '{{Word}}', back: '{{Hint}}', css: '' }] })
+    const other = await collection.createNote(deck.id, disposable.id, { [disposable.fields[0].id]: '犬', [disposable.fields[1].id]: 'canine' })
+    await collection.updateNoteType(disposable.id, { fields: [disposable.fields[0]], templates: [{ ...disposable.templates[0], back: '{{Word}}' }], removedFields: { [disposable.fields[1].id]: 'discard' } })
+    const changed = await collection.notes.get(other.id)
+    expect(changed?.fields).toEqual({ [disposable.fields[0].id]: '犬' })
+    expect(changed?.retiredFields?.[disposable.fields[1].id]).toBeUndefined()
+  })
+
+  test('adds a field and template, then suspends a removed template without losing review history', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Words')
+    const type = await collection.createNoteType({ name: 'Words', fields: [{ name: 'Word' }], templates: [{ name: 'Forward', front: '{{Word}}', back: '{{Word}}', css: '' }] })
+    const note = await collection.createNote(deck.id, type.id, { [type.fields[0].id]: '猫' })
+    const firstId = `${note.id}:${type.templates[0].id}`
+    await collection.answer(firstId, Rating.Good, new Date('2026-10-01T12:00:00Z'))
+
+    const expanded = await collection.updateNoteType(type.id, { fields: [...type.fields, { name: 'Meaning' }], templates: [...type.templates, { name: 'Reverse', front: '{{Word}}', back: '{{Meaning}}', css: '' }] })
+    expect(expanded.fields[1].id).toBeTruthy()
+    await expect(collection.notes.get(note.id)).resolves.toMatchObject({ fields: { [expanded.fields[1].id]: '' } })
+    const secondId = `${note.id}:${expanded.templates[1].id}`
+    expect(await collection.cards.get(secondId)).toMatchObject({ reps: 0 })
+    expect((await collection.cards.get(secondId))?.suspended).toBeFalsy()
+
+    await collection.updateNoteType(type.id, { templates: [expanded.templates[1]] })
+    await expect(collection.cards.get(firstId)).resolves.toMatchObject({ reps: 1, suspended: true })
+    expect((await collection.cards.get(secondId))?.suspended).toBeFalsy()
+    await expect(collection.reviewEntries.where('cardId').equals(firstId).count()).resolves.toBe(1)
+  })
+
+  test('deletes a used type only with replacement mapping and archives old cards', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Words')
+    const oldType = await collection.createNoteType({ name: 'Old', fields: [{ name: 'Word' }, { name: 'Hint' }], templates: [{ name: 'Old card', front: '{{Word}}', back: '{{Hint}}', css: '' }] })
+    const replacement = await collection.createNoteType({ name: 'New', fields: [{ name: 'Term' }], templates: [{ name: 'New card', front: '{{Term}}', back: '{{Term}}', css: '' }] })
+    const note = await collection.createNote(deck.id, oldType.id, { [oldType.fields[0].id]: '猫', [oldType.fields[1].id]: 'feline' })
+    const oldCardId = `${note.id}:${oldType.templates[0].id}`
+    await collection.answer(oldCardId, Rating.Good, new Date('2026-10-01T12:00:00Z'))
+
+    await expect(collection.deleteNoteType(oldType.id)).rejects.toThrow(/replacement/i)
+    await expect(collection.deleteNoteType(oldType.id, { replacementTypeId: replacement.id })).rejects.toThrow(/field mapping/i)
+    const operationsBefore = (await collection.pendingOperations()).length
+    await expect(collection.deleteNoteType(oldType.id, { replacementTypeId: replacement.id, fieldMapping: { [oldType.fields[0].id]: 'missing-field' } })).rejects.toThrow(/unknown replacement field/i)
+    await expect(collection.notes.get(note.id)).resolves.toMatchObject({ typeId: oldType.id })
+    await expect(collection.pendingOperations()).resolves.toHaveLength(operationsBefore)
+    await collection.deleteNoteType(oldType.id, { replacementTypeId: replacement.id, fieldMapping: { [oldType.fields[0].id]: replacement.fields[0].id } })
+
+    await expect(collection.noteTypes.get(oldType.id)).resolves.toBeUndefined()
+    await expect(collection.notes.get(note.id)).resolves.toMatchObject({ typeId: replacement.id, fields: { [replacement.fields[0].id]: '猫' }, retiredFields: { [oldType.fields[1].id]: 'feline' } })
+    await expect(collection.cards.get(oldCardId)).resolves.toMatchObject({ reps: 1, suspended: true })
+    expect(await collection.cards.get(`${note.id}:${replacement.templates[0].id}`)).toMatchObject({ reps: 0 })
+    expect((await collection.cards.get(`${note.id}:${replacement.templates[0].id}`))?.suspended).toBeFalsy()
+    await expect(collection.reviewEntries.where('cardId').equals(oldCardId).count()).resolves.toBe(1)
+    await expect(collection.pendingOperations()).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ entityType: 'noteType', entityId: oldType.id, action: 'delete' })]))
+  })
+
+  test('ignores delayed source note and card updates after replacement migration', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Words')
+    const source = await collection.createNoteType({ name: 'Old', fields: [{ name: 'Word' }], templates: [{ name: 'Card', front: '{{Word}}', back: '{{Word}}', css: '' }] })
+    const replacement = await collection.createNoteType({ name: 'New', fields: [{ name: 'Term' }], templates: [{ name: 'Card', front: '{{Term}}', back: '{{Term}}', css: '' }] })
+    const note = await collection.createNote(deck.id, source.id, { [source.fields[0].id]: '猫' })
+    const oldCardId = `${note.id}:${source.templates[0].id}`
+    const staleCard = await collection.cards.get(oldCardId)
+    await collection.deleteNoteType(source.id, { replacementTypeId: replacement.id, fieldMapping: { [source.fields[0].id]: replacement.fields[0].id } })
+    const migrated = await collection.notes.get(note.id)
+    const archived = await collection.cards.get(oldCardId)
+
+    await collection.applyRemoteChanges([
+      { opId: 'delayed-old-note', entityType: 'note', entityId: note.id, action: 'update', occurredAt: '2026-10-02T00:00:00.000Z', payload: { ...note, fields: { [source.fields[0].id]: 'dog' } } },
+      { opId: 'delayed-old-card', entityType: 'card', entityId: oldCardId, action: 'update', occurredAt: '2026-10-02T00:00:00.000Z', payload: staleCard },
+    ], 2)
+
+    await expect(collection.notes.get(note.id)).resolves.toEqual(migrated)
+    await expect(collection.cards.get(oldCardId)).resolves.toEqual(archived)
+    await expect(collection.receivedOperations.count()).resolves.toBe(2)
+  })
+
+  test('ignores a delayed review for an archived card after type replacement', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Words')
+    const source = await collection.createNoteType({ name: 'Old', fields: [{ name: 'Word' }], templates: [{ name: 'Card', front: '{{Word}}', back: '{{Word}}', css: '' }] })
+    const replacement = await collection.createNoteType({ name: 'New', fields: [{ name: 'Term' }], templates: [{ name: 'Card', front: '{{Term}}', back: '{{Term}}', css: '' }] })
+    const note = await collection.createNote(deck.id, source.id, { [source.fields[0].id]: '猫' })
+    const oldCardId = `${note.id}:${source.templates[0].id}`
+    const review = await collection.answer(oldCardId, Rating.Good, new Date('2026-10-01T12:00:00Z'))
+    await collection.deleteNoteType(source.id, { replacementTypeId: replacement.id, fieldMapping: { [source.fields[0].id]: replacement.fields[0].id } })
+
+    await collection.applyRemoteChanges([{ opId: 'delayed-review-op', entityType: 'review', entityId: 'delayed-review', action: 'create', occurredAt: '2026-10-02T00:00:00.000Z', payload: { ...review, id: 'delayed-review' } }], 1)
+
+    await expect(collection.reviewEntries.where('cardId').equals(oldCardId).count()).resolves.toBe(1)
+    await expect(collection.receivedOperations.count()).resolves.toBe(1)
+  })
+
+  test('suspends dependent cards when a remote note type deletion arrives before note migration', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Words')
+    const type = await collection.createNoteType({ name: 'Old', fields: [{ name: 'Word' }], templates: [{ name: 'Card', front: '{{Word}}', back: '{{Word}}', css: '' }] })
+    const note = await collection.createNote(deck.id, type.id, { [type.fields[0].id]: '猫' })
+    const cardId = `${note.id}:${type.templates[0].id}`
+    const staleCard = await collection.cards.get(cardId)
+
+    await collection.applyRemoteChanges([{ opId: 'remote-type-delete', entityType: 'noteType', entityId: type.id, action: 'delete', occurredAt: '2026-10-02T00:00:00.000Z', payload: { id: type.id } }], 1)
+    await collection.applyRemoteChanges([{ opId: 'old-card-after-type-delete', entityType: 'card', entityId: cardId, action: 'update', occurredAt: '2026-10-02T00:01:00.000Z', payload: staleCard }], 2)
+
+    await expect(collection.noteTypes.get(type.id)).resolves.toBeUndefined()
+    await expect(collection.cards.get(cardId)).resolves.toMatchObject({ suspended: true })
+    await expect(collection.dueCards(deck.id)).resolves.toHaveLength(0)
+    await expect(collection.notes.get(note.id)).resolves.toMatchObject({ typeId: type.id })
+    await expect(collection.receivedOperations.count()).resolves.toBe(2)
+  })
+
+  test('replays note type mutation and deletion operations only once on a second client', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const remote = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    try {
+      const deck = await collection.createDeck('Words')
+      const source = await collection.createNoteType({ name: 'Words', fields: [{ name: 'Word' }, { name: 'Hint' }], templates: [{ name: 'Card', front: '{{Word}}', back: '{{Hint}}', css: '' }] })
+      const replacement = await collection.createNoteType({ name: 'Replacement', fields: [{ name: 'Term' }], templates: [{ name: 'Card', front: '{{Term}}', back: '{{Term}}', css: '' }] })
+      const note = await collection.createNote(deck.id, source.id, { [source.fields[0].id]: '猫', [source.fields[1].id]: 'feline' })
+      const initial = await collection.pendingOperations()
+      await remote.applyRemoteChanges(initial, initial.length)
+      await collection.acknowledgeOperations(initial.map((operation) => operation.opId))
+
+      await collection.updateNoteType(source.id, { name: 'Renamed words', fields: [source.fields[0]], templates: [{ ...source.templates[0], back: '{{Word}}' }], removedFields: { [source.fields[1].id]: 'keep-as-extra' } })
+      const updates = await collection.pendingOperations()
+      await remote.applyRemoteChanges(updates, initial.length + updates.length)
+      await remote.applyRemoteChanges(updates, initial.length + updates.length)
+      await expect(remote.noteTypes.get(source.id)).resolves.toMatchObject({ name: 'Renamed words' })
+      await expect(remote.notes.get(note.id)).resolves.toMatchObject({ retiredFields: { [source.fields[1].id]: 'feline' } })
+      await collection.acknowledgeOperations(updates.map((operation) => operation.opId))
+
+      await collection.deleteNoteType(source.id, { replacementTypeId: replacement.id, fieldMapping: { [source.fields[0].id]: replacement.fields[0].id } })
+      const deletion = await collection.pendingOperations()
+      await remote.applyRemoteChanges(deletion, initial.length + updates.length + deletion.length)
+      await remote.applyRemoteChanges(deletion, initial.length + updates.length + deletion.length)
+      await expect(remote.noteTypes.get(source.id)).resolves.toBeUndefined()
+      await expect(remote.notes.get(note.id)).resolves.toEqual(await collection.notes.get(note.id))
+      await expect(remote.cards.where('noteId').equals(note.id).toArray()).resolves.toEqual(await collection.cards.where('noteId').equals(note.id).toArray())
+      await expect(remote.receivedOperations.count()).resolves.toBe(initial.length + updates.length + deletion.length)
+      await expect(remote.pendingOperations()).resolves.toHaveLength(0)
+    } finally {
+      await remote.delete()
+    }
+  })
+
   test('rejects note types whose templates reference an unknown field or FrontSide on front', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const input = { name: 'Words', fields: [{ name: 'Word' }], templates: [{ name: 'Card', front: '{{Missing}}', back: '{{Word}}', css: '' }] }

@@ -56,11 +56,11 @@
 - Consumes `NoteType` and generated-card APIs from Task 1.
 - Produces `updateNoteType`, `cloneNoteType`, `deleteNoteType`, and explicit field-removal modes.
 
-- [ ] **Step 1: Write failing tests** for rename, clone, replacement-type migration, reorder, and remove-field modes (`discard` and `keep-as-extra`).
-- [ ] **Step 2: Run `npm run test -- src/collection.test.ts`** and confirm the mutation coverage fails.
-- [ ] **Step 3: Implement mutation methods** that update affected notes and regenerate cards atomically; require a replacement type and field mapping before deleting a populated type, and reject destructive changes without an explicit mode.
-- [ ] **Step 4: Add sync operation tests** showing note-type changes are idempotent on a second client.
-- [ ] **Step 5: Run `npm run test -- src/collection.test.ts`** and commit `Safely mutate note types`.
+- [x] **Step 1: Write failing tests** for rename, clone, replacement-type migration, reorder, and remove-field modes (`discard` and `keep-as-extra`).
+- [x] **Step 2: Run `npm run test -- src/collection.test.ts`** and confirm the mutation coverage fails.
+- [x] **Step 3: Implement mutation methods** that update affected notes and regenerate cards atomically; require a replacement type and field mapping before deleting a populated type, and reject destructive changes without an explicit mode.
+- [x] **Step 4: Add sync operation tests** showing note-type changes are idempotent on a second client.
+- [x] **Step 5: Run `npm run test -- src/collection.test.ts`** and commit `Safely mutate note types`.
 
 ### Task 3: Note-type manager, note editor, and preview
 
