@@ -15,8 +15,10 @@
     "typecheck": "tsc -b",
     "lint": "eslint .",
     "test": "vitest run",
+    "server:build": "tsc -p tsconfig.server.json",
+    "test:server": "npm run server:build && node --test dist-server/server/**/*.test.js",
     "test:e2e": "playwright test",
-    "check": "npm run typecheck && npm run lint && npm run test && npm run build && npm run test:e2e"
+    "check": "npm run typecheck && npm run lint && npm run test && npm run test:server && npm run build && npm run test:e2e"
   },
   "dependencies": {
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
