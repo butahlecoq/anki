@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
 import { createServer } from 'node:http'
+import { startSyncServer } from './index.js'
 import { createSyncService } from './sync-service.js'
 import { createSyncHttpHandler } from './sync-http.js'
 
@@ -67,4 +68,14 @@ test('serves health, pairing, and authenticated sync over HTTP', async () => {
 
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
   service.close()
+})
+
+test('starts a loopback service with a durable runtime directory', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
+  const running = await startSyncServer({ runtimeDirectory, host: '127.0.0.1', port: 0 })
+
+  const health = await fetch(`http://127.0.0.1:${running.port}/api/health`)
+  assert.equal(health.status, 200)
+  assert.deepEqual(await health.json(), { ready: true, schemaVersion: 1, store: 'sqlite' })
+  await running.close()
 })
