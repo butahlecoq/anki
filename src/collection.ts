@@ -334,6 +334,12 @@ export class Collection extends Dexie {
     return this.noteMedia.where('noteId').equals(noteId).sortBy('createdAt')
   }
 
+  async missingReferencedMedia() {
+    const references = await this.noteMedia.toArray()
+    const available = new Set(await this.mediaBlobs.toCollection().primaryKeys())
+    return references.filter((reference) => !available.has(reference.digest))
+  }
+
   async removeMedia(referenceId: string, now = new Date()) {
     await this.transaction('rw', this.noteMedia, this.outbox, async () => {
       const reference = await this.noteMedia.get(referenceId)
