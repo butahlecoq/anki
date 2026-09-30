@@ -1,4 +1,4 @@
-import { describe, expect, test, vi } from 'vitest'
+import { expect, test, vi } from 'vitest'
 import { foregroundSync } from './sync-client'
 
 test('sends pending operations with the local pairing credential', async () => {
