@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { UPDATE_READY_EVENT } from './appEvents'
+import { OFFLINE_READY_EVENT, OFFLINE_UNAVAILABLE_EVENT, UPDATE_READY_EVENT } from './appEvents'
 
 type IconName = 'decks' | 'study' | 'browse' | 'stats' | 'settings' | 'arrow' | 'spark'
 
@@ -44,9 +44,43 @@ function useOnlineStatus() {
   return online
 }
 
+type OfflineShellStatus = 'checking' | 'ready' | 'unavailable'
+
+function useOfflineShellStatus(): OfflineShellStatus {
+  const [status, setStatus] = useState<OfflineShellStatus>(() => (
+    'serviceWorker' in navigator ? 'checking' : 'unavailable'
+  ))
+
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return
+
+    let active = true
+    const markReady = () => { if (active) setStatus('ready') }
+    const markUnavailable = () => { if (active) setStatus('unavailable') }
+
+    window.addEventListener(OFFLINE_READY_EVENT, markReady)
+    window.addEventListener(OFFLINE_UNAVAILABLE_EVENT, markUnavailable)
+    navigator.serviceWorker.ready.then(markReady).catch(markUnavailable)
+
+    return () => {
+      active = false
+      window.removeEventListener(OFFLINE_READY_EVENT, markReady)
+      window.removeEventListener(OFFLINE_UNAVAILABLE_EVENT, markUnavailable)
+    }
+  }, [])
+
+  return status
+}
+
 export function App() {
   const online = useOnlineStatus()
+  const offlineShellStatus = useOfflineShellStatus()
   const [updateReady, setUpdateReady] = useState(false)
+  const connectionMessage = online
+    ? offlineShellStatus === 'ready' ? 'Offline shell ready' : offlineShellStatus === 'checking' ? 'Preparing offline shell' : 'Offline cache unavailable'
+    : offlineShellStatus === 'ready' ? 'Offline shell active' : 'Offline shell unavailable'
+  const shellDetail = offlineShellStatus === 'ready' ? 'Cached' : offlineShellStatus === 'checking' ? 'Preparing' : 'Unavailable'
+  const shellDot = offlineShellStatus === 'ready' ? 'ok' : offlineShellStatus === 'checking' ? 'idle' : 'warn'
 
   useEffect(() => {
     const showUpdate = () => setUpdateReady(true)
@@ -102,7 +136,7 @@ export function App() {
           <div className="eyebrow"><span>COLLECTION</span><span>/</span><span>LOCAL</span></div>
           <div className={`connection ${online ? 'online' : 'offline'}`} role="status">
             <span className="pulse" />
-            {online ? 'App shell cached for offline' : 'Offline shell active'}
+            {connectionMessage}
           </div>
         </header>
 
@@ -149,7 +183,7 @@ export function App() {
               <Icon name="spark" />
             </div>
             <dl className="status-list">
-              <div><dt>App shell</dt><dd><span className="status-dot ok" />Cached</dd></div>
+              <div><dt>App shell</dt><dd><span className={`status-dot ${shellDot}`} />{shellDetail}</dd></div>
               <div><dt>Collection</dt><dd><span className="status-dot idle" />Empty</dd></div>
               <div><dt>Sync peer</dt><dd><span className="status-dot idle" />Not configured</dd></div>
               <div><dt>Connection</dt><dd><span className={`status-dot ${online ? 'ok' : 'warn'}`} />{online ? 'Online' : 'Offline'}</dd></div>
