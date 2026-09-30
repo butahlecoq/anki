@@ -26,6 +26,7 @@ export function createSyncService({ databasePath }: ServiceOptions) {
     CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, revoked_at TEXT);
     CREATE TABLE IF NOT EXISTS tokens (hash TEXT PRIMARY KEY, device_id TEXT NOT NULL, FOREIGN KEY(device_id) REFERENCES devices(id));
     CREATE TABLE IF NOT EXISTS changes (cursor INTEGER PRIMARY KEY AUTOINCREMENT, op_id TEXT UNIQUE NOT NULL, device_id TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, action TEXT NOT NULL, occurred_at TEXT NOT NULL, payload TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS media_blobs (digest TEXT PRIMARY KEY, byte_length INTEGER NOT NULL, mime_type TEXT NOT NULL, created_at TEXT NOT NULL);
   `)
 
   const service = {
