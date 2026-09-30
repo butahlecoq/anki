@@ -70,7 +70,7 @@ test('learner creates, edits, and reviews a Japanese card offline', async ({ bro
 })
 
 test('persistent profile reopens offline and continues a remaining Japanese review', async ({ browserName, browser }) => {
-  test.skip(browserName === 'webkit', 'Windows WebKit does not reliably restore a persistent profile in this runner.')
+  test.slow(browserName === 'webkit', 'Persistent WebKit profiles can take longer to release browser storage on Windows.')
   const profile = await mkdtemp(join(tmpdir(), 'kiroku-profile-'))
   let firstContext: import('@playwright/test').BrowserContext | undefined
   let reopenedContext: import('@playwright/test').BrowserContext | undefined
@@ -116,6 +116,9 @@ test('persistent profile reopens offline and continues a remaining Japanese revi
     await expect(reopenedPage.getByRole('heading', { name: /猫|犬/ })).toBeVisible()
     await reopenedPage.getByRole('button', { name: 'Show answer' }).click()
     await expect(reopenedPage.getByRole('button', { name: /^Good · / })).toBeVisible()
+    await reopenedPage.getByRole('button', { name: /^Good · / }).click()
+    await expect(reopenedPage.getByRole('heading', { name: 'Session complete' })).toBeVisible()
+    await expect(reopenedPage.getByText('1 review recorded')).toBeVisible()
   } finally {
     await firstContext?.close()
     await reopenedContext?.close()
