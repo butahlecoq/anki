@@ -423,7 +423,7 @@ export class Collection extends Dexie {
   }
 
   async applyRemoteChanges(changes: SyncOperation[], cursor: number) {
-    await this.transaction('rw', [this.decks, this.notes, this.cards, this.reviewEntries, this.receivedOperations, this.settings, this.deletedEntities], async () => {
+    await this.transaction('rw', [this.decks, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.receivedOperations, this.settings, this.deletedEntities], async () => {
       for (const change of changes) {
         if (await this.receivedOperations.get(change.opId)) continue
         if (change.action !== 'delete') {
@@ -453,12 +453,15 @@ export class Collection extends Dexie {
           } else if (change.entityType === 'card') {
             await this.cards.delete(change.entityId)
             await this.reviewEntries.where('cardId').equals(change.entityId).delete()
+          } else if (change.entityType === 'noteMedia') {
+            await this.noteMedia.delete(change.entityId)
           } else {
             await this.reviewEntries.delete(change.entityId)
           }
         } else if (change.entityType === 'deck') await this.decks.put(change.payload as Deck)
         else if (change.entityType === 'note') await this.notes.put(change.payload as Note)
         else if (change.entityType === 'card') await this.cards.put(change.payload as CardRecord)
+        else if (change.entityType === 'noteMedia') await this.noteMedia.put(change.payload as NoteMediaReference)
         else if (change.entityType === 'review') await this.reviewEntries.put(change.payload as ReviewEntry)
         await this.receivedOperations.add({ opId: change.opId })
       }
