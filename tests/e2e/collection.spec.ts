@@ -70,7 +70,7 @@ test('learner creates, edits, and reviews a Japanese card offline', async ({ bro
 })
 
 test('persistent profile reopens offline and continues a remaining Japanese review', async ({ browserName, browser }) => {
-  test.slow(browserName === 'webkit', 'Persistent WebKit profiles can take longer to release browser storage on Windows.')
+  test.slow(browserName === 'webkit', 'WebKit needs extra time to restart the app page and its service worker.')
   const profile = await mkdtemp(join(tmpdir(), 'kiroku-profile-'))
   let firstContext: import('@playwright/test').BrowserContext | undefined
   let reopenedContext: import('@playwright/test').BrowserContext | undefined
@@ -96,12 +96,25 @@ test('persistent profile reopens offline and continues a remaining Japanese revi
     await firstPage.getByRole('button', { name: /^Good · / }).click()
     await expect(firstPage.getByRole('heading', { name: '犬' })).toBeVisible()
     await firstPage.evaluate(async () => { await navigator.serviceWorker.ready })
-    await firstContext.close()
-    firstContext = undefined
 
-    reopenedContext = await browser.browserType().launchPersistentContext(profile)
-    await reopenedContext.setOffline(true)
-    const reopenedPage = reopenedContext.pages()[0] ?? await reopenedContext.newPage()
+    if (browserName === 'webkit') {
+      // WebKit drops the entire temporary website store when its final page
+      // closes. Keep a blank browser page alive while the app page closes.
+      await firstContext.newPage()
+      await firstPage.close()
+      await firstContext.setOffline(true)
+      reopenedContext = firstContext
+      firstContext = undefined
+    } else {
+      await firstContext.close()
+      firstContext = undefined
+      reopenedContext = await browser.browserType().launchPersistentContext(profile)
+      await reopenedContext.setOffline(true)
+    }
+
+    const reopenedPage = browserName === 'webkit'
+      ? await reopenedContext.newPage()
+      : reopenedContext.pages()[0] ?? await reopenedContext.newPage()
     await reopenedPage.clock.setFixedTime(REVIEW_TIME)
     try {
       await reopenedPage.goto(`http://127.0.0.1:4173/#deck/${deckId}`, { waitUntil: 'domcontentloaded' })
