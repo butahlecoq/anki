@@ -161,15 +161,13 @@ test('learner renames and deletes a deck', async ({ page }) => {
   await expect(page.getByText('JLPT N5')).not.toBeVisible()
 })
 
-test('PC and phone contexts exchange a collection and an FSRS review through the sync service', async ({ browser }, testInfo) => {
-  const pcContext = await browser.newContext()
-  const phoneContext = await browser.newContext()
+test('PC and phone contexts exchange a collection and an FSRS review through the sync service', async ({ browser, page: pc }, testInfo) => {
+  const phoneContext = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
   const deckName = `Shared Japanese ${testInfo.project.name} ${Date.now()}`
   try {
-    const pc = await pcContext.newPage()
     const phone = await phoneContext.newPage()
-    await Promise.all([pc.clock.setFixedTime(REVIEW_TIME), phone.clock.setFixedTime(REVIEW_TIME)])
-    await Promise.all([pc.goto('/'), phone.goto('/')])
+    await phone.clock.setFixedTime(REVIEW_TIME)
+    await phone.goto('http://127.0.0.1:4173/')
 
     await createDeck(pc, deckName)
     await pc.getByRole('button', { name: `Open ${deckName}` }).click()
@@ -197,7 +195,6 @@ test('PC and phone contexts exchange a collection and an FSRS review through the
     await expect(pc.getByText('LEARNING 1')).toBeVisible()
     await expect(pc.getByText('REVIEWS 1')).toBeVisible()
   } finally {
-    await pcContext.close()
     await phoneContext.close()
   }
 })
