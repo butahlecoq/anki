@@ -24,7 +24,11 @@ export async function foregroundSync(settings: SyncSettings, operations: Partial
 export async function syncCollection(collection: Collection, fetcher: Fetcher = fetch): Promise<SyncResult> {
   const settings = await collection.syncSettings()
   if (!settings) return { state: 'authentication-required' }
-  const result = await foregroundSync(settings, await collection.pendingOperations(), fetcher)
-  if (result.state === 'complete') await collection.applyRemoteChanges(result.changes as SyncOperation[], result.cursor)
+  const operations = await collection.pendingOperations()
+  const result = await foregroundSync(settings, operations, fetcher)
+  if (result.state === 'complete') {
+    await collection.applyRemoteChanges(result.changes as SyncOperation[], result.cursor)
+    await collection.acknowledgeOperations(operations.map((operation) => operation.opId))
+  }
   return result
 }

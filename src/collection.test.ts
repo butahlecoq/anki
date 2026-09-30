@@ -46,6 +46,22 @@ describe('local collection', () => {
     collection = undefined
   })
 
+  test('queues deck and note changes for sync', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Japanese foundations')
+    const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'ねこ — cat' })
+
+    await collection.renameDeck(deck.id, 'Japanese words')
+    await collection.updateBasicNote(note.id, { front: '猫', back: 'ねこ — feline' })
+    await collection.deleteDeck(deck.id)
+
+    await expect(collection.pendingOperations()).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ entityType: 'deck', entityId: deck.id, action: 'update' }),
+      expect.objectContaining({ entityType: 'note', entityId: note.id, action: 'update' }),
+      expect.objectContaining({ entityType: 'deck', entityId: deck.id, action: 'delete' }),
+    ]))
+  })
+
   test('keeps a paired sync credential in local collection settings', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'device-token', cursor: 4 })
@@ -58,5 +74,25 @@ describe('local collection', () => {
     await collection.applyRemoteChanges([operation], 1)
     await collection.applyRemoteChanges([operation], 1)
     await expect(collection.reviewEntries.count()).resolves.toBe(1)
+  })
+
+  test('applies remote deck, note, and card entities only once', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = { id: 'remote-deck', name: 'Remote Japanese', createdAt: '2026-10-01T12:00:00.000Z', updatedAt: '2026-10-01T12:00:00.000Z' }
+    const note = { id: 'remote-note', deckId: deck.id, type: 'basic' as const, fields: { front: '犬', back: 'いぬ — dog' }, createdAt: deck.createdAt, updatedAt: deck.updatedAt }
+    const card = { id: 'remote-card', deckId: deck.id, noteId: note.id, due: deck.createdAt, stability: 0, difficulty: 0, elapsedDays: 0, scheduledDays: 0, learningSteps: 0, reps: 0, lapses: 0, state: 0, lastReview: null }
+    const changes = [
+      { opId: 'remote-deck-create', entityType: 'deck' as const, entityId: deck.id, action: 'create' as const, occurredAt: deck.createdAt, payload: deck },
+      { opId: 'remote-note-create', entityType: 'note' as const, entityId: note.id, action: 'create' as const, occurredAt: note.createdAt, payload: note },
+      { opId: 'remote-card-create', entityType: 'card' as const, entityId: card.id, action: 'create' as const, occurredAt: card.due, payload: card },
+    ]
+
+    await collection.applyRemoteChanges(changes, 3)
+    await collection.applyRemoteChanges(changes, 3)
+
+    await expect(collection.decks.get(deck.id)).resolves.toEqual(deck)
+    await expect(collection.notes.get(note.id)).resolves.toEqual(note)
+    await expect(collection.cards.get(card.id)).resolves.toEqual(card)
+    await expect(collection.receivedOperations.count()).resolves.toBe(3)
   })
 })
