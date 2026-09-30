@@ -45,4 +45,10 @@ describe('local collection', () => {
     await reopened.delete()
     collection = undefined
   })
+
+  test('keeps a paired sync credential in local collection settings', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'device-token', cursor: 4 })
+    await expect(collection.syncSettings()).resolves.toEqual({ endpoint: 'https://pc.example.test', token: 'device-token', cursor: 4 })
+  })
 })

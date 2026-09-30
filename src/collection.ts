@@ -92,6 +92,8 @@ export interface SyncOperation {
   payload: unknown
 }
 
+export interface SyncSettings { endpoint: string; token: string; cursor: number }
+
 const scheduler = fsrs({
   request_retention: 0.9,
   maximum_interval: 36500,
@@ -183,6 +185,7 @@ export class Collection extends Dexie {
   cards!: EntityTable<CardRecord, 'id'>
   reviewEntries!: EntityTable<ReviewEntry, 'id'>
   outbox!: EntityTable<SyncOperation, 'opId'>
+  settings!: EntityTable<{ key: string; value: unknown }, 'key'>
 
   constructor(name: string) {
     super(name)
@@ -198,6 +201,9 @@ export class Collection extends Dexie {
       cards: 'id, deckId, noteId, due, state',
       reviewEntries: 'id, cardId, deckId, reviewedAt',
       outbox: 'opId, entityType, entityId, occurredAt',
+    })
+    this.version(3).stores({
+      decks: 'id, name, createdAt', notes: 'id, deckId, updatedAt', cards: 'id, deckId, noteId, due, state', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key',
     })
   }
 
@@ -338,6 +344,14 @@ export class Collection extends Dexie {
 
   async pendingOperations(): Promise<SyncOperation[]> {
     return this.outbox.orderBy('occurredAt').toArray()
+  }
+
+  async configureSync(settings: SyncSettings) {
+    await this.settings.put({ key: 'sync', value: settings })
+  }
+
+  async syncSettings(): Promise<SyncSettings | undefined> {
+    return (await this.settings.get('sync'))?.value as SyncSettings | undefined
   }
 }
 
