@@ -3,7 +3,9 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
+import { createServer } from 'node:http'
 import { createSyncService } from './sync-service.js'
+import { createSyncHttpHandler } from './sync-http.js'
 
 let runtimeDirectory: string | undefined
 
@@ -40,5 +42,29 @@ test('accepts a review mutation once when the request is delivered twice', async
   assert.equal(service.sync(token, request).accepted, 1)
   assert.equal(service.sync(token, request).accepted, 0)
   assert.equal(service.reviewCount(), 1)
+  service.close()
+})
+
+test('serves health, pairing, and authenticated sync over HTTP', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
+  const service = createSyncService({ databasePath: join(runtimeDirectory, 'collection.sqlite') })
+  const server = createServer(createSyncHttpHandler(service))
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  assert.ok(address && typeof address !== 'string')
+  const origin = `http://127.0.0.1:${address.port}`
+
+  const health = await fetch(`${origin}/api/health`)
+  assert.deepEqual(await health.json(), { ready: true, schemaVersion: 1, store: 'sqlite' })
+
+  const code = service.createPairingCode(new Date('2026-10-01T12:00:00.000Z'))
+  const paired = await fetch(`${origin}/api/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code, deviceId: 'phone-1' }) })
+  const credential = await paired.json() as { token: string }
+  const denied = await fetch(`${origin}/api/sync`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cursor: 0, operations: [] }) })
+  assert.equal(denied.status, 401)
+  const synced = await fetch(`${origin}/api/sync`, { method: 'POST', headers: { authorization: `Bearer ${credential.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ cursor: 0, operations: [] }) })
+  assert.deepEqual(await synced.json(), { accepted: 0 })
+
+  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
   service.close()
 })
