@@ -1,4 +1,4 @@
-import type { SyncOperation, SyncSettings } from './collection'
+import type { Collection, SyncOperation, SyncSettings } from './collection'
 
 type Fetcher = typeof fetch
 type Change = { cursor: number; opId: string; entityType: string; entityId: string; action: string; occurredAt: string; payload: unknown }
@@ -19,4 +19,12 @@ export async function foregroundSync(settings: SyncSettings, operations: Partial
   } catch {
     return { state: 'unreachable' }
   }
+}
+
+export async function syncCollection(collection: Collection, fetcher: Fetcher = fetch): Promise<SyncResult> {
+  const settings = await collection.syncSettings()
+  if (!settings) return { state: 'authentication-required' }
+  const result = await foregroundSync(settings, await collection.pendingOperations(), fetcher)
+  if (result.state === 'complete') await collection.applyRemoteChanges(result.changes as SyncOperation[], result.cursor)
+  return result
 }
