@@ -235,6 +235,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   const [queue, setQueue] = useState<string[] | null>(null)
   const [showAnswer, setShowAnswer] = useState(false)
   const [reviewsRecorded, setReviewsRecorded] = useState(0)
+  const [isAnswering, setIsAnswering] = useState(false)
   const cardId = queue?.[0]
   const card = useLiveQuery(() => cardId ? collection.cards.get(cardId) : undefined, [cardId])
   const note = useLiveQuery(() => card ? collection.notes.get(card.noteId) : undefined, [card?.noteId])
@@ -245,11 +246,16 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   }, [deckId])
 
   async function answer(rating: Grade) {
-    if (!cardId) return
-    await collection.answer(cardId, rating, new Date())
-    setReviewsRecorded((count) => count + 1)
-    setShowAnswer(false)
-    setQueue((current) => current?.slice(1) ?? [])
+    if (!cardId || isAnswering) return
+    setIsAnswering(true)
+    try {
+      await collection.answer(cardId, rating, new Date())
+      setReviewsRecorded((count) => count + 1)
+      setShowAnswer(false)
+      setQueue((current) => current?.slice(1) ?? [])
+    } finally {
+      setIsAnswering(false)
+    }
   }
 
   if (queue === null || (cardId && (!card || !note))) return <div className="loading-state" role="status">Preparing review…</div>
@@ -279,7 +285,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
       ) : (
         <div className="rating-grid" aria-label="Rate answer">
           {choices.map((choice) => (
-            <button aria-label={`${choice.label} · ${choice.interval}`} className={`rating rating-${Rating[choice.rating].toLowerCase()}`} type="button" key={choice.rating} onClick={() => answer(choice.rating)}>
+            <button aria-label={`${choice.label} · ${choice.interval}`} className={`rating rating-${Rating[choice.rating].toLowerCase()}`} type="button" disabled={isAnswering} key={choice.rating} onClick={() => void answer(choice.rating)}>
               <strong>{choice.label}</strong><span aria-hidden="true">·</span><small>{choice.interval}</small>
             </button>
           ))}

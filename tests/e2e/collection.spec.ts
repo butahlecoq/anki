@@ -1,4 +1,7 @@
 import { expect, test } from '@playwright/test'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const REVIEW_TIME = new Date('2026-09-30T12:00:00.000Z')
 
@@ -64,6 +67,60 @@ test('learner creates, edits, and reviews a Japanese card offline', async ({ bro
   await expect(page.getByText('LEARNING 1')).toBeVisible()
   await expect(page.getByText('REVIEWS 1')).toBeVisible()
   await expect(page.getByText('Offline shell active')).toBeVisible()
+})
+
+test('persistent profile reopens offline and continues a remaining Japanese review', async ({ browserName, browser }) => {
+  test.skip(browserName === 'webkit', 'Windows WebKit does not reliably restore a persistent profile in this runner.')
+  const profile = await mkdtemp(join(tmpdir(), 'kiroku-profile-'))
+  let firstContext: import('@playwright/test').BrowserContext | undefined
+  let reopenedContext: import('@playwright/test').BrowserContext | undefined
+
+  try {
+    firstContext = await browser.browserType().launchPersistentContext(profile)
+    const firstPage = firstContext.pages()[0] ?? await firstContext.newPage()
+    await firstPage.clock.setFixedTime(REVIEW_TIME)
+    await firstPage.goto('http://127.0.0.1:4173/')
+    await createDeck(firstPage, 'Offline Japanese')
+    await firstPage.getByRole('button', { name: 'Open Offline Japanese' }).click()
+
+    for (const [front, back] of [['猫', 'ねこ · cat'], ['犬', 'いぬ · dog']]) {
+      await firstPage.getByRole('button', { name: 'Add note' }).click()
+      await firstPage.getByLabel('Front').fill(front)
+      await firstPage.getByLabel('Back').fill(back)
+      await firstPage.getByRole('button', { name: 'Save note' }).click()
+    }
+
+    const deckId = await firstPage.evaluate(() => window.location.hash.split('/')[1])
+    await firstPage.getByRole('button', { name: 'Study now' }).click()
+    await firstPage.getByRole('button', { name: 'Show answer' }).click()
+    await firstPage.getByRole('button', { name: /^Good · / }).click()
+    await expect(firstPage.getByRole('heading', { name: '犬' })).toBeVisible()
+    await firstPage.evaluate(async () => { await navigator.serviceWorker.ready })
+    await firstContext.close()
+    firstContext = undefined
+
+    reopenedContext = await browser.browserType().launchPersistentContext(profile)
+    await reopenedContext.setOffline(true)
+    const reopenedPage = reopenedContext.pages()[0] ?? await reopenedContext.newPage()
+    await reopenedPage.clock.setFixedTime(REVIEW_TIME)
+    try {
+      await reopenedPage.goto(`http://127.0.0.1:4173/#deck/${deckId}`, { waitUntil: 'domcontentloaded' })
+    } catch (error) {
+      if (browserName !== 'webkit' || !(error instanceof Error) || !error.message.includes('internal error')) throw error
+    }
+
+    await expect(reopenedPage.getByRole('heading', { name: 'Offline Japanese' })).toBeVisible()
+    await expect(reopenedPage.getByText('NEW 1')).toBeVisible()
+    await expect(reopenedPage.getByText('LEARNING 1')).toBeVisible()
+    await reopenedPage.getByRole('button', { name: 'Study now' }).click()
+    await expect(reopenedPage.getByRole('heading', { name: /猫|犬/ })).toBeVisible()
+    await reopenedPage.getByRole('button', { name: 'Show answer' }).click()
+    await expect(reopenedPage.getByRole('button', { name: /^Good · / })).toBeVisible()
+  } finally {
+    await firstContext?.close()
+    await reopenedContext?.close()
+    await rm(profile, { recursive: true, force: true }).catch(() => undefined)
+  }
 })
 
 test('learner renames and deletes a deck', async ({ page }) => {
