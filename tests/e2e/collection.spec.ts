@@ -161,17 +161,18 @@ test('learner renames and deletes a deck', async ({ page }) => {
   await expect(page.getByText('JLPT N5')).not.toBeVisible()
 })
 
-test('PC and phone contexts exchange a collection and an FSRS review through the sync service', async ({ browser }) => {
+test('PC and phone contexts exchange a collection and an FSRS review through the sync service', async ({ browser }, testInfo) => {
   const pcContext = await browser.newContext()
   const phoneContext = await browser.newContext()
+  const deckName = `Shared Japanese ${testInfo.project.name} ${Date.now()}`
   try {
     const pc = await pcContext.newPage()
     const phone = await phoneContext.newPage()
     await Promise.all([pc.clock.setFixedTime(REVIEW_TIME), phone.clock.setFixedTime(REVIEW_TIME)])
     await Promise.all([pc.goto('/'), phone.goto('/')])
 
-    await createDeck(pc, 'Shared Japanese')
-    await pc.getByRole('button', { name: 'Open Shared Japanese' }).click()
+    await createDeck(pc, deckName)
+    await pc.getByRole('button', { name: `Open ${deckName}` }).click()
     await pc.getByRole('button', { name: 'Add note' }).click()
     await pc.getByLabel('Front').fill('犬')
     await pc.getByLabel('Back').fill('いぬ · dog')
@@ -182,9 +183,9 @@ test('PC and phone contexts exchange a collection and an FSRS review through the
     await pc.getByRole('button', { name: 'Sync now' }).click()
     await expect(pc.getByText('Sync complete. 3 local changes sent.')).toBeVisible()
     await phone.getByRole('button', { name: 'Sync now' }).click()
-    await expect(phone.getByRole('button', { name: 'Open Shared Japanese' })).toBeVisible()
+    await expect(phone.getByRole('button', { name: `Open ${deckName}` })).toBeVisible()
 
-    await phone.getByRole('button', { name: 'Open Shared Japanese' }).click()
+    await phone.getByRole('button', { name: `Open ${deckName}` }).click()
     await phone.getByRole('button', { name: 'Study now' }).click()
     await phone.getByRole('button', { name: 'Show answer' }).click()
     await phone.getByRole('button', { name: /^Good · / }).click()
