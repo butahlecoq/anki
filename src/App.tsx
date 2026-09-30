@@ -170,7 +170,7 @@ export function App() {
               <span className="empty-glyph" lang="ja">一</span>
               <div>
                 <h3>Your collection is clear.</h3>
-                <p>Card creation arrives in the next slice. The offline workspace is ready now.</p>
+                <p>Card creation arrives in the next slice.</p>
               </div>
               <button className="primary-action" type="button" disabled aria-describedby="next-slice-note">
                 New deck <Icon name="arrow" />

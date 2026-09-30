@@ -35,4 +35,5 @@ test('waits for service-worker readiness before claiming the offline shell is re
 
   expect(screen.getByRole('status')).toHaveTextContent('Preparing offline shell')
   expect(screen.getByText('Offline access is being prepared for this device.')).toBeVisible()
+  expect(screen.queryByText(/offline workspace is ready/i)).not.toBeInTheDocument()
 })
