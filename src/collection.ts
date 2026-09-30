@@ -83,6 +83,15 @@ export interface ReviewChoice {
   interval: string
 }
 
+export interface SyncOperation {
+  opId: string
+  entityType: 'deck' | 'note' | 'card' | 'review'
+  entityId: string
+  action: 'create' | 'update' | 'delete'
+  occurredAt: string
+  payload: unknown
+}
+
 const scheduler = fsrs({
   request_retention: 0.9,
   maximum_interval: 36500,
@@ -173,6 +182,7 @@ export class Collection extends Dexie {
   notes!: EntityTable<Note, 'id'>
   cards!: EntityTable<CardRecord, 'id'>
   reviewEntries!: EntityTable<ReviewEntry, 'id'>
+  outbox!: EntityTable<SyncOperation, 'opId'>
 
   constructor(name: string) {
     super(name)
@@ -181,6 +191,13 @@ export class Collection extends Dexie {
       notes: 'id, deckId, updatedAt',
       cards: 'id, deckId, noteId, due, state',
       reviewEntries: 'id, cardId, deckId, reviewedAt',
+    })
+    this.version(2).stores({
+      decks: 'id, name, createdAt',
+      notes: 'id, deckId, updatedAt',
+      cards: 'id, deckId, noteId, due, state',
+      reviewEntries: 'id, cardId, deckId, reviewedAt',
+      outbox: 'opId, entityType, entityId, occurredAt',
     })
   }
 
@@ -191,7 +208,10 @@ export class Collection extends Dexie {
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
     }
-    await this.decks.add(deck)
+    await this.transaction('rw', this.decks, this.outbox, async () => {
+      await this.decks.add(deck)
+      await this.outbox.add({ opId: id(), entityType: 'deck', entityId: deck.id, action: 'create', occurredAt: deck.createdAt, payload: deck })
+    })
     return deck
   }
 
@@ -231,9 +251,13 @@ export class Collection extends Dexie {
     const emptyCard = createEmptyCard(now)
     const card = serializeCard(emptyCard, { id: id(), deckId, noteId })
 
-    await this.transaction('rw', this.notes, this.cards, async () => {
+    await this.transaction('rw', this.notes, this.cards, this.outbox, async () => {
       await this.notes.add(note)
       await this.cards.add(card)
+      await this.outbox.bulkAdd([
+        { opId: id(), entityType: 'note', entityId: note.id, action: 'create', occurredAt: note.createdAt, payload: note },
+        { opId: id(), entityType: 'card', entityId: card.id, action: 'create', occurredAt: note.createdAt, payload: card },
+      ])
     })
     return note
   }
@@ -301,11 +325,19 @@ export class Collection extends Dexie {
       cardId,
       deckId: existing.deckId,
     })
-    await this.transaction('rw', this.cards, this.reviewEntries, async () => {
+    await this.transaction('rw', this.cards, this.reviewEntries, this.outbox, async () => {
       await this.cards.put(card)
       await this.reviewEntries.add(review)
+      await this.outbox.bulkAdd([
+        { opId: id(), entityType: 'card', entityId: card.id, action: 'update', occurredAt: review.reviewedAt, payload: card },
+        { opId: id(), entityType: 'review', entityId: review.id, action: 'create', occurredAt: review.reviewedAt, payload: review },
+      ])
     })
     return review
+  }
+
+  async pendingOperations(): Promise<SyncOperation[]> {
+    return this.outbox.orderBy('occurredAt').toArray()
   }
 }
 

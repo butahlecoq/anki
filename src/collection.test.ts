@@ -19,6 +19,7 @@ describe('local collection', () => {
     expect(note.deckId).toBe(deck.id)
     expect(note.fields).toEqual({ front: '猫', back: 'ねこ — cat' })
     await expect(collection.counts(deck.id)).resolves.toEqual({ new: 1, learning: 0, review: 0 })
+    await expect(collection.pendingOperations()).resolves.toHaveLength(3)
   })
 
   test('persists an edit and an FSRS review event atomically', async () => {
