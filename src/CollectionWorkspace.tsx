@@ -95,7 +95,7 @@ function DeckDialog({ deck, onClose }: { deck?: Deck; onClose: () => void }) {
 type PendingAttachment = { file: File; side: 'front' | 'back'; playback: 'automatic' | 'manual' }
 
 function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: Note; onClose: () => void }) {
-  const [fields, setFields] = useState<BasicNoteFields>(note?.fields ?? { front: '', back: '' })
+  const [fields, setFields] = useState<BasicNoteFields>({ front: note?.fields.front ?? '', back: note?.fields.back ?? '' })
   const [error, setError] = useState('')
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
   const existingMedia = useLiveQuery(() => note ? collection.mediaForNote(note.id) : [], [note?.id], [])

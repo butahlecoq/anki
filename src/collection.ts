@@ -9,6 +9,7 @@ import {
   type ReviewLog as FsrsReviewLog,
 } from 'ts-fsrs'
 import { digestMedia, validateMedia, type AudioPlayback, type MediaKind, type MediaSide } from './media'
+import { renderTemplate, validateTemplate } from './template-renderer'
 
 export { Rating, State }
 export type { Grade }
@@ -25,11 +26,45 @@ export interface BasicNoteFields {
   back: string
 }
 
+export const BASIC_NOTE_TYPE_ID = 'basic'
+export const BASIC_TEMPLATE_ID = 'basic'
+
+export interface NoteTypeField { readonly id: string; readonly name: string }
+export interface CardTemplate { readonly id: string; readonly name: string; readonly front: string; readonly back: string; readonly css: string }
+export interface NoteType {
+  readonly id: string
+  readonly name: string
+  readonly fields: readonly NoteTypeField[]
+  readonly templates: readonly CardTemplate[]
+  readonly protected: boolean
+  readonly createdAt: string
+  readonly updatedAt: string
+}
+export interface NewNoteType {
+  name: string
+  fields: readonly { name: string }[]
+  templates: readonly { name: string; front: string; back: string; css: string }[]
+}
+
+const basicNoteType: NoteType = {
+  id: BASIC_NOTE_TYPE_ID, name: 'Basic', protected: true,
+  fields: [{ id: 'front', name: 'front' }, { id: 'back', name: 'back' }],
+  templates: [{ id: BASIC_TEMPLATE_ID, name: 'Basic', front: '{{front}}', back: '{{FrontSide}}<hr>{{back}}', css: '' }],
+  createdAt: '1970-01-01T00:00:00.000Z', updatedAt: '1970-01-01T00:00:00.000Z',
+}
+
+/** Note values are stored by immutable field ID; templates address display names. */
+export function renderNoteTemplate(template: string, noteType: NoteType, fieldsById: Record<string, string>, front?: string) {
+  const displayFields = Object.fromEntries(noteType.fields.map((field) => [field.name, fieldsById[field.id] ?? '']))
+  return renderTemplate(template, displayFields, front)
+}
+
 export interface Note {
   id: string
   deckId: string
-  type: 'basic'
-  fields: BasicNoteFields
+  type: 'basic' | 'custom'
+  typeId: string
+  fields: Record<string, string>
   createdAt: string
   updatedAt: string
 }
@@ -38,6 +73,8 @@ export interface CardRecord {
   id: string
   deckId: string
   noteId: string
+  templateId: string
+  suspended?: boolean
   due: string
   stability: number
   difficulty: number
@@ -49,6 +86,9 @@ export interface CardRecord {
   state: State
   lastReview: string | null
 }
+
+type LegacyNote = Omit<Note, 'typeId'> & { typeId?: string }
+type LegacyCard = Omit<CardRecord, 'templateId'> & { templateId?: string }
 
 export interface ReviewEntry {
   id: string
@@ -86,7 +126,7 @@ export interface ReviewChoice {
 
 export interface SyncOperation {
   opId: string
-  entityType: 'deck' | 'note' | 'card' | 'review' | 'noteMedia'
+  entityType: 'deck' | 'note' | 'card' | 'review' | 'noteMedia' | 'noteType'
   entityId: string
   action: 'create' | 'update' | 'delete'
   occurredAt: string
@@ -129,7 +169,17 @@ function requiredText(value: string, label: string) {
   return normalized
 }
 
-function serializeCard(card: FsrsCard, identity: Pick<CardRecord, 'id' | 'deckId' | 'noteId'>): CardRecord {
+function canonicalNote(note: LegacyNote): Note {
+  if (note.type === 'basic') return { ...note, typeId: BASIC_NOTE_TYPE_ID }
+  if (!note.typeId) throw new Error('Synced custom note is missing its note type ID')
+  return { ...note, typeId: note.typeId }
+}
+
+function canonicalCard(card: LegacyCard): CardRecord {
+  return { ...card, templateId: card.templateId ?? BASIC_TEMPLATE_ID }
+}
+
+function serializeCard(card: FsrsCard, identity: Pick<CardRecord, 'id' | 'deckId' | 'noteId' | 'templateId'>): CardRecord {
   return {
     ...identity,
     due: card.due.toISOString(),
@@ -187,7 +237,7 @@ function intervalLabel(due: Date, reviewedAt: Date) {
 }
 
 function countsFor(cards: CardRecord[]): DeckCounts {
-  return cards.reduce<DeckCounts>((counts, card) => {
+  return cards.filter((card) => !card.suspended).reduce<DeckCounts>((counts, card) => {
     if (card.state === State.New) counts.new += 1
     else if (card.state === State.Review) counts.review += 1
     else counts.learning += 1
@@ -196,6 +246,7 @@ function countsFor(cards: CardRecord[]): DeckCounts {
 }
 
 export class Collection extends Dexie {
+  noteTypes!: EntityTable<NoteType, 'id'>
   decks!: EntityTable<Deck, 'id'>
   notes!: EntityTable<Note, 'id'>
   cards!: EntityTable<CardRecord, 'id'>
@@ -230,6 +281,97 @@ export class Collection extends Dexie {
     })
     this.version(5).stores({
       decks: 'id, name, createdAt', notes: 'id, deckId, updatedAt', cards: 'id, deckId, noteId, due, state', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId', deletedEntities: 'key, entityType, entityId, occurredAt', noteMedia: 'id, noteId, digest, side, kind, updatedAt', mediaBlobs: 'digest, verifiedAt',
+    })
+    this.version(6).stores({
+      decks: 'id, name, createdAt', notes: 'id, deckId, typeId, updatedAt', cards: 'id, deckId, noteId, templateId, due, state', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId', deletedEntities: 'key, entityType, entityId, occurredAt', noteMedia: 'id, noteId, digest, side, kind, updatedAt', mediaBlobs: 'digest, verifiedAt', noteTypes: 'id, name, updatedAt',
+    }).upgrade(async (transaction) => {
+      await transaction.table('noteTypes').put(basicNoteType)
+      await transaction.table('notes').toCollection().modify((note: LegacyNote) => { if (note.type === 'basic' && !note.typeId) note.typeId = BASIC_NOTE_TYPE_ID })
+      await transaction.table('cards').toCollection().modify((card: LegacyCard) => { if (!card.templateId) card.templateId = BASIC_TEMPLATE_ID })
+    })
+    this.on('populate', (transaction) => {
+      transaction.table('noteTypes').put(basicNoteType)
+    })
+  }
+
+  async createNoteType(input: NewNoteType, now = new Date()): Promise<NoteType> {
+    if (!input.fields.length) throw new Error('A note type needs at least one field')
+    if (!input.templates.length) throw new Error('A note type needs at least one template')
+    const names = input.fields.map((field) => requiredText(field.name, 'Field name'))
+    if (new Set(names).size !== names.length) throw new Error('Field names must be unique')
+    if (names.includes('FrontSide')) throw new Error('FrontSide is reserved for template backs')
+    for (const template of input.templates) {
+      validateTemplate(template.front, names, 'front')
+      validateTemplate(template.back, names, 'back')
+    }
+    const noteType: NoteType = {
+      id: id(), name: requiredText(input.name, 'Note type name'), protected: false,
+      fields: names.map((name) => ({ id: id(), name })),
+      templates: input.templates.map((template) => ({ id: id(), name: requiredText(template.name, 'Template name'), front: template.front, back: template.back, css: template.css })),
+      createdAt: now.toISOString(), updatedAt: now.toISOString(),
+    }
+    await this.transaction('rw', this.noteTypes, this.outbox, async () => {
+      await this.noteTypes.add(noteType)
+      await this.outbox.add({ opId: id(), entityType: 'noteType', entityId: noteType.id, action: 'create', occurredAt: noteType.createdAt, payload: noteType })
+    })
+    return noteType
+  }
+
+  cardGenerationStatus(noteType: NoteType, fields: Record<string, string>) {
+    const skipped: { templateId: string; reason: string }[] = []
+    const eligible: CardTemplate[] = []
+    for (const template of noteType.templates) {
+      if (renderNoteTemplate(template.front, noteType, fields).isEmpty) skipped.push({ templateId: template.id, reason: 'Front has no visible field content' })
+      else eligible.push(template)
+    }
+    return { eligible, skipped }
+  }
+
+  async createNote(deckId: string, typeId: string, fields: Record<string, string>, now = new Date()): Promise<Note> {
+    return this.transaction('rw', [this.decks, this.noteTypes, this.notes, this.cards, this.outbox], async () => {
+      if (!await this.decks.get(deckId)) throw new Error('Deck not found')
+      const noteType = await this.noteTypes.get(typeId)
+      if (!noteType) throw new Error('Note type not found')
+      const values = Object.fromEntries(noteType.fields.map((field) => [field.id, fields[field.id] ?? '']))
+      const note: Note = { id: id(), deckId, type: typeId === BASIC_NOTE_TYPE_ID ? 'basic' : 'custom', typeId, fields: values, createdAt: now.toISOString(), updatedAt: now.toISOString() }
+      const cards = this.cardGenerationStatus(noteType, values).eligible.map((template) => serializeCard(createEmptyCard(now), { id: `${note.id}:${template.id}`, deckId, noteId: note.id, templateId: template.id }))
+      await this.notes.add(note)
+      if (cards.length) await this.cards.bulkAdd(cards)
+      await this.outbox.bulkAdd([
+        { opId: id(), entityType: 'note', entityId: note.id, action: 'create', occurredAt: note.createdAt, payload: note },
+        ...cards.map((card) => ({ opId: id(), entityType: 'card' as const, entityId: card.id, action: 'create' as const, occurredAt: note.createdAt, payload: card })),
+      ])
+      return note
+    })
+  }
+
+  async updateNote(noteId: string, fields: Record<string, string>, now = new Date()): Promise<void> {
+    await this.transaction('rw', [this.noteTypes, this.notes, this.cards, this.outbox], async () => {
+      const note = await this.notes.get(noteId)
+      if (!note) throw new Error('Note not found')
+      const noteType = await this.noteTypes.get(note.typeId)
+      if (!noteType) throw new Error('Note type not found')
+      const values = Object.fromEntries(noteType.fields.map((field) => [field.id, fields[field.id] ?? '']))
+      const updated: Note = { ...note, fields: values, updatedAt: now.toISOString() }
+      const existing = await this.cards.where('noteId').equals(noteId).toArray()
+      const eligible = this.cardGenerationStatus(noteType, values).eligible
+      const eligibleIds = new Set(eligible.map((template) => template.id))
+      const changes: SyncOperation[] = [{ opId: id(), entityType: 'note', entityId: noteId, action: 'update', occurredAt: updated.updatedAt, payload: updated }]
+      for (const card of existing) {
+        const suspended = !eligibleIds.has(card.templateId)
+        if (Boolean(card.suspended) === suspended) continue
+        const revised = { ...card, suspended }
+        await this.cards.put(revised)
+        changes.push({ opId: id(), entityType: 'card', entityId: card.id, action: 'update', occurredAt: updated.updatedAt, payload: revised })
+      }
+      for (const template of eligible) {
+        if (existing.some((card) => card.templateId === template.id)) continue
+        const card = serializeCard(createEmptyCard(now), { id: `${note.id}:${template.id}`, deckId: note.deckId, noteId, templateId: template.id })
+        await this.cards.put(card)
+        changes.push({ opId: id(), entityType: 'card', entityId: card.id, action: 'create', occurredAt: updated.updatedAt, payload: card })
+      }
+      await this.notes.put(updated)
+      await this.outbox.bulkAdd(changes)
     })
   }
 
@@ -290,6 +432,7 @@ export class Collection extends Dexie {
       id: noteId,
       deckId,
       type: 'basic',
+      typeId: BASIC_NOTE_TYPE_ID,
       fields: {
         front: requiredText(fields.front, 'Front'),
         back: requiredText(fields.back, 'Back'),
@@ -298,7 +441,7 @@ export class Collection extends Dexie {
       updatedAt: createdAt,
     }
     const emptyCard = createEmptyCard(now)
-    const card = serializeCard(emptyCard, { id: id(), deckId, noteId })
+    const card = serializeCard(emptyCard, { id: `${noteId}:${BASIC_TEMPLATE_ID}`, deckId, noteId, templateId: BASIC_TEMPLATE_ID })
     const references: NoteMediaReference[] = prepared.map(({ definition, file, digest, side, playback }) => ({ id: id(), noteId, digest, kind: definition.kind, mimeType: file.type, displayName: file.name, side, playback, createdAt, updatedAt: createdAt }))
     const blobs = [...new Map(prepared.map(({ file, digest }) => [digest, { digest, blob: file as Blob, byteLength: file.size, mimeType: file.type, verifiedAt: createdAt } satisfies MediaBlob])).values()]
 
@@ -397,7 +540,7 @@ export class Collection extends Dexie {
   async dueCards(deckId: string, now = new Date()): Promise<CardRecord[]> {
     const cards = await this.cards.where('deckId').equals(deckId).toArray()
     return cards
-      .filter((card) => card.state === State.New || new Date(card.due).getTime() <= now.getTime())
+      .filter((card) => !card.suspended && (card.state === State.New || new Date(card.due).getTime() <= now.getTime()))
       .sort((left, right) => left.due.localeCompare(right.due))
   }
 
@@ -421,6 +564,7 @@ export class Collection extends Dexie {
   async answer(cardId: string, rating: Grade, now = new Date()): Promise<ReviewEntry> {
     const existing = await this.cards.get(cardId)
     if (!existing) throw new Error('Card not found')
+    if (existing.suspended) throw new Error('Card is suspended because its template front is empty')
     const result = scheduler.next(deserializeCard(existing), now, rating)
     const card = serializeCard(result.card, existing)
     const review = serializeReview(result.log, {
@@ -456,7 +600,7 @@ export class Collection extends Dexie {
   }
 
   async applyRemoteChanges(changes: SyncOperation[], cursor: number) {
-    await this.transaction('rw', [this.decks, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.receivedOperations, this.settings, this.deletedEntities], async () => {
+    await this.transaction('rw', [this.decks, this.noteTypes, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.receivedOperations, this.settings, this.deletedEntities], async () => {
       for (const change of changes) {
         if (await this.receivedOperations.get(change.opId)) continue
         if (change.action !== 'delete') {
@@ -491,13 +635,16 @@ export class Collection extends Dexie {
             await this.reviewEntries.where('cardId').equals(change.entityId).delete()
           } else if (change.entityType === 'noteMedia') {
             await this.noteMedia.delete(change.entityId)
+          } else if (change.entityType === 'noteType') {
+            if (change.entityId !== BASIC_NOTE_TYPE_ID) await this.noteTypes.delete(change.entityId)
           } else {
             await this.reviewEntries.delete(change.entityId)
           }
         } else if (change.entityType === 'deck') await this.decks.put(change.payload as Deck)
-        else if (change.entityType === 'note') await this.notes.put(change.payload as Note)
-        else if (change.entityType === 'card') await this.cards.put(change.payload as CardRecord)
+        else if (change.entityType === 'note') await this.notes.put(canonicalNote(change.payload as LegacyNote))
+        else if (change.entityType === 'card') await this.cards.put(canonicalCard(change.payload as LegacyCard))
         else if (change.entityType === 'noteMedia') await this.noteMedia.put(change.payload as NoteMediaReference)
+        else if (change.entityType === 'noteType' && change.entityId !== BASIC_NOTE_TYPE_ID) await this.noteTypes.put(change.payload as NoteType)
         else if (change.entityType === 'review') await this.reviewEntries.put(change.payload as ReviewEntry)
         await this.receivedOperations.add({ opId: change.opId })
       }
