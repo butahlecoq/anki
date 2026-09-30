@@ -57,6 +57,14 @@ export function createSyncHttpHandler(service: Service, { allowedOrigin }: HttpO
         if (!authorization?.startsWith('Bearer ') || !request.headers['content-type']) return reply(401, { error: 'Authentication required.' })
         return reply(200, await service.putMedia(authorization.slice(7), media[1], request.headers['content-type'], await bytes(request)))
       }
+      if (request.method === 'GET' && media) {
+        const authorization = request.headers.authorization
+        if (!authorization?.startsWith('Bearer ')) return reply(401, { error: 'Authentication required.' })
+        const result = await service.getMedia(authorization.slice(7), media[1])
+        response.writeHead(200, { ...headers, 'content-type': result.mimeType, 'content-length': String(result.byteLength), 'x-content-sha256': result.digest, 'x-content-type-options': 'nosniff', 'cache-control': 'no-store' })
+        response.end(result.bytes)
+        return
+      }
       return reply(404, { error: 'Not found.' })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Request failed.'
