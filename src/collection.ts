@@ -45,6 +45,17 @@ export interface NewNoteType {
   fields: readonly { name: string }[]
   templates: readonly { name: string; front: string; back: string; css: string }[]
 }
+export interface UpdateNoteType {
+  name?: string
+  fields?: readonly { id?: string; name: string }[]
+  templates?: readonly { id?: string; name: string; front: string; back: string; css: string }[]
+  removedFields?: Record<string, 'discard' | 'keep-as-extra'>
+}
+export interface NoteTypeReplacement {
+  replacementTypeId: string
+  /** Source field ID to replacement field ID. Unmapped values become retired data. */
+  fieldMapping?: Record<string, string>
+}
 
 const basicNoteType: NoteType = {
   id: BASIC_NOTE_TYPE_ID, name: 'Basic', protected: true,
@@ -65,6 +76,7 @@ export interface Note {
   type: 'basic' | 'custom'
   typeId: string
   fields: Record<string, string>
+  retiredFields?: Record<string, string>
   createdAt: string
   updatedAt: string
 }
@@ -315,6 +327,130 @@ export class Collection extends Dexie {
       await this.outbox.add({ opId: id(), entityType: 'noteType', entityId: noteType.id, action: 'create', occurredAt: noteType.createdAt, payload: noteType })
     })
     return noteType
+  }
+
+  async cloneNoteType(typeId: string, name?: string, now = new Date()): Promise<NoteType> {
+    return this.transaction('rw', [this.noteTypes, this.outbox], async () => {
+      const source = await this.noteTypes.get(typeId)
+      if (!source) throw new Error('Note type not found')
+      return this.createNoteType({
+        name: name ?? `${source.name} copy`,
+        fields: source.fields.map(({ name }) => ({ name })),
+        templates: source.templates.map(({ name, front, back, css }) => ({ name, front, back, css })),
+      }, now)
+    })
+  }
+
+  private async reconcileCards(note: Note, noteType: NoteType, now: Date, operations: SyncOperation[]) {
+    const existing = await this.cards.where('noteId').equals(note.id).toArray()
+    const eligible = this.cardGenerationStatus(noteType, note.fields).eligible
+    const eligibleIds = new Set(eligible.map((template) => template.id))
+    for (const card of existing) {
+      const suspended = !eligibleIds.has(card.templateId)
+      if (Boolean(card.suspended) === suspended) continue
+      const revised = { ...card, suspended }
+      await this.cards.put(revised)
+      operations.push({ opId: id(), entityType: 'card', entityId: card.id, action: 'update', occurredAt: now.toISOString(), payload: revised })
+    }
+    const existingIds = new Set(existing.map((card) => card.templateId))
+    for (const template of eligible) {
+      if (existingIds.has(template.id)) continue
+      const card = serializeCard(createEmptyCard(now), { id: `${note.id}:${template.id}`, deckId: note.deckId, noteId: note.id, templateId: template.id })
+      await this.cards.add(card)
+      operations.push({ opId: id(), entityType: 'card', entityId: card.id, action: 'create', occurredAt: now.toISOString(), payload: card })
+    }
+  }
+
+  async updateNoteType(typeId: string, input: UpdateNoteType, now = new Date()): Promise<NoteType> {
+    return this.transaction('rw', [this.noteTypes, this.notes, this.cards, this.outbox], async () => {
+      const previous = await this.noteTypes.get(typeId)
+      if (!previous) throw new Error('Note type not found')
+      if (previous.protected) throw new Error('Protected note type cannot be changed')
+      const oldFieldIds = new Set(previous.fields.map((field) => field.id))
+      const oldTemplateIds = new Set(previous.templates.map((template) => template.id))
+      const fields = (input.fields ?? previous.fields).map((field) => ({ id: field.id ?? id(), name: requiredText(field.name, 'Field name') }))
+      const templates = (input.templates ?? previous.templates).map((template) => ({ ...template, id: template.id ?? id(), name: requiredText(template.name, 'Template name') }))
+      if (!fields.length) throw new Error('A note type needs at least one field')
+      if (!templates.length) throw new Error('A note type needs at least one template')
+      if (new Set(fields.map((field) => field.id)).size !== fields.length) throw new Error('Field IDs must be unique')
+      if (fields.some((field) => !oldFieldIds.has(field.id) && input.fields?.some((candidate) => candidate.id === field.id))) throw new Error('Unknown field ID')
+      if (new Set(templates.map((template) => template.id)).size !== templates.length) throw new Error('Template IDs must be unique')
+      if (templates.some((template) => !oldTemplateIds.has(template.id) && input.templates?.some((candidate) => candidate.id === template.id))) throw new Error('Unknown template ID')
+      const names = fields.map((field) => field.name)
+      if (new Set(names).size !== names.length) throw new Error('Field names must be unique')
+      if (names.includes('FrontSide')) throw new Error('FrontSide is reserved for template backs')
+      for (const template of templates) {
+        validateTemplate(template.front, names, 'front')
+        validateTemplate(template.back, names, 'back')
+      }
+      const currentIds = new Set(fields.map((field) => field.id))
+      const removed = previous.fields.filter((field) => !currentIds.has(field.id))
+      for (const field of removed) {
+        const mode = input.removedFields?.[field.id]
+        if (mode !== 'discard' && mode !== 'keep-as-extra') throw new Error(`Valid field removal mode required for ${field.name}`)
+      }
+      if (Object.keys(input.removedFields ?? {}).some((fieldId) => !removed.some((field) => field.id === fieldId))) throw new Error('Removal mode supplied for a field that is not removed')
+      const updated: NoteType = { ...previous, name: requiredText(input.name ?? previous.name, 'Note type name'), fields, templates, updatedAt: now.toISOString() }
+      const operations: SyncOperation[] = [{ opId: id(), entityType: 'noteType', entityId: typeId, action: 'update', occurredAt: updated.updatedAt, payload: updated }]
+      const notes = await this.notes.where('typeId').equals(typeId).toArray()
+      for (const note of notes) {
+        let revised = note
+        if (removed.length || fields.some((field) => !oldFieldIds.has(field.id))) {
+          const values = Object.fromEntries(fields.map((field) => [field.id, note.fields[field.id] ?? '']))
+          const retiredFields = { ...note.retiredFields }
+          for (const [fieldId, value] of Object.entries(note.fields)) {
+            if (currentIds.has(fieldId)) continue
+            if (input.removedFields?.[fieldId] === 'discard') delete retiredFields[fieldId]
+            else retiredFields[fieldId] = value
+          }
+          revised = { ...note, fields: values, ...(Object.keys(retiredFields).length ? { retiredFields } : {}), updatedAt: now.toISOString() }
+          await this.notes.put(revised)
+          operations.push({ opId: id(), entityType: 'note', entityId: note.id, action: 'update', occurredAt: revised.updatedAt, payload: revised })
+        }
+        await this.reconcileCards(revised, updated, now, operations)
+      }
+      await this.noteTypes.put(updated)
+      await this.outbox.bulkAdd(operations)
+      return updated
+    })
+  }
+
+  async deleteNoteType(typeId: string, replacement?: NoteTypeReplacement, now = new Date()): Promise<void> {
+    await this.transaction('rw', [this.noteTypes, this.notes, this.cards, this.outbox, this.deletedEntities], async () => {
+      const source = await this.noteTypes.get(typeId)
+      if (!source) throw new Error('Note type not found')
+      if (source.protected) throw new Error('Protected note type cannot be deleted')
+      const notes = await this.notes.where('typeId').equals(typeId).toArray()
+      if (notes.length && !replacement?.replacementTypeId) throw new Error('A replacement note type is required')
+      if (notes.length && !replacement?.fieldMapping) throw new Error('An explicit field mapping is required')
+      const target = replacement ? await this.noteTypes.get(replacement.replacementTypeId) : undefined
+      if (replacement && (!target || target.id === typeId)) throw new Error('Replacement note type not found')
+      const sourceIds = new Set(source.fields.map((field) => field.id))
+      const targetIds = new Set(target?.fields.map((field) => field.id))
+      const mapping = replacement?.fieldMapping ?? {}
+      if (Object.keys(mapping).some((fieldId) => !sourceIds.has(fieldId))) throw new Error('Field mapping has an unknown source field')
+      if (Object.values(mapping).some((fieldId) => !targetIds.has(fieldId))) throw new Error('Field mapping has an unknown replacement field')
+      if (new Set(Object.values(mapping)).size !== Object.values(mapping).length) throw new Error('Field mapping must have unique targets')
+      const operations: SyncOperation[] = []
+      for (const note of notes) {
+        if (!target) throw new Error('Replacement note type not found')
+        const fields = Object.fromEntries(target.fields.map((field) => [field.id, ''])) as Record<string, string>
+        const retiredFields = { ...note.retiredFields }
+        for (const [fieldId, value] of Object.entries(note.fields)) {
+          const destination = mapping[fieldId]
+          if (destination) fields[destination] = value
+          else retiredFields[fieldId] = value
+        }
+        const revised: Note = { ...note, typeId: target.id, type: target.id === BASIC_NOTE_TYPE_ID ? 'basic' : 'custom', fields, ...(Object.keys(retiredFields).length ? { retiredFields } : {}), updatedAt: now.toISOString() }
+        await this.notes.put(revised)
+        operations.push({ opId: id(), entityType: 'note', entityId: note.id, action: 'update', occurredAt: revised.updatedAt, payload: revised })
+        await this.reconcileCards(revised, target, now, operations)
+      }
+      await this.noteTypes.delete(typeId)
+      await this.deletedEntities.put({ key: tombstoneKey('noteType', typeId), entityType: 'noteType', entityId: typeId, occurredAt: now.toISOString() })
+      operations.push({ opId: id(), entityType: 'noteType', entityId: typeId, action: 'delete', occurredAt: now.toISOString(), payload: { id: typeId } })
+      await this.outbox.bulkAdd(operations)
+    })
   }
 
   cardGenerationStatus(noteType: NoteType, fields: Record<string, string>) {
