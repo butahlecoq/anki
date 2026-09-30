@@ -1,0 +1,23 @@
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+.env
+.env.*
+!.env.example
+*.local
+*.log
+
+# Runtime data and private learning material
+data/
+backups/
+certificates/
+*.apkg
+*.colpkg
+*.anki2
+*.anki21
+
+# Pre-existing local reference saved before repository initialization
+Sync Server - Anki Manual.html
+Sync Server - Anki Manual_files/
