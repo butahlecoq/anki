@@ -8,6 +8,7 @@ import {
   type Grade,
   type ReviewLog as FsrsReviewLog,
 } from 'ts-fsrs'
+import { digestMedia, validateMedia, type AudioPlayback, type MediaKind, type MediaSide } from './media'
 
 export { Rating, State }
 export type { Grade }
@@ -85,7 +86,7 @@ export interface ReviewChoice {
 
 export interface SyncOperation {
   opId: string
-  entityType: 'deck' | 'note' | 'card' | 'review'
+  entityType: 'deck' | 'note' | 'card' | 'review' | 'noteMedia'
   entityId: string
   action: 'create' | 'update' | 'delete'
   occurredAt: string
@@ -94,6 +95,8 @@ export interface SyncOperation {
 
 export interface SyncSettings { endpoint: string; token: string; cursor: number }
 interface DeletionTombstone { key: string; entityType: SyncOperation['entityType']; entityId: string; occurredAt: string }
+export interface NoteMediaReference { id: string; noteId: string; digest: string; kind: MediaKind; mimeType: string; displayName: string; side: MediaSide; playback: AudioPlayback; createdAt: string; updatedAt: string }
+export interface MediaBlob { digest: string; blob: Blob; byteLength: number; mimeType: string; verifiedAt: string }
 
 const scheduler = fsrs({
   request_retention: 0.9,
@@ -200,6 +203,8 @@ export class Collection extends Dexie {
   settings!: EntityTable<{ key: string; value: unknown }, 'key'>
   receivedOperations!: EntityTable<{ opId: string }, 'opId'>
   deletedEntities!: EntityTable<DeletionTombstone, 'key'>
+  noteMedia!: EntityTable<NoteMediaReference, 'id'>
+  mediaBlobs!: EntityTable<MediaBlob, 'digest'>
 
   constructor(name: string) {
     super(name)
@@ -221,6 +226,9 @@ export class Collection extends Dexie {
     })
     this.version(4).stores({
       decks: 'id, name, createdAt', notes: 'id, deckId, updatedAt', cards: 'id, deckId, noteId, due, state', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId', deletedEntities: 'key, entityType, entityId, occurredAt',
+    })
+    this.version(5).stores({
+      decks: 'id, name, createdAt', notes: 'id, deckId, updatedAt', cards: 'id, deckId, noteId, due, state', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId', deletedEntities: 'key, entityType, entityId, occurredAt', noteMedia: 'id, noteId, digest, side, kind, updatedAt', mediaBlobs: 'digest, verifiedAt',
     })
   }
 
@@ -305,6 +313,33 @@ export class Collection extends Dexie {
       }
       await this.notes.put(updated)
       await this.outbox.add({ opId: id(), entityType: 'note', entityId: noteId, action: 'update', occurredAt: updated.updatedAt, payload: updated })
+    })
+  }
+
+  async attachMedia(noteId: string, { file, side, playback = 'manual' }: { file: File; side: MediaSide; playback?: AudioPlayback }, now = new Date()): Promise<NoteMediaReference> {
+    if (!await this.notes.get(noteId)) throw new Error('Note not found')
+    const definition = validateMedia(file)
+    const digest = await digestMedia(file)
+    const reference: NoteMediaReference = { id: id(), noteId, digest, kind: definition.kind, mimeType: file.type, displayName: file.name, side, playback, createdAt: now.toISOString(), updatedAt: now.toISOString() }
+    const blob: MediaBlob = { digest, blob: file, byteLength: file.size, mimeType: file.type, verifiedAt: now.toISOString() }
+    await this.transaction('rw', this.noteMedia, this.mediaBlobs, this.outbox, async () => {
+      if (!await this.mediaBlobs.get(digest)) await this.mediaBlobs.add(blob)
+      await this.noteMedia.add(reference)
+      await this.outbox.add({ opId: id(), entityType: 'noteMedia', entityId: reference.id, action: 'create', occurredAt: reference.createdAt, payload: reference })
+    })
+    return reference
+  }
+
+  async mediaForNote(noteId: string) {
+    return this.noteMedia.where('noteId').equals(noteId).sortBy('createdAt')
+  }
+
+  async removeMedia(referenceId: string, now = new Date()) {
+    await this.transaction('rw', this.noteMedia, this.outbox, async () => {
+      const reference = await this.noteMedia.get(referenceId)
+      if (!reference) throw new Error('Media reference not found')
+      await this.noteMedia.delete(referenceId)
+      await this.outbox.add({ opId: id(), entityType: 'noteMedia', entityId: referenceId, action: 'delete', occurredAt: now.toISOString(), payload: { id: referenceId, noteId: reference.noteId, digest: reference.digest } })
     })
   }
 

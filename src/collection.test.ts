@@ -62,6 +62,24 @@ describe('local collection', () => {
     ]))
   })
 
+  test('deduplicates verified media bytes while keeping independent note references', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Japanese foundations')
+    const first = await collection.createBasicNote(deck.id, { front: '猫', back: 'ねこ — cat' })
+    const second = await collection.createBasicNote(deck.id, { front: '犬', back: 'いぬ — dog' })
+    const image = new File([new Uint8Array([137, 80, 78, 71])], 'example.png', { type: 'image/png' })
+
+    const firstReference = await collection.attachMedia(first.id, { file: image, side: 'front' })
+    const secondReference = await collection.attachMedia(second.id, { file: image, side: 'back' })
+
+    expect(firstReference.digest).toBe(secondReference.digest)
+    await expect(collection.mediaBlobs.count()).resolves.toBe(1)
+    await expect(collection.mediaForNote(first.id)).resolves.toHaveLength(1)
+    await collection.removeMedia(firstReference.id)
+    await expect(collection.mediaBlobs.count()).resolves.toBe(1)
+    await expect(collection.mediaForNote(second.id)).resolves.toHaveLength(1)
+  })
+
   test('keeps a paired sync credential in local collection settings', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'device-token', cursor: 4 })
