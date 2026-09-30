@@ -31,7 +31,7 @@
     "@types/node": "^24.7.2",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
-    "@vite-pwa/assets-generator": "^2.0.0",
+    "@vite-pwa/assets-generator": "^1.0.4",
     "@vitejs/plugin-react": "^5.0.4",
     "eslint": "^9.38.0",
     "eslint-plugin-react-hooks": "^7.0.0",
