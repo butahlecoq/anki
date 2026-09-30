@@ -63,7 +63,7 @@ export interface Note {
   id: string
   deckId: string
   type: 'basic' | 'custom'
-  typeId?: string
+  typeId: string
   fields: Record<string, string>
   createdAt: string
   updatedAt: string
@@ -73,7 +73,7 @@ export interface CardRecord {
   id: string
   deckId: string
   noteId: string
-  templateId?: string
+  templateId: string
   suspended?: boolean
   due: string
   stability: number
@@ -86,6 +86,9 @@ export interface CardRecord {
   state: State
   lastReview: string | null
 }
+
+type LegacyNote = Omit<Note, 'typeId'> & { typeId?: string }
+type LegacyCard = Omit<CardRecord, 'templateId'> & { templateId?: string }
 
 export interface ReviewEntry {
   id: string
@@ -164,6 +167,16 @@ function requiredText(value: string, label: string) {
   const normalized = value.trim()
   if (!normalized) throw new Error(`${label} is required`)
   return normalized
+}
+
+function canonicalNote(note: LegacyNote): Note {
+  if (note.type === 'basic') return { ...note, typeId: BASIC_NOTE_TYPE_ID }
+  if (!note.typeId) throw new Error('Synced custom note is missing its note type ID')
+  return { ...note, typeId: note.typeId }
+}
+
+function canonicalCard(card: LegacyCard): CardRecord {
+  return { ...card, templateId: card.templateId ?? BASIC_TEMPLATE_ID }
 }
 
 function serializeCard(card: FsrsCard, identity: Pick<CardRecord, 'id' | 'deckId' | 'noteId' | 'templateId'>): CardRecord {
@@ -273,8 +286,8 @@ export class Collection extends Dexie {
       decks: 'id, name, createdAt', notes: 'id, deckId, typeId, updatedAt', cards: 'id, deckId, noteId, templateId, due, state', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId', deletedEntities: 'key, entityType, entityId, occurredAt', noteMedia: 'id, noteId, digest, side, kind, updatedAt', mediaBlobs: 'digest, verifiedAt', noteTypes: 'id, name, updatedAt',
     }).upgrade(async (transaction) => {
       await transaction.table('noteTypes').put(basicNoteType)
-      await transaction.table('notes').toCollection().modify((note: Note) => { if (note.type === 'basic' && !note.typeId) note.typeId = BASIC_NOTE_TYPE_ID })
-      await transaction.table('cards').toCollection().modify((card: CardRecord) => { if (!card.templateId) card.templateId = BASIC_TEMPLATE_ID })
+      await transaction.table('notes').toCollection().modify((note: LegacyNote) => { if (note.type === 'basic' && !note.typeId) note.typeId = BASIC_NOTE_TYPE_ID })
+      await transaction.table('cards').toCollection().modify((card: LegacyCard) => { if (!card.templateId) card.templateId = BASIC_TEMPLATE_ID })
     })
     this.on('populate', (transaction) => {
       transaction.table('noteTypes').put(basicNoteType)
@@ -336,7 +349,7 @@ export class Collection extends Dexie {
     await this.transaction('rw', [this.noteTypes, this.notes, this.cards, this.outbox], async () => {
       const note = await this.notes.get(noteId)
       if (!note) throw new Error('Note not found')
-      const noteType = await this.noteTypes.get(note.typeId ?? BASIC_NOTE_TYPE_ID)
+      const noteType = await this.noteTypes.get(note.typeId)
       if (!noteType) throw new Error('Note type not found')
       const values = Object.fromEntries(noteType.fields.map((field) => [field.id, fields[field.id] ?? '']))
       const updated: Note = { ...note, fields: values, updatedAt: now.toISOString() }
@@ -345,14 +358,14 @@ export class Collection extends Dexie {
       const eligibleIds = new Set(eligible.map((template) => template.id))
       const changes: SyncOperation[] = [{ opId: id(), entityType: 'note', entityId: noteId, action: 'update', occurredAt: updated.updatedAt, payload: updated }]
       for (const card of existing) {
-        const suspended = !eligibleIds.has(card.templateId ?? BASIC_TEMPLATE_ID)
+        const suspended = !eligibleIds.has(card.templateId)
         if (Boolean(card.suspended) === suspended) continue
         const revised = { ...card, suspended }
         await this.cards.put(revised)
         changes.push({ opId: id(), entityType: 'card', entityId: card.id, action: 'update', occurredAt: updated.updatedAt, payload: revised })
       }
       for (const template of eligible) {
-        if (existing.some((card) => (card.templateId ?? BASIC_TEMPLATE_ID) === template.id)) continue
+        if (existing.some((card) => card.templateId === template.id)) continue
         const card = serializeCard(createEmptyCard(now), { id: `${note.id}:${template.id}`, deckId: note.deckId, noteId, templateId: template.id })
         await this.cards.put(card)
         changes.push({ opId: id(), entityType: 'card', entityId: card.id, action: 'create', occurredAt: updated.updatedAt, payload: card })
@@ -628,8 +641,8 @@ export class Collection extends Dexie {
             await this.reviewEntries.delete(change.entityId)
           }
         } else if (change.entityType === 'deck') await this.decks.put(change.payload as Deck)
-        else if (change.entityType === 'note') await this.notes.put(change.payload as Note)
-        else if (change.entityType === 'card') await this.cards.put(change.payload as CardRecord)
+        else if (change.entityType === 'note') await this.notes.put(canonicalNote(change.payload as LegacyNote))
+        else if (change.entityType === 'card') await this.cards.put(canonicalCard(change.payload as LegacyCard))
         else if (change.entityType === 'noteMedia') await this.noteMedia.put(change.payload as NoteMediaReference)
         else if (change.entityType === 'noteType' && change.entityId !== BASIC_NOTE_TYPE_ID) await this.noteTypes.put(change.payload as NoteType)
         else if (change.entityType === 'review') await this.reviewEntries.put(change.payload as ReviewEntry)

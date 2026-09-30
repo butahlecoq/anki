@@ -39,4 +39,9 @@ describe('renderTemplate', () => {
     expect(() => validateTemplate('{{FrontSide}}', ['Known'], 'front')).toThrow(/FrontSide.*front/i)
     expect(() => validateTemplate('{{FrontSide}}<hr>{{Known}}', ['Known'], 'back')).not.toThrow()
   })
+
+  test('rejects unmatched opening or closing template delimiters', () => {
+    expect(() => validateTemplate('before {{Word', ['Word'], 'front')).toThrow(/unmatched.*delimiter/i)
+    expect(() => validateTemplate('{{Word}} after }}', ['Word'], 'front')).toThrow(/unmatched.*delimiter/i)
+  })
 })

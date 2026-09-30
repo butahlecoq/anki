@@ -9,10 +9,13 @@ const token = /{{\s*([#^/])?\s*([^{}]+?)\s*}}/g
 export function validateTemplate(template: string, fieldNames: readonly string[], side: 'front' | 'back'): void {
   const known = new Set(fieldNames)
   let section: string | undefined
+  let cursor = 0
   for (const match of template.matchAll(token)) {
+    if (/{{|}}/.test(template.slice(cursor, match.index))) throw new Error('Unmatched template delimiter')
     const [, marker, rawName] = match
+    cursor = match.index + match[0].length
     const name = rawName.trim()
-    if (marker === '/' ) {
+    if (marker === '/') {
       if (section !== name) throw new Error(`Unmatched template conditional: ${name}`)
       section = undefined
       continue
@@ -26,6 +29,7 @@ export function validateTemplate(template: string, fieldNames: readonly string[]
       section = name
     }
   }
+  if (/{{|}}/.test(template.slice(cursor))) throw new Error('Unmatched template delimiter')
   if (section) throw new Error(`Unclosed template conditional: ${section}`)
 }
 

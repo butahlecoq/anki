@@ -109,7 +109,7 @@ describe('local collection', () => {
     await collection.applyRemoteChanges([operation], 1)
     await collection.applyRemoteChanges([operation], 1)
     await expect(collection.noteTypes.get(BASIC_NOTE_TYPE_ID)).resolves.toEqual(basic)
-    await expect(collection.notes.get(note.id)).resolves.toEqual(note)
+    await expect(collection.notes.get(note.id)).resolves.toEqual({ ...note, typeId: BASIC_NOTE_TYPE_ID })
   })
 
   test('creates a Japanese Basic note with one new card in its deck', async () => {
@@ -234,9 +234,10 @@ describe('local collection', () => {
     await collection.applyRemoteChanges(changes, 3)
 
     await expect(collection.decks.get(deck.id)).resolves.toEqual(deck)
-    await expect(collection.notes.get(note.id)).resolves.toEqual(note)
-    await expect(collection.cards.get(card.id)).resolves.toEqual(card)
+    await expect(collection.notes.get(note.id)).resolves.toEqual({ ...note, typeId: BASIC_NOTE_TYPE_ID })
+    await expect(collection.cards.get(card.id)).resolves.toEqual({ ...card, templateId: 'basic' })
     await expect(collection.receivedOperations.count()).resolves.toBe(3)
+    await expect(collection.pendingOperations()).resolves.toHaveLength(0)
   })
 
   test('keeps a deleted deck deleted when an offline client later sends an edit', async () => {
