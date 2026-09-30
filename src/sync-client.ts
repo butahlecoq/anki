@@ -6,6 +6,12 @@ type Complete = { state: 'complete'; accepted: number; cursor: number; changes: 
 type SyncResult = Complete | { state: 'authentication-required' } | { state: 'unreachable' }
 export type PairingResult = { state: 'paired' } | { state: 'pairing-error' } | { state: 'unreachable' }
 
+export async function uploadMedia(settings: SyncSettings, digest: string, blob: Blob, fetcher: Fetcher = fetch) {
+  const response = await fetcher(`${settings.endpoint.replace(/\/$/, '')}/api/media/${digest}`, { method: 'PUT', headers: { authorization: `Bearer ${settings.token}`, 'content-type': blob.type }, body: blob })
+  if (!response.ok) throw new Error('Media upload failed.')
+  return response.json() as Promise<{ digest: string; byteLength: number; mimeType: string; deduplicated: boolean }>
+}
+
 function isSafeServiceEndpoint(endpoint: string) {
   try {
     const parsed = new URL(endpoint)
