@@ -43,6 +43,9 @@ test('accepts a review mutation once when the request is delivered twice', async
   assert.equal(service.sync(token, request).accepted, 1)
   assert.equal(service.sync(token, request).accepted, 0)
   assert.equal(service.reviewCount(), 1)
+  const pulled = service.sync(token, { cursor: 0, operations: [] })
+  assert.equal(pulled.changes.length, 1)
+  assert.equal(pulled.cursor, 1)
   service.close()
 })
 
@@ -64,7 +67,7 @@ test('serves health, pairing, and authenticated sync over HTTP', async () => {
   const denied = await fetch(`${origin}/api/sync`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cursor: 0, operations: [] }) })
   assert.equal(denied.status, 401)
   const synced = await fetch(`${origin}/api/sync`, { method: 'POST', headers: { authorization: `Bearer ${credential.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ cursor: 0, operations: [] }) })
-  assert.deepEqual(await synced.json(), { accepted: 0 })
+  assert.deepEqual(await synced.json(), { accepted: 0, cursor: 0, changes: [] })
 
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
   service.close()

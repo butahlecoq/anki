@@ -72,7 +72,22 @@ export function createSyncService({ databasePath }: ServiceOptions) {
         database.exec('ROLLBACK')
         throw error
       }
-      return { accepted }
+      const changes = database.prepare('SELECT cursor, op_id, device_id, entity_type, entity_id, action, occurred_at, payload FROM changes WHERE cursor > ? ORDER BY cursor').all(request.cursor) as Array<{ cursor: number; op_id: string; device_id: string; entity_type: string; entity_id: string; action: string; occurred_at: string; payload: string }>
+      const cursor = changes.at(-1)?.cursor ?? request.cursor
+      return {
+        accepted,
+        cursor,
+        changes: changes.map((change) => ({
+          cursor: change.cursor,
+          opId: change.op_id,
+          deviceId: change.device_id,
+          entityType: change.entity_type,
+          entityId: change.entity_id,
+          action: change.action,
+          occurredAt: change.occurred_at,
+          payload: JSON.parse(change.payload) as unknown,
+        })),
+      }
     },
 
     reviewCount() {
