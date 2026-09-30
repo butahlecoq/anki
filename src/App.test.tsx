@@ -34,4 +34,5 @@ test('waits for service-worker readiness before claiming the offline shell is re
   render(<App />)
 
   expect(screen.getByRole('status')).toHaveTextContent('Preparing offline shell')
+  expect(screen.getByText('Offline access is being prepared for this device.')).toBeVisible()
 })

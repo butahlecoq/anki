@@ -81,6 +81,11 @@ export function App() {
     : offlineShellStatus === 'ready' ? 'Offline shell active' : 'Offline shell unavailable'
   const shellDetail = offlineShellStatus === 'ready' ? 'Cached' : offlineShellStatus === 'checking' ? 'Preparing' : 'Unavailable'
   const shellDot = offlineShellStatus === 'ready' ? 'ok' : offlineShellStatus === 'checking' ? 'idle' : 'warn'
+  const shellNote = offlineShellStatus === 'ready'
+    ? 'The offline app shell is ready on this device.'
+    : offlineShellStatus === 'checking'
+      ? 'Offline access is being prepared for this device.'
+      : 'Offline access will be available after service-worker setup succeeds.'
 
   useEffect(() => {
     const showUpdate = () => setUpdateReady(true)
@@ -190,7 +195,7 @@ export function App() {
             </dl>
             <div className="system-note">
               <span>LOCAL-FIRST</span>
-              <p>Once downloaded, study sessions will not depend on this PC or the internet.</p>
+              <p>{shellNote}</p>
             </div>
           </aside>
         </section>
