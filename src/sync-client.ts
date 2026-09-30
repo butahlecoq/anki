@@ -2,19 +2,28 @@ import type { Collection, SyncOperation, SyncSettings } from './collection'
 
 type Fetcher = typeof fetch
 type Change = { cursor: number; opId: string; entityType: string; entityId: string; action: string; occurredAt: string; payload: unknown }
-type Complete = { state: 'complete'; accepted: number; cursor: number; changes: Change[] }
+export type MediaSyncProgress = { uploaded: number; downloaded: number; pending: number; uploadError?: 'authentication-required' | 'unreachable'; downloadError?: 'authentication-required' | 'unreachable' }
+type Complete = { state: 'complete'; accepted: number; cursor: number; changes: Change[]; media?: MediaSyncProgress }
 type SyncResult = Complete | { state: 'authentication-required' } | { state: 'unreachable' }
 export type PairingResult = { state: 'paired' } | { state: 'pairing-error' } | { state: 'unreachable' }
 
+class MediaTransferError extends Error {
+  constructor(readonly state: 'authentication-required' | 'unreachable') {
+    super('Media transfer failed.')
+  }
+}
+
 export async function uploadMedia(settings: SyncSettings, digest: string, blob: Blob, fetcher: Fetcher = fetch) {
   const response = await fetcher(`${settings.endpoint.replace(/\/$/, '')}/api/media/${digest}`, { method: 'PUT', headers: { authorization: `Bearer ${settings.token}`, 'content-type': blob.type }, body: blob })
-  if (!response.ok) throw new Error('Media upload failed.')
+  if (response.status === 401) throw new MediaTransferError('authentication-required')
+  if (!response.ok) throw new MediaTransferError('unreachable')
   return response.json() as Promise<{ digest: string; byteLength: number; mimeType: string; deduplicated: boolean }>
 }
 
 export async function downloadMedia(settings: SyncSettings, digest: string, fetcher: Fetcher = fetch) {
   const response = await fetcher(`${settings.endpoint.replace(/\/$/, '')}/api/media/${digest}`, { headers: { authorization: `Bearer ${settings.token}` } })
-  if (!response.ok || response.headers.get('x-content-sha256') !== digest) throw new Error('Media download failed verification.')
+  if (response.status === 401) throw new MediaTransferError('authentication-required')
+  if (!response.ok || response.headers.get('x-content-sha256') !== digest) throw new MediaTransferError('unreachable')
   return new Blob([await response.arrayBuffer()], { type: response.headers.get('content-type') ?? '' })
 }
 
@@ -66,20 +75,39 @@ export async function foregroundSync(settings: SyncSettings, operations: Partial
 export async function syncCollection(collection: Collection, fetcher: Fetcher = fetch): Promise<SyncResult> {
   const settings = await collection.syncSettings()
   if (!settings) return { state: 'authentication-required' }
+  let uploaded = 0
+  let downloaded = 0
+  let uploadError: MediaSyncProgress['uploadError']
+  let downloadError: MediaSyncProgress['downloadError']
   const references = await collection.noteMedia.toArray()
-  for (const digest of new Set(references.map((reference) => reference.digest))) {
+  const localDigests = new Set(references.map((reference) => reference.digest))
+  for (const digest of localDigests) {
     const local = await collection.verifiedMediaBlob(digest)
-    if (local) await uploadMedia(settings, digest, local.blob, fetcher)
+    if (!local) continue
+    try {
+      await uploadMedia(settings, digest, local.blob, fetcher)
+      uploaded += 1
+    } catch (error) {
+      uploadError = error instanceof MediaTransferError ? error.state : 'unreachable'
+    }
   }
   const operations = await collection.pendingOperations()
   const result = await foregroundSync(settings, operations, fetcher)
   if (result.state === 'complete') {
     await collection.applyRemoteChanges(result.changes as SyncOperation[], result.cursor)
     await collection.acknowledgeOperations(operations.map((operation) => operation.opId))
-    for (const reference of await collection.missingReferencedMedia()) {
-      const blob = await downloadMedia(settings, reference.digest, fetcher)
-      await collection.storeDownloadedMedia(reference.digest, blob)
+    for (const digest of new Set((await collection.missingReferencedMedia()).map((reference) => reference.digest))) {
+      try {
+        const blob = await downloadMedia(settings, digest, fetcher)
+        await collection.storeDownloadedMedia(digest, blob)
+        downloaded += 1
+      } catch (error) {
+        downloadError = error instanceof MediaTransferError ? error.state : 'unreachable'
+      }
     }
+    const missing = new Set((await collection.missingReferencedMedia()).map((reference) => reference.digest)).size
+    const pending = (uploadError ? localDigests.size - uploaded : 0) + missing
+    return { ...result, media: { uploaded, downloaded, pending, ...(uploadError ? { uploadError } : {}), ...(downloadError ? { downloadError } : {}) } }
   }
   return result
 }

@@ -17,7 +17,7 @@ async function createDeck(page: import('@playwright/test').Page, name: string) {
 }
 
 async function pairingCode() {
-  const runtimeDirectory = join(tmpdir(), 'kiroku-e2e-sync')
+  const runtimeDirectory = process.env.KIROKU_RUNTIME_DIRECTORY ?? join(tmpdir(), 'kiroku-e2e-sync')
   const { stdout } = await execFile(process.execPath, ['dist-server/server/index.js', '--pairing-code'], {
     env: { ...process.env, KIROKU_RUNTIME_DIRECTORY: runtimeDirectory },
   })
@@ -48,7 +48,9 @@ test('learner creates, edits, and reviews a Japanese card offline', async ({ bro
   await page.getByRole('button', { name: 'Save note' }).click()
 
   await expect(page.getByText('猫')).toBeVisible()
-  await page.getByRole('button', { name: 'Edit note' }).click()
+  const editNote = page.getByRole('button', { name: 'Edit note' })
+  await editNote.evaluate((button) => button.scrollIntoView({ block: 'center' }))
+  await editNote.click()
   await page.getByLabel('Back').fill('ねこ · cat · feline')
   await page.getByRole('button', { name: 'Save changes' }).click()
   await expect(page.getByText('ねこ · cat · feline')).toBeVisible()
@@ -179,7 +181,7 @@ test('PC and phone contexts exchange a collection and an FSRS review through the
     await pair(pc)
     await pair(phone)
     await pc.getByRole('button', { name: 'Sync now' }).click()
-    await expect(pc.getByText('Sync complete. 3 local changes sent.')).toBeVisible()
+    await expect(pc.getByRole('region', { name: 'PC sync' }).getByText(/complete\./i)).toBeVisible()
     await phone.getByRole('button', { name: 'Sync now' }).click()
     await expect(phone.getByRole('button', { name: `Open ${deckName}` })).toBeVisible()
 
@@ -189,12 +191,76 @@ test('PC and phone contexts exchange a collection and an FSRS review through the
     await phone.getByRole('button', { name: /^Good · / }).click()
     await expect(phone.getByRole('heading', { name: 'Session complete' })).toBeVisible()
     await phone.getByRole('button', { name: 'Sync now' }).click()
-    await expect(phone.getByText('Sync complete. 2 local changes sent.')).toBeVisible()
+    await expect(phone.getByRole('region', { name: 'PC sync' }).getByText(/complete\./i)).toBeVisible()
 
     await pc.getByRole('button', { name: 'Sync now' }).click()
     await expect(pc.getByText('LEARNING 1')).toBeVisible()
     await expect(pc.getByText('REVIEWS 1')).toBeVisible()
   } finally {
     await phoneContext.close()
+  }
+})
+
+test('a phone keeps verified synced media after a cold offline reload', async ({ browserName, browser, page: pc }, testInfo) => {
+  test.skip(browserName === 'webkit', 'The WebKit runner discards IndexedDB when a persistent profile is reopened.')
+  const profile = await mkdtemp(join(tmpdir(), 'kiroku-media-profile-'))
+  const deckName = `Media Japanese ${testInfo.project.name} ${Date.now()}`
+  let phoneContext: import('@playwright/test').BrowserContext | undefined
+  let reopenedContext: import('@playwright/test').BrowserContext | undefined
+  try {
+    phoneContext = await browser.browserType().launchPersistentContext(profile, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
+    const phone = phoneContext.pages()[0] ?? await phoneContext.newPage()
+    await phone.clock.setFixedTime(REVIEW_TIME)
+    await phone.goto('http://127.0.0.1:4173/')
+
+    await createDeck(pc, deckName)
+    await pc.getByRole('button', { name: `Open ${deckName}` }).click()
+    await pc.getByRole('button', { name: 'Add note' }).click()
+    await pc.getByLabel('Front').fill('猫')
+    await pc.getByLabel('Back').fill('cat')
+    await pc.getByLabel('Images and audio').setInputFiles([
+      { name: 'cat.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL4+QAAAABJRU5ErkJggg==', 'base64') },
+      { name: 'cat.wav', mimeType: 'audio/wav', buffer: Buffer.from([0x52, 0x49, 0x46, 0x46, 0x25, 0, 0, 0, 0x57, 0x41, 0x56, 0x45, 0x66, 0x6d, 0x74, 0x20, 16, 0, 0, 0, 1, 0, 1, 0, 0x40, 0x1f, 0, 0, 0x40, 0x1f, 0, 0, 1, 0, 8, 0, 0x64, 0x61, 0x74, 0x61, 1, 0, 0, 0, 0x80]) },
+    ])
+    await expect(pc.getByText('cat.png')).toBeVisible()
+    await pc.getByRole('button', { name: 'Save note' }).click()
+    const deckId = await pc.evaluate(() => window.location.hash.split('/')[1])
+
+    await pair(pc)
+    await pair(phone)
+    await pc.getByRole('button', { name: 'Sync now' }).click()
+    await expect(pc.getByText(/2 uploaded and 0 downloaded/)).toBeVisible()
+    await phone.getByRole('button', { name: 'Sync now' }).click()
+    await phone.getByRole('button', { name: `Open ${deckName}` }).click()
+    await phone.getByRole('button', { name: 'Study now' }).click()
+    const image = phone.getByRole('img', { name: 'cat.png' })
+    await expect(image).toBeVisible()
+    await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true)
+    const audio = phone.locator('audio')
+    await expect(audio).toHaveCount(1)
+    await expect(audio).toHaveJSProperty('controls', true)
+    await expect(audio).toHaveJSProperty('autoplay', true)
+    await expect.poll(() => audio.evaluate((element: HTMLAudioElement) => element.readyState >= HTMLMediaElement.HAVE_METADATA)).toBe(true)
+    await phone.evaluate(async () => { await navigator.serviceWorker.ready })
+
+    await phoneContext.close()
+    phoneContext = undefined
+    reopenedContext = await browser.browserType().launchPersistentContext(profile, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
+    await reopenedContext.setOffline(true)
+    const reopened = reopenedContext.pages()[0] ?? await reopenedContext.newPage()
+    await reopened.clock.setFixedTime(REVIEW_TIME)
+    await reopened.goto(`http://127.0.0.1:4173/#deck/${deckId}`, { waitUntil: 'domcontentloaded' })
+    await reopened.getByRole('button', { name: 'Study now' }).click()
+    const offlineImage = reopened.getByRole('img', { name: 'cat.png' })
+    await expect(offlineImage).toBeVisible()
+    await expect.poll(() => offlineImage.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true)
+    const offlineAudio = reopened.locator('audio')
+    await expect(offlineAudio).toHaveCount(1)
+    await expect(offlineAudio).toHaveJSProperty('controls', true)
+    await expect.poll(() => offlineAudio.evaluate((element: HTMLAudioElement) => element.readyState >= HTMLMediaElement.HAVE_METADATA)).toBe(true)
+  } finally {
+    await phoneContext?.close()
+    await reopenedContext?.close()
+    await rm(profile, { recursive: true, force: true }).catch(() => undefined)
   }
 })

@@ -80,6 +80,29 @@ describe('local collection', () => {
     await expect(collection.mediaForNote(second.id)).resolves.toHaveLength(1)
   })
 
+  test('creates a note and its media references atomically', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Japanese foundations')
+    const image = new File(['image'], 'cat.png', { type: 'image/png' })
+    const note = await collection.createBasicNoteWithMedia(deck.id, { front: '猫', back: 'cat' }, [{ file: image, side: 'front' }, { file: image, side: 'back' }])
+    await expect(collection.mediaForNote(note.id)).resolves.toHaveLength(2)
+    await expect(collection.mediaBlobs.count()).resolves.toBe(1)
+    await expect(collection.createBasicNoteWithMedia(deck.id, { front: '犬', back: 'dog' }, [{ file: new File(['bad'], 'bad.txt', { type: 'text/plain' }), side: 'front' }])).rejects.toThrow('not a supported')
+    await expect(collection.notes.count()).resolves.toBe(1)
+  })
+
+  test('removes media references with their deleted deck while retaining shared bytes', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Japanese foundations')
+    const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'ねこ — cat' })
+    await collection.attachMedia(note.id, { file: new File(['image'], 'cat.png', { type: 'image/png' }), side: 'front' })
+
+    await collection.deleteDeck(deck.id)
+
+    await expect(collection.noteMedia.count()).resolves.toBe(0)
+    await expect(collection.mediaBlobs.count()).resolves.toBe(1)
+  })
+
   test('keeps a paired sync credential in local collection settings', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'device-token', cursor: 4 })

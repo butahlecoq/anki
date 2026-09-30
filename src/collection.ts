@@ -97,6 +97,7 @@ export interface SyncSettings { endpoint: string; token: string; cursor: number 
 interface DeletionTombstone { key: string; entityType: SyncOperation['entityType']; entityId: string; occurredAt: string }
 export interface NoteMediaReference { id: string; noteId: string; digest: string; kind: MediaKind; mimeType: string; displayName: string; side: MediaSide; playback: AudioPlayback; createdAt: string; updatedAt: string }
 export interface MediaBlob { digest: string; blob: Blob; byteLength: number; mimeType: string; verifiedAt: string }
+export interface NoteMediaAttachment { file: File; side: MediaSide; playback?: AudioPlayback }
 
 const scheduler = fsrs({
   request_retention: 0.9,
@@ -257,13 +258,15 @@ export class Collection extends Dexie {
   }
 
   async deleteDeck(deckId: string, now = new Date()): Promise<void> {
-    await this.transaction('rw', [this.decks, this.notes, this.cards, this.reviewEntries, this.outbox, this.deletedEntities], async () => {
+    await this.transaction('rw', [this.decks, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.outbox, this.deletedEntities], async () => {
       if (!await this.decks.get(deckId)) throw new Error('Deck not found')
+      const noteIds = (await this.notes.where('deckId').equals(deckId).primaryKeys()) as string[]
       await Promise.all([
         this.decks.delete(deckId),
         this.notes.where('deckId').equals(deckId).delete(),
         this.cards.where('deckId').equals(deckId).delete(),
         this.reviewEntries.where('deckId').equals(deckId).delete(),
+        noteIds.length ? this.noteMedia.where('noteId').anyOf(noteIds).delete() : Promise.resolve(),
       ])
       const occurredAt = now.toISOString()
       await this.deletedEntities.put({ key: tombstoneKey('deck', deckId), entityType: 'deck', entityId: deckId, occurredAt })
@@ -272,7 +275,16 @@ export class Collection extends Dexie {
   }
 
   async createBasicNote(deckId: string, fields: BasicNoteFields, now = new Date()): Promise<Note> {
-    if (!await this.decks.get(deckId)) throw new Error('Deck not found')
+    return this.createBasicNoteWithMedia(deckId, fields, [], now)
+  }
+
+  async createBasicNoteWithMedia(deckId: string, fields: BasicNoteFields, attachments: NoteMediaAttachment[], now = new Date()): Promise<Note> {
+    const createdAt = now.toISOString()
+    const prepared = await Promise.all(attachments.map(async ({ file, side, playback = 'manual' }) => {
+      const definition = validateMedia(file)
+      const digest = await digestMedia(file)
+      return { definition, file, digest, side, playback }
+    }))
     const noteId = id()
     const note: Note = {
       id: noteId,
@@ -282,18 +294,24 @@ export class Collection extends Dexie {
         front: requiredText(fields.front, 'Front'),
         back: requiredText(fields.back, 'Back'),
       },
-      createdAt: now.toISOString(),
-      updatedAt: now.toISOString(),
+      createdAt,
+      updatedAt: createdAt,
     }
     const emptyCard = createEmptyCard(now)
     const card = serializeCard(emptyCard, { id: id(), deckId, noteId })
+    const references: NoteMediaReference[] = prepared.map(({ definition, file, digest, side, playback }) => ({ id: id(), noteId, digest, kind: definition.kind, mimeType: file.type, displayName: file.name, side, playback, createdAt, updatedAt: createdAt }))
+    const blobs = [...new Map(prepared.map(({ file, digest }) => [digest, { digest, blob: file as Blob, byteLength: file.size, mimeType: file.type, verifiedAt: createdAt } satisfies MediaBlob])).values()]
 
-    await this.transaction('rw', this.notes, this.cards, this.outbox, async () => {
+    await this.transaction('rw', [this.decks, this.notes, this.cards, this.noteMedia, this.mediaBlobs, this.outbox], async () => {
+      if (!await this.decks.get(deckId)) throw new Error('Deck not found')
       await this.notes.add(note)
       await this.cards.add(card)
+      if (references.length) await this.noteMedia.bulkAdd(references)
+      if (blobs.length) await this.mediaBlobs.bulkPut(blobs)
       await this.outbox.bulkAdd([
         { opId: id(), entityType: 'note', entityId: note.id, action: 'create', occurredAt: note.createdAt, payload: note },
         { opId: id(), entityType: 'card', entityId: card.id, action: 'create', occurredAt: note.createdAt, payload: card },
+        ...references.map((reference) => ({ opId: id(), entityType: 'noteMedia' as const, entityId: reference.id, action: 'create' as const, occurredAt: reference.createdAt, payload: reference })),
       ])
     })
     return note
@@ -316,14 +334,14 @@ export class Collection extends Dexie {
     })
   }
 
-  async attachMedia(noteId: string, { file, side, playback = 'manual' }: { file: File; side: MediaSide; playback?: AudioPlayback }, now = new Date()): Promise<NoteMediaReference> {
+  async attachMedia(noteId: string, { file, side, playback = 'manual' }: NoteMediaAttachment, now = new Date()): Promise<NoteMediaReference> {
     if (!await this.notes.get(noteId)) throw new Error('Note not found')
     const definition = validateMedia(file)
     const digest = await digestMedia(file)
     const reference: NoteMediaReference = { id: id(), noteId, digest, kind: definition.kind, mimeType: file.type, displayName: file.name, side, playback, createdAt: now.toISOString(), updatedAt: now.toISOString() }
     const blob: MediaBlob = { digest, blob: file, byteLength: file.size, mimeType: file.type, verifiedAt: now.toISOString() }
     await this.transaction('rw', this.noteMedia, this.mediaBlobs, this.outbox, async () => {
-      if (!await this.mediaBlobs.get(digest)) await this.mediaBlobs.add(blob)
+      await this.mediaBlobs.put(blob)
       await this.noteMedia.add(reference)
       await this.outbox.add({ opId: id(), entityType: 'noteMedia', entityId: reference.id, action: 'create', occurredAt: reference.createdAt, payload: reference })
     })
@@ -456,15 +474,18 @@ export class Collection extends Dexie {
         if (change.action === 'delete') {
           await this.deletedEntities.put({ key: tombstoneKey(change.entityType, change.entityId), entityType: change.entityType, entityId: change.entityId, occurredAt: change.occurredAt })
           if (change.entityType === 'deck') {
+            const noteIds = (await this.notes.where('deckId').equals(change.entityId).primaryKeys()) as string[]
             await this.decks.delete(change.entityId)
             await this.notes.where('deckId').equals(change.entityId).delete()
             await this.cards.where('deckId').equals(change.entityId).delete()
             await this.reviewEntries.where('deckId').equals(change.entityId).delete()
+            if (noteIds.length) await this.noteMedia.where('noteId').anyOf(noteIds).delete()
           } else if (change.entityType === 'note') {
             await this.notes.delete(change.entityId)
             const cardIds = (await this.cards.where('noteId').equals(change.entityId).primaryKeys()) as string[]
             await this.cards.bulkDelete(cardIds)
-            await this.reviewEntries.where('cardId').anyOf(cardIds).delete()
+            if (cardIds.length) await this.reviewEntries.where('cardId').anyOf(cardIds).delete()
+            await this.noteMedia.where('noteId').equals(change.entityId).delete()
           } else if (change.entityType === 'card') {
             await this.cards.delete(change.entityId)
             await this.reviewEntries.where('cardId').equals(change.entityId).delete()

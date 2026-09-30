@@ -9,7 +9,10 @@ import {
   type DeckSummary,
   type Grade,
   type Note,
+  type NoteMediaReference,
 } from './collection'
+import { MediaRenderer } from './MediaRenderer'
+import { validateMedia } from './media'
 import { pairCollection, syncCollection } from './sync-client'
 
 type Route =
@@ -89,15 +92,35 @@ function DeckDialog({ deck, onClose }: { deck?: Deck; onClose: () => void }) {
   )
 }
 
+type PendingAttachment = { file: File; side: 'front' | 'back'; playback: 'automatic' | 'manual' }
+
 function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: Note; onClose: () => void }) {
   const [fields, setFields] = useState<BasicNoteFields>(note?.fields ?? { front: '', back: '' })
   const [error, setError] = useState('')
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([])
+  const existingMedia = useLiveQuery(() => note ? collection.mediaForNote(note.id) : [], [note?.id], [])
+
+  function selectMedia(files: FileList | null) {
+    if (!files?.length) return
+    try {
+      const next = Array.from(files).map((file) => {
+        const definition = validateMedia(file)
+        return { file, side: 'front' as const, playback: definition.kind === 'audio' ? 'automatic' as const : 'manual' as const }
+      })
+      setAttachments((current) => [...current, ...next])
+      setError('')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Unable to attach media')
+    }
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault()
     try {
-      if (note) await collection.updateBasicNote(note.id, fields)
-      else await collection.createBasicNote(deckId, fields)
+      if (note) {
+        await collection.updateBasicNote(note.id, fields)
+        await Promise.all(attachments.map(({ file, side, playback }) => collection.attachMedia(note.id, { file, side, playback })))
+      } else await collection.createBasicNoteWithMedia(deckId, fields, attachments)
       onClose()
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Unable to save note')
@@ -118,6 +141,20 @@ function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: Note; on
             Back
             <textarea lang="ja" value={fields.back} onChange={(event) => setFields({ ...fields, back: event.target.value })} rows={4} />
           </label>
+          <label>
+            Images and audio
+            <input type="file" multiple accept="image/png,image/jpeg,image/webp,audio/mpeg,audio/ogg,audio/wav" onChange={(event) => selectMedia(event.target.files)} />
+            <small>PNG, JPEG, WebP up to 10 MB; MP3, Ogg, WAV up to 20 MB.</small>
+          </label>
+          {attachments.map((attachment, index) => (
+            <div className="media-attachment" key={`${attachment.file.name}-${index}`}>
+              <strong>{attachment.file.name}</strong>
+              <label>Show on <select value={attachment.side} onChange={(event) => setAttachments((current) => current.map((item, currentIndex) => currentIndex === index ? { ...item, side: event.target.value as PendingAttachment['side'] } : item))}><option value="front">front</option><option value="back">back</option></select></label>
+              {attachment.file.type.startsWith('audio/') && <label>Play <select value={attachment.playback} onChange={(event) => setAttachments((current) => current.map((item, currentIndex) => currentIndex === index ? { ...item, playback: event.target.value as PendingAttachment['playback'] } : item))}><option value="automatic">automatically</option><option value="manual">manually</option></select></label>}
+              <button className="text-button" type="button" onClick={() => setAttachments((current) => current.filter((_, currentIndex) => currentIndex !== index))}>Remove</button>
+            </div>
+          ))}
+          {existingMedia.map((media) => <ExistingMedia key={media.id} media={media} />)}
           {error && <p className="form-error" role="alert">{error}</p>}
           <div className="dialog-actions">
             <button className="text-button" type="button" onClick={onClose}>Cancel</button>
@@ -127,6 +164,11 @@ function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: Note; on
       </section>
     </div>
   )
+}
+
+function ExistingMedia({ media }: { media: NoteMediaReference }) {
+  const [error, setError] = useState('')
+  return <div className="media-attachment"><strong>{media.displayName}</strong><span>{media.side} · {media.kind}</span><button className="text-button" type="button" onClick={() => void collection.removeMedia(media.id).catch((reason) => setError(reason instanceof Error ? reason.message : 'Unable to remove media'))}>Remove</button>{error && <p className="form-error" role="alert">{error}</p>}</div>
 }
 
 function SyncControls() {
@@ -159,7 +201,13 @@ function SyncControls() {
     setMessage('Syncing your collection…')
     const result = await syncCollection(collection)
     setBusy(false)
-    if (result.state === 'complete') setMessage(`Sync complete. ${result.accepted} local change${result.accepted === 1 ? '' : 's'} sent.`)
+    if (result.state === 'complete') {
+      const media = result.media
+      const mediaError = media?.uploadError ?? media?.downloadError
+      if (mediaError === 'authentication-required') setMessage(`Card sync complete. ${media?.pending ?? 0} media file${media?.pending === 1 ? '' : 's'} still need pairing.`)
+      else if (mediaError) setMessage(`Card sync complete. ${media?.pending ?? 0} media file${media?.pending === 1 ? '' : 's'} will retry when the PC is reachable.`)
+      else setMessage(`Sync complete. ${result.accepted} local change${result.accepted === 1 ? '' : 's'} sent; ${media?.uploaded ?? 0} uploaded and ${media?.downloaded ?? 0} downloaded.`)
+    }
     else if (result.state === 'authentication-required') setMessage('This device needs to be paired again before it can sync.')
     else setMessage('Your PC service could not be reached. Your changes remain on this device and will retry next time.')
   }
@@ -309,6 +357,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   const cardId = queue?.[0]
   const card = useLiveQuery(() => cardId ? collection.cards.get(cardId) : undefined, [cardId])
   const note = useLiveQuery(() => card ? collection.notes.get(card.noteId) : undefined, [card?.noteId])
+  const media = useLiveQuery(() => card ? collection.mediaForNote(card.noteId) : [], [card?.noteId], [])
   const choices = useLiveQuery(() => cardId ? collection.reviewChoices(cardId, new Date()) : [], [cardId], [])
 
   useEffect(() => {
@@ -348,7 +397,9 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
       <article className="review-card">
         <span className="card-side">{showAnswer ? 'ANSWER' : 'QUESTION'}</span>
         <h1 lang="ja">{note.fields.front}</h1>
+        {media.filter((reference) => reference.side === 'front').map((reference) => <MediaRenderer key={reference.id} reference={reference} automatic />)}
         {showAnswer && <div className="review-answer" lang="ja">{note.fields.back}</div>}
+        {showAnswer && media.filter((reference) => reference.side === 'back').map((reference) => <MediaRenderer key={reference.id} reference={reference} automatic />)}
       </article>
       {!showAnswer ? (
         <button className="primary-action reveal-action" type="button" onClick={() => setShowAnswer(true)}>Show answer</button>

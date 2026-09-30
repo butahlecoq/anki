@@ -105,12 +105,11 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
       if (!['image/png', 'image/jpeg', 'image/webp', 'audio/mpeg', 'audio/ogg', 'audio/wav'].includes(mimeType)) throw new Error('Media type is unsupported.')
       if (!bytes.byteLength || bytes.byteLength > 20 * 1024 * 1024) throw new Error('Media size is invalid.')
       if (createHash('sha256').update(bytes).digest('hex') !== digest) throw new Error('Media digest does not match its bytes.')
-      const existing = database.prepare('SELECT digest FROM media_blobs WHERE digest = ?').get(digest)
-      if (existing) return { digest, byteLength: bytes.byteLength, mimeType, deduplicated: true }
       await mkdir(join(mediaDirectory, digest.slice(0, 2)), { recursive: true })
       await writeFile(join(mediaDirectory, digest.slice(0, 2), digest), bytes)
-      database.prepare('INSERT INTO media_blobs (digest, byte_length, mime_type, created_at) VALUES (?, ?, ?, ?)').run(digest, bytes.byteLength, mimeType, new Date().toISOString())
-      return { digest, byteLength: bytes.byteLength, mimeType, deduplicated: false }
+      const result = database.prepare('INSERT OR IGNORE INTO media_blobs (digest, byte_length, mime_type, created_at) VALUES (?, ?, ?, ?)').run(digest, bytes.byteLength, mimeType, new Date().toISOString())
+      const metadata = database.prepare('SELECT byte_length, mime_type FROM media_blobs WHERE digest = ?').get(digest) as { byte_length: number; mime_type: string }
+      return { digest, byteLength: metadata.byte_length, mimeType: metadata.mime_type, deduplicated: !Number(result.changes) }
     },
 
     async getMedia(accessToken: string, digest: string) {
@@ -119,7 +118,9 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
       if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error('Media digest is invalid.')
       const metadata = database.prepare('SELECT byte_length, mime_type FROM media_blobs WHERE digest = ?').get(digest) as { byte_length: number; mime_type: string } | undefined
       if (!metadata) throw new Error('Media not found.')
-      return { digest, byteLength: metadata.byte_length, mimeType: metadata.mime_type, bytes: await readFile(join(mediaDirectory, digest.slice(0, 2), digest)) }
+      const bytes = await readFile(join(mediaDirectory, digest.slice(0, 2), digest))
+      if (bytes.byteLength !== metadata.byte_length || createHash('sha256').update(bytes).digest('hex') !== digest) throw new Error('Media bytes failed verification.')
+      return { digest, byteLength: metadata.byte_length, mimeType: metadata.mime_type, bytes }
     },
 
     close() { database.close() },

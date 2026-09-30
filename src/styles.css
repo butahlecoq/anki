@@ -176,6 +176,15 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--acid); outline-
 .dialog input:focus, .dialog textarea:focus { border-color: var(--acid-dark); box-shadow: 0 0 0 1px rgba(195,255,90,.1); }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 6px; }
 .form-error { margin: 0; color: #ff826f; font-size: 10px; }
+.dialog label small { display: block; margin-top: 6px; color: var(--faint); font-size: 9px; line-height: 1.45; }
+.media-attachment { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; padding: 9px 10px; border: 1px solid var(--line); color: var(--muted); font-size: 10px; }
+.media-attachment strong { color: var(--text); overflow-wrap: anywhere; }
+.media-attachment label { display: flex; align-items: center; gap: 5px; margin: 0; font-size: 9px; }
+.media-attachment select { padding: 4px; border: 1px solid var(--line-strong); background: #101317; color: var(--text); font: inherit; }
+.media-attachment .text-button { margin-left: auto; }
+.media-pending { color: var(--faint); font-size: 10px; }
+.card-image { display: block; width: min(100%, 540px); max-height: 290px; margin-top: 24px; object-fit: contain; }
+.card-audio { width: min(100%, 400px); margin-top: 22px; }
 
 .review-session { min-height: calc(100vh - 95px); padding: 28px 0 45px; display: flex; flex-direction: column; }
 .review-progress { display: flex; justify-content: space-between; align-items: center; color: var(--faint); font-size: 8px; letter-spacing: .13em; }
@@ -207,7 +216,7 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--acid); outline-
 
 @media (max-width: 680px) {
   .sidebar { display: none; }
-  .main { margin-left: 0; padding: 0 18px 94px; }
+  .main { margin-left: 0; padding: 0 18px 148px; }
   .topbar { height: 60px; padding-top: env(safe-area-inset-top); }
   .eyebrow span:nth-child(n+2) { display: none; }
   .connection { max-width: 190px; font-size: 8px; }
@@ -225,7 +234,7 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--acid); outline-
   .status-list { padding-inline: 18px; }
   .system-note { margin-inline: 18px; }
   .footer-line { display: none; }
-  .mobile-nav { position: fixed; z-index: 12; left: 0; right: 0; bottom: 0; min-height: calc(66px + env(safe-area-inset-bottom)); padding: 8px 12px env(safe-area-inset-bottom); display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--line); background: rgba(11,13,16,.96); backdrop-filter: blur(16px); }
+  .mobile-nav { position: fixed; z-index: 12; left: 0; right: 0; bottom: 0; min-height: calc(66px + env(safe-area-inset-bottom)); padding: 8px 12px env(safe-area-inset-bottom); display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--line); background: rgba(11,13,16,.96); backdrop-filter: blur(16px); pointer-events: none; }
   .mobile-nav a { min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: var(--faint); font-size: 8px; }
   .mobile-nav a.active { color: var(--acid); }
   .mobile-nav a.planned { color: #4f5861; }
@@ -241,7 +250,7 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--acid); outline-
   .deck-actions { display: grid; grid-template-columns: 1fr 1fr; }
   .deck-actions button { justify-content: center; }
   .note-row { grid-template-columns: 1fr; gap: 14px; }
-  .note-row .text-button { justify-self: start; }
+  .note-row .text-button { justify-self: start; scroll-margin-bottom: 92px; }
   .dialog-backdrop { padding: 12px; align-items: end; }
   .dialog { max-height: 92vh; overflow-y: auto; padding: 23px 19px calc(23px + env(safe-area-inset-bottom)); }
   .review-card { min-height: 350px; margin-top: 26px; padding: 27px 18px; }
