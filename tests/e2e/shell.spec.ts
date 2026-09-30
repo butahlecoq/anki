@@ -23,10 +23,11 @@ test('learner can open the production study workspace', async ({ page }, testInf
 
   await expect(page).toHaveTitle(/Kiroku/)
   await expect(page.getByRole('heading', { name: 'Your Japanese study system' })).toBeVisible()
-  await expect(page.getByText('Ready for offline study')).toBeVisible()
+  await expect(page.getByText('App shell cached for offline')).toBeVisible()
   await expect(page.getByRole('navigation', { name: navigationLabel })).toBeVisible()
   await expect(page.getByRole('link', { name: 'Decks' })).toBeVisible()
   await expect(page.getByRole('link', { name: 'Study' })).toBeVisible()
+  await expect(page.getByRole('link', { name: /Study/ })).toHaveAttribute('aria-disabled', 'true')
 
   const viewportWidth = page.viewportSize()?.width
   if (!viewportWidth) throw new Error('Browser viewport is unavailable')

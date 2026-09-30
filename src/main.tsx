@@ -3,12 +3,13 @@ import { createRoot } from 'react-dom/client'
 import { registerSW } from 'virtual:pwa-register'
 import '@fontsource-variable/jetbrains-mono'
 import { App } from './App'
+import { UPDATE_READY_EVENT } from './appEvents'
 import './styles.css'
 
 registerSW({
   immediate: true,
   onNeedRefresh() {
-    window.dispatchEvent(new CustomEvent('kiroku:update-ready'))
+    window.dispatchEvent(new CustomEvent(UPDATE_READY_EVENT))
   },
 })
 

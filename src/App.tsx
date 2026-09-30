@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
+import { UPDATE_READY_EVENT } from './appEvents'
 
 type IconName = 'decks' | 'study' | 'browse' | 'stats' | 'settings' | 'arrow' | 'spark'
 
-const navItems: Array<{ label: string; icon: IconName; href: string }> = [
-  { label: 'Decks', icon: 'decks', href: '#decks' },
-  { label: 'Study', icon: 'study', href: '#study' },
-  { label: 'Browse', icon: 'browse', href: '#browse' },
-  { label: 'Statistics', icon: 'stats', href: '#statistics' },
+const navItems: Array<{ label: string; icon: IconName; href: string; available: boolean }> = [
+  { label: 'Decks', icon: 'decks', href: '#decks', available: true },
+  { label: 'Study', icon: 'study', href: '#study', available: false },
+  { label: 'Browse', icon: 'browse', href: '#browse', available: false },
+  { label: 'Statistics', icon: 'stats', href: '#statistics', available: false },
 ]
 
 function Icon({ name }: { name: IconName }) {
@@ -49,8 +50,8 @@ export function App() {
 
   useEffect(() => {
     const showUpdate = () => setUpdateReady(true)
-    window.addEventListener('kiroku:update-ready', showUpdate)
-    return () => window.removeEventListener('kiroku:update-ready', showUpdate)
+    window.addEventListener(UPDATE_READY_EVENT, showUpdate)
+    return () => window.removeEventListener(UPDATE_READY_EVENT, showUpdate)
   }, [])
 
   return (
@@ -67,18 +68,27 @@ export function App() {
         <nav className="primary-nav" aria-label="Primary navigation">
           <span className="nav-label">Workspace</span>
           {navItems.map((item, index) => (
-            <a className={index === 0 ? 'nav-item active' : 'nav-item'} href={item.href} key={item.label} aria-current={index === 0 ? 'page' : undefined}>
+            <a
+              className={index === 0 ? 'nav-item active' : 'nav-item planned'}
+              href={item.href}
+              key={item.label}
+              aria-current={index === 0 ? 'page' : undefined}
+              aria-disabled={!item.available}
+              onClick={(event) => { if (!item.available) event.preventDefault() }}
+              title={item.available ? undefined : 'Planned feature'}
+            >
               <Icon name={item.icon} />
               <span>{item.label}</span>
-              {index === 0 && <span className="nav-count">0</span>}
+              {index === 0 ? <span className="nav-count" aria-hidden="true">0</span> : <span className="nav-state" aria-hidden="true">SOON</span>}
             </a>
           ))}
         </nav>
 
         <div className="sidebar-footer">
-          <a className="nav-item" href="#settings">
+          <a className="nav-item planned" href="#settings" aria-disabled="true" onClick={(event) => event.preventDefault()} title="Planned feature">
             <Icon name="settings" />
             <span>Settings</span>
+            <span className="nav-state" aria-hidden="true">SOON</span>
           </a>
           <div className="local-profile">
             <span className="avatar">私</span>
@@ -92,7 +102,7 @@ export function App() {
           <div className="eyebrow"><span>COLLECTION</span><span>/</span><span>LOCAL</span></div>
           <div className={`connection ${online ? 'online' : 'offline'}`} role="status">
             <span className="pulse" />
-            {online ? 'Ready for offline study' : 'Offline shell active'}
+            {online ? 'App shell cached for offline' : 'Offline shell active'}
           </div>
         </header>
 
@@ -159,7 +169,14 @@ export function App() {
 
       <nav className="mobile-nav" aria-label="Mobile navigation">
         {navItems.map((item, index) => (
-          <a className={index === 0 ? 'active' : ''} href={item.href} key={item.label} aria-label={item.label}>
+          <a
+            className={index === 0 ? 'active' : 'planned'}
+            href={item.href}
+            key={item.label}
+            aria-label={`${item.label}${item.available ? '' : ' (planned)'}`}
+            aria-disabled={!item.available}
+            onClick={(event) => { if (!item.available) event.preventDefault() }}
+          >
             <Icon name={item.icon} /><span>{item.label === 'Statistics' ? 'Stats' : item.label}</span>
           </a>
         ))}
