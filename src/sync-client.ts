@@ -12,6 +12,12 @@ export async function uploadMedia(settings: SyncSettings, digest: string, blob: 
   return response.json() as Promise<{ digest: string; byteLength: number; mimeType: string; deduplicated: boolean }>
 }
 
+export async function downloadMedia(settings: SyncSettings, digest: string, fetcher: Fetcher = fetch) {
+  const response = await fetcher(`${settings.endpoint.replace(/\/$/, '')}/api/media/${digest}`, { headers: { authorization: `Bearer ${settings.token}` } })
+  if (!response.ok || response.headers.get('x-content-sha256') !== digest) throw new Error('Media download failed verification.')
+  return new Blob([await response.arrayBuffer()], { type: response.headers.get('content-type') ?? '' })
+}
+
 function isSafeServiceEndpoint(endpoint: string) {
   try {
     const parsed = new URL(endpoint)
