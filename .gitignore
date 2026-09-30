@@ -13,10 +13,22 @@ test-results/
 data/
 backups/
 certificates/
+/media/
+/collection.media/
+/runtime/
 *.apkg
 *.colpkg
 *.anki2
 *.anki21
+*.db
+*.sqlite
+*.sqlite3
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
 
 # Pre-existing local reference saved before repository initialization
 Sync Server - Anki Manual.html

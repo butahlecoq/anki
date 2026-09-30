@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Kiroku">
+  <rect width="512" height="512" rx="112" fill="#0b0d10"/>
+  <path d="M112 116h288v280H112z" fill="#12161b" stroke="#2a3139" stroke-width="16"/>
+  <path d="M112 116h18v280h-18zM382 116h18v280h-18z" fill="#c3ff5a"/>
+  <text x="256" y="314" text-anchor="middle" font-family="serif" font-weight="700" font-size="180" fill="#f4f7ed">記</text>
+</svg>
