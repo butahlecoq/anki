@@ -2,7 +2,20 @@ import { expect, test } from '@playwright/test'
 
 test('learner can open the production study workspace', async ({ page }, testInfo) => {
   const pageErrors: Error[] = []
+  const assetFailures: string[] = []
+  const requiredAssetTypes = new Set(['font', 'image', 'manifest', 'script', 'stylesheet'])
   page.on('pageerror', (error) => pageErrors.push(error))
+  page.on('requestfailed', (request) => {
+    if (requiredAssetTypes.has(request.resourceType())) {
+      assetFailures.push(`${request.resourceType()} ${request.url()}: ${request.failure()?.errorText ?? 'request failed'}`)
+    }
+  })
+  page.on('response', (response) => {
+    const request = response.request()
+    if (requiredAssetTypes.has(request.resourceType()) && response.status() >= 400) {
+      assetFailures.push(`${request.resourceType()} ${response.status()} ${response.url()}`)
+    }
+  })
 
   await page.goto('/')
 
@@ -34,6 +47,7 @@ test('learner can open the production study workspace', async ({ page }, testInf
   }, viewportWidth)
   expect(layout.scrollWidth, JSON.stringify(layout)).toBeLessThanOrEqual(viewportWidth + 1)
   expect(layout.overflowingElements, JSON.stringify(layout)).toEqual([])
+  expect(assetFailures).toEqual([])
   expect(pageErrors).toEqual([])
 
   await testInfo.attach('workspace', {
@@ -49,12 +63,23 @@ test('manifest advertises an installable standalone app', async ({ request }) =>
   const manifest = await response.json()
   expect(manifest.name).toBe('Kiroku — Japanese Study')
   expect(manifest.display).toBe('standalone')
+  expect(manifest.background_color).toBe('#0b0d10')
+  expect(manifest.theme_color).toBe('#0b0d10')
+  expect(manifest.start_url).toBe('/')
+  expect(manifest.scope).toBe('/')
   expect(manifest.icons).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ sizes: '192x192', type: 'image/png' }),
       expect.objectContaining({ sizes: '512x512', type: 'image/png' }),
     ]),
   )
+
+  const faviconResponse = await request.get('/favicon.svg')
+  expect(faviconResponse.ok(), 'favicon must be available').toBe(true)
+  for (const icon of manifest.icons) {
+    const iconResponse = await request.get(icon.src)
+    expect(iconResponse.ok(), `${icon.src} must be available`).toBe(true)
+  }
 })
 
 test('installed shell cold-reloads without a network', async ({ browserName, context, page }) => {
