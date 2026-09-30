@@ -1,5 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 
 type ServiceOptions = { databasePath: string; mediaDirectory?: string }
 type PairRequest = { code: string; deviceId: string }
@@ -16,7 +18,8 @@ type SyncRequest = { cursor: number; operations: SyncOperation[] }
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const token = () => randomBytes(32).toString('hex')
 
-export function createSyncService({ databasePath }: ServiceOptions) {
+export function createSyncService({ databasePath, mediaDirectory: configuredMediaDirectory }: ServiceOptions) {
+  const mediaDirectory = configuredMediaDirectory ?? join(dirname(databasePath), 'media')
   const database = new DatabaseSync(databasePath, { enableForeignKeyConstraints: true })
   database.exec(`
     PRAGMA journal_mode=WAL;
@@ -93,6 +96,21 @@ export function createSyncService({ databasePath }: ServiceOptions) {
 
     reviewCount() {
       return Number((database.prepare("SELECT COUNT(*) AS count FROM changes WHERE entity_type = 'review'").get() as { count: number }).count)
+    },
+
+    async putMedia(accessToken: string, digest: string, mimeType: string, bytes: Uint8Array) {
+      const device = database.prepare('SELECT devices.id FROM tokens JOIN devices ON devices.id = tokens.device_id WHERE tokens.hash = ? AND devices.revoked_at IS NULL').get(hash(accessToken))
+      if (!device) throw new Error('Authentication required.')
+      if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error('Media digest is invalid.')
+      if (!['image/png', 'image/jpeg', 'image/webp', 'audio/mpeg', 'audio/ogg', 'audio/wav'].includes(mimeType)) throw new Error('Media type is unsupported.')
+      if (!bytes.byteLength || bytes.byteLength > 20 * 1024 * 1024) throw new Error('Media size is invalid.')
+      if (createHash('sha256').update(bytes).digest('hex') !== digest) throw new Error('Media digest does not match its bytes.')
+      const existing = database.prepare('SELECT digest FROM media_blobs WHERE digest = ?').get(digest)
+      if (existing) return { digest, byteLength: bytes.byteLength, mimeType, deduplicated: true }
+      await mkdir(join(mediaDirectory, digest.slice(0, 2)), { recursive: true })
+      await writeFile(join(mediaDirectory, digest.slice(0, 2), digest), bytes)
+      database.prepare('INSERT INTO media_blobs (digest, byte_length, mime_type, created_at) VALUES (?, ?, ?, ?)').run(digest, bytes.byteLength, mimeType, new Date().toISOString())
+      return { digest, byteLength: bytes.byteLength, mimeType, deduplicated: false }
     },
 
     close() { database.close() },

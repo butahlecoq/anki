@@ -49,6 +49,16 @@ test('accepts a review mutation once when the request is delivered twice', async
   service.close()
 })
 
+test('reserves durable media metadata by verified digest', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
+  const service = createSyncService({ databasePath: join(runtimeDirectory, 'collection.sqlite'), mediaDirectory: join(runtimeDirectory, 'media') })
+  const code = service.createPairingCode()
+  const { token } = service.pair({ code, deviceId: 'phone-1' })
+  assert.equal(typeof service.putMedia, 'function')
+  await assert.rejects(service.putMedia(token, 'invalid', 'image/png', new Uint8Array([1])), /digest/i)
+  service.close()
+})
+
 test('serves health, pairing, and authenticated sync over HTTP', async () => {
   runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
   const service = createSyncService({ databasePath: join(runtimeDirectory, 'collection.sqlite') })
