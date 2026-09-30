@@ -66,11 +66,20 @@ export async function foregroundSync(settings: SyncSettings, operations: Partial
 export async function syncCollection(collection: Collection, fetcher: Fetcher = fetch): Promise<SyncResult> {
   const settings = await collection.syncSettings()
   if (!settings) return { state: 'authentication-required' }
+  const references = await collection.noteMedia.toArray()
+  for (const digest of new Set(references.map((reference) => reference.digest))) {
+    const local = await collection.verifiedMediaBlob(digest)
+    if (local) await uploadMedia(settings, digest, local.blob, fetcher)
+  }
   const operations = await collection.pendingOperations()
   const result = await foregroundSync(settings, operations, fetcher)
   if (result.state === 'complete') {
     await collection.applyRemoteChanges(result.changes as SyncOperation[], result.cursor)
     await collection.acknowledgeOperations(operations.map((operation) => operation.opId))
+    for (const reference of await collection.missingReferencedMedia()) {
+      const blob = await downloadMedia(settings, reference.digest, fetcher)
+      await collection.storeDownloadedMedia(reference.digest, blob)
+    }
   }
   return result
 }
