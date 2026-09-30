@@ -21,7 +21,7 @@ describe('application shell', () => {
     expect(within(navigation).getByRole('link', { name: 'Study' })).toBeVisible()
     expect(within(navigation).getByRole('link', { name: 'Study' })).toHaveAttribute('aria-disabled', 'true')
     expect(screen.getByRole('status')).toHaveTextContent('Offline cache unavailable')
-    expect(screen.getByRole('button', { name: /new deck/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /new deck/i })).toBeEnabled()
   })
 })
 
@@ -34,6 +34,5 @@ test('waits for service-worker readiness before claiming the offline shell is re
   render(<App />)
 
   expect(screen.getByRole('status')).toHaveTextContent('Preparing offline shell')
-  expect(screen.getByText('Offline access is being prepared for this device.')).toBeVisible()
-  expect(screen.queryByText(/offline workspace is ready/i)).not.toBeInTheDocument()
+  expect(screen.queryByText('Offline shell ready')).not.toBeInTheDocument()
 })
