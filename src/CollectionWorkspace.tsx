@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import {
   Rating,
+  BASIC_NOTE_TYPE_ID,
   collection,
-  type BasicNoteFields,
   type Deck,
   type DeckCounts,
   type DeckSummary,
@@ -12,15 +12,18 @@ import {
   type NoteMediaReference,
 } from './collection'
 import { MediaRenderer } from './MediaRenderer'
+import { NoteTypeManager } from './NoteTypeManager'
 import { validateMedia } from './media'
 import { pairCollection, syncCollection } from './sync-client'
 
 type Route =
   | { view: 'decks' }
+  | { view: 'note-types' }
   | { view: 'deck'; deckId: string }
   | { view: 'review'; deckId: string }
 
 function routeFromHash(): Route {
+  if (window.location.hash === '#note-types') return { view: 'note-types' }
   const match = window.location.hash.match(/^#(deck|review)\/([^/]+)$/)
   if (!match) return { view: 'decks' }
   return { view: match[1] as 'deck' | 'review', deckId: decodeURIComponent(match[2]) }
@@ -36,7 +39,7 @@ function useRoute() {
   }, [])
 
   const navigate = (next: Route) => {
-    const hash = next.view === 'decks' ? '#decks' : `#${next.view}/${encodeURIComponent(next.deckId)}`
+    const hash = next.view === 'decks' ? '#decks' : next.view === 'note-types' ? '#note-types' : `#${next.view}/${encodeURIComponent(next.deckId)}`
     if (window.location.hash === hash) setRoute(next)
     else window.location.hash = hash
   }
@@ -95,10 +98,14 @@ function DeckDialog({ deck, onClose }: { deck?: Deck; onClose: () => void }) {
 type PendingAttachment = { file: File; side: 'front' | 'back'; playback: 'automatic' | 'manual' }
 
 function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: Note; onClose: () => void }) {
-  const [fields, setFields] = useState<BasicNoteFields>({ front: note?.fields.front ?? '', back: note?.fields.back ?? '' })
+  const noteTypes = useLiveQuery(() => collection.noteTypes.orderBy('name').toArray(), [], [])
+  const [typeId, setTypeId] = useState(note?.typeId ?? BASIC_NOTE_TYPE_ID)
+  const noteType = noteTypes.find((type) => type.id === typeId)
+  const [fields, setFields] = useState<Record<string, string>>(note?.fields ?? {})
   const [error, setError] = useState('')
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
   const existingMedia = useLiveQuery(() => note ? collection.mediaForNote(note.id) : [], [note?.id], [])
+  const generation = noteType ? collection.cardGenerationStatus(noteType, fields) : undefined
 
   function selectMedia(files: FileList | null) {
     if (!files?.length) return
@@ -118,9 +125,11 @@ function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: Note; on
     event.preventDefault()
     try {
       if (note) {
-        await collection.updateBasicNote(note.id, fields)
+        if (typeId === BASIC_NOTE_TYPE_ID) await collection.updateBasicNote(note.id, { front: fields.front ?? '', back: fields.back ?? '' })
+        else await collection.updateNote(note.id, fields)
         await Promise.all(attachments.map(({ file, side, playback }) => collection.attachMedia(note.id, { file, side, playback })))
-      } else await collection.createBasicNoteWithMedia(deckId, fields, attachments)
+      } else if (typeId === BASIC_NOTE_TYPE_ID) await collection.createBasicNoteWithMedia(deckId, { front: fields.front ?? '', back: fields.back ?? '' }, attachments)
+      else await collection.createNote(deckId, typeId, fields)
       onClose()
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Unable to save note')
@@ -130,22 +139,23 @@ function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: Note; on
   return (
     <div className="dialog-backdrop">
       <section className="dialog note-dialog" role="dialog" aria-modal="true" aria-labelledby="note-dialog-title">
-        <span className="section-code">BASIC // {note ? 'EDIT' : 'NEW'}</span>
-        <h2 id="note-dialog-title">{note ? 'Edit Basic note' : 'Add a Basic note'}</h2>
+        <span className="section-code">{noteType?.name.toUpperCase() ?? 'NOTE'} // {note ? 'EDIT' : 'NEW'}</span>
+        <h2 id="note-dialog-title">{note ? `Edit ${noteType?.name ?? ''} note` : `Add a ${noteType?.name ?? ''} note`}</h2>
         <form onSubmit={submit}>
-          <label>
-            Front
-            <textarea autoFocus lang="ja" value={fields.front} onChange={(event) => setFields({ ...fields, front: event.target.value })} rows={3} />
+          <label>Note type
+            <select value={typeId} disabled={Boolean(note)} onChange={(event) => { setTypeId(event.target.value); setFields({}) }}>
+              {noteTypes.map((type) => <option value={type.id} key={type.id}>{type.name}</option>)}
+            </select>
           </label>
-          <label>
-            Back
-            <textarea lang="ja" value={fields.back} onChange={(event) => setFields({ ...fields, back: event.target.value })} rows={4} />
-          </label>
-          <label>
+          {noteType?.fields.map((field, index) => <label key={field.id}>
+            {typeId === BASIC_NOTE_TYPE_ID ? field.name[0].toUpperCase() + field.name.slice(1) : field.name}
+            <textarea autoFocus={index === 0} lang="ja" value={fields[field.id] ?? ''} onChange={(event) => setFields((current) => ({ ...current, [field.id]: event.target.value }))} rows={index === 0 ? 3 : 4} />
+          </label>)}
+          {typeId === BASIC_NOTE_TYPE_ID && <label>
             Images and audio
             <input type="file" multiple accept="image/png,image/jpeg,image/webp,audio/mpeg,audio/ogg,audio/wav" onChange={(event) => selectMedia(event.target.files)} />
             <small>PNG, JPEG, WebP up to 10 MB; MP3, Ogg, WAV up to 20 MB.</small>
-          </label>
+          </label>}
           {attachments.map((attachment, index) => (
             <div className="media-attachment" key={`${attachment.file.name}-${index}`}>
               <strong>{attachment.file.name}</strong>
@@ -155,6 +165,8 @@ function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: Note; on
             </div>
           ))}
           {existingMedia.map((media) => <ExistingMedia key={media.id} media={media} />)}
+          {typeId !== BASIC_NOTE_TYPE_ID && generation && <p className="card-generation-status" aria-live="polite">{generation.eligible.length} {generation.eligible.length === 1 ? 'card' : 'cards'} will be created.</p>}
+          {generation?.skipped.map(({ templateId, reason }) => <p className="form-warning" role="status" key={templateId}>{noteType?.templates.find((template) => template.id === templateId)?.name}: {reason}. No card will be created.</p>)}
           {error && <p className="form-error" role="alert">{error}</p>}
           <div className="dialog-actions">
             <button className="text-button" type="button" onClick={onClose}>Cancel</button>
@@ -302,6 +314,7 @@ function DeckList({ decks, onNewDeck, onOpen }: { decks: DeckSummary[]; onNewDec
 function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () => void; onStudy: () => void }) {
   const deck = useLiveQuery(() => collection.decks.get(deckId), [deckId])
   const notes = useLiveQuery(() => collection.notes.where('deckId').equals(deckId).sortBy('createdAt'), [deckId], [])
+  const noteTypes = useLiveQuery(() => collection.noteTypes.toArray(), [], [])
   const summary = useLiveQuery(async () => (await collection.summaries()).find((item) => item.id === deckId), [deckId])
   const [deckDialog, setDeckDialog] = useState(false)
   const [noteDialog, setNoteDialog] = useState<{ note?: Note } | null>(null)
@@ -332,16 +345,17 @@ function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () =>
         </div>
       </section>
       <section className="note-list" aria-label="Notes">
-        <div className="panel-heading"><div><span className="section-code">NOTES // {String(notes.length).padStart(2, '0')}</span><h2>Basic notes</h2></div></div>
+        <div className="panel-heading"><div><span className="section-code">NOTES // {String(notes.length).padStart(2, '0')}</span><h2>Notes</h2></div></div>
         {notes.length === 0 ? (
           <div className="note-empty"><span lang="ja">書</span><p>Add a front and back to generate your first card.</p></div>
-        ) : notes.map((note) => (
-          <article className="note-row" key={note.id}>
-            <div><span>FRONT</span><strong lang="ja">{note.fields.front}</strong></div>
-            <div><span>BACK</span><p lang="ja">{note.fields.back}</p></div>
+        ) : notes.map((note) => {
+          const type = noteTypes.find((candidate) => candidate.id === note.typeId)
+          return <article className="note-row" key={note.id}>
+            <div><span>{type?.fields[0]?.name.toUpperCase() ?? 'FIELD'}</span><strong lang="ja">{note.fields[type?.fields[0]?.id ?? 'front']}</strong></div>
+            <div><span>{type?.fields[1]?.name.toUpperCase() ?? type?.name.toUpperCase() ?? 'NOTE'}</span><p lang="ja">{note.fields[type?.fields[1]?.id ?? 'back']}</p></div>
             <button className="text-button" type="button" onClick={() => setNoteDialog({ note })}>Edit note</button>
           </article>
-        ))}
+        })}
       </section>
       {deckDialog && <DeckDialog deck={deck} onClose={() => setDeckDialog(false)} />}
       {noteDialog && <NoteDialog deckId={deckId} note={noteDialog.note} onClose={() => setNoteDialog(null)} />}
@@ -424,6 +438,7 @@ export function CollectionWorkspace() {
   const content = useMemo(() => {
     if (route.view === 'review') return <ReviewSession deckId={route.deckId} onBack={() => navigate({ view: 'deck', deckId: route.deckId })} />
     if (route.view === 'deck') return <DeckDetail deckId={route.deckId} onBack={() => navigate({ view: 'decks' })} onStudy={() => navigate({ view: 'review', deckId: route.deckId })} />
+    if (route.view === 'note-types') return <NoteTypeManager onNewDeck={() => { navigate({ view: 'decks' }); setNewDeck(true) }} />
     if (decks.length === 0) return <EmptyCollection onNewDeck={() => setNewDeck(true)} />
     return <DeckList decks={decks} onNewDeck={() => setNewDeck(true)} onOpen={(deckId) => navigate({ view: 'deck', deckId })} />
   }, [decks, navigate, route])
