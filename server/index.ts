@@ -7,7 +7,7 @@ import { createSyncService } from './sync-service.js'
 
 export async function createPairingCode({ runtimeDirectory }: { runtimeDirectory: string }) {
   await mkdir(runtimeDirectory, { recursive: true })
-  const service = createSyncService({ databasePath: join(runtimeDirectory, 'kiroku-sync.sqlite') })
+  const service = createSyncService({ databasePath: join(runtimeDirectory, 'kiroku-sync.sqlite'), mediaDirectory: join(runtimeDirectory, 'media') })
   try {
     return service.createPairingCode()
   } finally {
