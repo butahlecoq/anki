@@ -9,7 +9,7 @@ import {
   type ReviewLog as FsrsReviewLog,
 } from 'ts-fsrs'
 import { digestMedia, validateMedia, type AudioPlayback, type MediaKind, type MediaSide } from './media'
-import { renderTemplate } from './template-renderer'
+import { renderTemplate, validateTemplate } from './template-renderer'
 
 export { Rating, State }
 export type { Grade }
@@ -51,6 +51,12 @@ const basicNoteType: NoteType = {
   fields: [{ id: 'front', name: 'front' }, { id: 'back', name: 'back' }],
   templates: [{ id: BASIC_TEMPLATE_ID, name: 'Basic', front: '{{front}}', back: '{{FrontSide}}<hr>{{back}}', css: '' }],
   createdAt: '1970-01-01T00:00:00.000Z', updatedAt: '1970-01-01T00:00:00.000Z',
+}
+
+/** Note values are stored by immutable field ID; templates address display names. */
+export function renderNoteTemplate(template: string, noteType: NoteType, fieldsById: Record<string, string>, front?: string) {
+  const displayFields = Object.fromEntries(noteType.fields.map((field) => [field.name, fieldsById[field.id] ?? '']))
+  return renderTemplate(template, displayFields, front)
 }
 
 export interface Note {
@@ -270,6 +276,9 @@ export class Collection extends Dexie {
       await transaction.table('notes').toCollection().modify((note: Note) => { if (note.type === 'basic' && !note.typeId) note.typeId = BASIC_NOTE_TYPE_ID })
       await transaction.table('cards').toCollection().modify((card: CardRecord) => { if (!card.templateId) card.templateId = BASIC_TEMPLATE_ID })
     })
+    this.on('populate', (transaction) => {
+      transaction.table('noteTypes').put(basicNoteType)
+    })
   }
 
   async createNoteType(input: NewNoteType, now = new Date()): Promise<NoteType> {
@@ -277,6 +286,11 @@ export class Collection extends Dexie {
     if (!input.templates.length) throw new Error('A note type needs at least one template')
     const names = input.fields.map((field) => requiredText(field.name, 'Field name'))
     if (new Set(names).size !== names.length) throw new Error('Field names must be unique')
+    if (names.includes('FrontSide')) throw new Error('FrontSide is reserved for template backs')
+    for (const template of input.templates) {
+      validateTemplate(template.front, names, 'front')
+      validateTemplate(template.back, names, 'back')
+    }
     const noteType: NoteType = {
       id: id(), name: requiredText(input.name, 'Note type name'), protected: false,
       fields: names.map((name) => ({ id: id(), name })),
@@ -294,7 +308,7 @@ export class Collection extends Dexie {
     const skipped: { templateId: string; reason: string }[] = []
     const eligible: CardTemplate[] = []
     for (const template of noteType.templates) {
-      if (renderTemplate(template.front, fields).isEmpty) skipped.push({ templateId: template.id, reason: 'Front has no visible field content' })
+      if (renderNoteTemplate(template.front, noteType, fields).isEmpty) skipped.push({ templateId: template.id, reason: 'Front has no visible field content' })
       else eligible.push(template)
     }
     return { eligible, skipped }
@@ -305,7 +319,7 @@ export class Collection extends Dexie {
       if (!await this.decks.get(deckId)) throw new Error('Deck not found')
       const noteType = await this.noteTypes.get(typeId)
       if (!noteType) throw new Error('Note type not found')
-      const values = Object.fromEntries(noteType.fields.map((field) => [field.name, fields[field.name] ?? '']))
+      const values = Object.fromEntries(noteType.fields.map((field) => [field.id, fields[field.id] ?? '']))
       const note: Note = { id: id(), deckId, type: typeId === BASIC_NOTE_TYPE_ID ? 'basic' : 'custom', typeId, fields: values, createdAt: now.toISOString(), updatedAt: now.toISOString() }
       const cards = this.cardGenerationStatus(noteType, values).eligible.map((template) => serializeCard(createEmptyCard(now), { id: `${note.id}:${template.id}`, deckId, noteId: note.id, templateId: template.id }))
       await this.notes.add(note)
@@ -324,7 +338,7 @@ export class Collection extends Dexie {
       if (!note) throw new Error('Note not found')
       const noteType = await this.noteTypes.get(note.typeId ?? BASIC_NOTE_TYPE_ID)
       if (!noteType) throw new Error('Note type not found')
-      const values = Object.fromEntries(noteType.fields.map((field) => [field.name, fields[field.name] ?? '']))
+      const values = Object.fromEntries(noteType.fields.map((field) => [field.id, fields[field.id] ?? '']))
       const updated: Note = { ...note, fields: values, updatedAt: now.toISOString() }
       const existing = await this.cards.where('noteId').equals(noteId).toArray()
       const eligible = this.cardGenerationStatus(noteType, values).eligible

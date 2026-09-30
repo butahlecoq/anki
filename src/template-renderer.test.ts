@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { renderTemplate } from './template-renderer'
+import { renderTemplate, validateTemplate } from './template-renderer'
 
 describe('renderTemplate', () => {
   test('escapes field values while retaining template markup', () => {
@@ -28,5 +28,15 @@ describe('renderTemplate', () => {
   test('rejects nested conditionals', () => {
     expect(() => renderTemplate('{{#A}}{{#B}}{{B}}{{/B}}{{/A}}', { A: 'a', B: 'b' }))
       .toThrow(/nested/i)
+  })
+
+  test('rejects unknown field tokens and conditionals', () => {
+    expect(() => validateTemplate('{{Unknown}}', ['Known'], 'front')).toThrow(/unknown field/i)
+    expect(() => validateTemplate('{{#Unknown}}{{Known}}{{/Unknown}}', ['Known'], 'back')).toThrow(/unknown field/i)
+  })
+
+  test('allows FrontSide on the back but rejects it on the front', () => {
+    expect(() => validateTemplate('{{FrontSide}}', ['Known'], 'front')).toThrow(/FrontSide.*front/i)
+    expect(() => validateTemplate('{{FrontSide}}<hr>{{Known}}', ['Known'], 'back')).not.toThrow()
   })
 })

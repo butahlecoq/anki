@@ -35,11 +35,12 @@ describe('local collection', () => {
       { name: 'Forward', front: '{{word}}', back: '{{meaning}}', css: '' },
       { name: 'Reverse', front: '{{meaning}}', back: '{{word}}', css: '' },
     ] })
-    const note = await collection.createNote(deck.id, type.id, { word: '猫', meaning: 'cat' })
+    const note = await collection.createNote(deck.id, type.id, { [type.fields[0].id]: '猫', [type.fields[1].id]: 'cat' })
+    expect(note.fields).toEqual({ [type.fields[0].id]: '猫', [type.fields[1].id]: 'cat' })
     const cards = await collection.cards.where('noteId').equals(note.id).toArray()
     expect(cards.map((card) => card.id).sort()).toEqual(type.templates.map((template) => `${note.id}:${template.id}`).sort())
     await collection.answer(cards[0].id, Rating.Good, new Date('2026-10-01T12:00:00Z'))
-    await collection.updateNote(note.id, { word: '犬', meaning: 'dog' })
+    await collection.updateNote(note.id, { [type.fields[0].id]: '犬', [type.fields[1].id]: 'dog' })
     await expect(collection.cards.get(cards[0].id)).resolves.toMatchObject({ reps: 1, templateId: cards[0].templateId })
     await expect(collection.cards.where('noteId').equals(note.id).count()).resolves.toBe(2)
     await expect(collection.pendingOperations()).resolves.toEqual(expect.arrayContaining([
@@ -54,7 +55,7 @@ describe('local collection', () => {
       { name: 'Word', front: '{{word}}', back: 'answer', css: '' },
       { name: 'Hint', front: '<b>{{hint}}</b>', back: 'answer', css: '' },
     ] })
-    const note = await collection.createNote(deck.id, type.id, { word: '猫', hint: '' })
+    const note = await collection.createNote(deck.id, type.id, { [type.fields[0].id]: '猫', [type.fields[1].id]: '' })
     await expect(collection.cards.where('noteId').equals(note.id).count()).resolves.toBe(1)
     expect(collection.cardGenerationStatus(type, note.fields).skipped).toEqual([{ templateId: type.templates[1].id, reason: 'Front has no visible field content' }])
   })
@@ -65,14 +66,39 @@ describe('local collection', () => {
     const type = await collection.createNoteType({ name: 'Hints', fields: [{ name: 'hint' }], templates: [
       { name: 'Hint', front: '{{hint}}', back: 'answer', css: '' },
     ] })
-    const note = await collection.createNote(deck.id, type.id, { hint: 'first' })
+    const note = await collection.createNote(deck.id, type.id, { [type.fields[0].id]: 'first' })
     const cardId = `${note.id}:${type.templates[0].id}`
     await collection.answer(cardId, Rating.Good, new Date('2026-10-01T12:00:00Z'))
-    await collection.updateNote(note.id, { hint: '' })
+    await collection.updateNote(note.id, { [type.fields[0].id]: '' })
     await expect(collection.cards.get(cardId)).resolves.toMatchObject({ suspended: true, reps: 1 })
     await expect(collection.dueCards(deck.id)).resolves.toHaveLength(0)
-    await collection.updateNote(note.id, { hint: 'restored' })
+    await collection.updateNote(note.id, { [type.fields[0].id]: 'restored' })
     await expect(collection.cards.get(cardId)).resolves.toMatchObject({ id: cardId, templateId: type.templates[0].id, suspended: false, reps: 1 })
+  })
+
+  test('keeps field values under stable IDs when display metadata is renamed', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Vocabulary')
+    const type = await collection.createNoteType({ name: 'Words', fields: [{ name: 'Word' }], templates: [
+      { name: 'Word card', front: '{{Word}}', back: 'answer', css: '' },
+    ] })
+    const fieldId = type.fields[0].id
+    const note = await collection.createNote(deck.id, type.id, { [fieldId]: '猫' })
+    const renamed = { ...type, fields: [{ ...type.fields[0], name: 'Term' }], templates: [{ ...type.templates[0], front: '{{Term}}' }] }
+    await collection.noteTypes.put(renamed)
+
+    expect(collection.cardGenerationStatus(renamed, note.fields).eligible).toHaveLength(1)
+    await collection.updateNote(note.id, { [fieldId]: '犬' })
+    await expect(collection.notes.get(note.id)).resolves.toMatchObject({ fields: { [fieldId]: '犬' } })
+    await expect(collection.cards.where('noteId').equals(note.id).count()).resolves.toBe(1)
+  })
+
+  test('rejects note types whose templates reference an unknown field or FrontSide on front', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const input = { name: 'Words', fields: [{ name: 'Word' }], templates: [{ name: 'Card', front: '{{Missing}}', back: '{{Word}}', css: '' }] }
+    await expect(collection.createNoteType(input)).rejects.toThrow(/unknown field/i)
+    await expect(collection.createNoteType({ ...input, templates: [{ ...input.templates[0], front: '{{FrontSide}}' }] })).rejects.toThrow(/FrontSide.*front/i)
+    await expect(collection.noteTypes.count()).resolves.toBe(1)
   })
 
   test('keeps the protected Basic type when an older Basic note syncs in twice', async () => {
