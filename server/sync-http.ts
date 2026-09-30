@@ -7,7 +7,7 @@ type HttpOptions = { allowedOrigin?: string }
 
 const corsHeaders = (origin: string | undefined, allowedOrigin: string | undefined): Record<string, string> => origin && allowedOrigin === origin ? {
   'access-control-allow-origin': allowedOrigin,
-  'access-control-allow-methods': 'GET, POST, OPTIONS',
+  'access-control-allow-methods': 'GET, POST, PUT, OPTIONS',
   'access-control-allow-headers': 'authorization, content-type',
 } : {}
 

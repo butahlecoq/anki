@@ -74,6 +74,7 @@ test('serves health, pairing, and authenticated sync over HTTP', async () => {
   const preflight = await fetch(`${origin}/api/sync`, { method: 'OPTIONS', headers: { origin: 'http://127.0.0.1:4173' } })
   assert.equal(preflight.status, 204)
   assert.equal(preflight.headers.get('access-control-allow-origin'), 'http://127.0.0.1:4173')
+  assert.match(preflight.headers.get('access-control-allow-methods') ?? '', /PUT/)
   const rejectedOrigin = await fetch(`${origin}/api/health`, { headers: { origin: 'https://untrusted.example.test' } })
   assert.equal(rejectedOrigin.headers.get('access-control-allow-origin'), null)
 
