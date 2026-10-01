@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
+import { State } from 'ts-fsrs'
 import { App } from './App'
 import { collection } from './collection'
 import { CollectionWorkspace } from './CollectionWorkspace'
@@ -178,8 +179,8 @@ test('a learner resumes, unburies, and reschedules a card from its deck', async 
     await waitFor(async () => expect(await collection.cards.get(card.id)).toMatchObject({ manualSuspended: false }))
     fireEvent.click(await within(dialog).findByRole('button', { name: 'Unbury card' }))
     await waitFor(async () => expect(await collection.cards.get(card.id)).toMatchObject({ buriedUntil: null }))
-    fireEvent.change(await within(dialog).findByLabelText('Reschedule due'), { target: { value: '2026-11-02T09:30' } })
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Reschedule card' }))
+    fireEvent.change(await within(dialog).findByLabelText(/Reschedule due for card 1, template /), { target: { value: '2026-11-02T09:30' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: /Reschedule card 1, template / }))
     await waitFor(async () => expect(await collection.cards.get(card.id)).toMatchObject({
       manualSuspended: false,
       buriedUntil: null,
@@ -202,6 +203,68 @@ test('a learner can suspend or bury the current review card and the queue refres
     expect(await screen.findByRole('heading', { name: 'Session complete' })).toBeVisible()
   } finally {
     await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+  }
+})
+
+test('a failed reviewer action keeps the card available for retry and announces the error', async () => {
+  const deck = await collection.createDeck(`Review failure ${crypto.randomUUID()}`)
+  const note = await collection.createBasicNote(deck.id, { front: '失敗', back: 'failure' })
+  const card = (await collection.cards.where('noteId').equals(note.id).first())!
+  const suspend = vi.spyOn(collection, 'suspendCard').mockRejectedValueOnce(new Error('Storage unavailable'))
+  window.location.hash = `#review/${deck.id}`
+  render(<CollectionWorkspace />)
+  try {
+    fireEvent.click(await screen.findByRole('button', { name: 'Suspend card' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Storage unavailable')
+    expect(screen.getByRole('button', { name: 'Suspend card' })).toBeEnabled()
+    expect(await collection.cards.get(card.id)).toMatchObject({ manualSuspended: false })
+  } finally {
+    suspend.mockRestore()
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+  }
+})
+
+test('a synced reschedule removes the current reviewer card when it is no longer due', async () => {
+  const deck = await collection.createDeck(`Synced reschedule ${crypto.randomUUID()}`)
+  const note = await collection.createBasicNote(deck.id, { front: '予定', back: 'schedule' })
+  const card = (await collection.cards.where('noteId').equals(note.id).first())!
+  await collection.cards.update(card.id, { due: new Date(Date.now() - 60 * 1000).toISOString(), state: State.Review })
+  window.location.hash = `#review/${deck.id}`
+  render(<CollectionWorkspace />)
+  try {
+    await screen.findByRole('button', { name: 'Suspend card' })
+    await collection.rescheduleCard(card.id, new Date(Date.now() + 60 * 60 * 1000))
+    expect(await screen.findByRole('heading', { name: 'Session complete' })).toBeVisible()
+  } finally {
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+  }
+})
+
+test('card management gives every reschedule control a distinct card and template name', async () => {
+  const deck = await collection.createDeck(`Accessible card controls ${crypto.randomUUID()}`)
+  const type = await collection.createNoteType({
+    name: `Accessible templates ${crypto.randomUUID()}`,
+    kind: 'standard',
+    fields: [{ name: 'Front' }, { name: 'Back' }],
+    templates: [
+      { name: 'First template', front: '{{Front}}', back: '{{Back}}', css: '' },
+      { name: 'Second template', front: '{{Back}}', back: '{{Front}}', css: '' },
+    ],
+  })
+  await collection.createNote(deck.id, type.id, { [type.fields[0].id]: '一', [type.fields[1].id]: '二' })
+  window.location.hash = `#deck/${deck.id}`
+  render(<CollectionWorkspace />)
+  try {
+    fireEvent.click(await screen.findByRole('button', { name: 'Manage cards' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Manage cards' })
+    const rescheduleInputs = await within(dialog).findAllByLabelText(/Reschedule due for card \d+, template /)
+    const rescheduleButtons = within(dialog).getAllByRole('button', { name: /Reschedule card \d+, template / })
+    expect(rescheduleInputs).toHaveLength(2)
+    expect(new Set(rescheduleInputs.map((input) => input.getAttribute('aria-label'))).size).toBe(2)
+    expect(new Set(rescheduleButtons.map((button) => button.getAttribute('aria-label'))).size).toBe(2)
+  } finally {
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+    await collection.deleteNoteType(type.id)
   }
 })
 
