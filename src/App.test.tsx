@@ -67,3 +67,30 @@ test('a stale queue entry whose card was deleted completes review', async () => 
     await collection.deleteDeck(deck.id)
   }
 })
+
+test('the note-type editor offers a cloze type with per-ordinal preview', async () => {
+  window.location.hash = '#note-types'
+  render(<CollectionWorkspace />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Create note type' }))
+  fireEvent.change(screen.getByRole('combobox', { name: 'Card generation' }), { target: { value: 'cloze' } })
+  expect(screen.getByLabelText('Template 1 front')).toHaveValue('{{cloze:Text}}')
+  expect(screen.getByLabelText('Template 1 back')).toHaveValue('{{cloze:Text}}<hr>{{Extra}}')
+  expect(screen.getByRole('combobox', { name: 'Preview ordinal' })).toHaveTextContent('c2')
+})
+
+test('a malformed synced template shows a card error without crashing review', async () => {
+  const deck = await collection.createDeck(`Malformed review ${crypto.randomUUID()}`)
+  const type = await collection.createNoteType({ name: 'Cloze review', kind: 'cloze', fields: [{ name: 'Text' }], templates: [{ name: 'Deletion', front: '{{cloze:Text}}', back: '{{cloze:Text}}', css: '' }] })
+  await collection.createNote(deck.id, type.id, { [type.fields[0].id]: '{{c1::猫}}' })
+  await collection.noteTypes.put({ ...type, templates: [{ ...type.templates[0], front: '{{cloze:Text' }] })
+  try {
+    window.location.hash = `#review/${deck.id}`
+    render(<CollectionWorkspace />)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/template delimiter/i)
+    fireEvent.click(screen.getByRole('button', { name: 'Skip card' }))
+    expect(await screen.findByRole('heading', { name: 'Session complete' })).toBeVisible()
+  } finally {
+    await collection.deleteDeck(deck.id)
+    await collection.deleteNoteType(type.id)
+  }
+})
