@@ -158,6 +158,31 @@ describe('local collection', () => {
     collection = undefined
   })
 
+  test('rejects previews and answers for future timed cards while keeping New cards eligible', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Policies')
+    const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
+    const card = (await collection.cards.where('noteId').equals(note.id).first())!
+    const now = new Date('2026-10-01T12:00:00.000Z')
+    const future = new Date('2026-10-03T12:00:00.000Z')
+
+    await collection.cards.update(card.id, { state: State.Review, due: now.toISOString(), stability: 2, difficulty: 5, reps: 3 })
+    await collection.rescheduleCard(card.id, future, now)
+    await expect(collection.reviewChoices(card.id, now)).resolves.toEqual([])
+    await expect(collection.answer(card.id, Rating.Good, now)).rejects.toThrow(/not due/i)
+
+    for (const state of [State.Learning, State.Relearning]) {
+      await collection.cards.update(card.id, { state, due: future.toISOString(), stability: 2, difficulty: 5, reps: 3, scheduledDays: state === State.Learning ? 0 : 1 })
+      await expect(collection.reviewChoices(card.id, now)).resolves.toEqual([])
+      await expect(collection.answer(card.id, Rating.Good, now)).rejects.toThrow(/not due/i)
+    }
+    await expect(collection.reviewEntries.where('cardId').equals(card.id).count()).resolves.toBe(0)
+
+    await collection.cards.update(card.id, { state: State.New, due: future.toISOString(), stability: 0, difficulty: 0, reps: 0, lapses: 0, scheduledDays: 0, learningSteps: 0, lastReview: null })
+    await expect(collection.reviewChoices(card.id, now)).resolves.toHaveLength(4)
+    await expect(collection.answer(card.id, Rating.Good, now)).resolves.toMatchObject({ cardId: card.id, rating: Rating.Good })
+  })
+
   test('does not let template reconciliation clear a manual suspension', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const deck = await collection.createDeck('Policies')
