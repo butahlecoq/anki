@@ -135,6 +135,21 @@ test('ignores a remote deletion of an active reviewed mask card', async () => {
   await expect(collection.receivedOperations.get('delete-active-mask-card')).resolves.toBeDefined()
 })
 
+test('ignores remote deletion of a removed mask card so restoring it keeps its review history', async () => {
+  collection = createCollection(`kiroku-io-${crypto.randomUUID()}`)
+  const deck = await collection.createDeck('Anatomy')
+  const note = await collection.createImageOcclusionNote(deck.id, { image: image(), imageWidth: 800, imageHeight: 600, header: '', backExtra: '', tags: [], masks: [mask('alpha', 0.1), mask('beta', 0.6)] })
+  const cardId = `${note.id}:${IMAGE_OCCLUSION_TEMPLATE_ID}:malpha`
+  await collection.answer(cardId, Rating.Good, new Date('2026-10-01T12:00:00Z'))
+  await collection.updateImageOcclusionNote(note.id, { masks: [mask('beta', 0.6)] })
+  await expect(collection.cards.get(cardId)).resolves.toMatchObject({ suspended: true, reps: 1 })
+  await collection.applyRemoteChanges([{ opId: 'delete-removed-mask-card', entityType: 'card', entityId: cardId, action: 'delete', occurredAt: '2026-10-02', payload: { id: cardId, noteId: note.id } }], 1)
+  await collection.updateImageOcclusionNote(note.id, { masks: [mask('alpha', 0.1), mask('beta', 0.6)] })
+  await expect(collection.cards.get(cardId)).resolves.toMatchObject({ suspended: false, reps: 1, occlusionOrdinal: 1 })
+  await expect(collection.reviewEntries.where('cardId').equals(cardId).count()).resolves.toBe(1)
+  await expect(collection.deletedEntities.get(`card:${cardId}`)).resolves.toBeUndefined()
+})
+
 test('ignores an inbound card update that changes a mask ordinal even if suspended', async () => {
   collection = createCollection(`kiroku-io-${crypto.randomUUID()}`)
   const deck = await collection.createDeck('Anatomy')

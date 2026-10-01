@@ -1039,7 +1039,11 @@ export class Collection extends Dexie {
           const note = existingCard && await this.notes.get(existingCard.noteId)
           const noteType = note && await this.noteTypes.get(note.typeId)
           const deletedType = note && !noteType && await this.deletedEntities.get(tombstoneKey('noteType', note.typeId))
-          if (existingCard && note && (deletedType || (noteType && (this.cardIsEligible(noteType, note, existingCard) || !noteType.templates.some((template) => template.id === existingCard.templateId))))) {
+          const retainedOcclusion = existingCard && note && noteType?.kind === 'image-occlusion' &&
+            existingCard.templateId === IMAGE_OCCLUSION_TEMPLATE_ID && Boolean(existingCard.occlusionId) &&
+            existingCard.id === `${note.id}:${IMAGE_OCCLUSION_TEMPLATE_ID}:m${existingCard.occlusionId}` &&
+            Number.isSafeInteger(existingCard.occlusionOrdinal) && (existingCard.occlusionOrdinal ?? 0) > 0
+          if (existingCard && note && (retainedOcclusion || deletedType || (noteType && (this.cardIsEligible(noteType, note, existingCard) || !noteType.templates.some((template) => template.id === existingCard.templateId))))) {
             await this.receivedOperations.add({ opId: change.opId })
             continue
           }
