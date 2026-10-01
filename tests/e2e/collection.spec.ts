@@ -13,7 +13,8 @@ const execFile = promisify(execFileCallback)
 const WEB_URL = `http://127.0.0.1:${process.env.KIROKU_WEB_PORT ?? '4173'}`
 const SYNC_URL = `http://127.0.0.1:${process.env.KIROKU_SYNC_PORT ?? '4174'}`
 
-test('statistics follow an offline Japanese review, heatmap selection, and undo', async ({ page, context }) => {
+test('statistics follow an offline Japanese review, heatmap selection, and undo', async ({ page, context, browserName }) => {
+  await context.setOffline(false)
   await page.clock.setFixedTime(REVIEW_TIME)
   await page.goto('/')
   await createDeck(page, '日本語 progress')
@@ -23,32 +24,44 @@ test('statistics follow an offline Japanese review, heatmap selection, and undo'
   await page.getByLabel('Back', { exact: true }).fill('cat')
   await page.getByRole('button', { name: 'Save note' }).click()
   await expect(page.getByText('Offline shell ready', { exact: true })).toBeVisible()
-  await context.setOffline(true)
-  await page.getByRole('button', { name: 'Study now' }).click()
-  const reviewURL = page.url()
-  await page.getByRole('button', { name: 'Show answer' }).click()
-  await page.getByRole('button', { name: /^Easy ·/ }).click()
-  await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
-  await page.getByRole('link', { name: 'Statistics', exact: true }).click()
-  await expect(page.getByRole('heading', { name: 'Every answer adds up' })).toBeVisible()
-  await expect(page.getByText('ANSWERS', { exact: true }).locator('..').locator('strong')).toHaveText('1')
-  await expect(page.getByText('REVIEW TIME', { exact: true }).locator('..')).toContainText('Measured for 1 of 1 answers')
-  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
-  await page.screenshot({ path: test.info().outputPath('statistics.png'), fullPage: true })
-  await page.getByRole('button', { name: '2026-09-30: 1 answers' }).click()
-  await expect(page.getByLabel('Period', { exact: true })).toHaveValue('day')
-  await page.getByRole('button', { name: '猫 · basic' }).click()
-  await expect(page.getByRole('dialog', { name: 'Card progress' })).toContainText('Review history')
-  await expect(page.getByRole('dialog', { name: 'Card progress' })).toContainText('Easy')
-  await page.getByRole('button', { name: 'Close', exact: true }).click()
-  await page.reload()
-  await expect(page.getByText('ANSWERS', { exact: true }).locator('..').locator('strong')).toHaveText('1')
-  await page.getByRole('link', { name: 'Decks', exact: true }).click()
-  await expect(page.getByRole('region', { name: "Today's workload" })).toContainText('STUDIED 1')
-  await page.goto(reviewURL)
-  await page.getByRole('button', { name: 'Undo last review' }).click()
-  await page.getByRole('link', { name: 'Statistics', exact: true }).click()
-  await expect(page.getByText('ANSWERS', { exact: true }).locator('..').locator('strong')).toHaveText('0')
+  try {
+    await context.setOffline(true)
+    await page.getByRole('button', { name: 'Study now' }).click()
+    const reviewURL = page.url()
+    await page.getByRole('button', { name: 'Show answer' }).click()
+    await page.getByRole('button', { name: /^Easy ·/ }).click()
+    await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
+    await page.getByRole('link', { name: 'Statistics', exact: true }).click()
+    await expect(page.getByRole('heading', { name: 'Every answer adds up' })).toBeVisible()
+    await expect(page.getByText('ANSWERS', { exact: true }).locator('..').locator('strong')).toHaveText('1')
+    await expect(page.getByText('REVIEW TIME', { exact: true }).locator('..')).toContainText('Measured for 1 of 1 answers')
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+    await page.screenshot({ path: test.info().outputPath('statistics.png'), fullPage: true })
+    await page.getByRole('button', { name: '2026-09-30: 1 answers' }).click()
+    await expect(page.getByLabel('Period', { exact: true })).toHaveValue('day')
+    await page.getByRole('button', { name: '猫 · basic' }).click()
+    await expect(page.getByRole('dialog', { name: 'Card progress' })).toContainText('Review history')
+    await expect(page.getByRole('dialog', { name: 'Card progress' })).toContainText('Easy')
+    await page.getByRole('button', { name: 'Close', exact: true }).click()
+    await page.evaluate(() => { Reflect.set(window, 'kirokuStatisticsReloadMarker', true) })
+    try {
+      await page.reload({ waitUntil: 'domcontentloaded' })
+    } catch (error) {
+      if (browserName !== 'webkit' || !(error instanceof Error) || !error.message.includes('internal error')) throw error
+    }
+    await expect.poll(() => page.evaluate(() => Reflect.has(window, 'kirokuStatisticsReloadMarker'))).toBe(false)
+    await expect(page.getByText('ANSWERS', { exact: true }).locator('..').locator('strong')).toHaveText('1')
+    await page.getByRole('link', { name: 'Decks', exact: true }).click()
+    await expect(page.getByRole('region', { name: "Today's workload" })).toContainText('STUDIED 1')
+    try {
+      await page.goto(reviewURL, { waitUntil: 'domcontentloaded' })
+    } catch (error) {
+      if (browserName !== 'webkit' || !(error instanceof Error) || !error.message.includes('internal error')) throw error
+    }
+    await page.getByRole('button', { name: 'Undo last review' }).click()
+    await page.getByRole('link', { name: 'Statistics', exact: true }).click()
+    await expect(page.getByText('ANSWERS', { exact: true }).locator('..').locator('strong')).toHaveText('0')
+  } finally { await context.setOffline(false) }
 })
 
 function wavFixture() {
