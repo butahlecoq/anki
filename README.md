@@ -96,6 +96,14 @@ Current-version clients sync cloze note types, deterministic per-ordinal cards, 
 
 Removing a field with saved values requires choosing **Keep as retired data** or **Discard saved values**. Retired values remain on the note under **Retired fields** and no longer fill templates. Deleting a note type used by notes requires a replacement type and an explicit mapping for fields you want to carry over; unmapped values are kept as retired data. Renaming a field updates its template references while preserving its saved values.
 
+## Deck hierarchy and scheduling options
+
+Decks can be nested. A parent deck’s counts and study session include all of its descendants, while each deck still applies the daily limits from its own scheduling option group. Use **Create child deck** or **Move deck** to organize the tree. Moving a note moves its generated cards with the same IDs and scheduling data; recorded reviews stay intact.
+
+Open **Scheduling options** on a deck to reuse an existing group or create one. A group controls daily new and review limits, desired retention, learning and relearning steps, and the supported new/review ordering. The dialog lists every deck that uses the selected group. Saving changes affects future scheduling decisions only; it never rewrites cards or review history.
+
+Deleting a deck always asks how to handle its contents. **Relocate contents and child decks** moves the deck’s direct notes and children to a selected destination, then removes the source deck. **Delete this deck and its subtree** permanently removes the whole branch and its contained study data.
+
 ## Verify
 
 Install the Playwright browser engines once:

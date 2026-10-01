@@ -120,6 +120,43 @@ test('learner draws an image occlusion and reveals only its active mask in revie
   await expect(page.getByText('Identify the highlighted bone.')).toBeVisible()
 })
 
+test('learner organizes a child deck and persists a shared daily study limit', async ({ page }) => {
+  await createDeck(page, 'Japanese')
+  await page.getByRole('button', { name: 'Open Japanese' }).click()
+  await page.getByRole('button', { name: 'Create child deck' }).click()
+  const childDialog = page.getByRole('dialog', { name: 'Create a child deck' })
+  await childDialog.getByLabel('Deck name').fill('Reading')
+  await childDialog.getByRole('button', { name: 'Create child deck' }).click()
+  await expect(childDialog).toBeHidden()
+
+  await page.getByRole('button', { name: 'Scheduling options' }).click()
+  const options = page.getByRole('dialog', { name: 'Scheduling options' })
+  await expect(options).toContainText('Japanese')
+  await options.getByRole('button', { name: 'Create option group' }).click()
+  await options.getByLabel('Option group name').fill('One at a time')
+  await options.getByLabel('Daily new limit').fill('1')
+  await options.getByRole('button', { name: 'Save options' }).click()
+  await expect(options).toBeHidden()
+
+  for (const [front, back] of [['一', 'one'], ['二', 'two']]) {
+    await page.getByRole('button', { name: 'Add note' }).click()
+    await page.getByLabel('Front').fill(front)
+    await page.getByLabel('Back').fill(back)
+    await page.getByRole('button', { name: 'Save note' }).click()
+  }
+  await page.getByRole('button', { name: 'Study now' }).click()
+  await page.getByRole('button', { name: 'Show answer' }).click()
+  await page.getByRole('button', { name: /Easy ·/ }).click()
+  await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
+  await page.getByRole('button', { name: 'Back to deck' }).click()
+  await expect(page.getByRole('button', { name: 'Study now' })).toBeDisabled()
+
+  await page.getByRole('button', { name: '← All decks' }).click()
+  const hierarchy = page.getByRole('tree', { name: 'Deck hierarchy' })
+  await expect(hierarchy.getByText('Japanese')).toBeVisible()
+  await expect(hierarchy.getByText('Reading')).toBeVisible()
+})
+
 test('review uses each generated template, isolates its CSS, and skips an empty template', async ({ page }) => {
   await page.getByRole('link', { name: 'Note types' }).click()
   await page.getByRole('button', { name: 'Create note type' }).click()
@@ -230,8 +267,8 @@ test('deleting the active card in another tab ends the review session', async ({
 
   const editor = await context.newPage()
   await editor.goto(deckUrl)
-  editor.once('dialog', (dialog) => dialog.accept())
   await editor.getByRole('button', { name: 'Delete deck' }).click()
+  await editor.getByRole('dialog', { name: 'Delete deck' }).getByRole('button', { name: 'Delete deck subtree' }).click()
   await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
   await expect(page.getByText('0 reviews recorded')).toBeVisible()
   await editor.close()
@@ -411,8 +448,8 @@ test('learner renames and deletes a deck', async ({ page }) => {
   await page.getByRole('button', { name: 'Save name' }).click()
   await expect(page.getByRole('heading', { name: 'JLPT N5' })).toBeVisible()
 
-  page.once('dialog', (dialog) => dialog.accept())
   await page.getByRole('button', { name: 'Delete deck' }).click()
+  await page.getByRole('dialog', { name: 'Delete deck' }).getByRole('button', { name: 'Delete deck subtree' }).click()
   await expect(page.getByRole('heading', { name: 'Start with one deck' })).toBeVisible()
   await expect(page.getByText('JLPT N5')).not.toBeVisible()
 })

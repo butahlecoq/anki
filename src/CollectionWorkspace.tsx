@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import {
   Rating,
@@ -8,6 +8,8 @@ import {
   tryRenderNoteTemplate,
   type Deck,
   type DeckCounts,
+  type DeckOptionGroup,
+  type DeckOptionSettings,
   type DeckSummary,
   type Grade,
   type Note,
@@ -64,16 +66,16 @@ function CountStrip({ counts, reviews }: { counts: DeckCounts; reviews: number }
   )
 }
 
-function DeckDialog({ deck, onClose }: { deck?: Deck; onClose: () => void }) {
+function DeckDialog({ deck, parentId, onClose }: { deck?: Deck; parentId?: string; onClose: () => void }) {
   const [name, setName] = useState(deck?.name ?? '')
   const [error, setError] = useState('')
-  const title = deck ? 'Rename deck' : 'Create a deck'
+  const title = deck ? 'Rename deck' : parentId ? 'Create a child deck' : 'Create a deck'
 
   async function submit(event: FormEvent) {
     event.preventDefault()
     try {
       if (deck) await collection.renameDeck(deck.id, name)
-      else await collection.createDeck(name)
+      else await collection.createDeck(name, { parentId })
       onClose()
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Unable to save deck')
@@ -93,7 +95,7 @@ function DeckDialog({ deck, onClose }: { deck?: Deck; onClose: () => void }) {
           {error && <p className="form-error" role="alert">{error}</p>}
           <div className="dialog-actions">
             <button className="text-button" type="button" onClick={onClose}>Cancel</button>
-            <button className="primary-action" type="submit">{deck ? 'Save name' : 'Create deck'}</button>
+            <button className="primary-action" type="submit">{deck ? 'Save name' : parentId ? 'Create child deck' : 'Create deck'}</button>
           </div>
         </form>
       </section>
@@ -331,15 +333,25 @@ function EmptyCollection({ onNewDeck }: { onNewDeck: () => void }) {
 }
 
 function DeckList({ decks, onNewDeck, onOpen }: { decks: DeckSummary[]; onNewDeck: () => void; onOpen: (id: string) => void }) {
+  const children = new Map<string | null, DeckSummary[]>()
+  for (const deck of decks) children.set(deck.parentId, [...(children.get(deck.parentId) ?? []), deck])
+  const ordered: Array<{ deck: DeckSummary; depth: number }> = []
+  const visit = (parentId: string | null, depth: number) => {
+    for (const deck of (children.get(parentId) ?? []).sort((left, right) => left.name.localeCompare(right.name))) {
+      ordered.push({ deck, depth })
+      visit(deck.id, depth + 1)
+    }
+  }
+  visit(null, 1)
   return (
     <>
       <section className="compact-hero">
         <div><span className="section-code">01 // COLLECTION</span><h1>Choose what to <em>remember</em></h1><p>Everything here is stored locally and ready whenever you are.</p></div>
         <button className="primary-action" type="button" onClick={onNewDeck}>New deck</button>
       </section>
-      <section className="deck-grid" aria-label="Decks">
-        {decks.map((deck) => (
-          <article className="deck-tile" key={deck.id}>
+      <section className="deck-grid deck-tree" role="tree" aria-label="Deck hierarchy">
+        {ordered.map(({ deck, depth }) => (
+          <article className="deck-tile" role="treeitem" aria-level={depth} style={{ '--deck-depth': depth - 1 } as CSSProperties} key={deck.id}>
             <span className="deck-index">DECK // {String(deck.noteCount).padStart(2, '0')} NOTES</span>
             <h2>{deck.name}</h2>
             <CountStrip counts={deck.counts} reviews={deck.reviewCount} />
@@ -351,24 +363,178 @@ function DeckList({ decks, onNewDeck, onOpen }: { decks: DeckSummary[]; onNewDec
   )
 }
 
+function settingsFromGroup(group: DeckOptionGroup): DeckOptionSettings {
+  return {
+    dailyNewLimit: group.dailyNewLimit,
+    dailyReviewLimit: group.dailyReviewLimit,
+    desiredRetention: group.desiredRetention,
+    learningSteps: group.learningSteps,
+    relearningSteps: group.relearningSteps,
+    newCardOrder: group.newCardOrder,
+    reviewCardOrder: group.reviewCardOrder,
+  }
+}
+
+function MoveDeckDialog({ deck, onClose }: { deck: Deck; onClose: () => void }) {
+  const decks = useLiveQuery(() => collection.decks.orderBy('name').toArray(), [], [])
+  const [parentId, setParentId] = useState(deck.parentId ?? '')
+  const [error, setError] = useState('')
+  const blocked = new Set([deck.id])
+  for (let changed = true; changed;) {
+    changed = false
+    for (const candidate of decks) if (candidate.parentId && blocked.has(candidate.parentId) && !blocked.has(candidate.id)) { blocked.add(candidate.id); changed = true }
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    try {
+      await collection.moveDeck(deck.id, parentId || null)
+      onClose()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Unable to move deck')
+    }
+  }
+
+  return <div className="dialog-backdrop"><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="move-deck-title">
+    <span className="section-code">DECK // MOVE</span><h2 id="move-deck-title">Move deck</h2>
+    <form onSubmit={submit}><label>New parent deck<select value={parentId} onChange={(event) => setParentId(event.target.value)}><option value="">Top level</option>{decks.filter((candidate) => !blocked.has(candidate.id)).map((candidate) => <option value={candidate.id} key={candidate.id}>{candidate.name}</option>)}</select></label>
+      <p className="options-note">Child decks stay with this deck.</p>{error && <p className="form-error" role="alert">{error}</p>}
+      <div className="dialog-actions"><button className="text-button" type="button" onClick={onClose}>Cancel</button><button className="primary-action" type="submit">Move deck</button></div>
+    </form>
+  </section></div>
+}
+
+function DeleteDeckDialog({ deck, onClose, onDeleted }: { deck: Deck; onClose: () => void; onDeleted: () => void }) {
+  const decks = useLiveQuery(() => collection.decks.orderBy('name').toArray(), [], [])
+  const [mode, setMode] = useState<'delete-subtree' | 'relocate'>('delete-subtree')
+  const [destinationId, setDestinationId] = useState('')
+  const [error, setError] = useState('')
+  const blocked = new Set([deck.id])
+  for (let changed = true; changed;) {
+    changed = false
+    for (const candidate of decks) if (candidate.parentId && blocked.has(candidate.parentId) && !blocked.has(candidate.id)) { blocked.add(candidate.id); changed = true }
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    try {
+      if (mode === 'relocate') await collection.deleteDeck(deck.id, { mode, destinationDeckId: destinationId })
+      else await collection.deleteDeck(deck.id, { mode })
+      onDeleted()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Unable to delete deck')
+    }
+  }
+
+  return <div className="dialog-backdrop"><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="delete-deck-title">
+    <span className="section-code">DECK // DELETE</span><h2 id="delete-deck-title">Delete deck</h2>
+    <form onSubmit={submit}><fieldset className="delete-mode"><legend>How should this deck be removed?</legend><label className="choice"><input name="delete-mode" type="radio" checked={mode === 'relocate'} onChange={() => setMode('relocate')} />Relocate contents and child decks</label>
+      <p className="options-note">Moves this deck’s notes and direct child decks to the destination, then deletes only this deck.</p>
+      {mode === 'relocate' && <label>Destination deck<select value={destinationId} onChange={(event) => setDestinationId(event.target.value)} required><option value="" disabled>Choose a destination</option>{decks.filter((candidate) => !blocked.has(candidate.id)).map((candidate) => <option value={candidate.id} key={candidate.id}>{candidate.name}</option>)}</select></label>}
+      <label className="choice"><input name="delete-mode" type="radio" checked={mode === 'delete-subtree'} onChange={() => setMode('delete-subtree')} />Delete this deck and its subtree</label>
+      <p className="options-note">Permanently deletes this deck, child decks, notes, cards, and their review entries.</p></fieldset>
+      {error && <p className="form-error" role="alert">{error}</p>}
+      <div className="dialog-actions"><button className="text-button" type="button" onClick={onClose}>Cancel</button><button className="primary-action" type="submit">{mode === 'relocate' ? 'Relocate and delete deck' : 'Delete deck subtree'}</button></div>
+    </form>
+  </section></div>
+}
+
+function MoveNoteDialog({ note, onClose }: { note: Note; onClose: () => void }) {
+  const decks = useLiveQuery(() => collection.decks.orderBy('name').toArray(), [], [])
+  const [destinationId, setDestinationId] = useState('')
+  const [error, setError] = useState('')
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    try {
+      await collection.moveNote(note.id, destinationId)
+      onClose()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Unable to move note')
+    }
+  }
+  return <div className="dialog-backdrop"><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="move-note-title">
+    <span className="section-code">NOTE // MOVE</span><h2 id="move-note-title">Move note</h2><form onSubmit={submit}>
+      <label>Destination deck<select value={destinationId} onChange={(event) => setDestinationId(event.target.value)} required><option value="" disabled>Choose a destination</option>{decks.filter((deck) => deck.id !== note.deckId).map((deck) => <option value={deck.id} key={deck.id}>{deck.name}</option>)}</select></label>
+      <p className="options-note">The note, generated cards, and review history keep their identities.</p>{error && <p className="form-error" role="alert">{error}</p>}
+      <div className="dialog-actions"><button className="text-button" type="button" onClick={onClose}>Cancel</button><button className="primary-action" type="submit">Move note</button></div>
+    </form>
+  </section></div>
+}
+
+function DeckOptionsDialog({ deck, onClose }: { deck: Deck; onClose: () => void }) {
+  const groups = useLiveQuery(() => collection.deckOptionGroups.orderBy('name').toArray(), [], [])
+  const decks = useLiveQuery(() => collection.decks.orderBy('name').toArray(), [], [])
+  const [groupId, setGroupId] = useState(deck.optionGroupId)
+  const [creating, setCreating] = useState(false)
+  const [name, setName] = useState('')
+  const group = groups.find((candidate) => candidate.id === groupId) ?? groups.find((candidate) => candidate.id === deck.optionGroupId)
+  const [settings, setSettings] = useState<DeckOptionSettings | null>(null)
+  const [error, setError] = useState('')
+
+  if (!group) return null
+
+  const selectedGroup: DeckOptionGroup = group
+  const selectedSettings: DeckOptionSettings = settings ?? settingsFromGroup(group)
+  const affected = decks.filter((candidate) => candidate.optionGroupId === (creating ? undefined : group.id))
+  const update = <K extends keyof DeckOptionSettings>(key: K, value: DeckOptionSettings[K]) => setSettings({ ...selectedSettings, [key]: value })
+  const stepList = (value: string) => value.split(/[\s,]+/).filter(Boolean)
+
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    try {
+      let target: DeckOptionGroup = selectedGroup
+      if (creating) target = await collection.createDeckOptionGroup(name)
+      await collection.updateDeckOptionGroup(target.id, selectedSettings)
+      await collection.assignDeckOptionGroup(deck.id, target.id)
+      onClose()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Unable to save scheduling options')
+    }
+  }
+
+  return <div className="dialog-backdrop"><section className="dialog options-dialog" role="dialog" aria-modal="true" aria-labelledby="options-dialog-title">
+    <span className="section-code">DECK // SCHEDULING</span><h2 id="options-dialog-title">Scheduling options</h2>
+    <form onSubmit={submit}>
+      <label>Scheduling option group<select aria-label="Scheduling option group" value={creating ? '' : group.id} onChange={(event) => { const next = groups.find((candidate) => candidate.id === event.target.value); setCreating(false); setGroupId(event.target.value); setSettings(next ? settingsFromGroup(next) : null); setError('') }}>
+        {groups.map((candidate) => <option value={candidate.id} key={candidate.id}>{candidate.name}{candidate.protected ? ' (Default)' : ''}</option>)}
+      </select></label>
+      <button className="text-button" type="button" onClick={() => { setCreating(true); setName(''); setSettings(settingsFromGroup(group)); setError('') }}>Create option group</button>
+      {creating && <label>Option group name<input autoFocus value={name} onChange={(event) => setName(event.target.value)} maxLength={120} /></label>}
+      <div className="options-fields">
+        <label>Daily new limit<input aria-label="Daily new limit" type="number" min="0" max="9999" value={selectedSettings.dailyNewLimit} onChange={(event) => update('dailyNewLimit', Number(event.target.value))} /></label>
+        <label>Daily review limit<input aria-label="Daily review limit" type="number" min="0" max="9999" value={selectedSettings.dailyReviewLimit} onChange={(event) => update('dailyReviewLimit', Number(event.target.value))} /></label>
+        <label>Desired retention<input aria-label="Desired retention" type="number" min="0.01" max="1" step="0.01" value={selectedSettings.desiredRetention} onChange={(event) => update('desiredRetention', Number(event.target.value))} /></label>
+        <label>Learning steps<input aria-label="Learning steps" value={selectedSettings.learningSteps.join(', ')} onChange={(event) => update('learningSteps', stepList(event.target.value))} /><small>Comma-separated minutes, hours, or days (for example: 1m, 10m).</small></label>
+        <label>Relearning steps<input aria-label="Relearning steps" value={selectedSettings.relearningSteps.join(', ')} onChange={(event) => update('relearningSteps', stepList(event.target.value))} /></label>
+        <label>New card order<select aria-label="New card order" value={selectedSettings.newCardOrder} onChange={(event) => update('newCardOrder', event.target.value as DeckOptionSettings['newCardOrder'])}><option value="added">Added</option><option value="random">Random</option></select></label>
+        <label>Review card order<select aria-label="Review card order" value={selectedSettings.reviewCardOrder} onChange={(event) => update('reviewCardOrder', event.target.value as DeckOptionSettings['reviewCardOrder'])}><option value="due">Due</option><option value="random">Random</option></select></label>
+      </div>
+      <section className="affected-decks" aria-label="Decks using this option group"><h3>Decks using this option group</h3><p>{creating ? 'This new group will be assigned to this deck.' : affected.length ? affected.map((candidate) => candidate.name).join(', ') : 'No decks use this group yet.'}</p></section>
+      <p className="options-note">Changes apply to future scheduling. Existing review history remains unchanged.</p>
+      {error && <p className="form-error" role="alert">{error}</p>}
+      <div className="dialog-actions"><button className="text-button" type="button" onClick={onClose}>Cancel</button><button className="primary-action" type="submit">Save options</button></div>
+    </form>
+  </section></div>
+}
+
 function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () => void; onStudy: () => void }) {
   const deck = useLiveQuery(() => collection.decks.get(deckId), [deckId])
   const notes = useLiveQuery(() => collection.notes.where('deckId').equals(deckId).sortBy('createdAt'), [deckId], [])
   const noteTypes = useLiveQuery(() => collection.noteTypes.toArray(), [], [])
   const summary = useLiveQuery(async () => (await collection.summaries()).find((item) => item.id === deckId), [deckId])
+  const due = useLiveQuery(() => collection.dueCards(deckId, new Date()), [deckId], [])
   const [deckDialog, setDeckDialog] = useState(false)
+  const [childDialog, setChildDialog] = useState(false)
+  const [moveDialog, setMoveDialog] = useState(false)
+  const [deleteDialog, setDeleteDialog] = useState(false)
+  const [optionsDialog, setOptionsDialog] = useState(false)
+  const [moveNote, setMoveNote] = useState<Note | null>(null)
   const [noteDialog, setNoteDialog] = useState<{ note?: Note } | null>(null)
 
   if (deck === undefined || summary === undefined) return <div className="loading-state" role="status">Loading local deck…</div>
   if (!deck || !summary) return <div className="loading-state"><h1>Deck not found</h1><button className="text-button" onClick={onBack}>Back to decks</button></div>
 
-  const hasDueCards = summary.counts.new + summary.counts.review > 0
-
-  async function removeDeck() {
-    if (!window.confirm(`Delete “${deck?.name}” and its cards?`)) return
-    await collection.deleteDeck(deckId, { mode: 'delete-subtree' })
-    onBack()
-  }
+  const hasDueCards = due.length > 0
 
   return (
     <>
@@ -380,8 +546,11 @@ function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () =>
         <div className="deck-actions">
           <button className="primary-action" type="button" onClick={() => setNoteDialog({})}>Add note</button>
           <button className="primary-action study-action" type="button" disabled={!hasDueCards} onClick={onStudy}>Study now</button>
+          <button className="text-button" type="button" onClick={() => setChildDialog(true)}>Create child deck</button>
+          <button className="text-button" type="button" onClick={() => setMoveDialog(true)}>Move deck</button>
+          <button className="text-button" type="button" onClick={() => setOptionsDialog(true)}>Scheduling options</button>
           <button className="text-button" type="button" onClick={() => setDeckDialog(true)}>Rename deck</button>
-          <button className="text-button danger" type="button" onClick={removeDeck}>Delete deck</button>
+          <button className="text-button danger" type="button" onClick={() => setDeleteDialog(true)}>Delete deck</button>
         </div>
       </section>
       <section className="note-list" aria-label="Notes">
@@ -393,11 +562,16 @@ function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () =>
           return <article className="note-row" key={note.id}>
             <div><span>{type?.fields[0]?.name.toUpperCase() ?? 'FIELD'}</span><strong lang="ja">{note.fields[type?.fields[0]?.id ?? 'front']}</strong></div>
             <div><span>{type?.fields[1]?.name.toUpperCase() ?? type?.name.toUpperCase() ?? 'NOTE'}</span><p lang="ja">{note.fields[type?.fields[1]?.id ?? 'back']}</p></div>
-            <button className="text-button" type="button" onClick={() => setNoteDialog({ note })}>Edit note</button>
+            <div className="note-row-actions"><button className="text-button" type="button" onClick={() => setNoteDialog({ note })}>Edit note</button><button className="text-button" type="button" onClick={() => setMoveNote(note)}>Move note</button></div>
           </article>
         })}
       </section>
       {deckDialog && <DeckDialog deck={deck} onClose={() => setDeckDialog(false)} />}
+      {childDialog && <DeckDialog parentId={deck.id} onClose={() => setChildDialog(false)} />}
+      {moveDialog && <MoveDeckDialog deck={deck} onClose={() => setMoveDialog(false)} />}
+      {deleteDialog && <DeleteDeckDialog deck={deck} onClose={() => setDeleteDialog(false)} onDeleted={onBack} />}
+      {optionsDialog && <DeckOptionsDialog deck={deck} onClose={() => setOptionsDialog(false)} />}
+      {moveNote && <MoveNoteDialog note={moveNote} onClose={() => setMoveNote(null)} />}
       {noteDialog && <NoteDialog deckId={deckId} note={noteDialog.note} onClose={() => setNoteDialog(null)} />}
     </>
   )

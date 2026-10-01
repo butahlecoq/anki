@@ -1109,6 +1109,7 @@ export class Collection extends Dexie {
         const updatedNotes = notes.map((note) => ({ ...note, deckId: destination.id, updatedAt: occurredAt }))
         const updatedCards = cards.map((card) => ({ ...card, deckId: destination.id }))
         const updatedChildren = children.map((child) => ({ ...child, parentId: destination.id, updatedAt: occurredAt }))
+        await Promise.all(updatedChildren.map((child) => this.validateDeckHierarchy(child)))
         if (updatedNotes.length) await this.notes.bulkPut(updatedNotes)
         if (updatedCards.length) await this.cards.bulkPut(updatedCards)
         if (updatedChildren.length) await this.decks.bulkPut(updatedChildren)
@@ -1260,17 +1261,34 @@ export class Collection extends Dexie {
   }
 
   async summaries(): Promise<DeckSummary[]> {
-    return this.transaction('r', this.decks, this.notes, this.cards, this.reviewEntries, async () => {
-      const decks = await this.decks.orderBy('createdAt').toArray()
-      return Promise.all(decks.map(async (deck) => {
-        const [cards, noteCount, reviewCount] = await Promise.all([
-          this.cards.where('deckId').equals(deck.id).toArray(),
-          this.notes.where('deckId').equals(deck.id).count(),
-          this.reviewEntries.where('deckId').equals(deck.id).count(),
-        ])
-        return { ...deck, counts: countsFor(cards), noteCount, reviewCount }
-      }))
-    })
+    const [decks, notes, cards, reviews] = await Promise.all([
+      this.decks.orderBy('createdAt').toArray(),
+      this.notes.toArray(),
+      this.cards.toArray(),
+      this.reviewEntries.toArray(),
+    ])
+    const descendants = (deckId: string) => {
+      const ids = new Set([deckId])
+      for (let changed = true; changed;) {
+        changed = false
+        for (const deck of decks) {
+          if (deck.parentId && ids.has(deck.parentId) && !ids.has(deck.id)) {
+            ids.add(deck.id)
+            changed = true
+          }
+        }
+      }
+      return ids
+    }
+    return Promise.all(decks.map(async (deck) => {
+      const ids = descendants(deck.id)
+      return {
+        ...deck,
+        counts: countsFor(cards.filter((card) => ids.has(card.deckId))),
+        noteCount: notes.filter((note) => ids.has(note.deckId)).length,
+        reviewCount: reviews.filter((review) => ids.has(review.deckId)).length,
+      }
+    }))
   }
 
   async dueCards(deckId: string, now = new Date()): Promise<CardRecord[]> {
