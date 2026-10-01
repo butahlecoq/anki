@@ -111,9 +111,16 @@ describe('Anki archive preflight', () => {
     await expect(preflightAnkiArchive(zip([{ name: 'collection.anki21b', data: rawZstd(0, false) }]))).rejects.toThrow(/zstd.*content size/i)
   })
 
-  test('rejects a current-layout zstd frame with compressed blocks that have no enforceable decoder cap', async () => {
-    const frame = concat([Uint8Array.of(0x28, 0xb5, 0x2f, 0xfd, 0x80, 0x38), u32(0), Uint8Array.of(5, 0, 0)])
-    await expect(preflightAnkiArchive(zip([{ name: 'collection.anki21b', data: frame }]))).rejects.toThrow(/compressed or run-length/i)
+  test('accepts bounded current-layout zstd frames with compressed and run-length blocks', async () => {
+    const compressed = concat([Uint8Array.of(0x28, 0xb5, 0x2f, 0xfd, 0x80, 0x38), u32(0), Uint8Array.of(5, 0, 0)])
+    const runLength = concat([Uint8Array.of(0x28, 0xb5, 0x2f, 0xfd, 0x80, 0x38), u32(3), Uint8Array.of(27, 0, 0, 0x41)])
+    await expect(preflightAnkiArchive(zip([{ name: 'collection.anki21b', data: compressed }]))).resolves.toBeUndefined()
+    await expect(preflightAnkiArchive(zip([{ name: 'collection.anki21b', data: runLength }]))).resolves.toBeUndefined()
+  })
+
+  test('rejects a current-layout zstd frame with a reserved block type', async () => {
+    const frame = concat([Uint8Array.of(0x28, 0xb5, 0x2f, 0xfd, 0x80, 0x38), u32(0), Uint8Array.of(7, 0, 0)])
+    await expect(preflightAnkiArchive(zip([{ name: 'collection.anki21b', data: frame }]))).rejects.toThrow(/reserved block type/i)
   })
 
   test('rejects a current-layout zstd frame above its decoded entry limit', async () => {

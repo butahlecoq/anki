@@ -219,7 +219,8 @@ function zstdFrame(bytes: Uint8Array, offset: number, name: string) {
   if (contentSizeValue > BigInt(ANKI_ARCHIVE_LIMITS.maxZstdEntryBytes)) fail(`zstd entry limit exceeded by ${JSON.stringify(name)}`)
   const contentSize = Number(contentSizeValue)
   cursor += contentSizeBytes
-  let decodedBytes = 0
+  let rawDecodedBytes = 0
+  let onlyRawBlocks = true
   for (;;) {
     requireRange(bytes, cursor, 3, `zstd block in ${name}`)
     const header = bytes[cursor] | (bytes[cursor + 1] << 8) | (bytes[cursor + 2] << 16)
@@ -227,31 +228,42 @@ function zstdFrame(bytes: Uint8Array, offset: number, name: string) {
     const lastBlock = Boolean(header & 1)
     const type = (header >>> 1) & 3
     const blockSize = header >>> 3
-    if (type !== 0) fail(`zstd frame in ${JSON.stringify(name)} uses compressed or run-length blocks that cannot be bounded before import`)
-    requireRange(bytes, cursor, blockSize, `zstd block in ${name}`)
-    decodedBytes += blockSize
-    if (decodedBytes > ANKI_ARCHIVE_LIMITS.maxZstdEntryBytes) fail(`zstd entry limit exceeded by ${JSON.stringify(name)}`)
-    cursor += blockSize
+    if (type === 0) {
+      requireRange(bytes, cursor, blockSize, `zstd block in ${name}`)
+      rawDecodedBytes += blockSize
+      if (rawDecodedBytes > ANKI_ARCHIVE_LIMITS.maxZstdEntryBytes) fail(`zstd entry limit exceeded by ${JSON.stringify(name)}`)
+      cursor += blockSize
+    } else if (type === 1) {
+      requireRange(bytes, cursor, 1, `zstd run-length block in ${name}`)
+      onlyRawBlocks = false
+      cursor += 1
+    } else if (type === 2) {
+      requireRange(bytes, cursor, blockSize, `zstd compressed block in ${name}`)
+      onlyRawBlocks = false
+      cursor += blockSize
+    } else {
+      fail(`zstd frame in ${JSON.stringify(name)} has a reserved block type`)
+    }
     if (lastBlock) break
   }
   if (descriptor & 4) {
     requireRange(bytes, cursor, 4, `zstd checksum in ${name}`)
     cursor += 4
   }
-  if (decodedBytes !== contentSize) fail(`zstd frame in ${JSON.stringify(name)} does not match its declared content size`)
-  return { next: cursor, decodedBytes }
+  if (onlyRawBlocks && rawDecodedBytes !== contentSize) fail(`zstd frame in ${JSON.stringify(name)} does not match its declared content size`)
+  return { next: cursor, declaredBytes: contentSize }
 }
 
-function validateRawZstdFrames(bytes: Uint8Array, name: string) {
+function validateZstdFrames(bytes: Uint8Array, name: string) {
   let offset = 0
-  let decodedBytes = 0
+  let declaredBytes = 0
   while (offset < bytes.length) {
     const frame = zstdFrame(bytes, offset, name)
     offset = frame.next
-    decodedBytes += frame.decodedBytes
-    if (decodedBytes > ANKI_ARCHIVE_LIMITS.maxZstdEntryBytes) fail(`zstd entry limit exceeded by ${JSON.stringify(name)}`)
+    declaredBytes += frame.declaredBytes
+    if (declaredBytes > ANKI_ARCHIVE_LIMITS.maxZstdEntryBytes) fail(`zstd entry limit exceeded by ${JSON.stringify(name)}`)
   }
-  return decodedBytes
+  return declaredBytes
 }
 
 function currentLayoutZstdEntry(name: string) {
@@ -260,9 +272,10 @@ function currentLayoutZstdEntry(name: string) {
 
 /**
  * Validates ZIP metadata before ankipack or SQL is loaded. Current Anki layout
- * zstd entries are inflated only to their already bounded ZIP size, then their
- * raw zstd blocks and declared output are checked. Compressed/RLE zstd blocks
- * are rejected because ankipack's decoder exposes no output cap for them.
+ * zstd entries are inflated only to their already bounded ZIP size. Their frame
+ * content size and window are checked before package parsing; raw blocks are
+ * cross-checked against their declared output, while the package reader checks
+ * compressed and run-length block validity.
  */
 export async function preflightAnkiArchive(bytes: Uint8Array): Promise<void> {
   if (bytes.byteLength > ANKI_ARCHIVE_LIMITS.maxCompressedBytes) fail(`archive exceeds the ${ANKI_ARCHIVE_LIMITS.maxCompressedBytes / 1024 / 1024} MB compressed limit`)
@@ -272,7 +285,7 @@ export async function preflightAnkiArchive(bytes: Uint8Array): Promise<void> {
   for (const entry of entries) {
     if (!currentLayout || !currentLayoutZstdEntry(entry.name)) continue
     const decoded = await decodedZipEntry(bytes, entry)
-    zstdBytes += validateRawZstdFrames(decoded, entry.name)
+    zstdBytes += validateZstdFrames(decoded, entry.name)
     if (zstdBytes > ANKI_ARCHIVE_LIMITS.maxZstdAggregateBytes) fail('aggregate limit exceeded by decoded zstd entries')
   }
 }
