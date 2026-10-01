@@ -295,10 +295,11 @@ describe('local collection', () => {
     const source = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const remote = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     try {
-      const deck = await source.createDeck('Sync policy')
-      const note = await source.createBasicNote(deck.id, { front: '猫', back: 'cat' })
-      const card = (await source.cards.where('noteId').equals(note.id).first())!
       const now = new Date('2026-10-01T12:00:00.000Z')
+      const createdAt = new Date('2026-10-01T11:59:00.000Z')
+      const deck = await source.createDeck('Sync policy', createdAt)
+      const note = await source.createBasicNote(deck.id, { front: '猫', back: 'cat' }, createdAt)
+      const card = (await source.cards.where('noteId').equals(note.id).first())!
       await source.suspendCard(card.id, now)
       await source.buryCard(card.id, new Date('2026-10-01T12:01:00.000Z'))
       await source.rescheduleCard(card.id, new Date('2026-10-03T12:00:00.000Z'), new Date('2026-10-01T12:02:00.000Z'))

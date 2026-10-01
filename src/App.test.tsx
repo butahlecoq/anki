@@ -350,6 +350,7 @@ test('editing and moving the current note work without leaving the reviewer', as
 
     fireEvent.click(screen.getByRole('button', { name: 'Move note' }))
     const mover = await screen.findByRole('dialog', { name: 'Move note' })
+    await waitFor(() => expect(within(mover).getByRole('option', { name: destination.name })).toBeVisible())
     fireEvent.change(within(mover).getByLabelText('Destination deck'), { target: { value: destination.id } })
     fireEvent.click(within(mover).getByRole('button', { name: 'Move note' }))
     await waitFor(async () => expect(await collection.notes.get(note.id)).toMatchObject({ deckId: destination.id }))
