@@ -181,7 +181,7 @@ function validateMediaBytes(bytes: Uint8Array, mime: string) {
     : mime === 'image/jpeg' ? bytes.length >= 16 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes.at(-2) === 0xff && bytes.at(-1) === 0xd9 && Boolean(imageDimensions(bytes))
       : mime === 'image/webp' ? bytes.length >= 20 && text(0, 4) === 'RIFF' && text(8, 12) === 'WEBP' && view.getUint32(4, true) + 8 <= bytes.length && ['VP8 ', 'VP8L', 'VP8X'].includes(text(12, 16)) && 20 + view.getUint32(16, true) <= bytes.length
         : mime === 'audio/wav' ? bytes.length >= 45 && text(0, 4) === 'RIFF' && text(8, 12) === 'WAVE' && view.getUint32(4, true) + 8 <= bytes.length && text(12, 16) === 'fmt ' && text(36, 40) === 'data' && view.getUint32(40, true) <= bytes.length - 44
-          : mime === 'audio/ogg' ? bytes.length >= 28 && text(0, 4) === 'OggS' && bytes[4] === 0 && 27 + bytes[26] + bytes.slice(27, 27 + bytes[26]).reduce((total, byte) => total + byte, 0) <= bytes.length
+          : mime === 'audio/ogg' ? validOgg(bytes)
             : mime === 'audio/mpeg' ? validMp3(bytes)
               : false
   if (!valid) throw new Error(`“${mime}” bytes do not match the declared media format.`)
@@ -191,9 +191,44 @@ function validMp3(bytes: Uint8Array) {
   let offset = 0
   if (textDecoder.decode(bytes.slice(0, 3)) === 'ID3') {
     if (bytes.length < 10 || bytes.slice(6, 10).some((byte) => byte > 0x7f)) return false
-    offset = 10 + bytes.slice(6, 10).reduce((size, byte) => size * 128 + byte, 0)
+    offset = 10 + bytes.slice(6, 10).reduce((size, byte) => size * 128 + byte, 0) + (bytes[5] & 0x10 ? 10 : 0)
   }
-  return offset + 24 <= bytes.length && bytes[offset] === 0xff && (bytes[offset + 1] & 0xe0) === 0xe0 && (bytes[offset + 2] & 0xf0) !== 0xf0 && (bytes[offset + 2] & 0x0c) !== 0x0c
+  if (offset + 4 > bytes.length || bytes[offset] !== 0xff || (bytes[offset + 1] & 0xe0) !== 0xe0) return false
+  const version = (bytes[offset + 1] >> 3) & 0x03
+  const layer = (bytes[offset + 1] >> 1) & 0x03
+  const bitrateIndex = bytes[offset + 2] >> 4
+  const rateIndex = (bytes[offset + 2] >> 2) & 0x03
+  if (version === 1 || layer === 0 || bitrateIndex === 0 || bitrateIndex === 15 || rateIndex === 3) return false
+  const mpeg1Bitrates = layer === 3
+    ? [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448]
+    : layer === 2
+      ? [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384]
+      : [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320]
+  const laterBitrates = layer === 3
+    ? [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256]
+    : [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160]
+  const bitrate = (version === 3 ? mpeg1Bitrates : laterBitrates)[bitrateIndex] * 1000
+  const sampleRate = [44_100, 48_000, 32_000][rateIndex] / (version === 3 ? 1 : version === 2 ? 2 : 4)
+  const padding = (bytes[offset + 2] >> 1) & 1
+  const frameLength = layer === 3
+    ? Math.floor((12 * bitrate / sampleRate) + padding) * 4
+    : Math.floor(((layer === 1 && version !== 3 ? 72 : 144) * bitrate / sampleRate) + padding)
+  return frameLength > 4 && offset + frameLength <= bytes.length
+}
+
+function validOgg(bytes: Uint8Array) {
+  let offset = 0
+  let sawEnd = false
+  while (offset < bytes.length) {
+    if (offset + 27 > bytes.length || textDecoder.decode(bytes.slice(offset, offset + 4)) !== 'OggS' || bytes[offset + 4] !== 0) return false
+    const segments = bytes[offset + 26]
+    if (offset + 27 + segments > bytes.length) return false
+    const payload = bytes.slice(offset + 27, offset + 27 + segments).reduce((total, byte) => total + byte, 0)
+    if (offset + 27 + segments + payload > bytes.length) return false
+    sawEnd ||= Boolean(bytes[offset + 5] & 0x04)
+    offset += 27 + segments + payload
+  }
+  return offset === bytes.length && sawEnd
 }
 
 function validateSupportedTemplateMarkup(front: string, back: string, css: string) {
