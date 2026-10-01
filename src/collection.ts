@@ -1637,20 +1637,22 @@ export class Collection extends Dexie {
 
   /** The renderable queue shared by the reviewer and today's workload. */
   async reviewQueue(deckId: string, now = new Date()): Promise<CardRecord[]> {
-    const scheduled = await this.dueCards(deckId, now)
-    const [notes, types, stored] = await Promise.all([
-      this.notes.bulkGet(scheduled.map((card) => card.noteId)), this.noteTypes.toArray(), this.cards.bulkGet(scheduled.map((card) => card.id)),
-    ])
-    const notesById = new Map(notes.filter((note): note is Note => Boolean(note)).map((note) => [note.id, note]))
-    const typesById = new Map(types.map((type) => [type.id, type]))
-    return stored.filter((card): card is CardRecord => Boolean(card)).filter((card) => {
-      const note = notesById.get(card.noteId)
-      const type = note && typesById.get(note.typeId)
-      const template = type?.templates.find((candidate) => candidate.id === card.templateId)
-      if (!note || !type || !template || card.suspended || card.templateSuspended || card.manualSuspended) return false
-      if (type.kind === 'image-occlusion') return true
-      const front = tryRenderNoteTemplate(template.front, type, note.fields, undefined, card.clozeOrdinal, 'front')
-      return !front.ok || !front.value.isEmpty
+    return this.transaction('r', [this.decks, this.deckOptionGroups, this.cards, this.notes, this.noteTypes, this.reviewEntries], async () => {
+      const scheduled = await this.dueCards(deckId, now)
+      const [notes, types, stored] = await Promise.all([
+        this.notes.bulkGet(scheduled.map((card) => card.noteId)), this.noteTypes.toArray(), this.cards.bulkGet(scheduled.map((card) => card.id)),
+      ])
+      const notesById = new Map(notes.filter((note): note is Note => Boolean(note)).map((note) => [note.id, note]))
+      const typesById = new Map(types.map((type) => [type.id, type]))
+      return stored.filter((card): card is CardRecord => Boolean(card)).filter((card) => {
+        const note = notesById.get(card.noteId)
+        const type = note && typesById.get(note.typeId)
+        const template = type?.templates.find((candidate) => candidate.id === card.templateId)
+        if (!note || !type || !template || !isReviewEligible(card, now)) return false
+        if (type.kind === 'image-occlusion') return true
+        const front = tryRenderNoteTemplate(template.front, type, note.fields, undefined, card.clozeOrdinal, 'front')
+        return !front.ok || !front.value.isEmpty
+      })
     })
   }
 
