@@ -47,8 +47,10 @@ test('does not send pairing codes to a non-loopback HTTP endpoint', async () => 
 test('syncs a configured collection, applies remote reviews, and clears acknowledged operations', async () => {
   const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
   await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 })
-  await collection.createDeck('Japanese foundations')
-  const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ accepted: 0, cursor: 1, changes: [{ opId: 'review-1', entityType: 'review', entityId: 'review-1', action: 'create', occurredAt: '2026-10-01T12:00:00.000Z', payload: { id: 'review-1', cardId: 'card-1', deckId: 'deck-1', rating: 3, state: 0, due: '2026-10-01T12:00:00.000Z', stability: 1, difficulty: 1, elapsedDays: 0, lastElapsedDays: 0, scheduledDays: 0, learningSteps: 0, reviewedAt: '2026-10-01T12:00:00.000Z' } }] }), { status: 200 }))
+  const deck = await collection.createDeck('Japanese foundations')
+  const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
+  const card = (await collection.cards.where('noteId').equals(note.id).first())!
+  const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ accepted: 0, cursor: 1, changes: [{ opId: 'review-1', entityType: 'review', entityId: 'review-1', action: 'create', occurredAt: '2026-10-01T12:00:00.000Z', payload: { id: 'review-1', cardId: card.id, deckId: deck.id, rating: 3, state: 0, due: '2026-10-01T12:00:00.000Z', stability: 1, difficulty: 1, elapsedDays: 0, lastElapsedDays: 0, scheduledDays: 0, learningSteps: 0, reviewedAt: '2026-10-01T12:00:00.000Z' } }] }), { status: 200 }))
   await expect(syncCollection(collection, fetcher)).resolves.toMatchObject({ state: 'complete', cursor: 1 })
   await expect(collection.reviewEntries.count()).resolves.toBe(1)
   await expect(collection.pendingOperations()).resolves.toHaveLength(0)
@@ -79,7 +81,7 @@ test('downloads remote media even when an unrelated local upload fails', async (
   await collection.attachMedia(note.id, { file: new File(['local'], 'local.png', { type: 'image/png' }), side: 'front' })
   const remoteBytes = new TextEncoder().encode('remote')
   const remoteDigest = await digestMedia(new Blob([remoteBytes], { type: 'image/png' }))
-  const remoteReference = { id: 'remote-media', noteId: 'remote-note', digest: remoteDigest, kind: 'image' as const, mimeType: 'image/png', displayName: 'remote.png', side: 'front' as const, playback: 'manual' as const, createdAt: '2026-10-01T12:00:00.000Z', updatedAt: '2026-10-01T12:00:00.000Z' }
+  const remoteReference = { id: 'remote-media', noteId: note.id, digest: remoteDigest, kind: 'image' as const, mimeType: 'image/png', displayName: 'remote.png', side: 'front' as const, playback: 'manual' as const, createdAt: '2026-10-01T12:00:00.000Z', updatedAt: '2026-10-01T12:00:00.000Z' }
   const fetcher = vi.fn((url: string) => {
     if (url.endsWith(`/api/media/${remoteDigest}`)) return Promise.resolve(new Response(remoteBytes, { status: 200, headers: { 'x-content-sha256': remoteDigest, 'content-type': 'image/png' } }))
     if (url.includes('/api/media/')) return Promise.resolve(new Response('', { status: 503 }))

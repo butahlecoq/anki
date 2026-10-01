@@ -366,7 +366,7 @@ function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () =>
 
   async function removeDeck() {
     if (!window.confirm(`Delete “${deck?.name}” and its cards?`)) return
-    await collection.deleteDeck(deckId)
+    await collection.deleteDeck(deckId, { mode: 'delete-subtree' })
     onBack()
   }
 

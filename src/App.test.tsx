@@ -64,7 +64,7 @@ test('a stale queue entry whose card was deleted completes review', async () => 
     expect(screen.getByText('0 reviews recorded')).toBeVisible()
   } finally {
     dueCards.mockRestore()
-    await collection.deleteDeck(deck.id)
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
   }
 })
 
@@ -90,7 +90,7 @@ test('the add-note chooser opens the dedicated image occlusion editor', async ()
     expect(await screen.findByRole('heading', { name: 'Add image occlusion note' })).toBeVisible()
     expect(screen.getByLabelText('Source image')).toHaveAttribute('accept', 'image/png,image/jpeg,image/webp')
   } finally {
-    await collection.deleteDeck(deck.id)
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
   }
 })
 
@@ -106,7 +106,7 @@ test('a malformed synced template shows a card error without crashing review', a
     fireEvent.click(screen.getByRole('button', { name: 'Skip card' }))
     expect(await screen.findByRole('heading', { name: 'Session complete' })).toBeVisible()
   } finally {
-    await collection.deleteDeck(deck.id)
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
     await collection.deleteNoteType(type.id)
   }
 })
