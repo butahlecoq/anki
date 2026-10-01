@@ -175,9 +175,9 @@ test('a learner resumes, unburies, and reschedules a card from its deck', async 
   try {
     fireEvent.click(await screen.findByRole('button', { name: 'Manage cards' }))
     const dialog = await screen.findByRole('dialog', { name: 'Manage cards' })
-    fireEvent.click(await within(dialog).findByRole('button', { name: 'Resume card' }))
+    fireEvent.click(await within(dialog).findByRole('button', { name: /Resume card 1, template / }))
     await waitFor(async () => expect(await collection.cards.get(card.id)).toMatchObject({ manualSuspended: false }))
-    fireEvent.click(await within(dialog).findByRole('button', { name: 'Unbury card' }))
+    fireEvent.click(await within(dialog).findByRole('button', { name: /Unbury card 1, template / }))
     await waitFor(async () => expect(await collection.cards.get(card.id)).toMatchObject({ buriedUntil: null }))
     fireEvent.change(await within(dialog).findByLabelText(/Reschedule due for card 1, template /), { target: { value: '2026-11-02T09:30' } })
     fireEvent.click(within(dialog).getByRole('button', { name: /Reschedule card 1, template / }))
@@ -257,7 +257,7 @@ test('a synced reschedule in a child deck removes the current parent review card
   }
 })
 
-test('card management gives every reschedule control a distinct card and template name', async () => {
+test('card management gives every control a distinct card and template name', async () => {
   const deck = await collection.createDeck(`Accessible card controls ${crypto.randomUUID()}`)
   const type = await collection.createNoteType({
     name: `Accessible templates ${crypto.randomUUID()}`,
@@ -268,7 +268,10 @@ test('card management gives every reschedule control a distinct card and templat
       { name: 'Second template', front: '{{Back}}', back: '{{Front}}', css: '' },
     ],
   })
-  await collection.createNote(deck.id, type.id, { [type.fields[0].id]: '一', [type.fields[1].id]: '二' })
+  const note = await collection.createNote(deck.id, type.id, { [type.fields[0].id]: '一', [type.fields[1].id]: '二' })
+  const [firstCard, secondCard] = await collection.cards.where('noteId').equals(note.id).sortBy('templateId')
+  await collection.suspendCard(firstCard.id)
+  await collection.buryCard(secondCard.id)
   window.location.hash = `#deck/${deck.id}`
   render(<CollectionWorkspace />)
   try {
@@ -276,9 +279,16 @@ test('card management gives every reschedule control a distinct card and templat
     const dialog = await screen.findByRole('dialog', { name: 'Manage cards' })
     const rescheduleInputs = await within(dialog).findAllByLabelText(/Reschedule due for card \d+, template /)
     const rescheduleButtons = within(dialog).getAllByRole('button', { name: /Reschedule card \d+, template / })
+    const lifecycleButtons = [
+      within(dialog).getByRole('button', { name: /Resume card \d+, template / }),
+      within(dialog).getByRole('button', { name: /Bury card \d+, template / }),
+      within(dialog).getByRole('button', { name: /Suspend card \d+, template / }),
+      within(dialog).getByRole('button', { name: /Unbury card \d+, template / }),
+    ]
     expect(rescheduleInputs).toHaveLength(2)
     expect(new Set(rescheduleInputs.map((input) => input.getAttribute('aria-label'))).size).toBe(2)
     expect(new Set(rescheduleButtons.map((button) => button.getAttribute('aria-label'))).size).toBe(2)
+    expect(new Set(lifecycleButtons.map((button) => button.getAttribute('aria-label'))).size).toBe(4)
   } finally {
     await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
     await collection.deleteNoteType(type.id)
