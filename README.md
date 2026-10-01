@@ -78,6 +78,16 @@ Stable Anki note GUIDs become stable local identities. A first import creates th
 
 Supported package templates use the documented template subset below, including Basic/reversed, cloze, multiple templates, furigana filters, typed answers, and isolated CSS. PNG/JPEG/WebP and MP3/Ogg/WAV references in note fields become offline media attachments. Native rectangular image-occlusion notes map to the built-in image-occlusion model. Unsupported filters, malformed templates, missing media, unsupported scheduler events, non-rectangular occlusions, and unreferenced static media appear in the import report; errors disable import instead of allowing silent partial loss. Export and broader compatibility proof remain tracked by Issues #16 and #25.
 
+## Export Anki packages
+
+Choose **Export Anki package** to download a portable `.apkg` for the whole collection or one deck and its descendants. Scheduling, review history, and image/audio inclusion are independent options. Keep the downloaded file in Files on iPhone or a backup folder on Windows; it does not depend on the sync service. The browser can export offline once the installed shell has cached the conversion assets. Physical Safari download retention still needs the iPhone checklist.
+
+Packages contain native schema 18 note types, templates, fields, tags, deck relationships, card rows, review logs, and a populated media manifest. Referenced supported media is checked against its SHA-256 digest before download. Imported native numeric note/card IDs and original GUIDs are retained; repeated exports keep those relationships stable. Earlier imports that discarded numeric identities cannot reconstruct them without their original package.
+
+Native Anki receives its supported scheduling representation. Kiroku also stores validated supplementary scheduling, review-memory, and attachment-placement data in native opaque data columns for a precise clean Kiroku round trip. A later native scheduling edit takes precedence over stale supplementary values. Export reports missing/damaged media, unsupported relationships, retired fields, differing CSS between templates, and archive-limit violations before success. Image occlusion export requires its image. This portable package is not an account login, sync-service configuration, or settings backup.
+
+See [Anki’s packaged-deck documentation](https://docs.ankiweb.net/exporting.html#packaged-decks) for how `.apkg` imports add content to an existing Anki collection.
+
 ## Note types and card templates
 
 Open **Note types** to create a reusable set of fields and card templates. A **Standard** type creates one card per template whose front uses a nonblank field or typed-answer prompt. A **Cloze deletions** type creates one card per distinct deletion number in its cloze field. The note editor shows the card count and why a card is skipped. If a card becomes ineligible, it is suspended from review; restoring its content restores the same card and review history.
