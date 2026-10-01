@@ -207,6 +207,7 @@ type NoteDeletionUndo = {
   operationId: string
   occurredAt: string
   note: Note
+  noteType: NoteType
   cards: CardRecord[]
   reviews: ReviewEntry[]
   media: NoteMediaReference[]
@@ -1270,9 +1271,11 @@ export class Collection extends Dexie {
   }
 
   async deleteNote(noteId: string, now = new Date()): Promise<void> {
-    await this.transaction('rw', [this.notes, this.cards, this.reviewEntries, this.noteMedia, this.outbox, this.deletedEntities, this.settings], async () => {
+    await this.transaction('rw', [this.noteTypes, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.outbox, this.deletedEntities, this.settings], async () => {
       const note = await this.notes.get(noteId)
       if (!note) throw new Error('Note not found')
+      const noteType = await this.noteTypes.get(note.typeId)
+      if (!noteType) throw new Error('Note type not found')
       const cards = await this.cards.where('noteId').equals(noteId).toArray()
       const cardIds = cards.map((card) => card.id)
       const reviews = cardIds.length ? await this.reviewEntries.where('cardId').anyOf(cardIds).toArray() : []
@@ -1294,7 +1297,7 @@ export class Collection extends Dexie {
       const operationId = id()
       await this.outbox.add({ opId: operationId, entityType: 'note', entityId: noteId, action: 'delete', occurredAt, payload: { id: noteId } })
       const syncEpoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
-      await this.settings.put({ key: 'noteDeletionUndo', value: { syncEpoch, operationId, occurredAt, note, cards, reviews, media } satisfies NoteDeletionUndo })
+      await this.settings.put({ key: 'noteDeletionUndo', value: { syncEpoch, operationId, occurredAt, note, noteType, cards, reviews, media } satisfies NoteDeletionUndo })
     })
   }
 
@@ -1303,6 +1306,7 @@ export class Collection extends Dexie {
     const epoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
     if (!undo || undo.syncEpoch !== epoch || !await this.outbox.get(undo.operationId) || await this.notes.get(undo.note.id)) return null
     if (!await this.decks.get(undo.note.deckId) || !await this.noteTypes.get(undo.note.typeId)) return null
+    if (JSON.stringify(await this.noteTypes.get(undo.note.typeId)) !== JSON.stringify(undo.noteType)) return null
     return undo
   }
 
@@ -1313,6 +1317,7 @@ export class Collection extends Dexie {
       const epoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
       if (epoch !== undo.syncEpoch || !await this.outbox.get(undo.operationId)) throw new Error('This deletion cannot be undone after a sync attempt')
       if (!await this.decks.get(undo.note.deckId) || !await this.noteTypes.get(undo.note.typeId)) throw new Error('The original deck or note type was deleted; undo is unavailable')
+      if (JSON.stringify(await this.noteTypes.get(undo.note.typeId)) !== JSON.stringify(undo.noteType)) throw new Error('The note type changed since deletion; undo is unavailable')
       const keys = [tombstoneKey('note', undo.note.id), ...undo.cards.map((card) => tombstoneKey('card', card.id)), ...undo.reviews.map((review) => tombstoneKey('review', review.id)), ...undo.media.map((reference) => tombstoneKey('noteMedia', reference.id))]
       const tombstones = await this.deletedEntities.bulkGet(keys)
       if (tombstones.some((tombstone) => tombstone?.occurredAt !== undo.occurredAt)) throw new Error('The deleted note changed; undo is unavailable')

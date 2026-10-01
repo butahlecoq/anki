@@ -427,6 +427,18 @@ describe('local collection', () => {
     expect(await collection.notes.get(note.id)).toBeUndefined()
   })
 
+  test('note deletion undo refuses a changed note type instead of restoring obsolete cards', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Changed template')
+    const type = await collection.createNoteType({ name: 'Term', fields: [{ name: 'Term' }], templates: [{ name: 'Forward', front: '{{Term}}', back: '{{Term}}', css: '' }] })
+    const note = await collection.createNote(deck.id, type.id, { [type.fields[0].id]: '猫' })
+    await collection.deleteNote(note.id)
+    await collection.updateNoteType(type.id, { ...type, templates: [{ ...type.templates[0], front: 'Changed {{Term}}' }] })
+    await expect(collection.latestNoteDeletionUndo()).resolves.toBeNull()
+    await expect(collection.undoLastNoteDeletion()).rejects.toThrow(/note type changed/i)
+    expect(await collection.notes.get(note.id)).toBeUndefined()
+  })
+
   test('card maintenance undo restores suspension and burial only before sync', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const deck = await collection.createDeck('Card undo')
