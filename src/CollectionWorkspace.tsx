@@ -25,18 +25,30 @@ import { pairCollection, syncCollection } from './sync-client'
 import { clozeOrdinals } from './template-renderer'
 import { compareTypedAnswer } from './typed-answer'
 import { prepareAnkiImport, type PreparedAnkiImport } from './anki-import'
+<<<<<<< HEAD
 import { CardHistory, Statistics, TodayWorkload } from './Statistics'
+=======
+import { CollectionBrowser } from './CollectionBrowser'
+>>>>>>> 27193d3 (Open the collection browser from desktop and phone navigation)
 
 type Route =
   | { view: 'decks' }
   | { view: 'note-types' }
+<<<<<<< HEAD
   | { view: 'statistics' }
+=======
+  | { view: 'browse' }
+>>>>>>> 27193d3 (Open the collection browser from desktop and phone navigation)
   | { view: 'deck'; deckId: string }
   | { view: 'review'; deckId: string }
 
 function routeFromHash(): Route {
   if (window.location.hash === '#note-types') return { view: 'note-types' }
+<<<<<<< HEAD
   if (window.location.hash === '#statistics') return { view: 'statistics' }
+=======
+  if (window.location.hash === '#browse') return { view: 'browse' }
+>>>>>>> 27193d3 (Open the collection browser from desktop and phone navigation)
   const match = window.location.hash.match(/^#(deck|review)\/([^/]+)$/)
   if (!match) return { view: 'decks' }
   return { view: match[1] as 'deck' | 'review', deckId: decodeURIComponent(match[2]) }
@@ -52,7 +64,11 @@ function useRoute() {
   }, [])
 
   const navigate = (next: Route) => {
+<<<<<<< HEAD
     const hash = next.view === 'decks' ? '#decks' : next.view === 'note-types' ? '#note-types' : next.view === 'statistics' ? '#statistics' : `#${next.view}/${encodeURIComponent(next.deckId)}`
+=======
+    const hash = next.view === 'decks' ? '#decks' : next.view === 'note-types' ? '#note-types' : next.view === 'browse' ? '#browse' : `#${next.view}/${encodeURIComponent(next.deckId)}`
+>>>>>>> 27193d3 (Open the collection browser from desktop and phone navigation)
     if (window.location.hash === hash) setRoute(next)
     else window.location.hash = hash
   }
@@ -1124,6 +1140,7 @@ export function CollectionWorkspace() {
     if (route.view === 'deck') return <DeckDetail deckId={route.deckId} onBack={() => navigate({ view: 'decks' })} onStudy={() => navigate({ view: 'review', deckId: route.deckId })} />
     if (route.view === 'statistics') return <Statistics />
     if (route.view === 'note-types') return <NoteTypeManager onNewDeck={() => { navigate({ view: 'decks' }); setNewDeck(true) }} />
+    if (route.view === 'browse') return <CollectionBrowser />
     if (decks.length === 0) return <EmptyCollection onNewDeck={() => setNewDeck(true)} onImport={() => setImporting(true)} />
     return <DeckList decks={decks} onNewDeck={() => setNewDeck(true)} onImport={() => setImporting(true)} onOpen={(deckId) => navigate({ view: 'deck', deckId })} />
   }, [decks, navigate, route])
