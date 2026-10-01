@@ -32,4 +32,4 @@
 
 - [x] Build accessible nested deck, move/delete, and shared-options flows for desktop and phone sizes.
 - [x] Verify the workflow from settings through persisted scheduling behavior in browser tests.
-- [ ] Document hierarchy/options semantics, run full verification, obtain review, and open a PR.
+- [x] Document hierarchy/options semantics, run full verification, obtain review, and open a PR.
