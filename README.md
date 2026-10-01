@@ -126,6 +126,18 @@ While reviewing, you can edit or move the current note, change its tags, mark it
 
 Deleting a deck always asks how to handle its contents. **Relocate contents and child decks** moves the deck’s direct notes and children to a selected destination, then removes the source deck. **Delete this deck and its subtree** permanently removes the whole branch and its contained study data.
 
+## Collection browser
+
+Open **Browse** from either navigation bar. Switch between cards and notes, sort the result columns, and use pages of 50 rows. Search, view, sort, and separate card/note selections persist on this device. Selection follows record IDs across sorting and reload; selected records outside the current search still receive bulk actions.
+
+Text searches note fields using normalized Japanese/Latin text. Spaces mean AND; use `OR`, parentheses, a leading `-`, and double quotes for values containing spaces. Supported filters include `deck:Japanese` (including children), `tag:jlpt::*`, `note:"Basic reversed"`, `card:Recognition`, `flag:3`, `is:due`, and states `new`, `learn`, `learning`, `relearning`, `review`, `suspended`, and `buried`. Name/tag filters accept `*` and `?`. `due:<2026-10-01` and `reviewed:2026-10-01` use local calendar dates and accept comparison operators. `rated:7:1` finds Again answers within seven local days; ratings 1–4 are Again/Hard/Good/Easy. Invalid syntax shows its position while retaining the last valid results.
+
+Tag, move, and delete actions affect the selected notes and every generated sibling card. Flag and suspension actions affect selected cards, or all cards of selected notes. Deletion shows affected counts and requires confirmation. Multi-record maintenance does not expose a misleading partial undo. All changes and sync operations commit together or roll back together.
+
+**Find / replace / edit** selects one note type and field, offers literal, JavaScript Unicode regex, or entire-field replacement, and requires a before/after preview and confirmation. Literal replacements keep dollar signs literal; regex replacements support capture references. Previews allow up to 5,000 notes or 8 MiB and stop expensive patterns after two seconds in a separate worker. Edits preserve existing card identities and review history; a changed note or type invalidates its preview.
+
+The duplicate report matches a note type and normalized first field. The empty report finds empty fronts and missing templates; Notes view also includes notes without generated cards. Open an expression to edit the affected record. Image occlusion uses its dedicated editor.
+
 ## Verify
 
 Install the Playwright browser engines once:

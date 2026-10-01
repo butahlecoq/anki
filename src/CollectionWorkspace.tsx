@@ -26,17 +26,20 @@ import { clozeOrdinals } from './template-renderer'
 import { compareTypedAnswer } from './typed-answer'
 import { prepareAnkiImport, type PreparedAnkiImport } from './anki-import'
 import { CardHistory, Statistics, TodayWorkload } from './Statistics'
+import { CollectionBrowser } from './CollectionBrowser'
 
 type Route =
   | { view: 'decks' }
   | { view: 'note-types' }
   | { view: 'statistics' }
+  | { view: 'browse' }
   | { view: 'deck'; deckId: string }
   | { view: 'review'; deckId: string }
 
 function routeFromHash(): Route {
   if (window.location.hash === '#note-types') return { view: 'note-types' }
   if (window.location.hash === '#statistics') return { view: 'statistics' }
+  if (window.location.hash === '#browse') return { view: 'browse' }
   const match = window.location.hash.match(/^#(deck|review)\/([^/]+)$/)
   if (!match) return { view: 'decks' }
   return { view: match[1] as 'deck' | 'review', deckId: decodeURIComponent(match[2]) }
@@ -52,7 +55,7 @@ function useRoute() {
   }, [])
 
   const navigate = (next: Route) => {
-    const hash = next.view === 'decks' ? '#decks' : next.view === 'note-types' ? '#note-types' : next.view === 'statistics' ? '#statistics' : `#${next.view}/${encodeURIComponent(next.deckId)}`
+    const hash = 'deckId' in next ? `#${next.view}/${encodeURIComponent(next.deckId)}` : `#${next.view}`
     if (window.location.hash === hash) setRoute(next)
     else window.location.hash = hash
   }
@@ -1124,6 +1127,7 @@ export function CollectionWorkspace() {
     if (route.view === 'deck') return <DeckDetail deckId={route.deckId} onBack={() => navigate({ view: 'decks' })} onStudy={() => navigate({ view: 'review', deckId: route.deckId })} />
     if (route.view === 'statistics') return <Statistics />
     if (route.view === 'note-types') return <NoteTypeManager onNewDeck={() => { navigate({ view: 'decks' }); setNewDeck(true) }} />
+    if (route.view === 'browse') return <CollectionBrowser />
     if (decks.length === 0) return <EmptyCollection onNewDeck={() => setNewDeck(true)} onImport={() => setImporting(true)} />
     return <DeckList decks={decks} onNewDeck={() => setNewDeck(true)} onImport={() => setImporting(true)} onOpen={(deckId) => navigate({ view: 'deck', deckId })} />
   }, [decks, navigate, route])
