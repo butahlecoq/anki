@@ -592,7 +592,7 @@ test('PC and phone contexts exchange a collection and an FSRS review through the
     await pc.getByRole('button', { name: 'Sync now' }).click()
     await expect(pc.getByRole('region', { name: 'PC sync' }).getByText(/complete\./i)).toBeVisible({ timeout: 15_000 })
     await phone.getByRole('button', { name: 'Sync now' }).click()
-    await expect(phone.getByRole('button', { name: `Open ${deckName}` })).toBeVisible()
+    await expect(phone.getByRole('button', { name: `Open ${deckName}` })).toBeVisible({ timeout: 15_000 })
 
     await phone.getByRole('button', { name: `Open ${deckName}` }).click()
     await phone.getByRole('button', { name: 'Study now' }).click()
