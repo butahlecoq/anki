@@ -129,6 +129,8 @@ test('learner previews and imports an Anki package before studying its media off
   await expect.poll(() => offlineImage.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true)
   const offlineAudio = offlineReview.locator('audio')
   await expectAudioReady(offlineAudio, browserName)
+  await page.getByRole('button', { name: 'Replay audio' }).click()
+  await expect(page.getByText('Audio replayed.', { exact: true })).toBeVisible()
   await expect(page.getByText('Offline shell active')).toBeVisible()
 })
 
