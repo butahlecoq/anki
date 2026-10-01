@@ -78,6 +78,22 @@ test('the note-type editor offers a cloze type with per-ordinal preview', async 
   expect(screen.getByRole('combobox', { name: 'Preview ordinal' })).toHaveTextContent('c2')
 })
 
+test('the add-note chooser opens the dedicated image occlusion editor', async () => {
+  const deck = await collection.createDeck(`Occlusion editor ${crypto.randomUUID()}`)
+  window.location.hash = `#deck/${deck.id}`
+  render(<CollectionWorkspace />)
+  try {
+    fireEvent.click(await screen.findByRole('button', { name: 'Add note' }))
+    await screen.findByRole('option', { name: 'Image Occlusion' })
+    const type = screen.getByRole('combobox', { name: 'Note type' })
+    fireEvent.change(type, { target: { value: 'image-occlusion' } })
+    expect(await screen.findByRole('heading', { name: 'Add image occlusion note' })).toBeVisible()
+    expect(screen.getByLabelText('Source image')).toHaveAttribute('accept', 'image/png,image/jpeg,image/webp')
+  } finally {
+    await collection.deleteDeck(deck.id)
+  }
+})
+
 test('a malformed synced template shows a card error without crashing review', async () => {
   const deck = await collection.createDeck(`Malformed review ${crypto.randomUUID()}`)
   const type = await collection.createNoteType({ name: 'Cloze review', kind: 'cloze', fields: [{ name: 'Text' }], templates: [{ name: 'Deletion', front: '{{cloze:Text}}', back: '{{cloze:Text}}', css: '' }] })

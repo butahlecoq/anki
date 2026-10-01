@@ -210,6 +210,18 @@ function requiredText(value: string, label: string) {
   return normalized
 }
 
+async function storableBlob(file: File) {
+  const bytes = 'arrayBuffer' in file && typeof file.arrayBuffer === 'function'
+    ? await file.arrayBuffer()
+    : await new Promise<ArrayBuffer>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onerror = () => reject(reader.error ?? new Error('Unable to read media bytes.'))
+      reader.onload = () => resolve(reader.result as ArrayBuffer)
+      reader.readAsArrayBuffer(file)
+    })
+  return new Blob([bytes], { type: file.type })
+}
+
 function renameTemplateFields(template: string, renamed: ReadonlyMap<string, string>, known: ReadonlySet<string>) {
   return template.replace(/{{\s*([#^/]?)\s*([^{}]+?)\s*}}/g, (token, marker: string, rawName: string) => {
     const raw = rawName.trim()
@@ -632,6 +644,7 @@ export class Collection extends Dexie {
     const definition = validateMedia(input.image)
     if (definition.kind !== 'image') throw new Error('Image occlusion requires an image')
     const digest = await digestMedia(input.image)
+    const storedImage = await storableBlob(input.image)
     const noteId = id()
     const mediaId = id()
     const createdAt = now.toISOString()
@@ -639,7 +652,7 @@ export class Collection extends Dexie {
     validateImageOcclusion(imageOcclusion)
     const note: Note = { id: noteId, deckId, type: 'custom', typeId: IMAGE_OCCLUSION_NOTE_TYPE_ID, fields: { header: input.header, backExtra: input.backExtra }, tags: normalizeTags(input.tags), imageOcclusion, createdAt, updatedAt: createdAt }
     const reference: NoteMediaReference = { id: mediaId, noteId, digest, kind: 'image', mimeType: input.image.type, displayName: input.image.name, side: 'front', playback: 'manual', createdAt, updatedAt: createdAt }
-    const blob: MediaBlob = { digest, blob: input.image, byteLength: input.image.size, mimeType: input.image.type, verifiedAt: createdAt }
+    const blob: MediaBlob = { digest, blob: storedImage, byteLength: input.image.size, mimeType: input.image.type, verifiedAt: createdAt }
     return this.transaction('rw', [this.decks, this.notes, this.cards, this.noteMedia, this.mediaBlobs, this.outbox], async () => {
       if (!await this.decks.get(deckId)) throw new Error('Deck not found')
       await this.mediaBlobs.put(blob)
@@ -660,6 +673,7 @@ export class Collection extends Dexie {
     const definition = input.image ? validateMedia(input.image) : undefined
     if (definition && definition.kind !== 'image') throw new Error('Image occlusion requires an image')
     const digest = input.image ? await digestMedia(input.image) : undefined
+    const storedImage = input.image ? await storableBlob(input.image) : undefined
     await this.transaction('rw', [this.notes, this.cards, this.noteMedia, this.mediaBlobs, this.outbox], async () => {
       const note = await this.notes.get(noteId)
       if (!note || note.typeId !== IMAGE_OCCLUSION_NOTE_TYPE_ID || !note.imageOcclusion) throw new Error('Image occlusion note not found')
@@ -675,7 +689,7 @@ export class Collection extends Dexie {
         const reference = await this.noteMedia.get(original.sourceMediaId)
         if (!reference || reference.noteId !== noteId || reference.kind !== 'image') throw new Error('Source image reference is missing')
         const revised: NoteMediaReference = { ...reference, digest, mimeType: input.image.type, displayName: input.image.name, updatedAt: updated.updatedAt }
-        await this.mediaBlobs.put({ digest, blob: input.image, byteLength: input.image.size, mimeType: input.image.type, verifiedAt: updated.updatedAt })
+        await this.mediaBlobs.put({ digest, blob: storedImage!, byteLength: input.image.size, mimeType: input.image.type, verifiedAt: updated.updatedAt })
         await this.noteMedia.put(revised)
         operations.push({ opId: id(), entityType: 'noteMedia', entityId: revised.id, action: 'update', occurredAt: updated.updatedAt, payload: revised })
       }

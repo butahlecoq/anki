@@ -3,6 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import {
   Rating,
   BASIC_NOTE_TYPE_ID,
+  IMAGE_OCCLUSION_NOTE_TYPE_ID,
   collection,
   tryRenderNoteTemplate,
   type Deck,
@@ -13,6 +14,7 @@ import {
   type NoteMediaReference,
 } from './collection'
 import { MediaRenderer } from './MediaRenderer'
+import { ImageOcclusionEditor, ImageOcclusionReview } from './ImageOcclusion'
 import { NoteTypeManager } from './NoteTypeManager'
 import { TemplatePreview } from './TemplatePreview'
 import { validateMedia } from './media'
@@ -104,6 +106,7 @@ type PendingAttachment = { file: File; side: 'front' | 'back'; playback: 'automa
 function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: Note; onClose: () => void }) {
   const noteTypes = useLiveQuery(() => collection.noteTypes.orderBy('name').toArray(), [], [])
   const [typeId, setTypeId] = useState(note?.typeId ?? BASIC_NOTE_TYPE_ID)
+  const [imageEditor, setImageEditor] = useState(note?.typeId === IMAGE_OCCLUSION_NOTE_TYPE_ID)
   const noteType = noteTypes.find((type) => type.id === typeId)
   const [fields, setFields] = useState<Record<string, string>>(note?.fields ?? {})
   const [error, setError] = useState('')
@@ -112,6 +115,8 @@ function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: Note; on
   const existingMedia = useLiveQuery(() => note ? collection.mediaForNote(note.id) : [], [note?.id], [])
   const generation = noteType ? collection.tryCardGenerationStatus(noteType, fields) : undefined
   const clozeEditorField = noteType?.kind === 'cloze' ? noteType.templates[0]?.front.match(/{{\s*cloze:([^{}:]+?)\s*}}/)?.[1].trim() : undefined
+
+  if (imageEditor) return <ImageOcclusionEditor deckId={deckId} note={note} onClose={onClose} />
 
   function makeCloze(fieldId: string) {
     const textarea = textareas.current[fieldId]
@@ -169,7 +174,7 @@ function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: Note; on
         <h2 id="note-dialog-title">{note ? `Edit ${noteType?.name ?? ''} note` : `Add a ${noteType?.name ?? ''} note`}</h2>
         <form onSubmit={submit}>
           <label>Note type
-            <select value={typeId} disabled={Boolean(note)} onChange={(event) => { setTypeId(event.target.value); setFields({}); setAttachments([]) }}>
+            <select value={typeId} disabled={Boolean(note)} onChange={(event) => { if (event.target.value === IMAGE_OCCLUSION_NOTE_TYPE_ID) { setImageEditor(true); return } setTypeId(event.target.value); setFields({}); setAttachments([]) }}>
               {noteTypes.map((type) => <option value={type.id} key={type.id}>{type.name}</option>)}
             </select>
           </label>
@@ -419,9 +424,10 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     ? tryRenderNoteTemplate(template.back, noteType, note.fields, frontResult.value.html, card.clozeOrdinal, 'back') : undefined
   const typedAnswer = frontResult?.ok ? frontResult.value.typedAnswer : undefined
   const renderError = frontResult && !frontResult.ok ? frontResult.error : backResult && !backResult.ok ? backResult.error : undefined
+  const imageOcclusion = noteType?.kind === 'image-occlusion'
   const unavailable = card === null || note === null || noteType === null ||
     Boolean(card?.suspended) || (Boolean(noteType && card) && !template) ||
-    Boolean(frontResult?.ok && frontResult.value.isEmpty)
+    Boolean(frontResult?.ok && frontResult.value.isEmpty && !imageOcclusion)
 
   useEffect(() => {
     collection.dueCards(deckId, new Date()).then((cards) => setQueue(cards.map((card) => card.id)))
@@ -488,7 +494,9 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
       <div className="review-progress"><span>REVIEW // {String(reviewsRecorded + 1).padStart(2, '0')}</span><button className="text-button" onClick={onBack}>End session</button></div>
       <article className="review-card">
         <span className="card-side">{showAnswer ? 'ANSWER' : 'QUESTION'}</span>
-        <TemplatePreview key={card.id} title="Review card" front={template.front} back={template.back} css={template.css} fields={fields} kind={noteType.kind === 'image-occlusion' ? 'standard' : noteType.kind} ordinal={card.clozeOrdinal} side={showAnswer ? 'back' : 'front'} />
+        {imageOcclusion
+          ? <ImageOcclusionReview note={note} card={card} showAnswer={showAnswer} />
+          : <TemplatePreview key={card.id} title="Review card" front={template.front} back={template.back} css={template.css} fields={fields} kind={noteType.kind} ordinal={card.clozeOrdinal} side={showAnswer ? 'back' : 'front'} />}
         {noteType.id === BASIC_NOTE_TYPE_ID && media.filter((reference) => reference.side === 'front').map((reference) => <MediaRenderer key={reference.id} reference={reference} automatic />)}
         {noteType.id === BASIC_NOTE_TYPE_ID && showAnswer && media.filter((reference) => reference.side === 'back').map((reference) => <MediaRenderer key={reference.id} reference={reference} automatic />)}
         {typedAnswer !== undefined && !showAnswer && <label className="typed-answer">Type your answer
