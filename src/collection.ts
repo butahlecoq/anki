@@ -1475,7 +1475,8 @@ export class Collection extends Dexie {
         const reviewsDue = sortWithinDeck(own.filter((card) => card.state === State.Review && new Date(card.due).getTime() <= now.getTime()), group, 'review')
         const newCards = sortWithinDeck(own.filter((card) => card.state === State.New), group, 'new')
         const totals = reviewedToday.get(deck.id) ?? { new: 0, review: 0 }
-        const limited = selectedGroup.interdayLearningOrder === 'before-reviews'
+        // Each owning deck applies its own policy while gathering from its daily review budget.
+        const limited = group.interdayLearningOrder === 'before-reviews'
           ? [...interdayLearning, ...reviewsDue]
           : [...reviewsDue, ...interdayLearning]
         selected.push(...intradayLearning, ...limited.slice(0, Math.max(0, group.dailyReviewLimit - totals.review)), ...newCards.slice(0, Math.max(0, group.dailyNewLimit - totals.new)))
@@ -1484,6 +1485,7 @@ export class Collection extends Dexie {
       const interdayLearning = sortQueue(selected.filter(isInterdayLearning), 'learning')
       const orderedReviews = sortQueue(selected.filter((card) => card.state === State.Review), 'review')
       const newCards = sortQueue(selected.filter((card) => card.state === State.New), 'new')
+      // The selected deck then provides one stable display policy when its subtree is merged.
       const reviewQueue = selectedGroup.interdayLearningOrder === 'before-reviews'
         ? [...interdayLearning, ...orderedReviews]
         : [...orderedReviews, ...interdayLearning]

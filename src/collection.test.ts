@@ -373,6 +373,26 @@ describe('local collection', () => {
     expect(capped.map((card) => card.id)).toEqual([intradayFirst.id, intradaySecond.id, firstNew.id])
   })
 
+  test('uses each owning deck policy to gather a subtree before applying the selected deck display order', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const rootGroup = await collection.createDeckOptionGroup('Root display')
+    const childGroup = await collection.createDeckOptionGroup('Child gather')
+    await collection.updateDeckOptionGroup(rootGroup.id, { ...rootGroup, dailyReviewLimit: 1, interdayLearningOrder: 'before-reviews' })
+    await collection.updateDeckOptionGroup(childGroup.id, { ...childGroup, dailyReviewLimit: 1, interdayLearningOrder: 'after-reviews' })
+    const root = await collection.createDeck('Root', { optionGroupId: rootGroup.id })
+    const child = await collection.createDeck('Child', { parentId: root.id, optionGroupId: childGroup.id })
+    const now = new Date('2026-10-01T12:00:00.000Z')
+    const rootInterday = { ...directCard('root-interday', root.id, 'root-interday-note', State.Learning, '2026-10-01T09:00:00.000Z'), scheduledDays: 1 }
+    const rootReview = directCard('root-review', root.id, 'root-review-note', State.Review, '2026-10-01T08:00:00.000Z')
+    const childInterday = { ...directCard('child-interday', child.id, 'child-interday-note', State.Relearning, '2026-10-01T09:00:00.000Z'), scheduledDays: 1 }
+    const childReview = directCard('child-review', child.id, 'child-review-note', State.Review, '2026-10-01T08:00:00.000Z')
+    await collection.cards.bulkAdd([rootInterday, rootReview, childInterday, childReview])
+
+    const queue = await collection.dueCards(root.id, now)
+
+    expect(queue.map((card) => card.id)).toEqual([rootInterday.id, childReview.id])
+  })
+
   test('summaries aggregate a parent deck with every descendant', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const parent = await collection.createDeck('Japanese')
