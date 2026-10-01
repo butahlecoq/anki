@@ -178,6 +178,8 @@ export interface CardRecord {
   manualSuspended?: boolean
   templateSuspended?: boolean
   buriedUntil?: string | null
+  /** Anki-compatible card flag: 0 is none, 1–7 are the standard colors. */
+  flag?: number
   due: string
   stability: number
   difficulty: number
@@ -483,6 +485,7 @@ function withPolicyDefaults(card: CardRecord): CardRecord {
     templateSuspended: templateSuspended(card),
     manualSuspended: card.manualSuspended ?? false,
     buriedUntil: card.buriedUntil ?? null,
+    flag: card.flag ?? 0,
   }
 }
 
@@ -587,6 +590,7 @@ function canonicalCard(card: LegacyCard): CardRecord {
   if (card.templateSuspended !== undefined && typeof card.templateSuspended !== 'boolean') throw new Error('Card template suspension is invalid')
   if (card.templateSuspended !== undefined && card.suspended !== undefined && card.templateSuspended !== card.suspended) throw new Error('Card suspension fields conflict')
   if (card.buriedUntil !== undefined && card.buriedUntil !== null && typeof card.buriedUntil !== 'string') throw new Error('Card burial time is invalid')
+  if (card.flag !== undefined && (!Number.isSafeInteger(card.flag) || card.flag < 0 || card.flag > 7)) throw new Error('Card flag is invalid')
   const buriedUntil = card.buriedUntil ?? null
   if (buriedUntil !== null && (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(buriedUntil) || Number.isNaN(new Date(buriedUntil).getTime()))) throw new Error('Card burial time is invalid')
   return withPolicyDefaults({ ...card, templateId: card.templateId ?? BASIC_TEMPLATE_ID, buriedUntil })
@@ -609,13 +613,14 @@ const defaultDeckOptionGroup: DeckOptionGroup = {
   updatedAt: '1970-01-01T00:00:00.000Z',
 }
 
-function serializeCard(card: FsrsCard, identity: Pick<CardRecord, 'id' | 'deckId' | 'noteId' | 'templateId' | 'clozeOrdinal'>): CardRecord {
+function serializeCard(card: FsrsCard, identity: Pick<CardRecord, 'id' | 'deckId' | 'noteId' | 'templateId' | 'clozeOrdinal' | 'flag'>): CardRecord {
   return {
     manualSuspended: false,
     templateSuspended: false,
     buriedUntil: null,
     suspended: false,
     ...identity,
+    flag: identity.flag ?? 0,
     due: card.due.toISOString(),
     stability: card.stability,
     difficulty: card.difficulty,
@@ -763,6 +768,11 @@ export class Collection extends Dexie {
     }).upgrade(async (transaction) => {
       await transaction.table('deckOptionGroups').toCollection().modify((group: LegacyDeckOptionGroup) => Object.assign(group, canonicalDeckOptionGroup(group)))
       if (!await transaction.table('deckOptionGroups').get(DEFAULT_DECK_OPTION_GROUP_ID)) await transaction.table('deckOptionGroups').put(defaultDeckOptionGroup)
+    })
+    this.version(13).stores({
+      decks: 'id, parentId, optionGroupId, name, createdAt', notes: 'id, deckId, typeId, updatedAt', cards: 'id, deckId, noteId, templateId, due, state', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId', deletedEntities: 'key, entityType, entityId, occurredAt', noteMedia: 'id, noteId, digest, side, kind, updatedAt', mediaBlobs: 'digest, verifiedAt', noteTypes: 'id, name, updatedAt', deckOptionGroups: 'id, name, updatedAt',
+    }).upgrade(async (transaction) => {
+      await transaction.table('cards').toCollection().modify((card: CardRecord) => { if (card.flag === undefined) card.flag = 0 })
     })
     this.on('populate', (transaction) => {
       transaction.table('noteTypes').put(basicNoteType)
@@ -1637,6 +1647,18 @@ export class Collection extends Dexie {
       const state = card.state === State.New ? State.Review : card.state
       if (state !== State.Learning && state !== State.Relearning && state !== State.Review) throw new Error('Card state cannot be rescheduled')
       const updated = withPolicyDefaults({ ...card, state, due: due.toISOString() })
+      await this.cards.put(updated)
+      await this.outbox.add({ opId: id(), entityType: 'card', entityId: cardId, action: 'update', occurredAt: now.toISOString(), payload: updated })
+    })
+  }
+
+  async setCardFlag(cardId: string, flag: number, now = new Date()): Promise<void> {
+    if (!Number.isSafeInteger(flag) || flag < 0 || flag > 7) throw new Error('Card flag is invalid')
+    await this.transaction('rw', [this.cards, this.outbox], async () => {
+      const card = await this.cards.get(cardId)
+      if (!card) throw new Error('Card not found')
+      if ((card.flag ?? 0) === flag) return
+      const updated = withPolicyDefaults({ ...card, flag })
       await this.cards.put(updated)
       await this.outbox.add({ opId: id(), entityType: 'card', entityId: cardId, action: 'update', occurredAt: now.toISOString(), payload: updated })
     })

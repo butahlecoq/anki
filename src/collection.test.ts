@@ -317,6 +317,27 @@ describe('local collection', () => {
     }
   })
 
+  test('preserves and syncs a card flag across review scheduling', async () => {
+    const source = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const remote = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    try {
+      const createdAt = new Date('2026-10-01T11:59:00.000Z')
+      const deck = await source.createDeck('Flagged', createdAt)
+      const note = await source.createBasicNote(deck.id, { front: '旗', back: 'flag' }, createdAt)
+      const card = (await source.cards.where('noteId').equals(note.id).first())!
+      await source.setCardFlag(card.id, 1, new Date('2026-10-01T12:00:00.000Z'))
+      await source.answer(card.id, Rating.Good, new Date('2026-10-01T12:01:00.000Z'))
+      expect(await source.cards.get(card.id)).toMatchObject({ flag: 1, reps: 1 })
+      const outbound = await source.pendingOperations()
+      await remote.applyRemoteChanges(outbound, outbound.length)
+      expect(await remote.cards.get(card.id)).toMatchObject({ flag: 1, reps: 1 })
+      await expect(source.setCardFlag(card.id, 8)).rejects.toThrow('Card flag is invalid')
+    } finally {
+      await source.delete()
+      await remote.delete()
+    }
+  })
+
   test('converges answer-side sibling burial and leech actions as one sync batch', async () => {
     const source = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const remote = createCollection(`kiroku-test-${crypto.randomUUID()}`)
@@ -1311,7 +1332,7 @@ describe('local collection', () => {
 
     await expect(collection.decks.get(deck.id)).resolves.toEqual({ ...deck, parentId: null, optionGroupId: 'default' })
     await expect(collection.notes.get(note.id)).resolves.toEqual({ ...note, typeId: BASIC_NOTE_TYPE_ID })
-    await expect(collection.cards.get(card.id)).resolves.toEqual({ ...card, templateId: 'basic', suspended: false, manualSuspended: false, templateSuspended: false, buriedUntil: null })
+    await expect(collection.cards.get(card.id)).resolves.toEqual({ ...card, templateId: 'basic', suspended: false, manualSuspended: false, templateSuspended: false, buriedUntil: null, flag: 0 })
     await expect(collection.receivedOperations.count()).resolves.toBe(3)
     await expect(collection.pendingOperations()).resolves.toHaveLength(0)
   })

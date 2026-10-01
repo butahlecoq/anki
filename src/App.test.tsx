@@ -383,6 +383,26 @@ test('review keyboard shortcuts use the same answer and rating actions as touch 
   }
 })
 
+test('reviewer flag control and keyboard shortcut update the current card', async () => {
+  const deck = await collection.createDeck(`Flag review ${crypto.randomUUID()}`)
+  const note = await collection.createBasicNote(deck.id, { front: '旗', back: 'flag' })
+  const card = (await collection.cards.where('noteId').equals(note.id).first())!
+  window.location.hash = `#review/${deck.id}`
+  render(<CollectionWorkspace />)
+  try {
+    const flagControl = await screen.findByRole('combobox', { name: 'Card flag' })
+    fireEvent.change(flagControl, { target: { value: '1' } })
+    await waitFor(async () => expect(await collection.cards.get(card.id)).toMatchObject({ flag: 1 }))
+    expect(screen.getByRole('button', { name: 'Show answer' })).toBeVisible()
+    fireEvent.keyDown(window, { key: 'f' })
+    await waitFor(async () => expect(await collection.cards.get(card.id)).toMatchObject({ flag: 2 }))
+    fireEvent.click(screen.getByRole('button', { name: 'Card info' }))
+    expect(within(await screen.findByRole('dialog', { name: 'Card info' })).getByText('Orange')).toBeVisible()
+  } finally {
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+  }
+})
+
 test('a learner moves a deck under a different parent', async () => {
   const firstParent = await collection.createDeck(`First ${crypto.randomUUID()}`)
   const secondParent = await collection.createDeck(`Second ${crypto.randomUUID()}`)
