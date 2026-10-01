@@ -28,13 +28,21 @@ export interface BasicNoteFields {
 
 export const BASIC_NOTE_TYPE_ID = 'basic'
 export const BASIC_TEMPLATE_ID = 'basic'
+export const IMAGE_OCCLUSION_NOTE_TYPE_ID = 'image-occlusion'
+export const IMAGE_OCCLUSION_TEMPLATE_ID = 'image-occlusion'
+
+export interface OcclusionMask { id: string; ordinal: number; x: number; y: number; width: number; height: number }
+export interface ImageOcclusion { version: 1; sourceMediaId: string; imageWidth: number; imageHeight: number; nextOrdinal: number; masks: OcclusionMask[] }
+export interface OcclusionMaskDraft { id?: string; ordinal?: number; x: number; y: number; width: number; height: number }
+export interface NewImageOcclusionNote { image: File; imageWidth: number; imageHeight: number; header: string; backExtra: string; tags: string[]; masks: OcclusionMaskDraft[] }
+export interface UpdateImageOcclusionNote { image?: File; imageWidth?: number; imageHeight?: number; header?: string; backExtra?: string; tags?: string[]; masks?: OcclusionMaskDraft[] }
 
 export interface NoteTypeField { readonly id: string; readonly name: string }
 export interface CardTemplate { readonly id: string; readonly name: string; readonly front: string; readonly back: string; readonly css: string }
 export interface NoteType {
   readonly id: string
   readonly name: string
-  readonly kind: 'standard' | 'cloze'
+  readonly kind: 'standard' | 'cloze' | 'image-occlusion'
   readonly fields: readonly NoteTypeField[]
   readonly templates: readonly CardTemplate[]
   readonly protected: boolean
@@ -66,15 +74,22 @@ const basicNoteType: NoteType = {
   createdAt: '1970-01-01T00:00:00.000Z', updatedAt: '1970-01-01T00:00:00.000Z',
 }
 
+const imageOcclusionNoteType: NoteType = {
+  id: IMAGE_OCCLUSION_NOTE_TYPE_ID, name: 'Image Occlusion', kind: 'image-occlusion', protected: true,
+  fields: [{ id: 'header', name: 'Header' }, { id: 'backExtra', name: 'Back Extra' }],
+  templates: [{ id: IMAGE_OCCLUSION_TEMPLATE_ID, name: 'Hide one, reveal one', front: '{{Header}}', back: '{{Header}}<hr>{{Back Extra}}', css: '' }],
+  createdAt: '1970-01-01T00:00:00.000Z', updatedAt: '1970-01-01T00:00:00.000Z',
+}
+
 /** Note values are stored by immutable field ID; templates address display names. */
 export function renderNoteTemplate(template: string, noteType: NoteType, fieldsById: Record<string, string>, front?: string, ordinal?: number, side?: 'front' | 'back') {
   const displayFields = Object.fromEntries(noteType.fields.map((field) => [field.name, fieldsById[field.id] ?? '']))
-  return renderTemplate(template, displayFields, front, { kind: noteType.kind, ordinal, side: side ?? (front === undefined ? 'front' : 'back') })
+  return renderTemplate(template, displayFields, front, { kind: noteType.kind === 'image-occlusion' ? 'standard' : noteType.kind, ordinal, side: side ?? (front === undefined ? 'front' : 'back') })
 }
 
 export function tryRenderNoteTemplate(template: string, noteType: NoteType, fieldsById: Record<string, string>, front?: string, ordinal?: number, side?: 'front' | 'back') {
   const displayFields = Object.fromEntries(noteType.fields.map((field) => [field.name, fieldsById[field.id] ?? '']))
-  return tryRenderTemplate(template, displayFields, front, { kind: noteType.kind, ordinal, side: side ?? (front === undefined ? 'front' : 'back') })
+  return tryRenderTemplate(template, displayFields, front, { kind: noteType.kind === 'image-occlusion' ? 'standard' : noteType.kind, ordinal, side: side ?? (front === undefined ? 'front' : 'back') })
 }
 
 export interface Note {
@@ -83,6 +98,8 @@ export interface Note {
   type: 'basic' | 'custom'
   typeId: string
   fields: Record<string, string>
+  tags?: string[]
+  imageOcclusion?: ImageOcclusion
   retiredFields?: Record<string, string>
   createdAt: string
   updatedAt: string
@@ -94,6 +111,8 @@ export interface CardRecord {
   noteId: string
   templateId: string
   clozeOrdinal?: number
+  occlusionId?: string
+  occlusionOrdinal?: number
   suspended?: boolean
   due: string
   stability: number
@@ -215,8 +234,48 @@ function clozeField(noteType: Pick<NoteType, 'kind' | 'fields' | 'templates'>): 
   return noteType.fields.find((field) => field.name === front[0])
 }
 
-function cardKey(card: Pick<CardRecord, 'templateId' | 'clozeOrdinal'>) {
-  return `${card.templateId}:c${card.clozeOrdinal ?? 0}`
+function cardKey(card: Pick<CardRecord, 'templateId' | 'clozeOrdinal' | 'occlusionId'>) {
+  return card.occlusionId ? `${card.templateId}:m${card.occlusionId}` : `${card.templateId}:c${card.clozeOrdinal ?? 0}`
+}
+
+function validateImageOcclusion(value: ImageOcclusion): void {
+  if (value.version !== 1 || !value.sourceMediaId) throw new Error('Image occlusion source is invalid')
+  if (![value.imageWidth, value.imageHeight].every((dimension) => Number.isSafeInteger(dimension) && dimension > 0)) throw new Error('Image dimensions are invalid')
+  if (!Number.isSafeInteger(value.nextOrdinal) || value.nextOrdinal < 1 || !Array.isArray(value.masks) || !value.masks.length || value.masks.length > 500) throw new Error('Image occlusion masks are invalid')
+  const ids = new Set<string>()
+  const ordinals = new Set<number>()
+  for (const mask of value.masks) {
+    if (!mask.id || ids.has(mask.id) || !Number.isSafeInteger(mask.ordinal) || mask.ordinal < 1 || mask.ordinal >= value.nextOrdinal || ordinals.has(mask.ordinal)) throw new Error('Image occlusion mask identity is invalid')
+    ids.add(mask.id)
+    ordinals.add(mask.ordinal)
+    if (![mask.x, mask.y, mask.width, mask.height].every(Number.isFinite) || mask.x < 0 || mask.y < 0 || mask.width <= 0 || mask.height <= 0 || mask.x + mask.width > 1 || mask.y + mask.height > 1) throw new Error('Image occlusion mask is out of bounds')
+  }
+}
+
+function normalizeTags(tags: string[]): string[] {
+  if (!Array.isArray(tags)) throw new Error('Tags are invalid')
+  const normalized = tags.map((tag) => tag.trim()).filter(Boolean)
+  if (normalized.some((tag) => tag.length > 120)) throw new Error('Tag is too long')
+  return [...new Set(normalized)]
+}
+
+function resolveMasks(drafts: OcclusionMaskDraft[], previous?: ImageOcclusion, existingCards: CardRecord[] = []): Pick<ImageOcclusion, 'masks' | 'nextOrdinal'> {
+  if (!Array.isArray(drafts) || !drafts.length) throw new Error('At least one image occlusion mask is required')
+  let nextOrdinal = previous?.nextOrdinal ?? 1
+  const known = new Map<string, number>([
+    ...(previous?.masks ?? []).map((mask) => [mask.id, mask.ordinal] as const),
+    ...existingCards.filter((card) => card.occlusionId && card.occlusionOrdinal).map((card) => [card.occlusionId!, card.occlusionOrdinal!] as const),
+  ])
+  const masks = drafts.map((draft) => {
+    const maskId = draft.id ?? id()
+    const knownOrdinal = known.get(maskId)
+    if (knownOrdinal && draft.ordinal && draft.ordinal !== knownOrdinal) throw new Error('Image occlusion mask ordinal cannot change')
+    if (!knownOrdinal && draft.ordinal && draft.ordinal < nextOrdinal) throw new Error('Image occlusion mask ordinal cannot be reused')
+    const ordinal = knownOrdinal ?? draft.ordinal ?? nextOrdinal++
+    if (!knownOrdinal && draft.ordinal) nextOrdinal = Math.max(nextOrdinal, draft.ordinal + 1)
+    return { ...draft, id: maskId, ordinal }
+  })
+  return { masks, nextOrdinal }
 }
 
 function canonicalNote(note: LegacyNote): Note {
@@ -349,8 +408,15 @@ export class Collection extends Dexie {
       await transaction.table('noteTypes').toCollection().modify((noteType: LegacyNoteType) => { if (!noteType.kind) noteType.kind = 'standard' })
       if (!await transaction.table('noteTypes').get(BASIC_NOTE_TYPE_ID)) await transaction.table('noteTypes').put(basicNoteType)
     })
+    this.version(8).stores({
+      decks: 'id, name, createdAt', notes: 'id, deckId, typeId, updatedAt', cards: 'id, deckId, noteId, templateId, due, state', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId', deletedEntities: 'key, entityType, entityId, occurredAt', noteMedia: 'id, noteId, digest, side, kind, updatedAt', mediaBlobs: 'digest, verifiedAt', noteTypes: 'id, name, updatedAt',
+    }).upgrade(async (transaction) => {
+      await transaction.table('notes').toCollection().modify((note: Note) => { if (!note.tags) note.tags = [] })
+      await transaction.table('noteTypes').put(imageOcclusionNoteType)
+    })
     this.on('populate', (transaction) => {
       transaction.table('noteTypes').put(basicNoteType)
+      transaction.table('noteTypes').put(imageOcclusionNoteType)
     })
   }
 
@@ -384,6 +450,7 @@ export class Collection extends Dexie {
     return this.transaction('rw', [this.noteTypes, this.outbox], async () => {
       const source = await this.noteTypes.get(typeId)
       if (!source) throw new Error('Note type not found')
+      if (source.kind === 'image-occlusion') throw new Error('Image occlusion type cannot be cloned')
       return this.createNoteType({
         name: name ?? `${source.name} copy`,
         kind: source.kind,
@@ -395,8 +462,8 @@ export class Collection extends Dexie {
 
   private async reconcileCards(note: Note, noteType: NoteType, now: Date, operations: SyncOperation[]) {
     const existing = await this.cards.where('noteId').equals(note.id).toArray()
-    const eligible = this.cardGenerationStatus(noteType, note.fields).eligible
-    const eligibleIds = new Set(eligible.map((template) => cardKey({ templateId: template.id, clozeOrdinal: template.clozeOrdinal })))
+    const eligible = this.cardGenerationStatus(noteType, note.fields, note.imageOcclusion).eligible
+    const eligibleIds = new Set(eligible.map((template) => cardKey({ templateId: template.id, clozeOrdinal: template.clozeOrdinal, occlusionId: template.occlusionId })))
     for (const card of existing) {
       const suspended = !eligibleIds.has(cardKey(card))
       if (Boolean(card.suspended) === suspended) continue
@@ -406,8 +473,8 @@ export class Collection extends Dexie {
     }
     const existingIds = new Set(existing.map(cardKey))
     for (const template of eligible) {
-      if (existingIds.has(cardKey({ templateId: template.id, clozeOrdinal: template.clozeOrdinal }))) continue
-      const card = serializeCard(createEmptyCard(now), { id: `${note.id}:${template.id}${template.clozeOrdinal ? `:c${template.clozeOrdinal}` : ''}`, deckId: note.deckId, noteId: note.id, templateId: template.id, ...(template.clozeOrdinal ? { clozeOrdinal: template.clozeOrdinal } : {}) })
+      if (existingIds.has(cardKey({ templateId: template.id, clozeOrdinal: template.clozeOrdinal, occlusionId: template.occlusionId }))) continue
+      const card = serializeCard(createEmptyCard(now), { id: `${note.id}:${template.id}${template.clozeOrdinal ? `:c${template.clozeOrdinal}` : template.occlusionId ? `:m${template.occlusionId}` : ''}`, deckId: note.deckId, noteId: note.id, templateId: template.id, ...(template.clozeOrdinal ? { clozeOrdinal: template.clozeOrdinal } : {}), ...(template.occlusionId ? { occlusionId: template.occlusionId, occlusionOrdinal: template.occlusionOrdinal } : {}) })
       await this.cards.add(card)
       operations.push({ opId: id(), entityType: 'card', entityId: card.id, action: 'create', occurredAt: now.toISOString(), payload: card })
     }
@@ -446,8 +513,8 @@ export class Collection extends Dexie {
       if (new Set(names).size !== names.length) throw new Error('Field names must be unique')
       if (names.includes('FrontSide')) throw new Error('FrontSide is reserved for template backs')
       for (const template of templates) {
-        validateTemplate(template.front, names, 'front', previous.kind)
-        validateTemplate(template.back, names, 'back', previous.kind)
+        validateTemplate(template.front, names, 'front', previous.kind === 'image-occlusion' ? 'standard' : previous.kind)
+        validateTemplate(template.back, names, 'back', previous.kind === 'image-occlusion' ? 'standard' : previous.kind)
       }
       if (previous.kind === 'cloze' && !clozeField({ kind: previous.kind, fields, templates })) throw new Error('Cloze field not found')
       const currentIds = new Set(fields.map((field) => field.id))
@@ -520,9 +587,16 @@ export class Collection extends Dexie {
     })
   }
 
-  cardGenerationStatus(noteType: NoteType, fields: Record<string, string>) {
+  cardGenerationStatus(noteType: NoteType, fields: Record<string, string>, imageOcclusion?: ImageOcclusion) {
     const skipped: { templateId: string; reason: string }[] = []
-    const eligible: Array<CardTemplate & { clozeOrdinal?: number }> = []
+    const eligible: Array<CardTemplate & { clozeOrdinal?: number; occlusionId?: string; occlusionOrdinal?: number }> = []
+    if (noteType.kind === 'image-occlusion') {
+      if (!imageOcclusion) throw new Error('Image occlusion metadata is required')
+      validateImageOcclusion(imageOcclusion)
+      if (noteType.templates.length !== 1) throw new Error('Image occlusion needs exactly one template')
+      for (const mask of imageOcclusion.masks) eligible.push({ ...noteType.templates[0], occlusionId: mask.id, occlusionOrdinal: mask.ordinal })
+      return { eligible, skipped }
+    }
     if (noteType.kind === 'cloze') {
       const field = clozeField(noteType)
       if (!field) throw new Error('Cloze field not found')
@@ -538,19 +612,77 @@ export class Collection extends Dexie {
     return { eligible, skipped }
   }
 
-  tryCardGenerationStatus(noteType: NoteType, fields: Record<string, string>) {
-    try { return { ok: true as const, value: this.cardGenerationStatus(noteType, fields) } }
+  tryCardGenerationStatus(noteType: NoteType, fields: Record<string, string>, imageOcclusion?: ImageOcclusion) {
+    try { return { ok: true as const, value: this.cardGenerationStatus(noteType, fields, imageOcclusion) } }
     catch (reason) { return { ok: false as const, error: reason instanceof Error ? reason.message : 'Unable to generate cards' } }
   }
 
   private cardIsEligible(noteType: NoteType, note: Note, card: CardRecord): boolean {
     try {
-      return this.cardGenerationStatus(noteType, note.fields).eligible.some((template) =>
-        template.id === card.templateId && template.clozeOrdinal === card.clozeOrdinal &&
-        (noteType.kind !== 'cloze' || card.id === `${note.id}:${template.id}:c${template.clozeOrdinal}`))
+      return this.cardGenerationStatus(noteType, note.fields, note.imageOcclusion).eligible.some((template) =>
+        template.id === card.templateId && template.clozeOrdinal === card.clozeOrdinal && template.occlusionId === card.occlusionId && template.occlusionOrdinal === card.occlusionOrdinal &&
+        (noteType.kind !== 'cloze' || card.id === `${note.id}:${template.id}:c${template.clozeOrdinal}`) &&
+        (noteType.kind !== 'image-occlusion' || card.id === `${note.id}:${template.id}:m${template.occlusionId}`))
     } catch {
       return false
     }
+  }
+
+  async createImageOcclusionNote(deckId: string, input: NewImageOcclusionNote, now = new Date()): Promise<Note> {
+    const definition = validateMedia(input.image)
+    if (definition.kind !== 'image') throw new Error('Image occlusion requires an image')
+    const digest = await digestMedia(input.image)
+    const noteId = id()
+    const mediaId = id()
+    const createdAt = now.toISOString()
+    const imageOcclusion: ImageOcclusion = { version: 1, sourceMediaId: mediaId, imageWidth: input.imageWidth, imageHeight: input.imageHeight, ...resolveMasks(input.masks) }
+    validateImageOcclusion(imageOcclusion)
+    const note: Note = { id: noteId, deckId, type: 'custom', typeId: IMAGE_OCCLUSION_NOTE_TYPE_ID, fields: { header: input.header, backExtra: input.backExtra }, tags: normalizeTags(input.tags), imageOcclusion, createdAt, updatedAt: createdAt }
+    const reference: NoteMediaReference = { id: mediaId, noteId, digest, kind: 'image', mimeType: input.image.type, displayName: input.image.name, side: 'front', playback: 'manual', createdAt, updatedAt: createdAt }
+    const blob: MediaBlob = { digest, blob: input.image, byteLength: input.image.size, mimeType: input.image.type, verifiedAt: createdAt }
+    return this.transaction('rw', [this.decks, this.notes, this.cards, this.noteMedia, this.mediaBlobs, this.outbox], async () => {
+      if (!await this.decks.get(deckId)) throw new Error('Deck not found')
+      await this.mediaBlobs.put(blob)
+      await this.noteMedia.add(reference)
+      await this.notes.add(note)
+      const operations: SyncOperation[] = [
+        { opId: id(), entityType: 'note', entityId: note.id, action: 'create', occurredAt: createdAt, payload: note },
+        { opId: id(), entityType: 'noteMedia', entityId: reference.id, action: 'create', occurredAt: createdAt, payload: reference },
+      ]
+      await this.reconcileCards(note, imageOcclusionNoteType, now, operations)
+      await this.outbox.bulkAdd(operations)
+      return note
+    })
+  }
+
+  async updateImageOcclusionNote(noteId: string, input: UpdateImageOcclusionNote, now = new Date()): Promise<void> {
+    if ((input.imageWidth !== undefined || input.imageHeight !== undefined) && !input.image) throw new Error('Image dimensions require a new source image')
+    const definition = input.image ? validateMedia(input.image) : undefined
+    if (definition && definition.kind !== 'image') throw new Error('Image occlusion requires an image')
+    const digest = input.image ? await digestMedia(input.image) : undefined
+    await this.transaction('rw', [this.notes, this.cards, this.noteMedia, this.mediaBlobs, this.outbox], async () => {
+      const note = await this.notes.get(noteId)
+      if (!note || note.typeId !== IMAGE_OCCLUSION_NOTE_TYPE_ID || !note.imageOcclusion) throw new Error('Image occlusion note not found')
+      const original = note.imageOcclusion
+      const previousCards = await this.cards.where('noteId').equals(noteId).toArray()
+      const resolved = resolveMasks(input.masks ?? original.masks, original, previousCards)
+      const imageOcclusion: ImageOcclusion = { ...original, imageWidth: input.imageWidth ?? original.imageWidth, imageHeight: input.imageHeight ?? original.imageHeight, ...resolved }
+      validateImageOcclusion(imageOcclusion)
+      const updated: Note = { ...note, fields: { header: input.header ?? note.fields.header, backExtra: input.backExtra ?? note.fields.backExtra }, tags: input.tags ? normalizeTags(input.tags) : note.tags ?? [], imageOcclusion, updatedAt: now.toISOString() }
+      const operations: SyncOperation[] = [{ opId: id(), entityType: 'note', entityId: noteId, action: 'update', occurredAt: updated.updatedAt, payload: updated }]
+      if (input.image && digest) {
+        if (input.imageWidth === undefined || input.imageHeight === undefined) throw new Error('New image dimensions are required')
+        const reference = await this.noteMedia.get(original.sourceMediaId)
+        if (!reference || reference.noteId !== noteId || reference.kind !== 'image') throw new Error('Source image reference is missing')
+        const revised: NoteMediaReference = { ...reference, digest, mimeType: input.image.type, displayName: input.image.name, updatedAt: updated.updatedAt }
+        await this.mediaBlobs.put({ digest, blob: input.image, byteLength: input.image.size, mimeType: input.image.type, verifiedAt: updated.updatedAt })
+        await this.noteMedia.put(revised)
+        operations.push({ opId: id(), entityType: 'noteMedia', entityId: revised.id, action: 'update', occurredAt: updated.updatedAt, payload: revised })
+      }
+      await this.notes.put(updated)
+      await this.reconcileCards(updated, imageOcclusionNoteType, now, operations)
+      await this.outbox.bulkAdd(operations)
+    })
   }
 
   async createNote(deckId: string, typeId: string, fields: Record<string, string>, now = new Date()): Promise<Note> {
@@ -558,6 +690,7 @@ export class Collection extends Dexie {
       if (!await this.decks.get(deckId)) throw new Error('Deck not found')
       const noteType = await this.noteTypes.get(typeId)
       if (!noteType) throw new Error('Note type not found')
+      if (noteType.kind === 'image-occlusion') throw new Error('Use the image occlusion editor to create this note')
       const values = Object.fromEntries(noteType.fields.map((field) => [field.id, fields[field.id] ?? '']))
       const note: Note = { id: id(), deckId, type: typeId === BASIC_NOTE_TYPE_ID ? 'basic' : 'custom', typeId, fields: values, createdAt: now.toISOString(), updatedAt: now.toISOString() }
       const cards = this.cardGenerationStatus(noteType, values).eligible.map((template) => serializeCard(createEmptyCard(now), { id: `${note.id}:${template.id}${template.clozeOrdinal ? `:c${template.clozeOrdinal}` : ''}`, deckId, noteId: note.id, templateId: template.id, ...(template.clozeOrdinal ? { clozeOrdinal: template.clozeOrdinal } : {}) }))
@@ -577,6 +710,7 @@ export class Collection extends Dexie {
       if (!note) throw new Error('Note not found')
       const noteType = await this.noteTypes.get(note.typeId)
       if (!noteType) throw new Error('Note type not found')
+      if (noteType.kind === 'image-occlusion') throw new Error('Use the image occlusion editor to update this note')
       const values = Object.fromEntries(noteType.fields.map((field) => [field.id, fields[field.id] ?? '']))
       const updated: Note = { ...note, fields: values, updatedAt: now.toISOString() }
       const changes: SyncOperation[] = [{ opId: id(), entityType: 'note', entityId: noteId, action: 'update', occurredAt: updated.updatedAt, payload: updated }]
@@ -722,9 +856,11 @@ export class Collection extends Dexie {
   }
 
   async removeMedia(referenceId: string, now = new Date()) {
-    await this.transaction('rw', this.noteMedia, this.outbox, async () => {
+    await this.transaction('rw', this.notes, this.noteMedia, this.outbox, async () => {
       const reference = await this.noteMedia.get(referenceId)
       if (!reference) throw new Error('Media reference not found')
+      const note = await this.notes.get(reference.noteId)
+      if (note?.imageOcclusion?.sourceMediaId === referenceId) throw new Error('Cannot remove the source image from an image occlusion note')
       await this.noteMedia.delete(referenceId)
       await this.outbox.add({ opId: id(), entityType: 'noteMedia', entityId: referenceId, action: 'delete', occurredAt: now.toISOString(), payload: { id: referenceId, noteId: reference.noteId, digest: reference.digest } })
     })
@@ -817,6 +953,14 @@ export class Collection extends Dexie {
       // Resolve type and note changes before their cards, even when equal timestamps arrive in index order.
       for (const change of [...changes].sort((left, right) => inboundDependencyOrder[left.entityType] - inboundDependencyOrder[right.entityType])) {
         if (await this.receivedOperations.get(change.opId)) continue
+        if (change.entityType === 'noteMedia') {
+          const previous = await this.noteMedia.get(change.entityId)
+          if (previous) affectedNoteIds.add(previous.noteId)
+        }
+        if (change.entityType === 'noteType' && [BASIC_NOTE_TYPE_ID, IMAGE_OCCLUSION_NOTE_TYPE_ID].includes(change.entityId)) {
+          await this.receivedOperations.add({ opId: change.opId })
+          continue
+        }
         if (change.action !== 'delete') {
           const related = relatedEntityIds(change)
           const deleted = await Promise.all([
@@ -830,6 +974,23 @@ export class Collection extends Dexie {
           }
           if (change.entityType === 'note') {
             const incoming = canonicalNote(change.payload as LegacyNote)
+            if (incoming.typeId === IMAGE_OCCLUSION_NOTE_TYPE_ID) {
+              if (!incoming.imageOcclusion) throw new Error('Synced image occlusion metadata is missing')
+              validateImageOcclusion(incoming.imageOcclusion)
+              if (!incoming.tags || !Array.isArray(incoming.tags)) throw new Error('Synced image occlusion tags are invalid')
+              const previous = await this.notes.get(incoming.id)
+              const previousCards = await this.cards.where('noteId').equals(incoming.id).toArray()
+              const priorOrdinals = new Map<string, number>([
+                ...(previous?.imageOcclusion?.masks ?? []).map((mask) => [mask.id, mask.ordinal] as const),
+                ...previousCards.filter((card) => card.occlusionId && card.occlusionOrdinal).map((card) => [card.occlusionId!, card.occlusionOrdinal!] as const),
+              ])
+              const nextOrdinal = previous?.imageOcclusion?.nextOrdinal ?? 1
+              if (incoming.imageOcclusion.nextOrdinal < nextOrdinal) throw new Error('Synced image occlusion mask ordinal cannot decrease')
+              for (const mask of incoming.imageOcclusion.masks) {
+                const prior = priorOrdinals.get(mask.id)
+                if ((prior !== undefined && prior !== mask.ordinal) || (prior === undefined && mask.ordinal < nextOrdinal)) throw new Error('Synced image occlusion mask ordinal cannot change or be reused')
+              }
+            }
             if (await this.deletedEntities.get(tombstoneKey('noteType', incoming.typeId))) {
               await this.receivedOperations.add({ opId: change.opId })
               continue
@@ -840,6 +1001,15 @@ export class Collection extends Dexie {
             const note = await this.notes.get(incoming.noteId)
             const noteType = note && await this.noteTypes.get(note.typeId)
             const deletedType = note && !noteType && await this.deletedEntities.get(tombstoneKey('noteType', note.typeId))
+            if (note && noteType?.kind === 'image-occlusion') {
+              const existing = await this.cards.get(incoming.id)
+              const mask = note.imageOcclusion?.masks.find((item) => item.id === incoming.occlusionId)
+              const expectedOrdinal = existing?.occlusionOrdinal ?? mask?.ordinal
+              if (!incoming.occlusionId || incoming.id !== `${note.id}:${IMAGE_OCCLUSION_TEMPLATE_ID}:m${incoming.occlusionId}` || incoming.templateId !== IMAGE_OCCLUSION_TEMPLATE_ID || expectedOrdinal !== incoming.occlusionOrdinal) {
+                await this.receivedOperations.add({ opId: change.opId })
+                continue
+              }
+            }
             if (note && (deletedType || (noteType && !this.cardIsEligible(noteType, note, incoming))) && !incoming.suspended) {
               await this.receivedOperations.add({ opId: change.opId })
               continue
@@ -855,13 +1025,25 @@ export class Collection extends Dexie {
               continue
             }
           }
+          if (change.entityType === 'noteMedia') {
+            const reference = change.payload as NoteMediaReference
+            const note = await this.notes.get(reference.noteId)
+            if (note?.imageOcclusion?.sourceMediaId === reference.id &&
+              (reference.kind !== 'image' || !['image/png', 'image/jpeg', 'image/webp'].includes(reference.mimeType) || reference.side !== 'front' || !/^[a-f0-9]{64}$/.test(reference.digest))) {
+              throw new Error('Synced source image reference is invalid')
+            }
+          }
         }
         if (change.action === 'delete' && change.entityType === 'card') {
           const existingCard = await this.cards.get(change.entityId)
           const note = existingCard && await this.notes.get(existingCard.noteId)
           const noteType = note && await this.noteTypes.get(note.typeId)
           const deletedType = note && !noteType && await this.deletedEntities.get(tombstoneKey('noteType', note.typeId))
-          if (existingCard && note && (deletedType || (noteType && !noteType.templates.some((template) => template.id === existingCard.templateId)))) {
+          const retainedOcclusion = existingCard && note && noteType?.kind === 'image-occlusion' &&
+            existingCard.templateId === IMAGE_OCCLUSION_TEMPLATE_ID && Boolean(existingCard.occlusionId) &&
+            existingCard.id === `${note.id}:${IMAGE_OCCLUSION_TEMPLATE_ID}:m${existingCard.occlusionId}` &&
+            Number.isSafeInteger(existingCard.occlusionOrdinal) && (existingCard.occlusionOrdinal ?? 0) > 0
+          if (existingCard && note && (retainedOcclusion || deletedType || (noteType && (this.cardIsEligible(noteType, note, existingCard) || !noteType.templates.some((template) => template.id === existingCard.templateId))))) {
             await this.receivedOperations.add({ opId: change.opId })
             continue
           }
@@ -903,6 +1085,10 @@ export class Collection extends Dexie {
         else if (change.entityType === 'review') await this.reviewEntries.put(change.payload as ReviewEntry)
         await this.receivedOperations.add({ opId: change.opId })
         if (change.entityType === 'note') affectedNoteIds.add(change.entityId)
+        if (change.entityType === 'noteMedia') {
+          const reference = change.payload as Partial<NoteMediaReference> | undefined
+          if (reference?.noteId) affectedNoteIds.add(reference.noteId)
+        }
         if (change.entityType === 'card') {
           const noteId = (change.payload as Partial<CardRecord> | undefined)?.noteId
           if (noteId) affectedNoteIds.add(noteId)
@@ -916,10 +1102,14 @@ export class Collection extends Dexie {
         const note = await this.notes.get(noteId)
         if (!note) continue
         const noteType = await this.noteTypes.get(note.typeId)
-        const generation = noteType && this.tryCardGenerationStatus(noteType, note.fields)
-        const eligible = new Set(generation?.ok ? generation.value.eligible.map((template) => cardKey({ templateId: template.id, clozeOrdinal: template.clozeOrdinal })) : [])
+        if (noteType?.kind === 'image-occlusion') {
+          const source = note.imageOcclusion && await this.noteMedia.get(note.imageOcclusion.sourceMediaId)
+          if (!source || source.noteId !== note.id || source.kind !== 'image' || !['image/png', 'image/jpeg', 'image/webp'].includes(source.mimeType) || source.side !== 'front' || !/^[a-f0-9]{64}$/.test(source.digest)) throw new Error('Image occlusion source image reference is invalid')
+        }
+        const generation = noteType && this.tryCardGenerationStatus(noteType, note.fields, note.imageOcclusion)
+        const eligible = new Set(generation?.ok ? generation.value.eligible.map((template) => cardKey({ templateId: template.id, clozeOrdinal: template.clozeOrdinal, occlusionId: template.occlusionId })) : [])
         for (const card of await this.cards.where('noteId').equals(noteId).toArray()) {
-          const active = eligible.has(cardKey(card)) && (noteType?.kind !== 'cloze' || card.id === `${noteId}:${card.templateId}:c${card.clozeOrdinal}`)
+          const active = eligible.has(cardKey(card)) && (noteType?.kind !== 'cloze' || card.id === `${noteId}:${card.templateId}:c${card.clozeOrdinal}`) && (noteType?.kind !== 'image-occlusion' || card.id === `${noteId}:${card.templateId}:m${card.occlusionId}`)
           if (Boolean(card.suspended) !== !active) await this.cards.put({ ...card, suspended: !active })
         }
       }

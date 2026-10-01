@@ -9,7 +9,7 @@ type DraftTemplate = { key: string; id?: string; name: string; front: string; ba
 
 function TypeEditor({ noteType, onClose }: { noteType?: NoteType; onClose: () => void }) {
   const [name, setName] = useState(noteType?.name ?? '')
-  const [kind, setKind] = useState<NoteType['kind']>(noteType?.kind ?? 'standard')
+  const [kind, setKind] = useState<Exclude<NoteType['kind'], 'image-occlusion'>>(noteType?.kind === 'cloze' ? 'cloze' : 'standard')
   const [fields, setFields] = useState<DraftField[]>(() => noteType?.fields.map((field) => ({ ...field, key: field.id })) ?? [
     { key: crypto.randomUUID(), name: 'Front' }, { key: crypto.randomUUID(), name: 'Back' },
   ])
@@ -39,7 +39,7 @@ function TypeEditor({ noteType, onClose }: { noteType?: NoteType; onClose: () =>
     setFields((current) => current.filter((_, position) => position !== index))
   }
 
-  function changeKind(next: NoteType['kind']) {
+  function changeKind(next: Exclude<NoteType['kind'], 'image-occlusion'>) {
     setKind(next)
     setPreviewTemplate(0)
     setPreviewOrdinal(1)
@@ -91,7 +91,7 @@ function TypeEditor({ noteType, onClose }: { noteType?: NoteType; onClose: () =>
         <h2 id="type-dialog-title">{noteType ? `Edit ${noteType.name}` : 'Create note type'}</h2>
         <form onSubmit={(event) => void save(event)}>
           <label>Note type name<input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label>
-          <label>Card generation<select value={kind} disabled={Boolean(noteType)} onChange={(event) => changeKind(event.target.value as NoteType['kind'])}><option value="standard">Standard</option><option value="cloze">Cloze deletions</option></select></label>
+          <label>Card generation<select value={kind} disabled={Boolean(noteType)} onChange={(event) => changeKind(event.target.value as Exclude<NoteType['kind'], 'image-occlusion'>)}><option value="standard">Standard</option><option value="cloze">Cloze deletions</option></select></label>
           <section className="editor-section" aria-label="Fields">
             <h3>Fields</h3>
             {fields.map((field, index) => (

@@ -488,7 +488,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
       <div className="review-progress"><span>REVIEW // {String(reviewsRecorded + 1).padStart(2, '0')}</span><button className="text-button" onClick={onBack}>End session</button></div>
       <article className="review-card">
         <span className="card-side">{showAnswer ? 'ANSWER' : 'QUESTION'}</span>
-        <TemplatePreview key={card.id} title="Review card" front={template.front} back={template.back} css={template.css} fields={fields} kind={noteType.kind} ordinal={card.clozeOrdinal} side={showAnswer ? 'back' : 'front'} />
+        <TemplatePreview key={card.id} title="Review card" front={template.front} back={template.back} css={template.css} fields={fields} kind={noteType.kind === 'image-occlusion' ? 'standard' : noteType.kind} ordinal={card.clozeOrdinal} side={showAnswer ? 'back' : 'front'} />
         {noteType.id === BASIC_NOTE_TYPE_ID && media.filter((reference) => reference.side === 'front').map((reference) => <MediaRenderer key={reference.id} reference={reference} automatic />)}
         {noteType.id === BASIC_NOTE_TYPE_ID && showAnswer && media.filter((reference) => reference.side === 'back').map((reference) => <MediaRenderer key={reference.id} reference={reference} automatic />)}
         {typedAnswer !== undefined && !showAnswer && <label className="typed-answer">Type your answer

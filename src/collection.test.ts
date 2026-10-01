@@ -445,7 +445,7 @@ describe('local collection', () => {
     const input = { name: 'Words', fields: [{ name: 'Word' }], templates: [{ name: 'Card', front: '{{Missing}}', back: '{{Word}}', css: '' }] }
     await expect(collection.createNoteType(input)).rejects.toThrow(/unknown field/i)
     await expect(collection.createNoteType({ ...input, templates: [{ ...input.templates[0], front: '{{FrontSide}}' }] })).rejects.toThrow(/FrontSide.*front/i)
-    await expect(collection.noteTypes.count()).resolves.toBe(1)
+    await expect(collection.noteTypes.count()).resolves.toBe(2)
   })
 
   test('keeps the protected Basic type when an older Basic note syncs in twice', async () => {
