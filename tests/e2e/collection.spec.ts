@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { execFile as execFileCallback } from 'node:child_process'
 import { promisify } from 'node:util'
 import initSqlJs from 'sql.js'
+import { zipSync } from 'fflate'
 import { Deck as AnkiDeck, Note as AnkiNote, Notetype as AnkiNotetype, Package as AnkiPackage } from 'ankipack'
 
 const REVIEW_TIME = new Date('2026-09-30T12:00:00.000Z')
@@ -93,6 +94,28 @@ async function drawOcclusionMask(canvas: import('@playwright/test').Locator, poi
 test.beforeEach(async ({ page }) => {
   await page.clock.setFixedTime(REVIEW_TIME)
   await page.goto('/')
+})
+
+test('unsafe archive previews keep existing Japanese material intact', async ({ page }) => {
+  await createDeck(page, 'Protected import')
+  await page.getByRole('button', { name: 'Open Protected import' }).click()
+  await page.getByRole('button', { name: 'Add note' }).click()
+  await page.getByLabel('Front').fill('守る')
+  await page.getByLabel('Back').fill('protect')
+  await page.getByRole('button', { name: 'Save note' }).click()
+  await page.goto('/#decks')
+  const archive = Buffer.from(zipSync({ '../media': new Uint8Array() }))
+  for (const extension of ['apkg', 'colpkg']) {
+    await page.getByRole('button', { name: 'Import Anki package' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Import Anki package' })
+    await dialog.getByLabel('Anki package', { exact: true }).setInputFiles({ name: `unsafe.${extension}`, mimeType: 'application/octet-stream', buffer: archive })
+    await expect(dialog.getByRole('alert')).toContainText('unsafe entry name')
+    await expect(dialog.getByRole('button', { name: 'Import package' })).toBeDisabled()
+    await dialog.getByRole('button', { name: 'Cancel' }).click()
+  }
+  await page.getByRole('button', { name: 'Open Protected import' }).click()
+  await expect(page.getByText('守る', { exact: true })).toBeVisible()
+  await expect(page.getByText('NEW 1', { exact: true })).toBeVisible()
 })
 
 test('learner previews and imports an Anki package before studying its media offline', async ({ page, browserName }) => {

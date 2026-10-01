@@ -5,6 +5,7 @@ import { DEFAULT_DECK_OPTION_GROUP_ID, State, type CardRecord, type Collection, 
 import { parseAnkiImageOcclusion, type AnkiImageOcclusionFields } from './image-occlusion-interchange'
 import { digestMedia, validateMedia, type MediaKind, type MediaSide } from './media'
 import { validateTemplate } from './template-renderer'
+import { ANKI_ARCHIVE_LIMITS, validateAnkiArchive } from './anki-archive'
 
 export interface AnkiImportIssue {
   severity: 'info' | 'warning' | 'error'
@@ -424,14 +425,16 @@ export class PreparedAnkiImport {
 export async function prepareAnkiImport(file: File, collection: Collection, options: PrepareAnkiImportOptions = {}): Promise<PreparedAnkiImport> {
   if (!/\.(apkg|colpkg)$/i.test(file.name)) throw new Error('Choose an Anki .apkg or .colpkg package')
   if (!file.size) throw new Error('The selected Anki package is empty')
-  if (file.size > 512 * 1024 * 1024) throw new Error('The selected Anki package is larger than the 512 MB import limit')
+  if (file.size > ANKI_ARCHIVE_LIMITS.compressedBytes) throw new Error('The selected Anki package is larger than the 128 MiB compressed import limit')
   const now = options.now ?? new Date()
   const importedAt = now.toISOString()
-  const SQL = options.SQL ?? await browserSql()
   let source: AnkiCollection
   try {
+    const bytes = new Uint8Array(await blobBytes(file))
+    validateAnkiArchive(bytes)
+    const SQL = options.SQL ?? await browserSql()
     const { Collection: AnkiPackageCollection } = await import('ankipack')
-    source = AnkiPackageCollection.open(new Uint8Array(await blobBytes(file)), SQL)
+    source = AnkiPackageCollection.open(bytes, SQL)
   } catch (reason) {
     console.error('Anki package preview failed', reason)
     throw new Error(`Unable to read “${file.name}”: ${reason instanceof Error ? reason.message : 'invalid Anki package'}`)

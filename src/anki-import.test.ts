@@ -4,6 +4,8 @@ import { Collection as AnkiCollection, Deck, Note as AnkiNote, Notetype, Package
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest'
 import { DEFAULT_DECK_OPTION_GROUP_ID, createCollection, State, type Collection } from './collection'
 import { prepareAnkiImport } from './anki-import'
+import { zipSync } from 'fflate'
+import { ANKI_ARCHIVE_LIMITS } from './anki-archive'
 
 let SQL: SqlJsStatic
 let collection: Collection | undefined
@@ -165,6 +167,38 @@ async function executableTemplatePackage() {
 }
 
 describe('Anki package import', () => {
+  test.each(['apkg', 'colpkg'])('rejects hostile %s archives without collection or outbox mutation', async (extension) => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const hugeEntry = zipSync({ 'collection.anki2': new Uint8Array(1) })
+    const view = new DataView(hugeEntry.buffer)
+    view.setUint32(22, ANKI_ARCHIVE_LIMITS.entryBytes + 1, true)
+    for (let offset = 0; offset <= hugeEntry.length - 46; offset += 1) {
+      if (view.getUint32(offset, true) === 0x02014b50) view.setUint32(offset + 24, ANKI_ARCHIVE_LIMITS.entryBytes + 1, true)
+    }
+    const hugeCount = zipSync({ media: new Uint8Array() })
+    const countView = new DataView(hugeCount.buffer)
+    countView.setUint16(hugeCount.length - 22 + 8, ANKI_ARCHIVE_LIMITS.entries + 1, true)
+    countView.setUint16(hugeCount.length - 22 + 10, ANKI_ARCHIVE_LIMITS.entries + 1, true)
+    const hugeWindow = zipSync({ 'collection.anki21b': Uint8Array.from([0x28, 0xb5, 0x2f, 0xfd, 0, 0x88, 1, 0, 0]) })
+    // No frame declares its output size. A few kilobytes of RLE frames emit
+    // more than 64 MiB, exercising the real streamed cap rather than metadata.
+    const frame = Uint8Array.from([0x28, 0xb5, 0x2f, 0xfd, 0, 0x38, 3, 0, 0x10, 65])
+    const frames = new Uint8Array(frame.length * (ANKI_ARCHIVE_LIMITS.entryBytes / 131_072 + 1))
+    for (let offset = 0; offset < frames.length; offset += frame.length) frames.set(frame, offset)
+    const actualBomb = zipSync({ 'collection.anki21b': frames })
+    const fixtures = [hugeEntry, hugeCount, hugeWindow, actualBomb, zipSync({ '../media': new Uint8Array() }), Uint8Array.from([1, 2, 3])]
+    for (const bytes of fixtures) {
+      const file = new File([bytes.slice().buffer], `hostile.${extension}`)
+      await expect(prepareAnkiImport(file, collection, { SQL })).rejects.toThrow(/Unable to read/i)
+      expect(await collection.decks.count()).toBe(0)
+      expect(await collection.notes.count()).toBe(0)
+      expect(await collection.cards.count()).toBe(0)
+      expect(await collection.reviewEntries.count()).toBe(0)
+      expect(await collection.noteMedia.count()).toBe(0)
+      expect(await collection.mediaBlobs.count()).toBe(0)
+      expect(await collection.pendingOperations()).toHaveLength(0)
+    }
+  })
   test('previews and transactionally imports templates, scheduling, history, tags, and media from a modern package', async () => {
     collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
     const prepared = await prepareAnkiImport(await japanesePackage(), collection, { SQL, now: new Date('2026-10-01T12:00:00.000Z') })
