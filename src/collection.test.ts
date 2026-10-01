@@ -90,6 +90,16 @@ describe('local collection', () => {
     await expect(collection.reviewEntries.where('cardId').equals(firstCard.id).toArray()).resolves.toEqual(history)
   })
 
+  test('syncs Default settings while rejecting a changed protected-group identity', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const defaults = (await collection.deckOptionGroups.get('default'))!
+    const changedSettings = { ...defaults, dailyNewLimit: 7, updatedAt: '2026-10-01T10:00:00.000Z' }
+
+    await collection.applyRemoteChanges([{ opId: 'default-settings', entityType: 'deckOptionGroup', entityId: defaults.id, action: 'update', occurredAt: changedSettings.updatedAt, payload: changedSettings }], 1)
+    await expect(collection.deckOptionGroups.get(defaults.id)).resolves.toMatchObject({ name: 'Default', protected: true, dailyNewLimit: 7 })
+    await expect(collection.applyRemoteChanges([{ opId: 'changed-default-name', entityType: 'deckOptionGroup', entityId: defaults.id, action: 'update', occurredAt: '2026-10-01T10:01:00.000Z', payload: { ...changedSettings, name: 'Changed default', updatedAt: '2026-10-01T10:01:00.000Z' } }], 2)).rejects.toThrow(/Default deck option group/i)
+  })
+
   test('aggregates descendant queues while enforcing each owning deck option group daily caps from review pre-state', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const active = collection
@@ -114,6 +124,56 @@ describe('local collection', () => {
     expect(queue.filter((card) => card.deckId === child.id && card.state === State.New)).toHaveLength(1)
     expect(queue).toEqual(expect.arrayContaining([reviewed]))
     expect(queue.find((card) => card.id === reviewDue.id)).toBeUndefined()
+  })
+
+  test('returns an empty queue when an active deck has been deleted in another tab', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Transient')
+    await collection.createBasicNote(deck.id, { front: '前', back: 'back' })
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+
+    await expect(collection.dueCards(deck.id, new Date('2026-10-01T12:00:00.000Z'))).resolves.toEqual([])
+  })
+
+  test('applies new-card caps to the learner local study day across a UTC midnight offset', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const group = await collection.createDeckOptionGroup('One per local day')
+    await collection.updateDeckOptionGroup(group.id, { dailyNewLimit: 1, dailyReviewLimit: 10, desiredRetention: 0.9, learningSteps: ['1m'], relearningSteps: ['10m'], newCardOrder: 'added', reviewCardOrder: 'due' })
+    const deck = await collection.createDeck('Local day', { optionGroupId: group.id })
+    const first = await collection.createBasicNote(deck.id, { front: 'first', back: 'first' })
+    const second = await collection.createBasicNote(deck.id, { front: 'second', back: 'second' })
+    const firstCard = (await collection.cards.where('noteId').equals(first.id).first())!
+    const secondCard = (await collection.cards.where('noteId').equals(second.id).first())!
+    const localMidnight = new Date(2026, 9, 1, 0, 0, 0, 0)
+    const previousLocalDay = new Date(localMidnight.getTime() - 15 * 60 * 1000)
+    const currentLocalDay = new Date(localMidnight.getTime() + 15 * 60 * 1000)
+    await collection.cards.update(firstCard.id, { state: State.Learning, due: new Date(currentLocalDay.getTime() + 60 * 60 * 1000).toISOString() })
+    await collection.reviewEntries.add({ id: 'previous-local-day', cardId: firstCard.id, deckId: deck.id, rating: Rating.Good, state: State.New, due: firstCard.due, stability: 1, difficulty: 5, elapsedDays: 0, lastElapsedDays: 0, scheduledDays: 0, learningSteps: 1, reviewedAt: previousLocalDay.toISOString() })
+
+    await expect(collection.dueCards(deck.id, currentLocalDay)).resolves.toEqual([expect.objectContaining({ id: secondCard.id })])
+  })
+
+  test('uses deck identity to make parent queues deterministic when child groups use different orders', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const timestamp = '2026-10-01T00:00:00.000Z'
+    await collection.deckOptionGroups.bulkAdd([
+      { id: 'a-due-options', name: 'Due', protected: false, dailyNewLimit: 10, dailyReviewLimit: 10, desiredRetention: 0.9, learningSteps: ['1m'], relearningSteps: ['10m'], newCardOrder: 'added', reviewCardOrder: 'due', createdAt: timestamp, updatedAt: timestamp },
+      { id: 'z-random-options', name: 'Random', protected: false, dailyNewLimit: 10, dailyReviewLimit: 10, desiredRetention: 0.9, learningSteps: ['1m'], relearningSteps: ['10m'], newCardOrder: 'random', reviewCardOrder: 'random', createdAt: timestamp, updatedAt: timestamp },
+    ])
+    await collection.decks.bulkAdd([
+      { id: 'parent', name: 'Parent', parentId: null, optionGroupId: 'default', createdAt: timestamp, updatedAt: timestamp },
+      { id: 'a-due-deck', name: 'Due', parentId: 'parent', optionGroupId: 'a-due-options', createdAt: timestamp, updatedAt: timestamp },
+      { id: 'z-random-deck', name: 'Random', parentId: 'parent', optionGroupId: 'z-random-options', createdAt: timestamp, updatedAt: timestamp },
+    ])
+    await collection.cards.bulkAdd([
+      directCard('a-new', 'a-due-deck', 'a-note', State.New, '2026-10-01T09:00:00.000Z'),
+      directCard('z', 'z-random-deck', 'z-note', State.New, '2026-10-01T08:00:00.000Z'),
+    ])
+
+    await expect(collection.dueCards('parent', new Date('2026-10-01T12:00:00.000Z'))).resolves.toEqual([
+      expect.objectContaining({ id: 'a-new' }),
+      expect.objectContaining({ id: 'z' }),
+    ])
   })
 
   test('orders new and review cards according to their group with a deterministic per-day random order', async () => {

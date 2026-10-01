@@ -359,8 +359,14 @@ function schedulerFor(group: DeckOptionGroup) {
   })
 }
 
-function utcDay(value: Date) {
-  return value.toISOString().slice(0, 10)
+function studyDay(value: Date) {
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`
+}
+
+function studyDayWindow(value: Date) {
+  const start = new Date(value.getFullYear(), value.getMonth(), value.getDate())
+  const end = new Date(value.getFullYear(), value.getMonth(), value.getDate() + 1)
+  return { start: start.getTime(), end: end.getTime() }
 }
 
 function stableRank(value: string) {
@@ -1270,7 +1276,7 @@ export class Collection extends Dexie {
   async dueCards(deckId: string, now = new Date()): Promise<CardRecord[]> {
     return this.transaction('r', [this.decks, this.deckOptionGroups, this.notes, this.cards, this.reviewEntries], async () => {
       const subtree = await this.deckSubtree(deckId)
-      if (!subtree.length) throw new Error('Deck not found')
+      if (!subtree.length) return []
       const deckIds = subtree.map((deck) => deck.id)
       const [cards, notes, groups, reviewEntries] = await Promise.all([
         this.cards.where('deckId').anyOf(deckIds).toArray(),
@@ -1281,8 +1287,7 @@ export class Collection extends Dexie {
       const decks = new Map(subtree.map((deck) => [deck.id, deck]))
       const groupsById = new Map(groups.map((group) => [group.id, group]))
       const notesById = new Map(notes.map((note) => [note.id, note]))
-      const start = new Date(`${utcDay(now)}T00:00:00.000Z`).getTime()
-      const end = start + 24 * 60 * 60 * 1000
+      const { start, end } = studyDayWindow(now)
       const reviewedToday = new Map<string, { new: number; review: number }>()
       for (const review of reviewEntries) {
         const timestamp = new Date(review.reviewedAt).getTime()
@@ -1292,32 +1297,33 @@ export class Collection extends Dexie {
         if (review.state === State.Review) totals.review += 1
         reviewedToday.set(review.deckId, totals)
       }
-      const sort = (candidates: CardRecord[], kind: 'new' | 'review' | 'learning') => candidates.sort((left, right) => {
-        const leftDeck = decks.get(left.deckId)!
-        const rightDeck = decks.get(right.deckId)!
-        const leftGroup = groupsById.get(leftDeck.optionGroupId)
-        const rightGroup = groupsById.get(rightDeck.optionGroupId)
-        if (!leftGroup || !rightGroup) throw new Error('Deck option group not found')
-        const random = kind === 'new' ? leftGroup.newCardOrder === 'random' : kind === 'review' ? leftGroup.reviewCardOrder === 'random' : false
-        const rightRandom = kind === 'new' ? rightGroup.newCardOrder === 'random' : kind === 'review' ? rightGroup.reviewCardOrder === 'random' : false
-        const leftKey = random ? String(stableRank(`${utcDay(now)}:${left.deckId}:${left.id}`)).padStart(10, '0') : kind === 'new' ? notesById.get(left.noteId)?.createdAt ?? left.due : left.due
-        const rightKey = rightRandom ? String(stableRank(`${utcDay(now)}:${right.deckId}:${right.id}`)).padStart(10, '0') : kind === 'new' ? notesById.get(right.noteId)?.createdAt ?? right.due : right.due
-        return leftKey.localeCompare(rightKey) || left.deckId.localeCompare(right.deckId) || left.id.localeCompare(right.id)
+      const orderKey = (card: CardRecord, group: DeckOptionGroup, kind: 'new' | 'review' | 'learning') => {
+        const random = kind === 'new' ? group.newCardOrder === 'random' : kind === 'review' ? group.reviewCardOrder === 'random' : false
+        if (random) return String(stableRank(`${studyDay(now)}:${card.deckId}:${card.id}`)).padStart(10, '0')
+        return kind === 'new' ? notesById.get(card.noteId)?.createdAt ?? card.due : card.due
+      }
+      const sortWithinDeck = (candidates: CardRecord[], group: DeckOptionGroup, kind: 'new' | 'review' | 'learning') => candidates.sort((left, right) => orderKey(left, group, kind).localeCompare(orderKey(right, group, kind)) || left.id.localeCompare(right.id))
+      const sortQueue = (candidates: CardRecord[], kind: 'new' | 'review' | 'learning') => candidates.sort((left, right) => {
+        if (left.deckId !== right.deckId) return left.deckId.localeCompare(right.deckId)
+        const deck = decks.get(left.deckId)!
+        const group = groupsById.get(deck.optionGroupId)
+        if (!group) throw new Error('Deck option group not found')
+        return orderKey(left, group, kind).localeCompare(orderKey(right, group, kind)) || left.id.localeCompare(right.id)
       })
       const selected: CardRecord[] = []
       for (const deck of subtree) {
         const group = groupsById.get(deck.optionGroupId)
         if (!group) throw new Error('Deck option group not found')
         const own = cards.filter((card) => card.deckId === deck.id && !card.suspended)
-        const learning = sort(own.filter((card) => (card.state === State.Learning || card.state === State.Relearning) && new Date(card.due).getTime() <= now.getTime()), 'learning')
-        const reviewsDue = sort(own.filter((card) => card.state === State.Review && new Date(card.due).getTime() <= now.getTime()), 'review')
-        const newCards = sort(own.filter((card) => card.state === State.New), 'new')
+        const learning = sortWithinDeck(own.filter((card) => (card.state === State.Learning || card.state === State.Relearning) && new Date(card.due).getTime() <= now.getTime()), group, 'learning')
+        const reviewsDue = sortWithinDeck(own.filter((card) => card.state === State.Review && new Date(card.due).getTime() <= now.getTime()), group, 'review')
+        const newCards = sortWithinDeck(own.filter((card) => card.state === State.New), group, 'new')
         const totals = reviewedToday.get(deck.id) ?? { new: 0, review: 0 }
         selected.push(...learning, ...reviewsDue.slice(0, Math.max(0, group.dailyReviewLimit - totals.review)), ...newCards.slice(0, Math.max(0, group.dailyNewLimit - totals.new)))
       }
-      const learning = sort(selected.filter((card) => card.state === State.Learning || card.state === State.Relearning), 'learning')
-      const orderedReviews = sort(selected.filter((card) => card.state === State.Review), 'review')
-      const newCards = sort(selected.filter((card) => card.state === State.New), 'new')
+      const learning = sortQueue(selected.filter((card) => card.state === State.Learning || card.state === State.Relearning), 'learning')
+      const orderedReviews = sortQueue(selected.filter((card) => card.state === State.Review), 'review')
+      const newCards = sortQueue(selected.filter((card) => card.state === State.New), 'new')
       return [...learning, ...orderedReviews, ...newCards]
     })
   }
@@ -1423,6 +1429,7 @@ export class Collection extends Dexie {
           if (change.entityType === 'deckOptionGroup') {
             const incoming = canonicalDeckOptionGroup(change.payload as LegacyDeckOptionGroup)
             if (!incoming || incoming.id !== change.entityId || !requiredText(incoming.name, 'Deck option group name') || (incoming.id === DEFAULT_DECK_OPTION_GROUP_ID ? !incoming.protected : incoming.protected)) throw new Error('Synced deck option group is invalid')
+            if (incoming.id === DEFAULT_DECK_OPTION_GROUP_ID && incoming.name !== defaultDeckOptionGroup.name) throw new Error('The Default deck option group identity cannot change')
           }
           if (change.entityType === 'deck') {
             const incoming = canonicalDeck(change.payload as LegacyDeck)
@@ -1572,7 +1579,13 @@ export class Collection extends Dexie {
             await this.reviewEntries.delete(change.entityId)
           }
         } else if (change.entityType === 'deck') await this.decks.put(canonicalDeck(change.payload as LegacyDeck))
-        else if (change.entityType === 'deckOptionGroup') await this.deckOptionGroups.put(canonicalDeckOptionGroup(change.payload as LegacyDeckOptionGroup))
+        else if (change.entityType === 'deckOptionGroup') {
+          const incoming = canonicalDeckOptionGroup(change.payload as LegacyDeckOptionGroup)
+          if (incoming.id === DEFAULT_DECK_OPTION_GROUP_ID) {
+            const existing = await this.deckOptionGroups.get(DEFAULT_DECK_OPTION_GROUP_ID)
+            await this.deckOptionGroups.put({ ...(existing ?? defaultDeckOptionGroup), ...copiedDeckOptionSettings(incoming), updatedAt: incoming.updatedAt })
+          } else await this.deckOptionGroups.put(incoming)
+        }
         else if (change.entityType === 'note') await this.notes.put(canonicalNote(change.payload as LegacyNote))
         else if (change.entityType === 'card') await this.cards.put(canonicalCard(change.payload as LegacyCard))
         else if (change.entityType === 'noteMedia') await this.noteMedia.put(change.payload as NoteMediaReference)
