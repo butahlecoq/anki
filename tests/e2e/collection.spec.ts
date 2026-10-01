@@ -183,6 +183,26 @@ test('a card emptied during review leaves the session and cannot reenter until r
   await editor.close()
 })
 
+test('deleting the active card in another tab ends the review session', async ({ context, page }) => {
+  await createDeck(page, 'Temporary')
+  await page.getByRole('button', { name: 'Open Temporary' }).click()
+  await page.getByRole('button', { name: 'Add note' }).click()
+  await page.getByLabel('Front').fill('猫')
+  await page.getByLabel('Back').fill('cat')
+  await page.getByRole('button', { name: 'Save note' }).click()
+  const deckUrl = page.url()
+  await page.getByRole('button', { name: 'Study now' }).click()
+  await expect(page.frameLocator('iframe[title="Review card"]').getByText('猫')).toBeVisible()
+
+  const editor = await context.newPage()
+  await editor.goto(deckUrl)
+  editor.once('dialog', (dialog) => dialog.accept())
+  await editor.getByRole('button', { name: 'Delete deck' }).click()
+  await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
+  await expect(page.getByText('0 reviews recorded')).toBeVisible()
+  await editor.close()
+})
+
 test('empty card warning and type deletion preserve mapped note values', async ({ page }) => {
   await page.getByRole('link', { name: 'Note types' }).click()
   await page.getByRole('button', { name: 'Create note type' }).click()
@@ -309,9 +329,13 @@ test('persistent profile reopens offline and continues a remaining Japanese revi
 
     const deckId = await firstPage.evaluate(() => window.location.hash.split('/')[1])
     await firstPage.getByRole('button', { name: 'Study now' }).click()
+    const firstReview = firstPage.frameLocator('iframe[title="Review card"]').locator('body')
+    await expect(firstReview).toHaveText(/^(猫|犬)$/)
+    const firstFront = (await firstReview.textContent())?.trim()
+    const remainingFront = firstFront === '猫' ? '犬' : '猫'
     await firstPage.getByRole('button', { name: 'Show answer' }).click()
     await firstPage.getByRole('button', { name: /^Good · / }).click()
-    await expect(firstPage.frameLocator('iframe[title="Review card"]').locator('body')).toContainText(/猫|犬/)
+    await expect(firstReview).toHaveText(remainingFront)
     await firstPage.evaluate(async () => { await navigator.serviceWorker.ready })
 
     await firstContext.close()
@@ -331,7 +355,7 @@ test('persistent profile reopens offline and continues a remaining Japanese revi
     await expect(reopenedPage.getByText('NEW 1')).toBeVisible()
     await expect(reopenedPage.getByText('LEARNING 1')).toBeVisible()
     await reopenedPage.getByRole('button', { name: 'Study now' }).click()
-    await expect(reopenedPage.frameLocator('iframe[title="Review card"]').locator('body')).toContainText(/猫|犬/)
+    await expect(reopenedPage.frameLocator('iframe[title="Review card"]').locator('body')).toHaveText(remainingFront)
     await reopenedPage.getByRole('button', { name: 'Show answer' }).click()
     await expect(reopenedPage.getByRole('button', { name: /^Good · / })).toBeVisible()
     await reopenedPage.getByRole('button', { name: /^Good · / }).click()

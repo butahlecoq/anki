@@ -380,7 +380,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   const note = useLiveQuery(async () => card ? await collection.notes.get(card.noteId) ?? null : undefined, [card?.noteId])
   const noteType = useLiveQuery(async () => note ? await collection.noteTypes.get(note.typeId) ?? null : undefined, [note?.typeId])
   const media = useLiveQuery(() => card ? collection.mediaForNote(card.noteId) : [], [card?.noteId], [])
-  const choices = useLiveQuery(() => cardId ? collection.reviewChoices(cardId, new Date()) : [], [cardId], [])
+  const choices = useLiveQuery(() => card ? collection.reviewChoices(card.id, new Date()) : [], [card?.id], [])
   const template = noteType?.templates.find((candidate) => candidate.id === card?.templateId)
   const unavailable = card === null || note === null || noteType === null ||
     Boolean(card?.suspended) || (Boolean(noteType && card) && !template) ||
@@ -391,7 +391,8 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   }, [deckId])
 
   useEffect(() => {
-    if (cardId && card !== undefined && note !== undefined && noteType !== undefined && unavailable) {
+    if (cardId && unavailable && (card === null || note === null || noteType === null ||
+      (card !== undefined && note !== undefined && noteType !== undefined))) {
       void collection.dueCards(deckId, new Date()).then((cards) => {
         const dueIds = new Set(cards.map((dueCard) => dueCard.id))
         setShowAnswer(false)

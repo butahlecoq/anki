@@ -1,6 +1,8 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
-import { afterEach, describe, expect, test } from 'vitest'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 import { App } from './App'
+import { collection } from './collection'
+import { CollectionWorkspace } from './CollectionWorkspace'
 
 const serviceWorkerDescriptor = Object.getOwnPropertyDescriptor(navigator, 'serviceWorker')
 
@@ -47,4 +49,21 @@ test('waits for service-worker readiness before claiming the offline shell is re
 
   expect(screen.getByRole('status')).toHaveTextContent('Preparing offline shell')
   expect(screen.queryByText('Offline shell ready')).not.toBeInTheDocument()
+})
+
+test('a stale queue entry whose card was deleted completes review', async () => {
+  const deck = await collection.createDeck(`Deleted card ${crypto.randomUUID()}`)
+  const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
+  const [card] = await collection.cards.where('noteId').equals(note.id).toArray()
+  await collection.cards.delete(card.id)
+  const dueCards = vi.spyOn(collection, 'dueCards').mockResolvedValueOnce([card])
+  try {
+    window.location.hash = `#review/${deck.id}`
+    render(<CollectionWorkspace />)
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Session complete' })).toBeVisible())
+    expect(screen.getByText('0 reviews recorded')).toBeVisible()
+  } finally {
+    dueCards.mockRestore()
+    await collection.deleteDeck(deck.id)
+  }
 })
