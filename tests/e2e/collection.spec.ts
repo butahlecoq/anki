@@ -50,8 +50,16 @@ async function createDeck(page: import('@playwright/test').Page, name: string) {
   await expect(page.getByRole('heading', { name })).toBeVisible()
 }
 
+function configuredSyncRuntimeDirectory() {
+  const runtimeDirectory = test.info().config.metadata.syncRuntimeDirectory
+  if (typeof runtimeDirectory !== 'string' || !runtimeDirectory.trim()) {
+    throw new Error('Playwright did not provide the sync runtime directory to this worker')
+  }
+  return runtimeDirectory
+}
+
 async function pairingCode() {
-  const runtimeDirectory = process.env.KIROKU_RUNTIME_DIRECTORY ?? join(tmpdir(), 'kiroku-e2e-sync')
+  const runtimeDirectory = configuredSyncRuntimeDirectory()
   const { stdout } = await execFile(process.execPath, ['dist-server/server/index.js', '--pairing-code'], {
     env: { ...process.env, KIROKU_RUNTIME_DIRECTORY: runtimeDirectory },
   })
