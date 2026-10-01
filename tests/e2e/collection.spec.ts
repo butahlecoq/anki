@@ -13,7 +13,9 @@ const execFile = promisify(execFileCallback)
 const WEB_URL = `http://127.0.0.1:${process.env.KIROKU_WEB_PORT ?? '4173'}`
 const SYNC_URL = `http://127.0.0.1:${process.env.KIROKU_SYNC_PORT ?? '4174'}`
 
-test('statistics follow an offline Japanese review, heatmap selection, and undo', async ({ page, context, browserName }) => {
+for (const reopen of [false, true]) {
+test(`statistics follow an offline Japanese review, heatmap selection, and undo${reopen ? ' in a fresh document' : ' in the current session'}`, async ({ page, context, browserName }) => {
+  test.skip(reopen && browserName === 'webkit', 'Playwright supports service workers only in Chromium; fresh offline navigation needs physical Safari verification. https://playwright.dev/docs/service-workers')
   await context.setOffline(false)
   await page.clock.setFixedTime(REVIEW_TIME)
   await page.goto('/')
@@ -43,19 +45,17 @@ test('statistics follow an offline Japanese review, heatmap selection, and undo'
     await expect(page.getByRole('dialog', { name: 'Card progress' })).toContainText('Review history')
     await expect(page.getByRole('dialog', { name: 'Card progress' })).toContainText('Easy')
     await page.getByRole('button', { name: 'Close', exact: true }).click()
-    const statisticsURL = page.url()
-    const previousPage = page
-    await page.evaluate(() => { Reflect.set(window, 'kirokuStatisticsReloadMarker', true) })
-    page = await context.newPage()
-    await page.clock.setFixedTime(REVIEW_TIME)
-    try {
+    if (reopen) {
+      const statisticsURL = page.url()
+      const previousPage = page
+      await page.evaluate(() => { Reflect.set(window, 'kirokuStatisticsReloadMarker', true) })
+      page = await context.newPage()
+      await page.clock.setFixedTime(REVIEW_TIME)
       await page.goto(statisticsURL, { waitUntil: 'domcontentloaded' })
-    } catch (error) {
-      if (browserName !== 'webkit' || !(error instanceof Error) || !error.message.includes('internal error')) throw error
+      await expect(page.getByRole('heading', { name: 'Every answer adds up' })).toBeVisible()
+      await expect.poll(() => page.evaluate(() => Reflect.has(window, 'kirokuStatisticsReloadMarker'))).toBe(false)
+      await previousPage.close()
     }
-    await expect(page.getByRole('heading', { name: 'Every answer adds up' })).toBeVisible()
-    await expect.poll(() => page.evaluate(() => Reflect.has(window, 'kirokuStatisticsReloadMarker'))).toBe(false)
-    await previousPage.close()
     await expect(page.getByText('ANSWERS', { exact: true }).locator('..').locator('strong')).toHaveText('1')
     await page.getByRole('link', { name: 'Decks', exact: true }).click()
     await expect(page.getByRole('region', { name: "Today's workload" })).toContainText('STUDIED 1')
@@ -65,6 +65,7 @@ test('statistics follow an offline Japanese review, heatmap selection, and undo'
     await expect(page.getByText('ANSWERS', { exact: true }).locator('..').locator('strong')).toHaveText('0')
   } finally { await context.setOffline(false) }
 })
+}
 
 function wavFixture() {
   const samples = 800

@@ -140,7 +140,7 @@ Run every current check:
 npm run check
 ```
 
-The browser suite builds the production app, starts it locally, then verifies desktop Chromium and phone-sized WebKit. It includes a service-worker-backed offline cold reload rather than testing only a warm page.
+The browser suite builds the production app, starts it locally, then verifies desktop Chromium and phone-sized WebKit. Statistics are exercised offline in both engines; a separate Chromium test opens a fresh document offline and reads the stored answers. Playwright [supports service workers only in Chromium](https://playwright.dev/docs/service-workers), so the fresh-document statistics test explicitly skips WebKit. Automated phone-sized WebKit checks do not prove that an installed iPhone app reopens offline: verify that on physical Safari before release.
 
 ## Privacy
 
