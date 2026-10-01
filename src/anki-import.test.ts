@@ -24,13 +24,14 @@ afterAll(() => {
 const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL4+QAAAABJRU5ErkJggg=='), (character) => character.charCodeAt(0))
 function wavFixture() {
   const samples = 800
-  const bytes = new Uint8Array(44 + samples)
+  const bytes = new Uint8Array(54 + samples)
   const view = new DataView(bytes.buffer)
   const text = (offset: number, value: string) => [...value].forEach((character, index) => { bytes[offset + index] = character.charCodeAt(0) })
-  text(0, 'RIFF'); view.setUint32(4, 36 + samples, true); text(8, 'WAVE'); text(12, 'fmt ')
+  text(0, 'RIFF'); view.setUint32(4, bytes.length - 8, true); text(8, 'WAVE'); text(12, 'fmt ')
   view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true); view.setUint32(24, 8000, true)
-  view.setUint32(28, 8000, true); view.setUint16(32, 1, true); view.setUint16(34, 8, true); text(36, 'data'); view.setUint32(40, samples, true)
-  bytes.fill(128, 44)
+  view.setUint32(28, 8000, true); view.setUint16(32, 1, true); view.setUint16(34, 8, true)
+  text(36, 'JUNK'); view.setUint32(40, 1, true); bytes[44] = 1
+  text(46, 'data'); view.setUint32(50, samples, true); bytes.fill(128, 54)
   return bytes
 }
 const wav = wavFixture()
@@ -263,6 +264,36 @@ describe('Anki package import', () => {
     const staleSchedule = new File([(await source.toUint8Array(SQL)).slice().buffer as ArrayBuffer], 'stale-schedule.apkg')
     await (await prepareAnkiImport(staleSchedule, collection, { SQL, now: new Date('2030-01-02T12:00:00.000Z') })).commit()
     await expect(collection.cards.get(importedCard!.id)).resolves.toEqual(afterLocalReview)
+  })
+
+  test('keeps a note aggregate intact when its locally newer note type wins', async () => {
+    collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
+    const file = await japanesePackage()
+    await (await prepareAnkiImport(file, collection, { SQL })).commit()
+    const noteId = 'anki-note:stable-vocabulary-guid'
+    const typeId = 'anki-note-type:1700000000001'
+    const localType = await collection.noteTypes.get(typeId)
+    const localNote = await collection.notes.get(noteId)
+    if (!localType || !localNote) throw new Error('imported fixture missing')
+    await collection.noteTypes.put({ ...localType, name: 'Locally customized', updatedAt: '2030-01-01T00:00:00.000Z' })
+    const beforeCards = await collection.cards.where('noteId').equals(noteId).toArray()
+    const beforeMedia = await collection.mediaForNote(noteId)
+    const source = AnkiCollection.open(await fileBytes(file), SQL)
+    const sourceNote = source.data.notes.find((note) => note.guid === 'stable-vocabulary-guid')
+    if (!sourceNote) throw new Error('source fixture missing')
+    const fields = sourceNote.flds.split('\u001f')
+    fields[2] = 'package replacement'
+    sourceNote.flds = fields.join('\u001f')
+    sourceNote.mod = Math.floor(new Date('2029-01-01T00:00:00.000Z').getTime() / 1000)
+    const changed = new File([(await source.toUint8Array(SQL)).slice().buffer as ArrayBuffer], 'changed.apkg')
+
+    const prepared = await prepareAnkiImport(changed, collection, { SQL })
+    expect(prepared.duplicates.keepLocal).toBeGreaterThan(0)
+    expect(prepared.issues).toEqual(expect.arrayContaining([expect.objectContaining({ severity: 'warning', code: 'local-note-type-wins', subject: noteId })]))
+    await prepared.commit()
+    await expect(collection.notes.get(noteId)).resolves.toEqual(localNote)
+    await expect(collection.cards.where('noteId').equals(noteId).toArray()).resolves.toEqual(beforeCards)
+    await expect(collection.mediaForNote(noteId)).resolves.toEqual(beforeMedia)
   })
 
   test('restores a filtered card to its original deck and original due day', async () => {

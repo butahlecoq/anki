@@ -179,8 +179,8 @@ function validateMediaBytes(bytes: Uint8Array, mime: string) {
       && text(12, 16) === 'IHDR' && view.getUint32(16) > 0 && view.getUint32(20) > 0
       && bytes.slice(-8).every((byte, index) => byte === [0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82][index])
     : mime === 'image/jpeg' ? bytes.length >= 16 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes.at(-2) === 0xff && bytes.at(-1) === 0xd9 && Boolean(imageDimensions(bytes))
-      : mime === 'image/webp' ? bytes.length >= 20 && text(0, 4) === 'RIFF' && text(8, 12) === 'WEBP' && view.getUint32(4, true) + 8 <= bytes.length && ['VP8 ', 'VP8L', 'VP8X'].includes(text(12, 16)) && 20 + view.getUint32(16, true) <= bytes.length
-        : mime === 'audio/wav' ? bytes.length >= 45 && text(0, 4) === 'RIFF' && text(8, 12) === 'WAVE' && view.getUint32(4, true) + 8 <= bytes.length && text(12, 16) === 'fmt ' && text(36, 40) === 'data' && view.getUint32(40, true) <= bytes.length - 44
+      : mime === 'image/webp' ? bytes.length >= 20 && text(0, 4) === 'RIFF' && text(8, 12) === 'WEBP' && view.getUint32(4, true) + 8 <= bytes.length && ['VP8 ', 'VP8L', 'VP8X'].includes(text(12, 16)) && 20 + view.getUint32(16, true) <= bytes.length && Boolean(imageDimensions(bytes))
+        : mime === 'audio/wav' ? validWav(bytes)
           : mime === 'audio/ogg' ? validOgg(bytes)
             : mime === 'audio/mpeg' ? validMp3(bytes)
               : false
@@ -240,6 +240,25 @@ function validOgg(bytes: Uint8Array) {
     offset += 27 + segments + payload
   }
   return offset === bytes.length && sawEnd
+}
+
+function validWav(bytes: Uint8Array) {
+  if (bytes.length < 12 || textDecoder.decode(bytes.slice(0, 4)) !== 'RIFF' || textDecoder.decode(bytes.slice(8, 12)) !== 'WAVE') return false
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  if (view.getUint32(4, true) + 8 > bytes.length) return false
+  let offset = 12
+  let format = false
+  let audio = false
+  while (offset + 8 <= bytes.length) {
+    const name = textDecoder.decode(bytes.slice(offset, offset + 4))
+    const size = view.getUint32(offset + 4, true)
+    const end = offset + 8 + size
+    if (end > bytes.length) return false
+    if (name === 'fmt ' && size >= 16) format = true
+    if (name === 'data' && size > 0) audio = true
+    offset = end + (size % 2)
+  }
+  return format && audio && offset >= bytes.length
 }
 
 function validateSupportedTemplateMarkup(front: string, back: string, css: string) {
@@ -663,13 +682,27 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
     if (action === 'create' || action === 'update') writes.noteTypes.push({ value, action })
   }
   const noteDecisions = new Map<string, 'create' | 'update' | 'keepLocal' | 'unchanged'>()
+  const keptAggregateNoteIds = new Set<string>()
   for (const value of notes) {
-    const action = await decide('notes', value)
+    const proposedAction = await decide('notes', value)
+    const localTypeWins = noteTypeDecisions.get(value.typeId) === 'keepLocal'
+    const existing = localTypeWins ? await collection.notes.get(value.id) : undefined
+    const action = localTypeWins ? 'keepLocal' as const : proposedAction
+    if (localTypeWins) {
+      keptAggregateNoteIds.add(value.id)
+      issues.push({
+        severity: existing ? 'warning' : 'error',
+        code: 'local-note-type-wins',
+        subject: value.id,
+        detail: existing ? 'Kept the local note, cards, and media because its locally newer note type is incompatible with this package version.' : 'A package note cannot be created against a locally newer, incompatible note type.',
+      })
+    }
     noteDecisions.set(value.id, action)
     duplicates[action] += 1
     if (action === 'create' || action === 'update') writes.notes.push({ value, action })
   }
   for (const value of cards) {
+    if (keptAggregateNoteIds.has(value.noteId)) continue
     const existing = await collection.cards.get(value.id)
     snapshots.push({ table: 'cards', id: value.id, value: fingerprint(existing) })
     if (!existing) writes.cards.push({ value, action: 'create' })
@@ -692,6 +725,8 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
     }
   }
   for (const value of reviews) {
+    const importedCard = cards.find((card) => card.id === value.cardId)
+    if (importedCard && keptAggregateNoteIds.has(importedCard.noteId)) continue
     const existing = await collection.reviewEntries.get(value.id)
     snapshots.push({ table: 'reviewEntries', id: value.id, value: fingerprint(existing) })
     if (!existing) writes.reviews.push(value)
@@ -715,7 +750,9 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
       writes.deletedReferences.push(existing)
     }
   }
+  const eligibleMediaDigests = new Set(references.filter((reference) => !keptAggregateNoteIds.has(reference.noteId)).map((reference) => reference.digest))
   for (const value of blobs.values()) {
+    if (!eligibleMediaDigests.has(value.digest)) continue
     const existing = await collection.mediaBlobs.get(value.digest)
     snapshots.push({ table: 'mediaBlobs', id: value.digest, value: fingerprint(existing) })
     if (!existing) writes.blobs.push(value)
@@ -736,9 +773,11 @@ function imageDimensions(bytes: Uint8Array): { width: number; height: number } |
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
     return { width: view.getUint32(16), height: view.getUint32(20) }
   }
-  if (bytes.length >= 30 && textDecoder.decode(bytes.slice(0, 4)) === 'RIFF' && textDecoder.decode(bytes.slice(8, 12)) === 'WEBP') {
+  if (bytes.length >= 20 && textDecoder.decode(bytes.slice(0, 4)) === 'RIFF' && textDecoder.decode(bytes.slice(8, 12)) === 'WEBP') {
     const kind = textDecoder.decode(bytes.slice(12, 16))
-    if (kind === 'VP8X') return { width: 1 + bytes[24] + (bytes[25] << 8) + (bytes[26] << 16), height: 1 + bytes[27] + (bytes[28] << 8) + (bytes[29] << 16) }
+    if (kind === 'VP8X' && bytes.length >= 30) return { width: 1 + bytes[24] + (bytes[25] << 8) + (bytes[26] << 16), height: 1 + bytes[27] + (bytes[28] << 8) + (bytes[29] << 16) }
+    if (kind === 'VP8 ' && bytes.length >= 30 && bytes[23] === 0x9d && bytes[24] === 0x01 && bytes[25] === 0x2a) return { width: (bytes[26] | (bytes[27] << 8)) & 0x3fff, height: (bytes[28] | (bytes[29] << 8)) & 0x3fff }
+    if (kind === 'VP8L' && bytes.length >= 25 && bytes[20] === 0x2f) return { width: 1 + bytes[21] + ((bytes[22] & 0x3f) << 8), height: 1 + (bytes[22] >> 6) + (bytes[23] << 2) + ((bytes[24] & 0x0f) << 10) }
   }
   if (bytes.length > 4 && bytes[0] === 0xff && bytes[1] === 0xd8) {
     let offset = 2
