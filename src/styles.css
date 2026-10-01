@@ -215,6 +215,8 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--acid); outline-
 .review-progress { display: flex; justify-content: space-between; align-items: center; color: var(--faint); font-size: 8px; letter-spacing: .13em; }
 .review-card { width: min(800px, 100%); min-height: 390px; margin: 45px auto 24px; padding: 38px; display: grid; place-items: center; align-content: center; border: 1px solid var(--line); background: radial-gradient(circle at 50% 30%, rgba(195,255,90,.035), transparent 50%), #101317; text-align: center; }
 .card-side { margin-bottom: 35px; color: var(--acid-dark); font-size: 8px; letter-spacing: .2em; }
+.review-card .template-preview { width: 100%; }
+.review-card .template-preview iframe { min-height: 260px; border: 0; }
 .review-card h1 { margin: 0; color: #f1f4ec; font-family: 'Hiragino Kaku Gothic ProN', 'Yu Gothic', Meiryo, sans-serif; font-size: clamp(44px, 8vw, 82px); font-weight: 500; }
 .review-answer { width: min(600px, 100%); margin-top: 36px; padding-top: 29px; border-top: 1px solid var(--line); color: #b8c0b5; font-family: 'Hiragino Kaku Gothic ProN', 'Yu Gothic', Meiryo, sans-serif; font-size: clamp(18px, 3vw, 26px); }
 .reveal-action { align-self: center; min-width: 210px; justify-content: center; }

@@ -6,9 +6,10 @@ interface TemplatePreviewProps {
   css: string
   fields: Record<string, string>
   side: 'front' | 'back'
+  title?: string
 }
 
-export function TemplatePreview({ front, back, css, fields, side }: TemplatePreviewProps) {
+export function TemplatePreview({ front, back, css, fields, side, title = 'Card preview' }: TemplatePreviewProps) {
   let frontHtml = ''
   let html = ''
   let empty = false
@@ -27,7 +28,7 @@ export function TemplatePreview({ front, back, css, fields, side }: TemplatePrev
     <div className="template-preview">
       {error && <p role="alert">{error}</p>}
       {empty && <p className="form-warning" role="status">No card will be created: front has no visible field content.</p>}
-      <iframe title="Card preview" sandbox="" srcDoc={srcDoc} />
+      <iframe title={title} sandbox="" srcDoc={srcDoc} />
     </div>
   )
 }
