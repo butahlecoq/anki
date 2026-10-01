@@ -1816,6 +1816,16 @@ export class Collection extends Dexie {
     return this.outbox.orderBy('occurredAt').toArray()
   }
 
+  async captureSyncOperations(): Promise<SyncOperation[]> {
+    return this.transaction('rw', [this.outbox, this.settings], async () => {
+      // Reviews can be recorded while preflight or media upload is running.
+      // Invalidate their undo in the same transaction that captures the batch.
+      const epoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
+      await this.settings.put({ key: 'syncEpoch', value: epoch + 1 })
+      return this.outbox.orderBy('occurredAt').toArray()
+    })
+  }
+
   async acknowledgeOperations(opIds: string[]) {
     await this.outbox.bulkDelete(opIds)
   }

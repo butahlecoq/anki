@@ -62,6 +62,30 @@ test('invalidates local undo before an in-flight sync can capture review operati
   }
 })
 
+test('also invalidates undo for a review recorded during sync preflight', async () => {
+  const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+  try {
+    await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 })
+    const now = new Date('2026-10-01T12:00:00.000Z')
+    const deck = await collection.createDeck('Concurrent review', now)
+    const note = await collection.createBasicNote(deck.id, { front: '同時', back: 'concurrent' }, now)
+    const card = (await collection.cards.where('noteId').equals(note.id).first())!
+    const fetcher = vi.fn(async (url: RequestInfo | URL) => {
+      if (String(url).endsWith('/api/health')) {
+        await collection.answer(card.id, Rating.Good, now)
+        expect(await collection.latestReviewUndo()).not.toBeNull()
+        return health()
+      }
+      await expect(collection.undoLastReview()).rejects.toThrow(/sync attempt/i)
+      return new Response(JSON.stringify({ accepted: 4, cursor: 4, changes: [] }), { status: 200 })
+    })
+    await expect(syncCollection(collection, fetcher)).resolves.toMatchObject({ state: 'complete' })
+    expect(await collection.reviewEntries.where('cardId').equals(card.id).count()).toBe(1)
+  } finally {
+    await collection.delete()
+  }
+})
+
 test('pairs a collection and persists only the returned device credential', async () => {
   const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
   const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ deviceId: 'phone-1', token: 'device-token' }), { status: 201 }))

@@ -134,7 +134,7 @@ export async function syncCollection(collection: Collection, fetcher: Fetcher = 
       uploadError = error instanceof MediaTransferError ? error.state : 'unreachable'
     }
   }
-  const operations = await collection.pendingOperations()
+  const operations = await collection.captureSyncOperations()
   const result = await foregroundSync(settings, operations, fetcher)
   if (result.state === 'complete') {
     await collection.applyRemoteChanges(result.changes as SyncOperation[], result.cursor)
