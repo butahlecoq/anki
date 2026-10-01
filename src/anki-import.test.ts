@@ -1,0 +1,217 @@
+import 'fake-indexeddb/auto'
+import initSqlJs, { type SqlJsStatic } from 'sql.js'
+import { Collection as AnkiCollection, Deck, Note as AnkiNote, Notetype, Package } from 'ankipack'
+import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest'
+import { createCollection, State, type Collection } from './collection'
+import { prepareAnkiImport } from './anki-import'
+
+let SQL: SqlJsStatic
+let collection: Collection | undefined
+
+beforeAll(async () => {
+  SQL = await initSqlJs({ locateFile: () => './node_modules/sql.js/dist/sql-wasm.wasm' })
+})
+
+afterEach(async () => {
+  await collection?.delete()
+  collection = undefined
+})
+
+afterAll(() => {
+  SQL = undefined as unknown as SqlJsStatic
+})
+
+const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL4+QAAAABJRU5ErkJggg=='), (character) => character.charCodeAt(0))
+const wav = new Uint8Array([0x52, 0x49, 0x46, 0x46, 0x25, 0, 0, 0, 0x57, 0x41, 0x56, 0x45, 0x66, 0x6d, 0x74, 0x20, 16, 0, 0, 0, 1, 0, 1, 0, 0x40, 0x1f, 0, 0, 0x40, 0x1f, 0, 0, 1, 0, 8, 0, 0x64, 0x61, 0x74, 0x61, 1, 0, 0, 0, 0x80])
+
+async function japanesePackage() {
+  const vocabulary = new Notetype({
+    id: 1_700_000_000_001,
+    name: 'Japanese vocabulary',
+    fields: [{ name: 'Expression' }, { name: 'Reading' }, { name: 'Meaning' }, { name: 'Media' }],
+    templates: [
+      { name: 'Recognition', questionFormat: '<b>{{Expression}}</b><br>{{furigana:Reading}}{{Media}}', answerFormat: '{{FrontSide}}<hr>{{Meaning}}' },
+      { name: 'Production', questionFormat: '{{Meaning}}', answerFormat: '{{Expression}}<br>{{kana:Reading}}' },
+    ],
+    css: '.card { color: rgb(30, 40, 50); }',
+  })
+  const cloze = new Notetype({
+    id: 1_700_000_000_002,
+    name: 'Japanese cloze',
+    type: 'cloze',
+    fields: [{ name: 'Text' }, { name: 'Extra' }],
+    templates: [{ name: 'Cloze', questionFormat: '{{cloze:Text}}', answerFormat: '{{cloze:Text}}<hr>{{Extra}}' }],
+  })
+  const deck = new Deck({ id: 1_700_000_000_010, name: 'Japanese::Core' })
+  deck.addNote(new AnkiNote({
+    notetype: vocabulary,
+    guid: 'stable-vocabulary-guid',
+    fields: ['猫', '猫[ねこ]', 'cat', '<img src="cat.png"><br>[sound:cat.wav]'],
+    tags: ['jlpt::n5', 'animal'],
+  }))
+  deck.addNote(new AnkiNote({ notetype: cloze, guid: 'stable-cloze-guid', fields: ['{{c1::東京}}へ{{c2::行く}}', 'Tokyo'], tags: ['sentence'] }))
+  const pkg = new Package()
+  pkg.addDeck(deck)
+  pkg.addMedia('cat.png', png)
+  pkg.addMedia('cat.wav', wav)
+  const opened = AnkiCollection.open(await pkg.toUint8Array(SQL), SQL)
+  const firstCard = opened.data.cards.find((card) => card.nid === opened.data.notes.find((note) => note.guid === 'stable-vocabulary-guid')?.id)
+  if (!firstCard) throw new Error('fixture card missing')
+  firstCard.type = 2
+  firstCard.queue = 2
+  firstCard.ivl = 12
+  firstCard.due = 20
+  firstCard.factor = 425
+  firstCard.reps = 5
+  firstCard.lapses = 1
+  firstCard.data = '{"s":12.5,"d":4.25}'
+  opened.data.revlog.push({ id: 1_725_192_000_000, cid: firstCard.id, usn: -1, ease: 3, ivl: 12, lastIvl: 5, factor: 425, time: 1200, type: 1 })
+  return new File([(await opened.toUint8Array(SQL)).slice().buffer as ArrayBuffer], 'japanese.apkg', { type: 'application/octet-stream' })
+}
+
+async function imageOcclusionPackage() {
+  const type = new Notetype({
+    id: 1_700_000_000_020,
+    name: 'Image Occlusion',
+    type: 'cloze',
+    fields: [{ name: 'Occlusion' }, { name: 'Image' }, { name: 'Header' }, { name: 'Back Extra' }, { name: 'Comments' }],
+    templates: [{ name: 'Hide one, reveal one', questionFormat: '{{cloze:Occlusion}}<br>{{Image}}', answerFormat: '{{cloze:Occlusion}}<br>{{Image}}<hr>{{Back Extra}}' }],
+  })
+  const deck = new Deck({ id: 1_700_000_000_021, name: 'Anatomy' })
+  deck.addNote(new AnkiNote({
+    notetype: type,
+    guid: 'stable-occlusion-guid',
+    fields: [
+      '{{c1::image-occlusion:rect:left=.1:top=.2:width=.3:height=.2}}<br>{{c2::image-occlusion:rect:left=.6:top=.5:width=.2:height=.3}}<br>',
+      '<img src="diagram.png">',
+      'Skull bones',
+      'Name the hidden bone.',
+      'Imported fixture',
+    ],
+  }))
+  const pkg = new Package()
+  pkg.addDeck(deck)
+  pkg.addMedia('diagram.png', png)
+  return new File([(await pkg.toUint8Array(SQL)).slice().buffer as ArrayBuffer], 'occlusion.colpkg', { type: 'application/octet-stream' })
+}
+
+async function unsupportedPackage() {
+  const type = new Notetype({
+    id: 1_700_000_000_030,
+    name: 'Unsupported hints',
+    fields: [{ name: 'Front' }, { name: 'Back' }],
+    templates: [{ name: 'Hint card', questionFormat: '{{hint:Front}}', answerFormat: '{{Back}}' }],
+  })
+  const deck = new Deck({ id: 1_700_000_000_031, name: 'Unsupported' })
+  deck.addNote(new AnkiNote({ notetype: type, guid: 'unsupported-guid', fields: ['question', 'answer'] }))
+  const pkg = new Package()
+  pkg.addDeck(deck)
+  return new File([(await pkg.toUint8Array(SQL)).slice().buffer as ArrayBuffer], 'unsupported.apkg', { type: 'application/octet-stream' })
+}
+
+describe('Anki package import', () => {
+  test('previews and transactionally imports templates, scheduling, history, tags, and media from a modern package', async () => {
+    collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
+    const prepared = await prepareAnkiImport(await japanesePackage(), collection, { SQL, now: new Date('2026-10-01T12:00:00.000Z') })
+
+    expect(prepared.summary).toMatchObject({ decks: 1, noteTypes: 2, notes: 2, cards: 4, reviews: 1, media: 2 })
+    expect(prepared.duplicates).toEqual({ create: 2, update: 0, keepLocal: 0, unchanged: 0 })
+    expect(prepared.issues.filter((issue) => issue.severity === 'error')).toEqual([])
+    expect(prepared.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'deck-hierarchy', detail: expect.stringContaining('Japanese::Core') }),
+      expect.objectContaining({ code: 'scheduling-mapped', detail: expect.stringContaining('FSRS memory state') }),
+    ]))
+
+    await prepared.commit()
+
+    const decks = await collection.decks.toArray()
+    expect(decks).toEqual([expect.objectContaining({ name: 'Japanese::Core' })])
+    const types = (await collection.noteTypes.toArray()).filter((type) => !type.protected)
+    expect(types).toHaveLength(2)
+    expect(types.find((type) => type.name === 'Japanese vocabulary')).toMatchObject({
+      kind: 'standard',
+      templates: [
+        expect.objectContaining({ name: 'Recognition', front: expect.stringContaining('{{furigana:Reading}}'), css: expect.stringContaining('rgb(30, 40, 50)') }),
+        expect.objectContaining({ name: 'Production' }),
+      ],
+    })
+    const notes = await collection.notes.toArray()
+    expect(notes.find((note) => note.id === 'anki-note:stable-vocabulary-guid')).toMatchObject({ tags: ['jlpt::n5', 'animal'] })
+    expect(notes.find((note) => note.id === 'anki-note:stable-cloze-guid')?.fields).toEqual(expect.objectContaining({ 'anki-field:1700000000002:0': '{{c1::東京}}へ{{c2::行く}}' }))
+    const scheduled = (await collection.cards.toArray()).find((card) => card.reps === 5)
+    expect(scheduled).toMatchObject({ state: State.Review, stability: 12.5, difficulty: 4.25, scheduledDays: 12, lapses: 1 })
+    await expect(collection.reviewEntries.count()).resolves.toBe(1)
+    const media = await collection.mediaForNote('anki-note:stable-vocabulary-guid')
+    expect(media).toEqual(expect.arrayContaining([
+      expect.objectContaining({ displayName: 'cat.png', kind: 'image', side: 'front' }),
+      expect.objectContaining({ displayName: 'cat.wav', kind: 'audio', side: 'front', playback: 'automatic' }),
+    ]))
+    await expect(collection.mediaBlobs.count()).resolves.toBe(2)
+    await expect(collection.pendingOperations()).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ entityType: 'noteType', action: 'create' }),
+      expect.objectContaining({ entityType: 'review', action: 'create' }),
+      expect.objectContaining({ entityType: 'noteMedia', action: 'create' }),
+    ]))
+  })
+
+  test('keeps a newer local edit when the same stable Anki note is imported again', async () => {
+    collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
+    const file = await japanesePackage()
+    await (await prepareAnkiImport(file, collection, { SQL, now: new Date('2026-10-01T12:00:00.000Z') })).commit()
+    const note = await collection.notes.get('anki-note:stable-vocabulary-guid')
+    if (!note) throw new Error('imported note missing')
+    await collection.updateNote(note.id, { ...note.fields, 'anki-field:1700000000001:2': 'feline' }, new Date('2030-01-01T00:00:00.000Z'))
+
+    const prepared = await prepareAnkiImport(file, collection, { SQL, now: new Date('2026-10-02T12:00:00.000Z') })
+    expect(prepared.duplicates.keepLocal).toBe(1)
+    await prepared.commit()
+    await expect(collection.notes.get(note.id)).resolves.toMatchObject({ fields: { 'anki-field:1700000000001:2': 'feline' } })
+    await expect(collection.reviewEntries.count()).resolves.toBe(1)
+  })
+
+  test('maps the supported native rectangular image-occlusion subset', async () => {
+    collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
+    const prepared = await prepareAnkiImport(await imageOcclusionPackage(), collection, { SQL, now: new Date('2026-10-01T12:00:00.000Z') })
+
+    expect(prepared.summary).toMatchObject({ decks: 1, noteTypes: 1, notes: 1, cards: 2, media: 1 })
+    expect(prepared.issues.filter((issue) => issue.severity === 'error')).toEqual([])
+    await prepared.commit()
+
+    const note = await collection.notes.get('anki-note:stable-occlusion-guid')
+    expect(note).toMatchObject({
+      typeId: 'image-occlusion',
+      fields: { header: 'Skull bones', backExtra: 'Name the hidden bone.' },
+      imageOcclusion: { imageWidth: 1, imageHeight: 1, masks: [
+        expect.objectContaining({ ordinal: 1, x: .1, y: .2, width: .3, height: .2 }),
+        expect.objectContaining({ ordinal: 2, x: .6, y: .5, width: .2, height: .3 }),
+      ] },
+    })
+    await expect(collection.cards.where('noteId').equals(note!.id).count()).resolves.toBe(2)
+    await expect(collection.mediaForNote(note!.id)).resolves.toEqual([expect.objectContaining({ displayName: 'diagram.png', kind: 'image' })])
+  })
+
+  test('rejects a stale preview without partially writing the package', async () => {
+    collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
+    const prepared = await prepareAnkiImport(await japanesePackage(), collection, { SQL, now: new Date('2026-10-01T12:00:00.000Z') })
+    await collection.decks.put({ id: 'anki-deck:1700000000010', name: 'Concurrent deck', createdAt: '2026-10-01T12:00:00.000Z', updatedAt: '2026-10-01T12:00:00.000Z' })
+
+    await expect(prepared.commit()).rejects.toThrow(/preview again/i)
+    await expect(collection.decks.count()).resolves.toBe(1)
+    await expect(collection.notes.count()).resolves.toBe(0)
+    await expect(collection.cards.count()).resolves.toBe(0)
+    await expect(collection.mediaBlobs.count()).resolves.toBe(0)
+  })
+
+  test('reports unsupported template features instead of silently dropping them', async () => {
+    collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
+    const prepared = await prepareAnkiImport(await unsupportedPackage(), collection, { SQL, now: new Date('2026-10-01T12:00:00.000Z') })
+
+    expect(prepared.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ severity: 'error', code: 'unsupported-note-type', subject: 'Unsupported hints', detail: expect.stringMatching(/unsupported template filter/i) }),
+      expect.objectContaining({ severity: 'error', code: 'note-skipped', subject: 'unsupported-guid' }),
+    ]))
+    await expect(prepared.commit()).rejects.toThrow(/resolve package errors/i)
+    await expect(collection.decks.count()).resolves.toBe(0)
+    await expect(collection.notes.count()).resolves.toBe(0)
+  })
+})

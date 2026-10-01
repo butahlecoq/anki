@@ -23,6 +23,7 @@ import { validateMedia } from './media'
 import { pairCollection, syncCollection } from './sync-client'
 import { clozeOrdinals } from './template-renderer'
 import { compareTypedAnswer } from './typed-answer'
+import { prepareAnkiImport, type PreparedAnkiImport } from './anki-import'
 
 type Route =
   | { view: 'decks' }
@@ -300,7 +301,89 @@ function SyncControls() {
   )
 }
 
-function EmptyCollection({ onNewDeck }: { onNewDeck: () => void }) {
+function ImportDialog({ onClose }: { onClose: () => void }) {
+  const [prepared, setPrepared] = useState<PreparedAnkiImport>()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  async function selectPackage(files: FileList | null) {
+    const file = files?.[0]
+    if (!file) return
+    setBusy(true)
+    setError('')
+    setPrepared(undefined)
+    try {
+      setPrepared(await prepareAnkiImport(file, collection))
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Unable to preview package')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function commit() {
+    if (!prepared) return
+    setBusy(true)
+    setError('')
+    try {
+      await prepared.commit()
+      onClose()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Unable to import package')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const hasErrors = prepared?.issues.some((issue) => issue.severity === 'error') ?? false
+  const count = (value: number, singular: string, plural = `${singular}s`) => `${value} ${value === 1 ? singular : plural}`
+  return <div className="dialog-backdrop">
+    <section className="dialog import-dialog" role="dialog" aria-modal="true" aria-labelledby="import-dialog-title">
+      <span className="section-code">ANKI // PACKAGE IMPORT</span>
+      <h2 id="import-dialog-title">Import Anki package</h2>
+      <p className="dialog-intro">Preview a local .apkg or .colpkg before making one atomic change to this collection.</p>
+      <label>Anki package
+        <input type="file" accept=".apkg,.colpkg,application/octet-stream" disabled={busy} onChange={(event) => void selectPackage(event.target.files)} />
+      </label>
+      {busy && !prepared && <p className="media-pending" role="status">Reading package…</p>}
+      {prepared && <>
+        <section className="import-summary" aria-label="Package summary">
+          <h3>{prepared.filename}</h3>
+          <ul>
+            <li>{count(prepared.summary.decks, 'deck')}</li>
+            <li>{count(prepared.summary.noteTypes, 'note type')}</li>
+            <li>{count(prepared.summary.notes, 'note')}</li>
+            <li>{count(prepared.summary.cards, 'card')}</li>
+            <li>{count(prepared.summary.reviews, 'review')}</li>
+            <li>{count(prepared.summary.media, 'media file')}</li>
+          </ul>
+        </section>
+        <section className="import-policy" aria-label="Duplicate policy">
+          <h3>Duplicate policy</h3>
+          <p>Stable Anki note identities are created once. A newer package updates its note; a newer local edit is kept. Review entries are added once.</p>
+          <dl>
+            <div><dt>Create</dt><dd>{prepared.duplicates.create}</dd></div>
+            <div><dt>Update</dt><dd>{prepared.duplicates.update}</dd></div>
+            <div><dt>Keep local</dt><dd>{prepared.duplicates.keepLocal}</dd></div>
+            <div><dt>Unchanged</dt><dd>{prepared.duplicates.unchanged}</dd></div>
+          </dl>
+        </section>
+        {prepared.issues.length > 0 && <section className="import-report" aria-label="Import report">
+          <h3>Import report</h3>
+          <ul>{prepared.issues.map((issue, index) => <li className={`import-${issue.severity}`} key={`${issue.code}-${issue.subject}-${index}`}><strong>{issue.subject}</strong><span>{issue.detail}</span></li>)}</ul>
+        </section>}
+      </>}
+      {hasErrors && <p className="form-error" role="alert">This package has unsupported content. Nothing will be imported until the reported errors are resolved.</p>}
+      {error && <p className="form-error" role="alert">{error}</p>}
+      <div className="dialog-actions">
+        <button className="text-button" type="button" disabled={busy} onClick={onClose}>Cancel</button>
+        <button className="primary-action" type="button" disabled={!prepared || busy || hasErrors} onClick={() => void commit()}>{busy && prepared ? 'Importing…' : 'Import package'}</button>
+      </div>
+    </section>
+  </div>
+}
+
+function EmptyCollection({ onNewDeck, onImport }: { onNewDeck: () => void; onImport: () => void }) {
   return (
     <>
       <section className="hero">
@@ -323,7 +406,7 @@ function EmptyCollection({ onNewDeck }: { onNewDeck: () => void }) {
           <div className="empty-card">
             <span className="empty-glyph" lang="ja">一</span>
             <div><h3>Your collection is clear.</h3><p>Create a focused deck, add a Japanese card, and begin your first offline review.</p></div>
-            <button className="primary-action" type="button" onClick={onNewDeck}>New deck</button>
+            <div className="empty-actions"><button className="primary-action" type="button" onClick={onNewDeck}>New deck</button><button className="text-button" type="button" onClick={onImport}>Import Anki package</button></div>
             <small>Your decks and reviews stay in this browser.</small>
           </div>
         </article>
@@ -332,7 +415,7 @@ function EmptyCollection({ onNewDeck }: { onNewDeck: () => void }) {
   )
 }
 
-function DeckList({ decks, onNewDeck, onOpen }: { decks: DeckSummary[]; onNewDeck: () => void; onOpen: (id: string) => void }) {
+function DeckList({ decks, onNewDeck, onImport, onOpen }: { decks: DeckSummary[]; onNewDeck: () => void; onImport: () => void; onOpen: (id: string) => void }) {
   const children = new Map<string | null, DeckSummary[]>()
   for (const deck of decks) children.set(deck.parentId, [...(children.get(deck.parentId) ?? []), deck])
   const ordered: Array<{ deck: DeckSummary; depth: number }> = []
@@ -347,7 +430,7 @@ function DeckList({ decks, onNewDeck, onOpen }: { decks: DeckSummary[]; onNewDec
     <>
       <section className="compact-hero">
         <div><span className="section-code">01 // COLLECTION</span><h1>Choose what to <em>remember</em></h1><p>Everything here is stored locally and ready whenever you are.</p></div>
-        <button className="primary-action" type="button" onClick={onNewDeck}>New deck</button>
+        <div className="collection-actions"><button className="text-button" type="button" onClick={onImport}>Import Anki package</button><button className="primary-action" type="button" onClick={onNewDeck}>New deck</button></div>
       </section>
       <section className="deck-grid deck-tree" role="tree" aria-label="Deck hierarchy">
         {ordered.map(({ deck, depth }) => (
@@ -671,8 +754,8 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
         {imageOcclusion
           ? <ImageOcclusionReview note={note} card={card} showAnswer={showAnswer} />
           : <TemplatePreview key={card.id} title="Review card" front={template.front} back={template.back} css={template.css} fields={fields} kind={noteType.kind} ordinal={card.clozeOrdinal} side={showAnswer ? 'back' : 'front'} />}
-        {noteType.id === BASIC_NOTE_TYPE_ID && media.filter((reference) => reference.side === 'front').map((reference) => <MediaRenderer key={reference.id} reference={reference} automatic />)}
-        {noteType.id === BASIC_NOTE_TYPE_ID && showAnswer && media.filter((reference) => reference.side === 'back').map((reference) => <MediaRenderer key={reference.id} reference={reference} automatic />)}
+        {noteType.kind !== 'image-occlusion' && media.filter((reference) => reference.side === 'front' && (!reference.templateId || reference.templateId === card.templateId)).map((reference) => <MediaRenderer key={reference.id} reference={reference} automatic />)}
+        {noteType.kind !== 'image-occlusion' && showAnswer && media.filter((reference) => reference.side === 'back' && (!reference.templateId || reference.templateId === card.templateId)).map((reference) => <MediaRenderer key={reference.id} reference={reference} automatic />)}
         {typedAnswer !== undefined && !showAnswer && <label className="typed-answer">Type your answer
           <input autoComplete="off" value={typedInput} onChange={(event) => setTypedDraft({ cardId, value: event.target.value })} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); setShowAnswer(true) } }} />
         </label>}
@@ -701,13 +784,14 @@ export function CollectionWorkspace() {
   const [route, navigate] = useRoute()
   const decks = useLiveQuery(() => collection.summaries(), [], [])
   const [newDeck, setNewDeck] = useState(false)
+  const [importing, setImporting] = useState(false)
 
   const content = useMemo(() => {
     if (route.view === 'review') return <ReviewSession deckId={route.deckId} onBack={() => navigate({ view: 'deck', deckId: route.deckId })} />
     if (route.view === 'deck') return <DeckDetail deckId={route.deckId} onBack={() => navigate({ view: 'decks' })} onStudy={() => navigate({ view: 'review', deckId: route.deckId })} />
     if (route.view === 'note-types') return <NoteTypeManager onNewDeck={() => { navigate({ view: 'decks' }); setNewDeck(true) }} />
-    if (decks.length === 0) return <EmptyCollection onNewDeck={() => setNewDeck(true)} />
-    return <DeckList decks={decks} onNewDeck={() => setNewDeck(true)} onOpen={(deckId) => navigate({ view: 'deck', deckId })} />
+    if (decks.length === 0) return <EmptyCollection onNewDeck={() => setNewDeck(true)} onImport={() => setImporting(true)} />
+    return <DeckList decks={decks} onNewDeck={() => setNewDeck(true)} onImport={() => setImporting(true)} onOpen={(deckId) => navigate({ view: 'deck', deckId })} />
   }, [decks, navigate, route])
 
   return (
@@ -715,6 +799,7 @@ export function CollectionWorkspace() {
       <SyncControls />
       {content}
       {newDeck && <DeckDialog onClose={() => setNewDeck(false)} />}
+      {importing && <ImportDialog onClose={() => setImporting(false)} />}
     </>
   )
 }
