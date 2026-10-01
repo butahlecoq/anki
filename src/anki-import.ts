@@ -181,7 +181,10 @@ function mediaNames(value: string): string[] {
 }
 
 function plainField(value: string): string {
-  const withoutMedia = value.replace(/<img\b[^>]*>/gi, '').replace(/\[sound:[^\]]+\]/gi, '').replace(/<br\s*\/?>/gi, '\n')
+  const withoutMedia = value
+    .replace(/<img\b[^>]*\bsrc\s*=\s*["']([^"'<>]+)["'][^>]*>/gi, (_tag, name: string) => `[[kiroku-media:${encodeURIComponent(name)}]]`)
+    .replace(/\[sound:([^\]]+)\]/gi, (_tag, name: string) => `[[kiroku-media:${encodeURIComponent(name)}]]`)
+    .replace(/<br\s*\/?>/gi, '\n')
   const document = new DOMParser().parseFromString(withoutMedia, 'text/html')
   const text = document.body.textContent ?? ''
   return text.trim() ? text : mediaNames(value).length ? '\u200b' : ''
@@ -380,6 +383,9 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
       if (unsupportedHtml) issues.push({ severity: 'warning', code: 'field-html-normalized', subject: `${row.guid} · ${sourceType.fields[index].name}`, detail: `Field HTML ${unsupportedHtml[0]} was converted to plain text because imported field markup is outside the supported template subset.` })
     })
     const noteId = stableId('note', row.guid)
+    const noteCreatedAt = isoFromSeconds(Math.floor(row.id / 1000), now)
+    const noteUpdatedAt = isoFromSeconds(row.mod, now)
+    const referenceUpdatedAt = sourceType.updatedAt > noteUpdatedAt ? sourceType.updatedAt : noteUpdatedAt
     let noteTypeId = sourceType.localId
     let fields = Object.fromEntries(sourceType.fields.map((field, index) => [field.id, plainField(rawFields[index] ?? '')]))
     let imageOcclusion: Note['imageOcclusion']
@@ -398,7 +404,7 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
         noteTypeId = 'image-occlusion'
         fields = { header: parsed.header, backExtra: parsed.backExtra }
         imageOcclusion = { version: 1, sourceMediaId: referenceId, imageWidth: dimensions.width, imageHeight: dimensions.height, nextOrdinal: Math.max(...parsed.masks.map((mask) => mask.ordinal)) + 1, masks: parsed.masks }
-        references.push({ id: referenceId, noteId, digest, kind: 'image', mimeType: mime, displayName: media.name, side: 'front', playback: 'manual', createdAt: importedAt, updatedAt: importedAt })
+        references.push({ id: referenceId, noteId, digest, kind: 'image', mimeType: mime, displayName: media.name, side: 'front', playback: 'manual', createdAt: noteCreatedAt, updatedAt: referenceUpdatedAt })
         blobs.set(digest, { digest, blob: ownedBuffer(media.data), byteLength: media.data.byteLength, mimeType: mime, verifiedAt: importedAt })
         imageOcclusionTypes.add(sourceType.id)
       } catch (reason) {
@@ -406,7 +412,7 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
         continue
       }
     }
-    const note: Note = { id: noteId, deckId, type: noteTypeId === 'basic' ? 'basic' : 'custom', typeId: noteTypeId, fields, tags: row.tags.trim() ? row.tags.trim().split(/\s+/) : [], ...(imageOcclusion ? { imageOcclusion } : {}), createdAt: isoFromSeconds(Math.floor(row.id / 1000), now), updatedAt: isoFromSeconds(row.mod, now) }
+    const note: Note = { id: noteId, deckId, type: noteTypeId === 'basic' ? 'basic' : 'custom', typeId: noteTypeId, fields, tags: row.tags.trim() ? row.tags.trim().split(/\s+/) : [], ...(imageOcclusion ? { imageOcclusion } : {}), createdAt: noteCreatedAt, updatedAt: noteUpdatedAt }
     notes.push(note)
 
     if (!imageOcclusion) {
@@ -442,9 +448,10 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
             displayName: name,
             side,
             ...(templateId ? { templateId } : {}),
+            inline: true,
             playback: mime.startsWith('audio/') ? 'automatic' : 'manual',
             createdAt: note.createdAt,
-            updatedAt: note.updatedAt,
+            updatedAt: referenceUpdatedAt,
           })
         }
       }
@@ -453,6 +460,10 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
     const latestReviewByCard = new Map<number, number>()
     for (const review of data.revlog) latestReviewByCard.set(review.cid, Math.max(latestReviewByCard.get(review.cid) ?? 0, review.id))
     for (const sourceCard of sourceCards) {
+      if (![0, 1, 2, 3].includes(sourceCard.type)) {
+        issues.push({ severity: 'error', code: 'unsupported-card-state', subject: String(sourceCard.id), detail: `Card type ${sourceCard.type} is not supported.` })
+        continue
+      }
       const deck = deckBySource.get(sourceCard.odid || sourceCard.did)
       if (!deck) continue
       const isOcclusion = Boolean(imageOcclusion)
@@ -545,18 +556,18 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
     const action = await decide('decks', value)
     if (action === 'create' || action === 'update') writes.decks.push({ value, action })
   }
+  const noteTypeDecisions = new Map<string, 'create' | 'update' | 'keepLocal' | 'unchanged'>()
   for (const value of noteTypes) {
     const action = await decide('noteTypes', value)
+    noteTypeDecisions.set(value.id, action)
     if (action === 'create' || action === 'update') writes.noteTypes.push({ value, action })
   }
-  const updatedNoteIds = new Set<string>()
+  const noteDecisions = new Map<string, 'create' | 'update' | 'keepLocal' | 'unchanged'>()
   for (const value of notes) {
     const action = await decide('notes', value)
+    noteDecisions.set(value.id, action)
     duplicates[action] += 1
-    if (action === 'create' || action === 'update') {
-      writes.notes.push({ value, action })
-      if (action === 'update') updatedNoteIds.add(value.id)
-    }
+    if (action === 'create' || action === 'update') writes.notes.push({ value, action })
   }
   for (const value of cards) {
     const existing = await collection.cards.get(value.id)
@@ -572,7 +583,8 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
     }
   }
   const incomingCardIds = new Set(cards.map(({ id }) => id))
-  for (const noteId of updatedNoteIds) {
+  const reconcilableNoteIds = new Set(notes.filter((note) => noteDecisions.get(note.id) !== 'keepLocal' && noteTypeDecisions.get(note.typeId) !== 'keepLocal').map(({ id }) => id))
+  for (const noteId of reconcilableNoteIds) {
     for (const existing of await collection.cards.where('noteId').equals(noteId).toArray()) {
       if (incomingCardIds.has(existing.id) || existing.suspended) continue
       snapshots.push({ table: 'cards', id: existing.id, value: fingerprint(existing) })
@@ -584,12 +596,18 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
     snapshots.push({ table: 'reviewEntries', id: value.id, value: fingerprint(existing) })
     if (!existing) writes.reviews.push(value)
   }
+  const mediaReconcileNoteIds = new Set(notes.filter((note) => {
+    const noteAction = noteDecisions.get(note.id)
+    return noteAction === 'create' || noteAction === 'update' || (noteAction === 'unchanged' && noteTypeDecisions.get(note.typeId) === 'update')
+  }).map(({ id }) => id))
   for (const value of references) {
+    const noteAction = noteDecisions.get(value.noteId)
+    if (!mediaReconcileNoteIds.has(value.noteId) || noteAction === 'keepLocal') continue
     const action = await decide('noteMedia', value)
     if (action === 'create' || action === 'update') writes.references.push({ value, action })
   }
   const incomingReferenceIds = new Set(references.map(({ id }) => id))
-  for (const noteId of updatedNoteIds) {
+  for (const noteId of mediaReconcileNoteIds) {
     for (const existing of await collection.noteMedia.where('noteId').equals(noteId).toArray()) {
       const importedReference = existing.id.startsWith(`${noteId}:media:`) || existing.id === `${noteId}:image-occlusion-source`
       if (!importedReference || incomingReferenceIds.has(existing.id)) continue

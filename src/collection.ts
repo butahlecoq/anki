@@ -222,7 +222,7 @@ export interface SyncOperation {
 
 export interface SyncSettings { endpoint: string; token: string; cursor: number }
 interface DeletionTombstone { key: string; entityType: SyncOperation['entityType']; entityId: string; occurredAt: string }
-export interface NoteMediaReference { id: string; noteId: string; digest: string; kind: MediaKind; mimeType: string; displayName: string; side: MediaSide; templateId?: string; playback: AudioPlayback; createdAt: string; updatedAt: string }
+export interface NoteMediaReference { id: string; noteId: string; digest: string; kind: MediaKind; mimeType: string; displayName: string; side: MediaSide; templateId?: string; inline?: boolean; playback: AudioPlayback; createdAt: string; updatedAt: string }
 export interface MediaBlob { digest: string; blob: Blob; byteLength: number; mimeType: string; verifiedAt: string }
 interface StoredMediaBlob extends Omit<MediaBlob, 'blob'> { blob: Blob | ArrayBuffer }
 export interface NoteMediaAttachment { file: File; side: MediaSide; playback?: AudioPlayback }

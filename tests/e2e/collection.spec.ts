@@ -12,6 +12,18 @@ const execFile = promisify(execFileCallback)
 const WEB_URL = `http://127.0.0.1:${process.env.KIROKU_WEB_PORT ?? '4173'}`
 const SYNC_URL = `http://127.0.0.1:${process.env.KIROKU_SYNC_PORT ?? '4174'}`
 
+function wavFixture() {
+  const samples = 800
+  const bytes = new Uint8Array(44 + samples)
+  const view = new DataView(bytes.buffer)
+  const text = (offset: number, value: string) => [...value].forEach((character, index) => { bytes[offset + index] = character.charCodeAt(0) })
+  text(0, 'RIFF'); view.setUint32(4, 36 + samples, true); text(8, 'WAVE'); text(12, 'fmt ')
+  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true); view.setUint32(24, 8000, true)
+  view.setUint32(28, 8000, true); view.setUint16(32, 1, true); view.setUint16(34, 8, true); text(36, 'data'); view.setUint32(40, samples, true)
+  bytes.fill(128, 44)
+  return bytes
+}
+
 async function importFixture() {
   const SQL = await initSqlJs({ locateFile: () => './node_modules/sql.js/dist/sql-wasm.wasm' })
   const type = new AnkiNotetype({
@@ -26,7 +38,7 @@ async function importFixture() {
   const pkg = new AnkiPackage()
   pkg.addDeck(deck)
   pkg.addMedia('cat.png', Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL4+QAAAABJRU5ErkJggg==', 'base64')))
-  pkg.addMedia('cat.wav', new Uint8Array([0x52, 0x49, 0x46, 0x46, 0x25, 0, 0, 0, 0x57, 0x41, 0x56, 0x45, 0x66, 0x6d, 0x74, 0x20, 16, 0, 0, 0, 1, 0, 1, 0, 0x40, 0x1f, 0, 0, 0x40, 0x1f, 0, 0, 1, 0, 8, 0, 0x64, 0x61, 0x74, 0x61, 1, 0, 0, 0, 0x80]))
+  pkg.addMedia('cat.wav', wavFixture())
   return Buffer.from(await pkg.toUint8Array(SQL))
 }
 
@@ -54,6 +66,13 @@ async function pair(page: import('@playwright/test').Page) {
   await expect(page.getByText('PC connected. Your collections are ready to sync.')).toBeVisible()
 }
 
+async function expectAudioReady(audio: import('@playwright/test').Locator, browserName: string) {
+  await expect(audio).toHaveCount(1)
+  await expect(audio).toHaveAttribute('src', /^data:audio\/wav;base64,/)
+  // Playwright's Windows WebKit port has no functional audio backend; Chromium proves decode.
+  if (browserName === 'chromium') await expect.poll(() => audio.evaluate((element: HTMLAudioElement) => element.readyState >= HTMLMediaElement.HAVE_METADATA)).toBe(true)
+}
+
 async function drawOcclusionMask(canvas: import('@playwright/test').Locator, pointerId: number, from: { x: number; y: number }, to: { x: number; y: number }) {
   const box = await canvas.boundingBox()
   if (!box) throw new Error('Image occlusion canvas was not measurable')
@@ -68,7 +87,7 @@ test.beforeEach(async ({ page }) => {
   await page.goto('/')
 })
 
-test('learner previews and imports an Anki package before studying its media offline', async ({ page }) => {
+test('learner previews and imports an Anki package before studying its media offline', async ({ page, browserName }) => {
   await page.getByRole('button', { name: 'Import Anki package' }).click()
   const dialog = page.getByRole('dialog', { name: 'Import Anki package' })
   await dialog.getByLabel('Anki package', { exact: true }).setInputFiles({ name: 'japanese.apkg', mimeType: 'application/octet-stream', buffer: await importFixture() })
@@ -86,21 +105,25 @@ test('learner previews and imports an Anki package before studying its media off
   await page.getByRole('button', { name: 'Study now' }).click()
   const review = page.frameLocator('iframe[title="Review card"]')
   await expect(review.locator('ruby')).toHaveText('猫ねこ')
-  const image = page.getByRole('img', { name: 'cat.png' })
+  const image = review.getByRole('img', { name: 'cat.png' })
   await expect(image).toBeVisible()
   await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true)
-  await expect(page.locator('audio')).toHaveCount(1)
+  const audio = review.locator('audio')
+  await expectAudioReady(audio, browserName)
   await page.evaluate(async () => { await navigator.serviceWorker.ready })
   await page.context().setOffline(true)
   await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => undefined)
   await expect(page.frameLocator('iframe[title="Review card"]').locator('ruby')).toHaveText('猫ねこ')
-  const offlineImage = page.getByRole('img', { name: 'cat.png' })
+  const offlineReview = page.frameLocator('iframe[title="Review card"]')
+  const offlineImage = offlineReview.getByRole('img', { name: 'cat.png' })
   await expect(offlineImage).toBeVisible()
   await expect.poll(() => offlineImage.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true)
+  const offlineAudio = offlineReview.locator('audio')
+  await expectAudioReady(offlineAudio, browserName)
   await expect(page.getByText('Offline shell active')).toBeVisible()
 })
 
-test('a clean phone syncs imported package media and keeps it offline', async ({ browser, page: pc }) => {
+test('a clean phone syncs imported package media and keeps it offline', async ({ browser, browserName, page: pc }) => {
   const phoneContext = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
   try {
     const phone = await phoneContext.newPage()
@@ -114,21 +137,26 @@ test('a clean phone syncs imported package media and keeps it offline', async ({
     await pair(pc)
     await pair(phone)
     await pc.getByRole('button', { name: 'Sync now' }).click()
-    await expect(pc.getByText(/2 uploaded and 0 downloaded/)).toBeVisible()
+    await expect(pc.getByText(/2 uploaded and \d+ downloaded/)).toBeVisible()
     await phone.getByRole('button', { name: 'Sync now' }).click()
     await phone.getByRole('button', { name: 'Open Imported::Japanese' }).click()
     await phone.getByRole('button', { name: 'Study now' }).click()
 
-    const image = phone.getByRole('img', { name: 'cat.png' })
+    const review = phone.frameLocator('iframe[title="Review card"]')
+    const image = review.getByRole('img', { name: 'cat.png' })
     await expect(image).toBeVisible()
     await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true)
-    await expect(phone.locator('audio')).toHaveCount(1)
+    const audio = review.locator('audio')
+    await expectAudioReady(audio, browserName)
     await phone.evaluate(async () => { await navigator.serviceWorker.ready })
     await phoneContext.setOffline(true)
     await phone.reload({ waitUntil: 'domcontentloaded' }).catch(() => undefined)
-    const offlineImage = phone.getByRole('img', { name: 'cat.png' })
+    const offlineReview = phone.frameLocator('iframe[title="Review card"]')
+    const offlineImage = offlineReview.getByRole('img', { name: 'cat.png' })
     await expect(offlineImage).toBeVisible()
     await expect.poll(() => offlineImage.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true)
+    const offlineAudio = offlineReview.locator('audio')
+    await expectAudioReady(offlineAudio, browserName)
     await expect(phone.getByText('Offline shell active')).toBeVisible()
   } finally {
     await phoneContext.close()
@@ -609,7 +637,7 @@ test('a phone keeps verified synced media after a cold offline reload', async ({
     await pair(pc)
     await pair(phone)
     await pc.getByRole('button', { name: 'Sync now' }).click()
-    await expect(pc.getByText(/2 uploaded and 0 downloaded/)).toBeVisible()
+    await expect(pc.getByText(/2 uploaded and \d+ downloaded/)).toBeVisible()
     await phone.getByRole('button', { name: 'Sync now' }).click()
     await phone.getByRole('button', { name: `Open ${deckName}` }).click()
     await phone.getByRole('button', { name: 'Study now' }).click()

@@ -8,6 +8,7 @@ export interface RenderOptions {
   kind?: 'standard' | 'cloze'
   ordinal?: number
   side?: 'front' | 'back'
+  media?: Record<string, { kind: 'image' | 'audio'; url: string; automatic?: boolean }>
 }
 
 export type RenderResult = { ok: true; value: RenderedTemplate } | { ok: false; error: string }
@@ -45,6 +46,24 @@ function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   })[character] ?? character)
+}
+
+const mediaToken = /\[\[kiroku-media:([^\]]+)]]/g
+
+function renderField(value: string, media: RenderOptions['media']): string {
+  let html = ''
+  let cursor = 0
+  for (const match of value.matchAll(mediaToken)) {
+    html += escapeHtml(value.slice(cursor, match.index))
+    cursor = match.index + match[0].length
+    let name = match[1]
+    try { name = decodeURIComponent(name) } catch { /* keep malformed token inert */ }
+    const source = media?.[name]
+    if (!source) html += `<span class="media-pending">[media unavailable: ${escapeHtml(name)}]</span>`
+    else if (source.kind === 'image') html += `<img class="card-image" src="${escapeHtml(source.url)}" alt="${escapeHtml(name)}">`
+    else html += `<audio class="card-audio" controls${source.automatic ? ' autoplay' : ''} src="${escapeHtml(source.url)}">Audio: ${escapeHtml(name)}</audio>`
+  }
+  return html + escapeHtml(value.slice(cursor))
 }
 
 function renderCloze(value: string, ordinal: number, side: 'front' | 'back'): string {
@@ -150,7 +169,7 @@ export function renderTemplate(template: string, fields: Record<string, string>,
         html += name === 'FrontSide' ? value : filter === 'cloze'
           ? renderCloze(value, ordinal ?? 0, side)
           : filter === 'furigana' || filter === 'kana' || filter === 'kanji' ? renderReading(value, filter)
-            : escapeHtml(value)
+            : renderField(value, options.media)
       }
     }
   }

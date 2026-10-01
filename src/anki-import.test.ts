@@ -22,7 +22,18 @@ afterAll(() => {
 })
 
 const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL4+QAAAABJRU5ErkJggg=='), (character) => character.charCodeAt(0))
-const wav = new Uint8Array([0x52, 0x49, 0x46, 0x46, 0x25, 0, 0, 0, 0x57, 0x41, 0x56, 0x45, 0x66, 0x6d, 0x74, 0x20, 16, 0, 0, 0, 1, 0, 1, 0, 0x40, 0x1f, 0, 0, 0x40, 0x1f, 0, 0, 1, 0, 8, 0, 0x64, 0x61, 0x74, 0x61, 1, 0, 0, 0, 0x80])
+function wavFixture() {
+  const samples = 800
+  const bytes = new Uint8Array(44 + samples)
+  const view = new DataView(bytes.buffer)
+  const text = (offset: number, value: string) => [...value].forEach((character, index) => { bytes[offset + index] = character.charCodeAt(0) })
+  text(0, 'RIFF'); view.setUint32(4, 36 + samples, true); text(8, 'WAVE'); text(12, 'fmt ')
+  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true); view.setUint32(24, 8000, true)
+  view.setUint32(28, 8000, true); view.setUint16(32, 1, true); view.setUint16(34, 8, true); text(36, 'data'); view.setUint32(40, samples, true)
+  bytes.fill(128, 44)
+  return bytes
+}
+const wav = wavFixture()
 
 async function fileBytes(file: File) {
   return new Uint8Array(await new Promise<ArrayBuffer>((resolve, reject) => {
@@ -170,11 +181,21 @@ describe('Anki package import', () => {
     const note = await collection.notes.get('anki-note:stable-vocabulary-guid')
     if (!note) throw new Error('imported note missing')
     await collection.updateNote(note.id, { ...note.fields, 'anki-field:1700000000001:2': 'feline' }, new Date('2030-01-01T00:00:00.000Z'))
+    const existingMedia = await collection.mediaForNote(note.id)
+    const source = AnkiCollection.open(await fileBytes(file), SQL)
+    const sourceNote = source.data.notes.find((candidate) => candidate.guid === 'stable-vocabulary-guid')
+    if (!sourceNote) throw new Error('fixture note missing')
+    const values = sourceNote.flds.split('\u001f')
+    values[3] = ''
+    sourceNote.flds = values.join('\u001f')
+    sourceNote.mod = Math.floor(new Date('2027-01-01T00:00:00.000Z').getTime() / 1000)
+    const olderPackage = new File([(await source.toUint8Array(SQL)).slice().buffer as ArrayBuffer], 'older.apkg')
 
-    const prepared = await prepareAnkiImport(file, collection, { SQL, now: new Date('2026-10-02T12:00:00.000Z') })
+    const prepared = await prepareAnkiImport(olderPackage, collection, { SQL, now: new Date('2026-10-02T12:00:00.000Z') })
     expect(prepared.duplicates.keepLocal).toBe(1)
     await prepared.commit()
     await expect(collection.notes.get(note.id)).resolves.toMatchObject({ fields: { 'anki-field:1700000000001:2': 'feline' } })
+    await expect(collection.mediaForNote(note.id)).resolves.toEqual(existingMedia)
     await expect(collection.reviewEntries.count()).resolves.toBe(1)
   })
 

@@ -660,6 +660,40 @@ function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () =>
   )
 }
 
+function ReviewTemplatePreview({ template, fields, kind, ordinal, side, media }: {
+  template: { front: string; back: string; css: string }
+  fields: Record<string, string>
+  kind: 'standard' | 'cloze'
+  ordinal?: number
+  side: 'front' | 'back'
+  media: NoteMediaReference[]
+}) {
+  const [sources, setSources] = useState<Record<string, { kind: 'image' | 'audio'; url: string; automatic?: boolean }>>({})
+  useEffect(() => {
+    let active = true
+    const urls: string[] = []
+    void Promise.all(media.map(async (reference) => {
+      const stored = await collection.verifiedMediaBlob(reference.digest)
+      if (!stored) return undefined
+      const url = reference.kind === 'audio' ? await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onerror = () => reject(reader.error ?? new Error('Unable to prepare audio'))
+        reader.onload = () => resolve(String(reader.result))
+        reader.readAsDataURL(stored.blob)
+      }) : URL.createObjectURL(stored.blob)
+      if (reference.kind === 'image') urls.push(url)
+      return [reference.displayName, { kind: reference.kind, url, automatic: reference.playback === 'automatic' }] as const
+    })).then((entries) => {
+      if (active) setSources(Object.fromEntries(entries.filter((entry) => entry !== undefined)))
+    })
+    return () => {
+      active = false
+      for (const url of urls) URL.revokeObjectURL(url)
+    }
+  }, [media])
+  return <TemplatePreview title="Review card" front={template.front} back={template.back} css={template.css} fields={fields} kind={kind} ordinal={ordinal} side={side} media={sources} />
+}
+
 function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void }) {
   const [queue, setQueue] = useState<string[] | null>(null)
   const [showAnswer, setShowAnswer] = useState(false)
@@ -745,6 +779,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
 
   const fields = Object.fromEntries(noteType.fields.map((field) => [field.name, note.fields[field.id] ?? '']))
   const answerDiff = showAnswer && typedAnswer !== undefined ? compareTypedAnswer(typedAnswer, typedInput) : []
+  const templateMedia = media.filter((reference) => reference.inline && (!reference.templateId || reference.templateId === card.templateId))
 
   return (
     <section className="review-session">
@@ -753,9 +788,9 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
         <span className="card-side">{showAnswer ? 'ANSWER' : 'QUESTION'}</span>
         {imageOcclusion
           ? <ImageOcclusionReview note={note} card={card} showAnswer={showAnswer} />
-          : <TemplatePreview key={card.id} title="Review card" front={template.front} back={template.back} css={template.css} fields={fields} kind={noteType.kind} ordinal={card.clozeOrdinal} side={showAnswer ? 'back' : 'front'} />}
-        {noteType.kind !== 'image-occlusion' && media.filter((reference) => reference.side === 'front' && (!reference.templateId || reference.templateId === card.templateId)).map((reference) => <MediaRenderer key={reference.id} reference={reference} automatic />)}
-        {noteType.kind !== 'image-occlusion' && showAnswer && media.filter((reference) => reference.side === 'back' && (!reference.templateId || reference.templateId === card.templateId)).map((reference) => <MediaRenderer key={reference.id} reference={reference} automatic />)}
+          : <ReviewTemplatePreview key={card.id} template={template} fields={fields} kind={noteType.kind} ordinal={card.clozeOrdinal} side={showAnswer ? 'back' : 'front'} media={templateMedia} />}
+        {noteType.kind !== 'image-occlusion' && media.filter((reference) => !reference.inline && reference.side === 'front' && (!reference.templateId || reference.templateId === card.templateId)).map((reference) => <MediaRenderer key={reference.id} reference={reference} automatic />)}
+        {noteType.kind !== 'image-occlusion' && showAnswer && media.filter((reference) => !reference.inline && reference.side === 'back' && (!reference.templateId || reference.templateId === card.templateId)).map((reference) => <MediaRenderer key={reference.id} reference={reference} automatic />)}
         {typedAnswer !== undefined && !showAnswer && <label className="typed-answer">Type your answer
           <input autoComplete="off" value={typedInput} onChange={(event) => setTypedDraft({ cardId, value: event.target.value })} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); setShowAnswer(true) } }} />
         </label>}
