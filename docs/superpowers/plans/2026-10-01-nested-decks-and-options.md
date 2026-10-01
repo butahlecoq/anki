@@ -24,9 +24,9 @@
 
 ### Task 2: Scheduling options
 
-- [ ] Resolve FSRS settings from the current deck option group for preview and answer.
-- [ ] Enforce deterministic daily New/Review limits, hierarchy study, and supported ordering.
-- [ ] Test group reuse, affected decks, future-only scheduling changes, limits, and ordering.
+- [x] Resolve FSRS settings from the current deck option group for preview and answer.
+- [x] Enforce deterministic daily New/Review limits, hierarchy study, and supported ordering.
+- [x] Test group reuse, affected decks, future-only scheduling changes, limits, and ordering.
 
 ### Task 3: Organization UI, documentation, and review
 
