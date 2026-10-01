@@ -789,7 +789,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   const [typedDraft, setTypedDraft] = useState<{ cardId?: string; value: string }>({ value: '' })
   const typedResultRef = useRef<HTMLDivElement>(null)
   const cardId = queue?.[0]
-  const deckCards = useLiveQuery(() => collection.cards.where('deckId').equals(deckId).toArray(), [deckId])
+  const dueQueue = useLiveQuery(() => collection.dueCards(deckId, new Date()), [deckId])
   async function refreshQueue() {
     const dueCards = await collection.dueCards(deckId, new Date())
     setQueue(dueCards.map((dueCard) => dueCard.id))
@@ -814,9 +814,9 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     Boolean(frontResult?.ok && frontResult.value.isEmpty && !imageOcclusion)
 
   useEffect(() => {
-    if (!deckCards) return
-    void collection.dueCards(deckId, new Date()).then((cards) => setQueue(cards.map((dueCard) => dueCard.id)))
-  }, [deckCards, deckId])
+    if (!dueQueue) return
+    setQueue(dueQueue.map((dueCard) => dueCard.id))
+  }, [dueQueue])
 
   useEffect(() => {
     if (showAnswer && typedAnswer !== undefined) typedResultRef.current?.focus()

@@ -240,6 +240,23 @@ test('a synced reschedule removes the current reviewer card when it is no longer
   }
 })
 
+test('a synced reschedule in a child deck removes the current parent review card', async () => {
+  const parent = await collection.createDeck(`Parent reschedule ${crypto.randomUUID()}`)
+  const child = await collection.createDeck('Child', { parentId: parent.id })
+  const note = await collection.createBasicNote(child.id, { front: '子', back: 'child' })
+  const card = (await collection.cards.where('noteId').equals(note.id).first())!
+  await collection.cards.update(card.id, { due: new Date(Date.now() - 60 * 1000).toISOString(), state: State.Review })
+  window.location.hash = `#review/${parent.id}`
+  render(<CollectionWorkspace />)
+  try {
+    await screen.findByRole('button', { name: 'Suspend card' })
+    await collection.rescheduleCard(card.id, new Date(Date.now() + 60 * 60 * 1000))
+    expect(await screen.findByRole('heading', { name: 'Session complete' })).toBeVisible()
+  } finally {
+    await collection.deleteDeck(parent.id, { mode: 'delete-subtree' })
+  }
+})
+
 test('card management gives every reschedule control a distinct card and template name', async () => {
   const deck = await collection.createDeck(`Accessible card controls ${crypto.randomUUID()}`)
   const type = await collection.createNoteType({
