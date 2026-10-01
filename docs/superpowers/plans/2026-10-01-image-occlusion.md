@@ -23,13 +23,13 @@
 
 ### Task 2: Editor and review
 
-- [ ] Build accessible image upload and SVG mask editor with pointer, touch, keyboard list controls, and mobile layout.
-- [ ] Support Header, Back Extra, tags, deck, mask add/move/resize/delete, and save errors.
-- [ ] Render active-mask question and revealed answer over verified local image in review.
-- [ ] Add desktop and phone browser tests, including history-preserving mask edits.
+- [x] Build accessible image upload and SVG mask editor with pointer, touch, keyboard list controls, and mobile layout.
+- [x] Support Header, Back Extra, tags, deck, mask add/move/resize/delete, and save errors.
+- [x] Render active-mask question and revealed answer over verified local image in review.
+- [x] Add desktop and phone browser tests, including history-preserving mask edits.
 
 ### Task 3: Offline verification and documentation
 
-- [ ] Verify image metadata/blob sync and cold offline reload in supported browser profiles.
-- [ ] Document representation, constraints, and import/export fixture boundary.
+- [x] Verify image metadata/blob sync and cold offline reload in supported browser profiles.
+- [x] Document representation, constraints, and import/export fixture boundary.
 - [ ] Run `npm run check`, obtain review, and open a PR.
