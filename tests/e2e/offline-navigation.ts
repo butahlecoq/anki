@@ -14,7 +14,7 @@ export async function navigateOfflineDocument(page: Page, url = page.url()) {
   await expect(page).toHaveURL(url)
 }
 
-/** A restarted profile starts at about:blank, so it cannot retain the app DOM. */
+/** New tabs and restarted profiles start blank and cannot retain the app DOM. */
 export async function openOfflineProfileDocument(page: Page, url: string) {
   await expect(page).toHaveURL('about:blank')
   const response = await page.goto(url, { waitUntil: 'domcontentloaded' })
