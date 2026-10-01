@@ -108,7 +108,9 @@ Removing a field with saved values requires choosing **Keep as retired data** or
 
 Decks can be nested. A parent deck’s counts and study session include all of its descendants, while each deck still applies the daily limits from its own scheduling option group. Use **Create child deck** or **Move deck** to organize the tree. Moving a note moves its generated cards with the same IDs and scheduling data; recorded reviews stay intact.
 
-Open **Scheduling options** on a deck to reuse an existing group or create one. A group controls daily new and review limits, desired retention, learning and relearning steps, and the supported new/review ordering. The dialog lists every deck that uses the selected group. Saving changes affects future scheduling decisions only; it never rewrites cards or review history.
+Open **Scheduling options** on a deck to reuse an existing group or create one. A group controls daily new and review limits, desired retention, learning and relearning steps, and new, review, and interday-learning order. It can bury new or review siblings until the next local study day after one of their note-mates is answered. Set a leech threshold, a tag, and whether crossing that threshold also suspends the card. The dialog lists every deck that uses the selected group. Saving changes affects future scheduling decisions only; it never rewrites cards or review history.
+
+Use **Manage cards** beside a note to resume a manually suspended card, unbury it, or set its next due time. The reviewer also has **Suspend card** and **Bury card** actions; either one refreshes the session queue immediately. These lifecycle controls retain card identity, scheduler data, and review history. Cards suspended because their template no longer generates content remain unavailable until that content is restored.
 
 Deleting a deck always asks how to handle its contents. **Relocate contents and child decks** moves the deck’s direct notes and children to a selected destination, then removes the source deck. **Delete this deck and its subtree** permanently removes the whole branch and its contained study data.
 
