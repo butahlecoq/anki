@@ -1,0 +1,19 @@
+{
+  "source": "Anki native Image Occlusion rectangular subset; hand-authored from ankitects/anki ts/routes/image-occlusion/shapes/to-cloze.ts and shapes/rectangle.ts",
+  "fields": {
+    "Occlusion": "{{c1::image-occlusion:rect:left=.1:top=.2:width=.2:height=.25}}<br>{{c3::image-occlusion:rect:left=.6:top=.2:width=.2:height=.25}}<br>",
+    "Image": "<img src=\"map.png\">",
+    "Header": "Bones",
+    "Back Extra": "Review",
+    "Comments": ""
+  },
+  "expected": {
+    "imageName": "map.png",
+    "header": "Bones",
+    "backExtra": "Review",
+    "masks": [
+      { "ordinal": 1, "x": 0.1, "y": 0.2, "width": 0.2, "height": 0.25 },
+      { "ordinal": 3, "x": 0.6, "y": 0.2, "width": 0.2, "height": 0.25 }
+    ]
+  }
+}
