@@ -1,0 +1,8 @@
+{
+  "name": "kiroku-private-ankiweb",
+  "main": "server/ankiweb-gateway.ts",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": true,
+  "vars": { "PWA_ORIGIN": "https://replace-with-your-installed-app-origin.example" },
+  "observability": { "enabled": false }
+}
