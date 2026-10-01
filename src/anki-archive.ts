@@ -111,12 +111,15 @@ function zstdMagic(value: number) { return value === 0xfd2fb528 || (value >= 0x1
 
 // Validate every frame's allocation parameters before fzstd sees it, including
 // concatenated/skippable frames. Format: https://www.rfc-editor.org/rfc/rfc8878.html
-function validateZstdHeaders(bytes: Uint8Array, limit: number) {
+function validateZstdHeaders(bytes: Uint8Array, limit: number, windowBudget: number, frameBudget: number) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
   let offset = 0
   let declared = 0n
   let allSizesKnown = true
+  let windows = 0
+  let frames = 0
   while (offset < bytes.length) {
+    if (++frames > frameBudget) invalid('too many Zstandard frames')
     bounded(offset, 4, bytes.length)
     const magic = view.getUint32(offset, true)
     offset += 4
@@ -152,6 +155,8 @@ function validateZstdHeaders(bytes: Uint8Array, limit: number) {
     declared += content
     if (single) window = Number(content)
     if (window > limit || content > BigInt(limit) || declared > BigInt(limit)) invalid('Zstandard window or content exceeds the entry limit')
+    windows += window
+    if (windows > windowBudget) invalid('Zstandard decoder windows exceed the aggregate allocation limit')
     let last = false
     while (!last) {
       bounded(offset, 3, bytes.length)
@@ -167,7 +172,7 @@ function validateZstdHeaders(bytes: Uint8Array, limit: number) {
     }
     if (flags & 4) { bounded(offset, 4, bytes.length); offset += 4 }
   }
-  return allSizesKnown ? Number(declared) : undefined
+  return { expected: allSizesKnown ? Number(declared) : undefined, windows, frames }
 }
 
 /** Reject resource-hostile packages before the Anki reader parses any data. */
@@ -175,17 +180,21 @@ export function validateAnkiArchive(bytes: Uint8Array, limits: Limits = ANKI_ARC
   if (bytes.length > limits.compressedBytes) invalid(`package exceeds the ${limits.compressedBytes / MiB} MiB compressed limit`)
   const directory = entries(bytes, limits)
   let expanded = 0
+  let windows = 0
+  let frames = 0
   for (const entry of directory) {
     const content = extract(bytes, entry)
     if (content.length >= 4 && zstdMagic(new DataView(content.buffer, content.byteOffset, content.byteLength).getUint32(0, true))) {
-      const expected = validateZstdHeaders(content, limits.entryBytes)
+      const header = validateZstdHeaders(content, limits.entryBytes, limits.expandedBytes - windows, limits.entries - frames)
+      windows += header.windows
+      frames += header.frames
       let extracted = 0
       const decoder = new Decompress((chunk) => {
         extracted += chunk.length
         if (extracted > limits.entryBytes || expanded + extracted > limits.expandedBytes) invalid('Zstandard payload exceeds the expanded limit')
       })
       for (let offset = 0; offset < content.length; offset += 4096) decoder.push(content.subarray(offset, offset + 4096), offset + 4096 >= content.length)
-      if (expected !== undefined && extracted !== expected) invalid('Zstandard content size mismatch')
+      if (header.expected !== undefined && extracted !== header.expected) invalid('Zstandard content size mismatch')
       expanded += extracted
     } else expanded += content.length
     if (expanded > limits.expandedBytes) invalid('archive payload exceeds the expanded limit')

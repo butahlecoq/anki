@@ -11,9 +11,13 @@ function rawZstd(text: string) {
   return Uint8Array.from([0x28, 0xb5, 0x2f, 0xfd, 0x20, data.length, header & 255, (header >> 8) & 255, header >> 16, ...data])
 }
 
-function unknownSizeRleZstd(size: number) {
-  const block = (size << 3) | 3
-  return Uint8Array.from([0x28, 0xb5, 0x2f, 0xfd, 0, 0, block & 255, (block >> 8) & 255, block >> 16, 65])
+function unknownSizeRleZstd(size: number, blocks = 1) {
+  const bytes = [0x28, 0xb5, 0x2f, 0xfd, 0, 0]
+  for (let index = 0; index < blocks; index += 1) {
+    const block = (size << 3) | 2 | Number(index === blocks - 1)
+    bytes.push(block & 255, (block >> 8) & 255, block >> 16, 65)
+  }
+  return Uint8Array.from(bytes)
 }
 
 function changeZipSize(bytes: Uint8Array, size: number) {
@@ -91,10 +95,19 @@ test('refuses directories the downstream ZIP reader would interpret differently'
 })
 
 test('counts actual Zstandard output when headers omit the content size', () => {
-  const bomb = zipSync({ 'collection.anki21b': unknownSizeRleZstd(1000) })
-  expect(() => validateAnkiArchive(bomb, { ...small, entryBytes: 2048 })).toThrow(/Zstandard payload exceeds/i)
+  const bomb = zipSync({ 'collection.anki21b': unknownSizeRleZstd(1000, 2) })
+  expect(() => validateAnkiArchive(bomb, { ...small, entryBytes: 2048, expandedBytes: 1500 })).toThrow(/Zstandard payload exceeds/i)
   const frames = Uint8Array.from([...unknownSizeRleZstd(1000), ...unknownSizeRleZstd(1000), ...unknownSizeRleZstd(1000)])
   expect(() => validateAnkiArchive(zipSync({ 'collection.anki21b': frames }), { ...small, entryBytes: 2048, expandedBytes: 8192 })).toThrow(/Zstandard payload exceeds/i)
+})
+
+test('bounds allocation churn from many tiny Zstandard frames', () => {
+  const frame = unknownSizeRleZstd(1)
+  const manyWindows = Uint8Array.from([...frame, ...frame, ...frame])
+  expect(() => validateAnkiArchive(zipSync({ a: manyWindows }), { ...small, entryBytes: 2048, expandedBytes: 2500 })).toThrow(/aggregate allocation limit/i)
+  const empty = rawZstd('')
+  const manyEmpty = Uint8Array.from([...empty, ...empty, ...empty])
+  expect(() => validateAnkiArchive(zipSync({ a: manyEmpty }), { ...small, entries: 2 })).toThrow(/too many Zstandard frames/i)
 })
 
 test('validates all concatenated frames and aggregate nested expansion', () => {
@@ -106,7 +119,7 @@ test('validates all concatenated frames and aggregate nested expansion', () => {
   const mismatched = rawZstd('safe')
   mismatched[5] = 10
   expect(() => validateAnkiArchive(zipSync({ a: mismatched }), small)).toThrow(/content size mismatch/i)
-  expect(() => validateAnkiArchive(zipSync({ a: unknownSizeRleZstd(1000), b: unknownSizeRleZstd(1000) }), { ...small, entryBytes: 2048, expandedBytes: 1500 })).toThrow(/Zstandard payload exceeds/i)
+  expect(() => validateAnkiArchive(zipSync({ a: unknownSizeRleZstd(1000, 2), b: unknownSizeRleZstd(1000, 2) }), { ...small, entryBytes: 2048, expandedBytes: 2500 })).toThrow(/Zstandard payload exceeds/i)
 })
 
 test('rejects a package exceeding the documented compressed budget', () => {
