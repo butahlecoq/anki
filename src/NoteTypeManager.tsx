@@ -2,12 +2,14 @@ import { useState, type FormEvent } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { collection, type NoteType, type NoteTypeField } from './collection'
 import { TemplatePreview } from './TemplatePreview'
+import { clozeOrdinals } from './template-renderer'
 
 type DraftField = { key: string; id?: string; name: string }
 type DraftTemplate = { key: string; id?: string; name: string; front: string; back: string; css: string }
 
 function TypeEditor({ noteType, onClose }: { noteType?: NoteType; onClose: () => void }) {
   const [name, setName] = useState(noteType?.name ?? '')
+  const [kind, setKind] = useState<NoteType['kind']>(noteType?.kind ?? 'standard')
   const [fields, setFields] = useState<DraftField[]>(() => noteType?.fields.map((field) => ({ ...field, key: field.id })) ?? [
     { key: crypto.randomUUID(), name: 'Front' }, { key: crypto.randomUUID(), name: 'Back' },
   ])
@@ -18,6 +20,7 @@ function TypeEditor({ noteType, onClose }: { noteType?: NoteType; onClose: () =>
   const [removed, setRemoved] = useState<NoteTypeField[]>([])
   const [previewTemplate, setPreviewTemplate] = useState(0)
   const [previewSide, setPreviewSide] = useState<'front' | 'back'>('front')
+  const [previewOrdinal, setPreviewOrdinal] = useState(1)
   const [sampleOverrides, setSampleOverrides] = useState<Record<string, string>>({})
   const [error, setError] = useState('')
   const exampleNote = useLiveQuery(() => noteType ? collection.notes.where('typeId').equals(noteType.id).first() : undefined, [noteType?.id])
@@ -36,6 +39,20 @@ function TypeEditor({ noteType, onClose }: { noteType?: NoteType; onClose: () =>
     setFields((current) => current.filter((_, position) => position !== index))
   }
 
+  function changeKind(next: NoteType['kind']) {
+    setKind(next)
+    setPreviewTemplate(0)
+    setPreviewOrdinal(1)
+    setSampleOverrides({})
+    if (next === 'cloze') {
+      setFields([{ key: crypto.randomUUID(), name: 'Text' }, { key: crypto.randomUUID(), name: 'Extra' }])
+      setTemplates([{ key: crypto.randomUUID(), name: 'Deletion', front: '{{cloze:Text}}', back: '{{cloze:Text}}<hr>{{Extra}}', css: '' }])
+    } else {
+      setFields([{ key: crypto.randomUUID(), name: 'Front' }, { key: crypto.randomUUID(), name: 'Back' }])
+      setTemplates([{ key: crypto.randomUUID(), name: 'Card 1', front: '{{Front}}', back: '{{Back}}', css: '' }])
+    }
+  }
+
   async function save(event: FormEvent) {
     event.preventDefault()
     setError('')
@@ -49,7 +66,7 @@ function TypeEditor({ noteType, onClose }: { noteType?: NoteType; onClose: () =>
           removedFields,
         })
       } else {
-        await collection.createNoteType({ name, fields: fields.map(({ name }) => ({ name })), templates: templates.map(({ name, front, back, css }) => ({ name, front, back, css })) })
+        await collection.createNoteType({ name, kind, fields: fields.map(({ name }) => ({ name })), templates: templates.map(({ name, front, back, css }) => ({ name, front, back, css })) })
       }
       onClose()
     } catch (reason) {
@@ -58,7 +75,14 @@ function TypeEditor({ noteType, onClose }: { noteType?: NoteType; onClose: () =>
   }
 
   const selected = templates[previewTemplate] ?? templates[0]
-  const displayFields = Object.fromEntries(fields.map((field) => [field.name, sampleOverrides[field.id ?? field.key] ?? exampleNote?.fields[field.id ?? field.key] ?? '']))
+  const clozeFieldName = templates[0]?.front.match(/{{\s*cloze:([^{}:]+?)\s*}}/)?.[1].trim()
+  const displayFields = Object.fromEntries(fields.map((field) => [field.name, sampleOverrides[field.id ?? field.key] ?? exampleNote?.fields[field.id ?? field.key] ?? (kind === 'cloze' && field.name === clozeFieldName ? '{{c1::東京::city}}に{{c2::行く}}' : '')]))
+  let previewOrdinals: number[] = []
+  if (kind === 'cloze') {
+    try { previewOrdinals = clozeOrdinals(displayFields[clozeFieldName ?? ''] ?? '') }
+    catch { /* The preview reports the malformed sample. */ }
+  }
+  const shownOrdinal = previewOrdinals.includes(previewOrdinal) ? previewOrdinal : previewOrdinals[0]
 
   return (
     <div className="dialog-backdrop">
@@ -67,6 +91,7 @@ function TypeEditor({ noteType, onClose }: { noteType?: NoteType; onClose: () =>
         <h2 id="type-dialog-title">{noteType ? `Edit ${noteType.name}` : 'Create note type'}</h2>
         <form onSubmit={(event) => void save(event)}>
           <label>Note type name<input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label>
+          <label>Card generation<select value={kind} disabled={Boolean(noteType)} onChange={(event) => changeKind(event.target.value as NoteType['kind'])}><option value="standard">Standard</option><option value="cloze">Cloze deletions</option></select></label>
           <section className="editor-section" aria-label="Fields">
             <h3>Fields</h3>
             {fields.map((field, index) => (
@@ -99,16 +124,17 @@ function TypeEditor({ noteType, onClose }: { noteType?: NoteType; onClose: () =>
                 {templates.length > 1 && <button className="text-button" type="button" onClick={() => { setTemplates((current) => current.filter((item) => item.key !== template.key)); setPreviewTemplate(0) }}>Remove template</button>}
               </div>
             ))}
-            <button className="text-button" type="button" onClick={() => setTemplates((current) => [...current, { key: crypto.randomUUID(), name: `Card ${current.length + 1}`, front: '', back: '', css: '' }])}>Add template</button>
+            {kind === 'standard' && <button className="text-button" type="button" onClick={() => setTemplates((current) => [...current, { key: crypto.randomUUID(), name: `Card ${current.length + 1}`, front: '', back: '', css: '' }])}>Add template</button>}
           </section>
           <section className="editor-section" aria-label="Card preview settings">
             <h3>Preview</h3>
             <div className="preview-controls">
               <label>Preview template<select value={previewTemplate} onChange={(event) => setPreviewTemplate(Number(event.target.value))}>{templates.map((template, index) => <option value={index} key={template.key}>{template.name || `Template ${index + 1}`}</option>)}</select></label>
               <label>Preview side<select value={previewSide} onChange={(event) => setPreviewSide(event.target.value as 'front' | 'back')}><option value="front">Front</option><option value="back">Back</option></select></label>
+              {kind === 'cloze' && <label>Preview ordinal<select value={shownOrdinal ?? ''} onChange={(event) => setPreviewOrdinal(Number(event.target.value))}>{previewOrdinals.map((ordinal) => <option value={ordinal} key={ordinal}>c{ordinal}</option>)}</select></label>}
             </div>
-            <div className="preview-samples">{fields.map((field) => <label key={field.key}>Sample {field.name || 'field'}<input value={sampleOverrides[field.id ?? field.key] ?? exampleNote?.fields[field.id ?? field.key] ?? ''} onChange={(event) => setSampleOverrides((current) => ({ ...current, [field.id ?? field.key]: event.target.value }))} /></label>)}</div>
-            {selected && <TemplatePreview front={selected.front} back={selected.back} css={selected.css} fields={displayFields} side={previewSide} />}
+            <div className="preview-samples">{fields.map((field) => <label key={field.key}>Sample {field.name || 'field'}<input value={displayFields[field.name] ?? ''} onChange={(event) => setSampleOverrides((current) => ({ ...current, [field.id ?? field.key]: event.target.value }))} /></label>)}</div>
+            {selected && <TemplatePreview front={selected.front} back={selected.back} css={selected.css} fields={displayFields} kind={kind} ordinal={shownOrdinal} side={previewSide} />}
           </section>
           {error && <p className="form-error" role="alert">{error}</p>}
           <div className="dialog-actions"><button className="text-button" type="button" onClick={onClose}>Cancel</button><button className="primary-action" type="submit">{noteType ? 'Save changes' : 'Save note type'}</button></div>

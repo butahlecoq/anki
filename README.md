@@ -54,18 +54,37 @@ Basic notes accept PNG, JPEG, and WebP images up to 10 MB, plus MP3, Ogg, and WA
 
 ## Note types and card templates
 
-Open **Note types** to create a reusable set of fields and one or more card templates. Each template generates a separate study card from a note when its front uses a field with a visible value. The note editor shows how many cards will be created and why an empty template is skipped. If an existing card becomes empty, it is suspended from review; its review history remains available if the card becomes eligible again.
+Open **Note types** to create a reusable set of fields and card templates. A **Standard** type creates one card per template whose front uses a nonblank field or typed-answer prompt. A **Cloze deletions** type creates one card per distinct deletion number in its cloze field. The note editor shows the card count and why a card is skipped. If a card becomes ineligible, it is suspended from review; restoring its content restores the same card and review history.
 
 Templates support HTML, CSS, and this small replacement syntax:
 
 | Syntax | Effect |
 | --- | --- |
 | `{{Field}}` | Insert a field value by its displayed name. Field values are escaped and shown as text, including any HTML they contain. |
+| `{{text:Field}}` | Insert the escaped field text. |
+| `{{furigana:Field}}` | Render `漢字[かんじ]` as ruby text with a reading. |
+| `{{kana:Field}}` / `{{kanji:Field}}` | Use the reading or base text, respectively, from annotated text. |
+| `{{cloze:Field}}` | Mask the active deletion on the front and reveal it on the back of a cloze card. |
+| `{{type:Field}}` | Ask for a typed answer using the field value. |
+| `{{type:cloze:Field}}` | Ask for the active cloze deletion as a typed answer. |
 | `{{#Field}}…{{/Field}}` | Include content when the field has a nonblank value. |
 | `{{^Field}}…{{/Field}}` | Include content when the field is blank. |
+| `{{#c1}}…{{/c1}}` / `{{^c1}}…{{/c1}}` | Include content on cloze ordinal 1, or on other ordinals, respectively. |
 | `{{FrontSide}}` | Insert the rendered front on the back of the card. |
 
-`{{FrontSide}}` is available only on the back. Conditional sections cannot be nested. Template HTML and CSS render in a sandboxed frame, so their styles stay inside the card and scripts cannot access the app. Basic notes retain their image and audio attachments in review.
+`{{FrontSide}}` is available only on the back. Conditional sections cannot be nested or filtered. A field whose exact name contains `:` remains available as `{{that:name}}`; an exact field name takes precedence over filter parsing. Unknown fields, unsupported filters such as `{{type:nc:Field}}`, and malformed delimiters produce an error. Template HTML and CSS render in a sandboxed frame, so their styles stay inside the card and scripts cannot access the app. Field values are escaped, and Basic notes retain their image and audio attachments in review.
+
+### Cloze notes and Japanese readings
+
+A cloze field uses `{{cN::answer}}` or `{{cN::answer::hint}}`, where `N` is a positive integer. For example, `{{c1::東京::city}}に{{c2::行く}}` creates cards `c1` and `c2`; the front of `c1` shows `[city]に行く` and its back reveals `東京`. A deletion without a hint shows `[…]`. Repeating `c1` in the same note makes one card that masks both `c1` deletions. Numbers may have gaps: `c1` and `c3` create two cards. The editor's **Make cloze** button wraps selected text with the next number; existing deletion numbers can also be edited directly. A cloze type has one template, with the same `{{cloze:Field}}` reference once on its front and once on its back. Preview lets you select an ordinal and side.
+
+The supported grammar does not include nested deletions or multi-ordinal markers such as `{{c1,2::answer}}`. A deletion needs a nonempty answer and at most one optional hint. Malformed or unclosed deletions show an error in the editor and do not save a partial note edit.
+
+Reading filters recognize a base beginning with one or more Han characters, optionally followed by hiragana or katakana, immediately before `[reading]`. For example, `私[わたし]は猫[ねこ]` becomes `私` and `猫` with separate ruby readings; `は` stays outside both annotations. `kana:` produces `わたしはねこ`, while `kanji:` produces `私は猫`. Unannotated text stays as entered. Bracket text without a matching Han-based annotation stays escaped text.
+
+Place `{{type:Field}}` or `{{type:cloze:Field}}` on the front to enable a typed response. A typed-answer token alone is enough to make a card when its expected answer is nonblank. Use one typed-answer token on the front; a second produces an error. If an ordinal has several deletions, `type:cloze:` expects their answers joined by `, `. The input and comparison appear outside the card frame; pressing Enter reveals a grapheme-aware difference after trimming and Unicode normalization, and moves focus to its announced result. The learner still chooses a review rating. Typed input is transient local review state and is never synced.
+
+Current-version clients sync cloze note types, deterministic per-ordinal cards, and review history. A removed ordinal suspends its card; restoring it retains its schedule. Sync does not yet negotiate schema capabilities with older clients. Do not sync a cloze collection with a v6 client: it may acknowledge changes it cannot represent. Mixed-version rejection and upgrade guidance are tracked by [Issue #35](https://github.com/butahlecoq/anki/issues/35). Malformed synced templates are contained in the reviewer as a card error with **Skip card** and **End session** actions.
 
 Removing a field with saved values requires choosing **Keep as retired data** or **Discard saved values**. Retired values remain on the note under **Retired fields** and no longer fill templates. Deleting a note type used by notes requires a replacement type and an explicit mapping for fields you want to carry over; unmapped values are kept as retired data. Renaming a field updates its template references while preserving its saved values.
 

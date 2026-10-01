@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import {
   Rating,
   BASIC_NOTE_TYPE_ID,
   collection,
-  renderNoteTemplate,
+  tryRenderNoteTemplate,
   type Deck,
   type DeckCounts,
   type DeckSummary,
@@ -17,6 +17,8 @@ import { NoteTypeManager } from './NoteTypeManager'
 import { TemplatePreview } from './TemplatePreview'
 import { validateMedia } from './media'
 import { pairCollection, syncCollection } from './sync-client'
+import { clozeOrdinals } from './template-renderer'
+import { compareTypedAnswer } from './typed-answer'
 
 type Route =
   | { view: 'decks' }
@@ -106,8 +108,30 @@ function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: Note; on
   const [fields, setFields] = useState<Record<string, string>>(note?.fields ?? {})
   const [error, setError] = useState('')
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
+  const textareas = useRef<Record<string, HTMLTextAreaElement | null>>({})
   const existingMedia = useLiveQuery(() => note ? collection.mediaForNote(note.id) : [], [note?.id], [])
-  const generation = noteType ? collection.cardGenerationStatus(noteType, fields) : undefined
+  const generation = noteType ? collection.tryCardGenerationStatus(noteType, fields) : undefined
+  const clozeEditorField = noteType?.kind === 'cloze' ? noteType.templates[0]?.front.match(/{{\s*cloze:([^{}:]+?)\s*}}/)?.[1].trim() : undefined
+
+  function makeCloze(fieldId: string) {
+    const textarea = textareas.current[fieldId]
+    if (!textarea) return
+    const value = fields[fieldId] ?? ''
+    const { selectionStart: start, selectionEnd: end } = textarea
+    if (start === end) { setError('Select text to make a cloze deletion'); return }
+    if (/{{|}}/.test(value.slice(start, end)) || [...value.matchAll(/{{c\d+::[\s\S]*?}}/g)].some((match) => start < match.index + match[0].length && end > match.index)) {
+      setError('Select text outside existing deletions'); return
+    }
+    try {
+      const ordinal = Math.max(0, ...clozeOrdinals(value)) + 1
+      const replacement = `{{c${ordinal}::${value.slice(start, end)}}}`
+      setFields((current) => ({ ...current, [fieldId]: value.slice(0, start) + replacement + value.slice(end) }))
+      setError('')
+      requestAnimationFrame(() => { textarea.focus(); textarea.setSelectionRange(start, start + replacement.length) })
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Unable to make cloze deletion')
+    }
+  }
 
   function selectMedia(files: FileList | null) {
     if (!files?.length) return
@@ -149,10 +173,13 @@ function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: Note; on
               {noteTypes.map((type) => <option value={type.id} key={type.id}>{type.name}</option>)}
             </select>
           </label>
-          {noteType?.fields.map((field, index) => <label key={field.id}>
-            {typeId === BASIC_NOTE_TYPE_ID ? field.name[0].toUpperCase() + field.name.slice(1) : field.name}
-            <textarea autoFocus={index === 0} lang="ja" value={fields[field.id] ?? ''} onChange={(event) => setFields((current) => ({ ...current, [field.id]: event.target.value }))} rows={index === 0 ? 3 : 4} />
-          </label>)}
+          {noteType?.fields.map((field, index) => <div key={field.id}>
+            <label>{typeId === BASIC_NOTE_TYPE_ID ? field.name[0].toUpperCase() + field.name.slice(1) : field.name}
+              <textarea ref={(element) => { textareas.current[field.id] = element }} autoFocus={index === 0} lang="ja" value={fields[field.id] ?? ''} onChange={(event) => setFields((current) => ({ ...current, [field.id]: event.target.value }))} rows={index === 0 ? 3 : 4} />
+            </label>
+            {clozeEditorField === field.name && <button className="text-button" type="button" onClick={() => makeCloze(field.id)}>Make cloze</button>}
+          </div>)}
+          {noteType?.kind === 'cloze' && <small>Select text and choose Make cloze, or type {'{{c1::answer::optional hint}}'} directly. Each number creates one card.</small>}
           {typeId === BASIC_NOTE_TYPE_ID && <label>
             Images and audio
             <input type="file" multiple accept="image/png,image/jpeg,image/webp,audio/mpeg,audio/ogg,audio/wav" onChange={(event) => selectMedia(event.target.files)} />
@@ -172,8 +199,9 @@ function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: Note; on
             <p>Saved values from fields that are no longer part of this note type.</p>
             <dl>{Object.entries(note.retiredFields).map(([fieldId, value]) => <div key={fieldId}><dt>Retired field · {fieldId}</dt><dd>{value || '(empty)'}</dd></div>)}</dl>
           </section>}
-          {typeId !== BASIC_NOTE_TYPE_ID && generation && <p className="card-generation-status" aria-live="polite">{generation.eligible.length} {generation.eligible.length === 1 ? 'card' : 'cards'} will be created.</p>}
-          {generation?.skipped.map(({ templateId, reason }) => <p className="form-warning" role="status" key={templateId}>{noteType?.templates.find((template) => template.id === templateId)?.name}: {reason}. No card will be created.</p>)}
+          {typeId !== BASIC_NOTE_TYPE_ID && generation?.ok && <p className="card-generation-status" aria-live="polite">{generation.value.eligible.length} {generation.value.eligible.length === 1 ? 'card' : 'cards'} will be created.</p>}
+          {generation?.ok && generation.value.skipped.map(({ templateId, reason }) => <p className="form-warning" role="status" key={templateId}>{noteType?.templates.find((template) => template.id === templateId)?.name}: {reason}. No card will be created.</p>)}
+          {generation && !generation.ok && <p className="form-error" role="alert">{generation.error}</p>}
           {error && <p className="form-error" role="alert">{error}</p>}
           <div className="dialog-actions">
             <button className="text-button" type="button" onClick={onClose}>Cancel</button>
@@ -375,20 +403,33 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   const [showAnswer, setShowAnswer] = useState(false)
   const [reviewsRecorded, setReviewsRecorded] = useState(0)
   const [isAnswering, setIsAnswering] = useState(false)
+  const [typedDraft, setTypedDraft] = useState<{ cardId?: string; value: string }>({ value: '' })
+  const typedResultRef = useRef<HTMLDivElement>(null)
   const cardId = queue?.[0]
+  const typedInput = typedDraft.cardId === cardId ? typedDraft.value : ''
   const card = useLiveQuery(async () => cardId ? await collection.cards.get(cardId) ?? null : undefined, [cardId])
   const note = useLiveQuery(async () => card ? await collection.notes.get(card.noteId) ?? null : undefined, [card?.noteId])
   const noteType = useLiveQuery(async () => note ? await collection.noteTypes.get(note.typeId) ?? null : undefined, [note?.typeId])
   const media = useLiveQuery(() => card ? collection.mediaForNote(card.noteId) : [], [card?.noteId], [])
   const choices = useLiveQuery(() => card ? collection.reviewChoices(card.id, new Date()) : [], [card?.id], [])
   const template = noteType?.templates.find((candidate) => candidate.id === card?.templateId)
+  const frontResult = template && noteType && note && card
+    ? tryRenderNoteTemplate(template.front, noteType, note.fields, undefined, card.clozeOrdinal, 'front') : undefined
+  const backResult = frontResult?.ok && template && noteType && note && card
+    ? tryRenderNoteTemplate(template.back, noteType, note.fields, frontResult.value.html, card.clozeOrdinal, 'back') : undefined
+  const typedAnswer = frontResult?.ok ? frontResult.value.typedAnswer : undefined
+  const renderError = frontResult && !frontResult.ok ? frontResult.error : backResult && !backResult.ok ? backResult.error : undefined
   const unavailable = card === null || note === null || noteType === null ||
     Boolean(card?.suspended) || (Boolean(noteType && card) && !template) ||
-    Boolean(template && noteType && note && renderNoteTemplate(template.front, noteType, note.fields).isEmpty)
+    Boolean(frontResult?.ok && frontResult.value.isEmpty)
 
   useEffect(() => {
     collection.dueCards(deckId, new Date()).then((cards) => setQueue(cards.map((card) => card.id)))
   }, [deckId])
+
+  useEffect(() => {
+    if (showAnswer && typedAnswer !== undefined) typedResultRef.current?.focus()
+  }, [cardId, showAnswer, typedAnswer])
 
   useEffect(() => {
     if (cardId && unavailable && (card === null || note === null || noteType === null ||
@@ -428,16 +469,36 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     )
   }
 
+  function skipCard() {
+    setShowAnswer(false)
+    setQueue((current) => current?.slice(1) ?? [])
+  }
+
+  if (renderError) return <section className="review-session">
+    <div className="review-progress"><span>REVIEW // {String(reviewsRecorded + 1).padStart(2, '0')}</span><button className="text-button" onClick={onBack}>End session</button></div>
+    <article className="review-card"><p className="form-error" role="alert">Unable to render card: {renderError}</p></article>
+    <button className="primary-action" type="button" onClick={skipCard}>Skip card</button>
+  </section>
+
   const fields = Object.fromEntries(noteType.fields.map((field) => [field.name, note.fields[field.id] ?? '']))
+  const answerDiff = showAnswer && typedAnswer !== undefined ? compareTypedAnswer(typedAnswer, typedInput) : []
 
   return (
     <section className="review-session">
       <div className="review-progress"><span>REVIEW // {String(reviewsRecorded + 1).padStart(2, '0')}</span><button className="text-button" onClick={onBack}>End session</button></div>
       <article className="review-card">
         <span className="card-side">{showAnswer ? 'ANSWER' : 'QUESTION'}</span>
-        <TemplatePreview key={card.id} title="Review card" front={template.front} back={template.back} css={template.css} fields={fields} side={showAnswer ? 'back' : 'front'} />
+        <TemplatePreview key={card.id} title="Review card" front={template.front} back={template.back} css={template.css} fields={fields} kind={noteType.kind} ordinal={card.clozeOrdinal} side={showAnswer ? 'back' : 'front'} />
         {noteType.id === BASIC_NOTE_TYPE_ID && media.filter((reference) => reference.side === 'front').map((reference) => <MediaRenderer key={reference.id} reference={reference} automatic />)}
         {noteType.id === BASIC_NOTE_TYPE_ID && showAnswer && media.filter((reference) => reference.side === 'back').map((reference) => <MediaRenderer key={reference.id} reference={reference} automatic />)}
+        {typedAnswer !== undefined && !showAnswer && <label className="typed-answer">Type your answer
+          <input autoComplete="off" value={typedInput} onChange={(event) => setTypedDraft({ cardId, value: event.target.value })} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); setShowAnswer(true) } }} />
+        </label>}
+        {typedAnswer !== undefined && showAnswer && <div ref={typedResultRef} className="typed-answer-result" role="status" aria-live="polite" aria-label="Typed answer comparison" tabIndex={-1}>
+          <span className="section-code">YOUR ANSWER</span>
+          <div className="answer-diff">{answerDiff.map((part, index) => <span key={index} className={`answer-${part.kind}`} aria-label={`${part.kind === 'good' ? 'Correct' : part.kind === 'bad' ? 'Incorrect' : 'Missing'}: ${part.text}`}>{part.text}</span>)}</div>
+          <p>Expected: <strong>{typedAnswer}</strong></p>
+        </div>}
       </article>
       {!showAnswer ? (
         <button className="primary-action reveal-action" type="button" onClick={() => setShowAnswer(true)}>Show answer</button>
