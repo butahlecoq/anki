@@ -1,9 +1,15 @@
 import 'fake-indexeddb/auto'
 import Dexie from 'dexie'
 import { afterEach, describe, expect, test } from 'vitest'
-import { BASIC_NOTE_TYPE_ID, createCollection, Rating, type Collection } from './collection'
+import { BASIC_NOTE_TYPE_ID, createCollection, Rating, State, type CardRecord, type Collection, type DeckOptionSettings } from './collection'
 
 let collection: Collection | undefined
+
+type SchedulingSettings = DeckOptionSettings
+
+function directCard(id: string, deckId: string, noteId: string, state: State, due: string): CardRecord {
+  return { id, deckId, noteId, templateId: 'basic', due, stability: 0, difficulty: 0, elapsedDays: 0, scheduledDays: 0, learningSteps: 0, reps: 0, lapses: 0, state, lastReview: null }
+}
 
 afterEach(async () => {
   await collection?.delete()
@@ -36,6 +42,116 @@ describe('local collection', () => {
     await expect(collection.decks.get('legacy-deck')).resolves.toMatchObject({ id: 'legacy-deck', parentId: null, optionGroupId: 'default' })
     await expect(collection.deckOptionGroups.get('default')).resolves.toMatchObject({ id: 'default', name: 'Default', protected: true })
     await expect(collection.pendingOperations()).resolves.toHaveLength(0)
+  })
+
+  test('upgrades reusable option groups with validated scheduling defaults without rewriting cards or reviews', async () => {
+    const databaseName = `kiroku-test-${crypto.randomUUID()}`
+    const old = new Dexie(databaseName)
+    old.version(9).stores({ decks: 'id, parentId, optionGroupId, name, createdAt', notes: 'id, deckId, typeId, updatedAt', cards: 'id, deckId, noteId, templateId, due, state', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId', deletedEntities: 'key, entityType, entityId, occurredAt', noteMedia: 'id, noteId, digest, side, kind, updatedAt', mediaBlobs: 'digest, verifiedAt', noteTypes: 'id, name, updatedAt', deckOptionGroups: 'id, name, updatedAt' })
+    const card = directCard('legacy-card', 'legacy-deck', 'legacy-note', State.Review, '2026-10-01T00:00:00.000Z')
+    const review = { id: 'legacy-review', cardId: card.id, deckId: card.deckId, rating: Rating.Good, state: State.Review, due: card.due, stability: 2, difficulty: 4, elapsedDays: 1, lastElapsedDays: 1, scheduledDays: 2, learningSteps: 0, reviewedAt: '2026-10-01T00:00:00.000Z' }
+    await old.table('deckOptionGroups').add({ id: 'legacy-group', name: 'Legacy', protected: false, createdAt: '2026-01-01', updatedAt: '2026-01-01' })
+    await old.table('cards').add(card)
+    await old.table('reviewEntries').add(review)
+    old.close()
+
+    collection = createCollection(databaseName)
+
+    await expect(collection.deckOptionGroups.get('legacy-group')).resolves.toMatchObject({ dailyNewLimit: 20, dailyReviewLimit: 200, desiredRetention: 0.9, learningSteps: ['1m', '10m'], relearningSteps: ['10m'], newCardOrder: 'added', reviewCardOrder: 'due' })
+    await expect(collection.cards.get(card.id)).resolves.toEqual(card)
+    await expect(collection.reviewEntries.get(review.id)).resolves.toEqual(review)
+    await expect(collection.updateDeckOptionGroup('legacy-group', { dailyNewLimit: -1, dailyReviewLimit: 1, desiredRetention: 0.9, learningSteps: ['1m'], relearningSteps: [], newCardOrder: 'added', reviewCardOrder: 'due' })).rejects.toThrow(/daily new/i)
+    await expect(collection.updateDeckOptionGroup('legacy-group', { dailyNewLimit: 1, dailyReviewLimit: 1, desiredRetention: 0, learningSteps: ['1m'], relearningSteps: [], newCardOrder: 'added', reviewCardOrder: 'due' })).rejects.toThrow(/retention/i)
+    await expect(collection.updateDeckOptionGroup('legacy-group', { dailyNewLimit: 1, dailyReviewLimit: 1, desiredRetention: 0.9, learningSteps: ['soon'], relearningSteps: [], newCardOrder: 'added', reviewCardOrder: 'due' })).rejects.toThrow(/learning step/i)
+  })
+
+  test('uses a shared option group for future scheduling while preserving existing history and card state', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const group = await collection.createDeckOptionGroup('Slow learning')
+    const first = await collection.createDeck('First', { optionGroupId: group.id })
+    const second = await collection.createDeck('Second', { optionGroupId: group.id })
+    const firstNote = await collection.createBasicNote(first.id, { front: '一', back: 'one' }, new Date('2026-10-01T08:00:00.000Z'))
+    const secondNote = await collection.createBasicNote(second.id, { front: '二', back: 'two' }, new Date('2026-10-01T08:00:00.000Z'))
+    const firstCard = (await collection.cards.where('noteId').equals(firstNote.id).first())!
+    const secondCard = (await collection.cards.where('noteId').equals(secondNote.id).first())!
+    const settings: SchedulingSettings = { dailyNewLimit: 5, dailyReviewLimit: 15, desiredRetention: 0.9, learningSteps: ['2h'], relearningSteps: ['30m'], newCardOrder: 'added', reviewCardOrder: 'due' }
+
+    await collection.updateDeckOptionGroup(group.id, settings, new Date('2026-10-01T09:00:00.000Z'))
+    await expect(collection.deckOptionGroups.get(group.id)).resolves.toMatchObject(settings)
+    await expect(collection.reviewChoices(firstCard.id, new Date('2026-10-01T10:00:00.000Z'))).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ label: 'Again', interval: '2h' })]))
+    await expect(collection.reviewChoices(secondCard.id, new Date('2026-10-01T10:00:00.000Z'))).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ label: 'Again', interval: '2h' })]))
+
+    await collection.answer(firstCard.id, Rating.Good, new Date('2026-10-01T10:00:00.000Z'))
+    const scheduled = await collection.cards.get(firstCard.id)
+    const history = await collection.reviewEntries.where('cardId').equals(firstCard.id).toArray()
+    await collection.updateDeckOptionGroup(group.id, { ...settings, desiredRetention: 0.95, learningSteps: ['4h'] }, new Date('2026-10-01T11:00:00.000Z'))
+
+    await expect(collection.cards.get(firstCard.id)).resolves.toEqual(scheduled)
+    await expect(collection.reviewEntries.where('cardId').equals(firstCard.id).toArray()).resolves.toEqual(history)
+  })
+
+  test('aggregates descendant queues while enforcing each owning deck option group daily caps from review pre-state', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const active = collection
+    const root = await active.createDeck('Root')
+    const childGroup = await active.createDeckOptionGroup('Child limits')
+    const child = await active.createDeck('Child', { parentId: root.id, optionGroupId: childGroup.id })
+    await active.updateDeckOptionGroup(childGroup.id, { dailyNewLimit: 2, dailyReviewLimit: 1, desiredRetention: 0.9, learningSteps: ['1m'], relearningSteps: ['10m'], newCardOrder: 'added', reviewCardOrder: 'due' })
+    const rootNote = await active.createBasicNote(root.id, { front: 'root', back: 'root' }, new Date('2026-10-01T08:00:00.000Z'))
+    const childNotes = await Promise.all(['a', 'b', 'c'].map((front) => active.createBasicNote(child.id, { front, back: front }, new Date('2026-10-01T08:00:00.000Z'))))
+    const childCards = await Promise.all(childNotes.map((note) => active.cards.where('noteId').equals(note.id).first()))
+    const reviewedNew = childCards[0]!
+    await collection.cards.update(reviewedNew.id, { state: State.Learning, due: '2026-10-02T08:00:00.000Z' })
+    await collection.reviewEntries.add({ id: 'already-new', cardId: reviewedNew.id, deckId: child.id, rating: Rating.Good, state: State.New, due: '2026-10-02T08:00:00.000Z', stability: 1, difficulty: 5, elapsedDays: 0, lastElapsedDays: 0, scheduledDays: 0, learningSteps: 1, reviewedAt: '2026-10-01T09:00:00.000Z' })
+    const reviewed = directCard('reviewed', child.id, 'reviewed-note', State.Learning, '2026-10-01T08:00:00.000Z')
+    const reviewDue = directCard('review-due', child.id, 'review-note', State.Review, '2026-10-01T08:00:00.000Z')
+    await collection.cards.bulkAdd([reviewed, reviewDue])
+    await collection.reviewEntries.add({ id: 'already-review', cardId: reviewed.id, deckId: child.id, rating: Rating.Good, state: State.Review, due: reviewed.due, stability: 1, difficulty: 5, elapsedDays: 0, lastElapsedDays: 0, scheduledDays: 1, learningSteps: 0, reviewedAt: '2026-10-01T09:00:00.000Z' })
+
+    const queue = await collection.dueCards(root.id, new Date('2026-10-01T12:00:00.000Z'))
+
+    expect(queue.map((card) => card.id)).toEqual(expect.arrayContaining([(await collection.cards.where('noteId').equals(rootNote.id).first())!.id]))
+    expect(queue.filter((card) => card.deckId === child.id && card.state === State.New)).toHaveLength(1)
+    expect(queue).toEqual(expect.arrayContaining([reviewed]))
+    expect(queue.find((card) => card.id === reviewDue.id)).toBeUndefined()
+  })
+
+  test('orders new and review cards according to their group with a deterministic per-day random order', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const group = { id: 'ordering-group', name: 'Ordering', protected: false, dailyNewLimit: 10, dailyReviewLimit: 10, desiredRetention: 0.9, learningSteps: ['1m'], relearningSteps: ['10m'], newCardOrder: 'added' as const, reviewCardOrder: 'due' as const, createdAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-01T00:00:00.000Z' }
+    const deck = { id: 'ordering-deck', name: 'Ordered', parentId: null, optionGroupId: group.id, createdAt: group.createdAt, updatedAt: group.updatedAt }
+    await collection.deckOptionGroups.add(group)
+    await collection.decks.add(deck)
+    await collection.notes.bulkAdd([
+      { id: 'late', deckId: deck.id, type: 'basic', typeId: 'basic', fields: {}, createdAt: '2026-10-01T09:00:00.000Z', updatedAt: '2026-10-01T09:00:00.000Z' },
+      { id: 'early', deckId: deck.id, type: 'basic', typeId: 'basic', fields: {}, createdAt: '2026-10-01T08:00:00.000Z', updatedAt: '2026-10-01T08:00:00.000Z' },
+      { id: 'middle', deckId: deck.id, type: 'basic', typeId: 'basic', fields: {}, createdAt: '2026-10-01T08:30:00.000Z', updatedAt: '2026-10-01T08:30:00.000Z' },
+      { id: 'fourth', deckId: deck.id, type: 'basic', typeId: 'basic', fields: {}, createdAt: '2026-10-01T08:45:00.000Z', updatedAt: '2026-10-01T08:45:00.000Z' },
+      { id: 'fifth', deckId: deck.id, type: 'basic', typeId: 'basic', fields: {}, createdAt: '2026-10-01T08:50:00.000Z', updatedAt: '2026-10-01T08:50:00.000Z' },
+    ])
+    await collection.cards.bulkAdd([
+      directCard('new-late', deck.id, 'late', State.New, '2026-10-01T09:00:00.000Z'),
+      directCard('new-early', deck.id, 'early', State.New, '2026-10-01T08:00:00.000Z'),
+      directCard('new-middle', deck.id, 'middle', State.New, '2026-10-01T08:30:00.000Z'),
+      directCard('new-fourth', deck.id, 'fourth', State.New, '2026-10-01T08:45:00.000Z'),
+      directCard('new-fifth', deck.id, 'fifth', State.New, '2026-10-01T08:50:00.000Z'),
+      directCard('review-late', deck.id, 'review-late-note', State.Review, '2026-10-01T11:00:00.000Z'),
+      directCard('review-early', deck.id, 'review-early-note', State.Review, '2026-10-01T10:00:00.000Z'),
+      directCard('review-middle', deck.id, 'review-middle-note', State.Review, '2026-10-01T10:30:00.000Z'),
+      directCard('review-fourth', deck.id, 'review-fourth-note', State.Review, '2026-10-01T10:45:00.000Z'),
+      directCard('review-fifth', deck.id, 'review-fifth-note', State.Review, '2026-10-01T10:50:00.000Z'),
+    ])
+
+    const dueOrder = await collection.dueCards(deck.id, new Date('2026-10-01T12:00:00.000Z'))
+    expect(dueOrder.filter((card) => card.state === State.New).map((card) => card.id)).toEqual(['new-early', 'new-middle', 'new-fourth', 'new-fifth', 'new-late'])
+    expect(dueOrder.filter((card) => card.state === State.Review).map((card) => card.id)).toEqual(['review-early', 'review-middle', 'review-fourth', 'review-fifth', 'review-late'])
+
+    await collection.updateDeckOptionGroup(group.id, { ...group, newCardOrder: 'random', reviewCardOrder: 'random' })
+    const first = await collection.dueCards(deck.id, new Date('2026-10-01T12:00:00.000Z'))
+    const second = await collection.dueCards(deck.id, new Date('2026-10-01T19:00:00.000Z'))
+    expect(first.map((card) => card.id)).toEqual(second.map((card) => card.id))
+    expect(first.filter((card) => card.state === State.New).map((card) => card.id)).toEqual(['new-fifth', 'new-early', 'new-middle', 'new-fourth', 'new-late'])
+    expect(first.filter((card) => card.state === State.Review).map((card) => card.id)).toEqual(['review-early', 'review-late', 'review-fifth', 'review-middle', 'review-fourth'])
   })
 
   test('nests decks and moves a reviewed note without changing card identity or review history', async () => {
