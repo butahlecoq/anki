@@ -952,13 +952,14 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (isAnswering || editingNote || movingNote || editingTags || deletingNote || showCardInfo || event.repeat || event.altKey || event.ctrlKey || event.metaKey) return
-      if (event.target instanceof Element && event.target.closest('input, textarea, select, button, [contenteditable="true"], [role="dialog"]')) return
+      if (event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable="true"], [role="dialog"]')) return
       const key = event.key.toLowerCase()
+      const buttonFocused = event.target instanceof Element && Boolean(event.target.closest('button'))
       if (key === 'u' && recentReview) { event.preventDefault(); void undoReview(); return }
       if (key === 'v' && recentCardAction) { event.preventDefault(); void undoCardAction(); return }
       if (key === 'x' && recentDeletion) { event.preventDefault(); void undoDeletion(); return }
       if (!cardId) return
-      if ((key === ' ' || key === 'spacebar') && !showAnswer) {
+      if ((key === ' ' || key === 'spacebar') && !showAnswer && !buttonFocused) {
         event.preventDefault()
         setShownAnswerCardId(cardId)
       } else if (showAnswer && /^[1-4]$/.test(key)) {
