@@ -43,21 +43,23 @@ test('statistics follow an offline Japanese review, heatmap selection, and undo'
     await expect(page.getByRole('dialog', { name: 'Card progress' })).toContainText('Review history')
     await expect(page.getByRole('dialog', { name: 'Card progress' })).toContainText('Easy')
     await page.getByRole('button', { name: 'Close', exact: true }).click()
+    const statisticsURL = page.url()
+    const previousPage = page
     await page.evaluate(() => { Reflect.set(window, 'kirokuStatisticsReloadMarker', true) })
+    page = await context.newPage()
+    await page.clock.setFixedTime(REVIEW_TIME)
     try {
-      await page.reload({ waitUntil: 'domcontentloaded' })
+      await page.goto(statisticsURL, { waitUntil: 'domcontentloaded' })
     } catch (error) {
       if (browserName !== 'webkit' || !(error instanceof Error) || !error.message.includes('internal error')) throw error
     }
+    await expect(page.getByRole('heading', { name: 'Every answer adds up' })).toBeVisible()
     await expect.poll(() => page.evaluate(() => Reflect.has(window, 'kirokuStatisticsReloadMarker'))).toBe(false)
+    await previousPage.close()
     await expect(page.getByText('ANSWERS', { exact: true }).locator('..').locator('strong')).toHaveText('1')
     await page.getByRole('link', { name: 'Decks', exact: true }).click()
     await expect(page.getByRole('region', { name: "Today's workload" })).toContainText('STUDIED 1')
-    try {
-      await page.goto(reviewURL, { waitUntil: 'domcontentloaded' })
-    } catch (error) {
-      if (browserName !== 'webkit' || !(error instanceof Error) || !error.message.includes('internal error')) throw error
-    }
+    await page.evaluate((url) => { window.location.hash = new URL(url).hash }, reviewURL)
     await page.getByRole('button', { name: 'Undo last review' }).click()
     await page.getByRole('link', { name: 'Statistics', exact: true }).click()
     await expect(page.getByText('ANSWERS', { exact: true }).locator('..').locator('strong')).toHaveText('0')
