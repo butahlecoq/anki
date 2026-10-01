@@ -66,7 +66,7 @@ test('browser maintains stable Japanese selections and previews field changes of
     await page.getByLabel('Result view', { exact: true }).selectOption('notes')
     await expect(page.getByRole('table')).toContainText('jlpt::n5, animals')
     await page.getByRole('checkbox', { name: /^Select note / }).check()
-    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true)
     await page.screenshot({ path: test.info().outputPath('collection-browser.png'), fullPage: true })
     await page.getByRole('button', { name: 'Delete selection', exact: true }).click()
     const deletion = page.getByRole('dialog', { name: 'Delete selected notes' })
@@ -134,7 +134,7 @@ test('bulk move and suspension preserve identities and empty reports open affect
   await expect(editor.getByLabel('front', { exact: true })).toHaveValue('')
   await expect(editor.getByLabel('back', { exact: true })).toHaveValue('empty-report')
   await editor.getByRole('button', { name: 'Cancel', exact: true }).click()
-  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true)
   await page.screenshot({ path: test.info().outputPath('collection-empty-report.png'), fullPage: true })
 })
 
