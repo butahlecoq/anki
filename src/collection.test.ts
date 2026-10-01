@@ -98,6 +98,19 @@ describe('local collection', () => {
     await expect(collection.pendingOperations()).resolves.toHaveLength(0)
   })
 
+  test('upgrades v11 option groups with the explicit interday-learning order', async () => {
+    const databaseName = `kiroku-test-${crypto.randomUUID()}`
+    const old = new Dexie(databaseName)
+    old.version(11).stores({ decks: 'id, parentId, optionGroupId, name, createdAt', notes: 'id, deckId, typeId, updatedAt', cards: 'id, deckId, noteId, templateId, due, state', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId', deletedEntities: 'key, entityType, entityId, occurredAt', noteMedia: 'id, noteId, digest, side, kind, updatedAt', mediaBlobs: 'digest, verifiedAt', noteTypes: 'id, name, updatedAt', deckOptionGroups: 'id, name, updatedAt' })
+    await old.table('deckOptionGroups').add({ id: 'v11-policy-group', name: 'V11 policy', protected: false, dailyNewLimit: 20, dailyReviewLimit: 200, desiredRetention: 0.9, learningSteps: ['1m'], relearningSteps: ['10m'], newCardOrder: 'added', reviewCardOrder: 'due', buryNewSiblings: false, buryReviewSiblings: false, leechThreshold: 8, leechAction: 'suspend', leechTag: 'leech', createdAt: '2026-01-01', updatedAt: '2026-01-01' })
+    old.close()
+
+    collection = createCollection(databaseName)
+
+    await expect(collection.deckOptionGroups.get('v11-policy-group')).resolves.toMatchObject({ interdayLearningOrder: 'before-reviews' })
+    await expect(collection.pendingOperations()).resolves.toHaveLength(0)
+  })
+
   test('rejects malformed or conflicting synchronized policy card fields', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const active = collection
@@ -330,6 +343,36 @@ describe('local collection', () => {
     expect(queue.find((card) => card.id === reviewDue.id)).toBeUndefined()
   })
 
+  test('keeps intraday learning due-prioritized while interday learning shares the configured review cap and order', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const group = await collection.createDeckOptionGroup('Learning policy')
+    await collection.updateDeckOptionGroup(group.id, { ...group, dailyNewLimit: 1, dailyReviewLimit: 1, interdayLearningOrder: 'before-reviews' })
+    const deck = await collection.createDeck('Learning', { optionGroupId: group.id })
+    const now = new Date('2026-10-01T12:00:00.000Z')
+    const intradayFirst = { ...directCard('intraday-first', deck.id, 'intraday-note', State.Learning, '2026-10-01T10:00:00.000Z'), scheduledDays: 0 }
+    const intradaySecond = { ...directCard('intraday-second', deck.id, 'intraday-note-2', State.Relearning, '2026-10-01T11:00:00.000Z'), scheduledDays: 0 }
+    const interday = { ...directCard('interday', deck.id, 'interday-note', State.Learning, '2026-10-01T09:00:00.000Z'), scheduledDays: 1 }
+    const review = directCard('review', deck.id, 'review-note', State.Review, '2026-10-01T08:00:00.000Z')
+    const firstNew = directCard('new-first', deck.id, 'new-note', State.New, '2026-10-01T07:00:00.000Z')
+    const secondNew = directCard('new-second', deck.id, 'new-note-2', State.New, '2026-10-01T07:01:00.000Z')
+    await collection.cards.bulkAdd([intradayFirst, intradaySecond, interday, review, firstNew, secondNew])
+
+    await expect(collection.dueCards(deck.id, now)).resolves.toEqual([
+      expect.objectContaining({ id: intradayFirst.id }),
+      expect.objectContaining({ id: intradaySecond.id }),
+      expect.objectContaining({ id: interday.id }),
+      expect.objectContaining({ id: firstNew.id }),
+    ])
+
+    await collection.updateDeckOptionGroup(group.id, { ...group, dailyNewLimit: 1, dailyReviewLimit: 1, interdayLearningOrder: 'after-reviews' })
+    const reviewFirst = await collection.dueCards(deck.id, now)
+    expect(reviewFirst.map((card) => card.id)).toEqual([intradayFirst.id, intradaySecond.id, review.id, firstNew.id])
+
+    await collection.reviewEntries.add({ id: 'already-interday', cardId: interday.id, deckId: deck.id, rating: Rating.Good, state: State.Learning, due: interday.due, stability: 1, difficulty: 5, elapsedDays: 0, lastElapsedDays: 0, scheduledDays: 1, learningSteps: 1, reviewedAt: now.toISOString() })
+    const capped = await collection.dueCards(deck.id, now)
+    expect(capped.map((card) => card.id)).toEqual([intradayFirst.id, intradaySecond.id, firstNew.id])
+  })
+
   test('summaries aggregate a parent deck with every descendant', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const parent = await collection.createDeck('Japanese')
@@ -397,8 +440,8 @@ describe('local collection', () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const timestamp = '2026-10-01T00:00:00.000Z'
     await collection.deckOptionGroups.bulkAdd([
-      { id: 'a-due-options', name: 'Due', protected: false, dailyNewLimit: 10, dailyReviewLimit: 10, desiredRetention: 0.9, learningSteps: ['1m'], relearningSteps: ['10m'], newCardOrder: 'added', reviewCardOrder: 'due', buryNewSiblings: false, buryReviewSiblings: false, leechThreshold: 8, leechAction: 'suspend', leechTag: 'leech', createdAt: timestamp, updatedAt: timestamp },
-      { id: 'z-random-options', name: 'Random', protected: false, dailyNewLimit: 10, dailyReviewLimit: 10, desiredRetention: 0.9, learningSteps: ['1m'], relearningSteps: ['10m'], newCardOrder: 'random', reviewCardOrder: 'random', buryNewSiblings: false, buryReviewSiblings: false, leechThreshold: 8, leechAction: 'suspend', leechTag: 'leech', createdAt: timestamp, updatedAt: timestamp },
+      { id: 'a-due-options', name: 'Due', protected: false, dailyNewLimit: 10, dailyReviewLimit: 10, desiredRetention: 0.9, learningSteps: ['1m'], relearningSteps: ['10m'], newCardOrder: 'added', reviewCardOrder: 'due', interdayLearningOrder: 'before-reviews', buryNewSiblings: false, buryReviewSiblings: false, leechThreshold: 8, leechAction: 'suspend', leechTag: 'leech', createdAt: timestamp, updatedAt: timestamp },
+      { id: 'z-random-options', name: 'Random', protected: false, dailyNewLimit: 10, dailyReviewLimit: 10, desiredRetention: 0.9, learningSteps: ['1m'], relearningSteps: ['10m'], newCardOrder: 'random', reviewCardOrder: 'random', interdayLearningOrder: 'before-reviews', buryNewSiblings: false, buryReviewSiblings: false, leechThreshold: 8, leechAction: 'suspend', leechTag: 'leech', createdAt: timestamp, updatedAt: timestamp },
     ])
     await collection.decks.bulkAdd([
       { id: 'parent', name: 'Parent', parentId: null, optionGroupId: 'default', createdAt: timestamp, updatedAt: timestamp },
@@ -418,7 +461,7 @@ describe('local collection', () => {
 
   test('orders new and review cards according to their group with a deterministic per-day random order', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
-    const group = { id: 'ordering-group', name: 'Ordering', protected: false, dailyNewLimit: 10, dailyReviewLimit: 10, desiredRetention: 0.9, learningSteps: ['1m'], relearningSteps: ['10m'], newCardOrder: 'added' as const, reviewCardOrder: 'due' as const, buryNewSiblings: false, buryReviewSiblings: false, leechThreshold: 8, leechAction: 'suspend' as const, leechTag: 'leech', createdAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-01T00:00:00.000Z' }
+    const group = { id: 'ordering-group', name: 'Ordering', protected: false, dailyNewLimit: 10, dailyReviewLimit: 10, desiredRetention: 0.9, learningSteps: ['1m'], relearningSteps: ['10m'], newCardOrder: 'added' as const, reviewCardOrder: 'due' as const, interdayLearningOrder: 'before-reviews' as const, buryNewSiblings: false, buryReviewSiblings: false, leechThreshold: 8, leechAction: 'suspend' as const, leechTag: 'leech', createdAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-01T00:00:00.000Z' }
     const deck = { id: 'ordering-deck', name: 'Ordered', parentId: null, optionGroupId: group.id, createdAt: group.createdAt, updatedAt: group.updatedAt }
     await collection.deckOptionGroups.add(group)
     await collection.decks.add(deck)

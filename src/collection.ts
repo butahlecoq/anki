@@ -28,6 +28,7 @@ export const DEFAULT_DECK_OPTION_GROUP_ID = 'default'
 /** Reusable scheduling settings are introduced independently of any individual deck. */
 export type NewCardOrder = 'added' | 'random'
 export type ReviewCardOrder = 'due' | 'random'
+export type InterdayLearningOrder = 'before-reviews' | 'after-reviews'
 type FsrsStep = `${number}${'m' | 'h' | 'd'}`
 
 export interface DeckOptionSettings {
@@ -38,6 +39,8 @@ export interface DeckOptionSettings {
   relearningSteps: readonly string[]
   newCardOrder: NewCardOrder
   reviewCardOrder: ReviewCardOrder
+  /** Controls where day-crossing learning cards appear relative to review cards. */
+  interdayLearningOrder?: InterdayLearningOrder
   /** Omitted by pre-policy callers; the owning group retains its current policy. */
   buryNewSiblings?: boolean
   buryReviewSiblings?: boolean
@@ -59,6 +62,7 @@ export interface DeckOptionGroup {
   relearningSteps: readonly string[]
   newCardOrder: NewCardOrder
   reviewCardOrder: ReviewCardOrder
+  interdayLearningOrder: InterdayLearningOrder
   buryNewSiblings: boolean
   buryReviewSiblings: boolean
   leechThreshold: number
@@ -255,6 +259,7 @@ const defaultDeckOptionSettings: Required<DeckOptionSettings> = {
   relearningSteps: ['10m'],
   newCardOrder: 'added',
   reviewCardOrder: 'due',
+  interdayLearningOrder: 'before-reviews',
   buryNewSiblings: false,
   buryReviewSiblings: false,
   leechThreshold: 8,
@@ -329,6 +334,7 @@ function copiedDeckOptionSettings(settings: DeckOptionSettings): Required<DeckOp
     ...settings,
     learningSteps: [...settings.learningSteps],
     relearningSteps: [...settings.relearningSteps],
+    interdayLearningOrder: settings.interdayLearningOrder ?? defaultDeckOptionSettings.interdayLearningOrder,
     buryNewSiblings: settings.buryNewSiblings ?? defaultDeckOptionSettings.buryNewSiblings,
     buryReviewSiblings: settings.buryReviewSiblings ?? defaultDeckOptionSettings.buryReviewSiblings,
     leechThreshold: settings.leechThreshold ?? defaultDeckOptionSettings.leechThreshold,
@@ -369,6 +375,8 @@ function validateDeckOptionSettings(input: DeckOptionSettings): Required<DeckOpt
   if (!Number.isFinite(input.desiredRetention) || input.desiredRetention <= 0 || input.desiredRetention > 1) throw new Error('Desired retention must be greater than 0 and at most 1')
   if (input.newCardOrder !== 'added' && input.newCardOrder !== 'random') throw new Error('New card order is invalid')
   if (input.reviewCardOrder !== 'due' && input.reviewCardOrder !== 'random') throw new Error('Review card order is invalid')
+  const interdayLearningOrder = input.interdayLearningOrder ?? defaultDeckOptionSettings.interdayLearningOrder
+  if (interdayLearningOrder !== 'before-reviews' && interdayLearningOrder !== 'after-reviews') throw new Error('Interday learning order is invalid')
   const buryNewSiblings = input.buryNewSiblings ?? defaultDeckOptionSettings.buryNewSiblings
   const buryReviewSiblings = input.buryReviewSiblings ?? defaultDeckOptionSettings.buryReviewSiblings
   if (typeof buryNewSiblings !== 'boolean' || typeof buryReviewSiblings !== 'boolean') throw new Error('Sibling burying options are invalid')
@@ -382,6 +390,7 @@ function validateDeckOptionSettings(input: DeckOptionSettings): Required<DeckOpt
     relearningSteps: validateSteps(input.relearningSteps, 'Relearning steps'),
     newCardOrder: input.newCardOrder,
     reviewCardOrder: input.reviewCardOrder,
+    interdayLearningOrder,
     buryNewSiblings,
     buryReviewSiblings,
     leechThreshold: validateLeechThreshold(input.leechThreshold ?? defaultDeckOptionSettings.leechThreshold),
@@ -401,6 +410,7 @@ function canonicalDeckOptionGroup(group: LegacyDeckOptionGroup): DeckOptionGroup
       relearningSteps: group.relearningSteps ?? defaultDeckOptionSettings.relearningSteps,
       newCardOrder: group.newCardOrder ?? defaultDeckOptionSettings.newCardOrder,
       reviewCardOrder: group.reviewCardOrder ?? defaultDeckOptionSettings.reviewCardOrder,
+      interdayLearningOrder: group.interdayLearningOrder ?? defaultDeckOptionSettings.interdayLearningOrder,
       buryNewSiblings: group.buryNewSiblings ?? defaultDeckOptionSettings.buryNewSiblings,
       buryReviewSiblings: group.buryReviewSiblings ?? defaultDeckOptionSettings.buryReviewSiblings,
       leechThreshold: group.leechThreshold ?? defaultDeckOptionSettings.leechThreshold,
@@ -445,6 +455,15 @@ function isBuried(card: CardRecord, now: Date) {
 
 function isQueueEligible(card: CardRecord, now: Date) {
   return card.manualSuspended !== true && !templateSuspended(card) && !isBuried(card, now)
+}
+
+function isLearningCard(card: CardRecord) {
+  return card.state === State.Learning || card.state === State.Relearning
+}
+
+/** FSRS records day-crossing (interday) steps with a positive scheduled-day count. */
+function isInterdayLearning(card: CardRecord) {
+  return isLearningCard(card) && card.scheduledDays >= 1
 }
 
 function withPolicyDefaults(card: CardRecord): CardRecord {
@@ -727,6 +746,12 @@ export class Collection extends Dexie {
     }).upgrade(async (transaction) => {
       await transaction.table('deckOptionGroups').toCollection().modify((group: LegacyDeckOptionGroup) => Object.assign(group, canonicalDeckOptionGroup(group)))
       await transaction.table('cards').toCollection().modify((card: LegacyCard) => Object.assign(card, canonicalCard(card)))
+      if (!await transaction.table('deckOptionGroups').get(DEFAULT_DECK_OPTION_GROUP_ID)) await transaction.table('deckOptionGroups').put(defaultDeckOptionGroup)
+    })
+    this.version(12).stores({
+      decks: 'id, parentId, optionGroupId, name, createdAt', notes: 'id, deckId, typeId, updatedAt', cards: 'id, deckId, noteId, templateId, due, state', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId', deletedEntities: 'key, entityType, entityId, occurredAt', noteMedia: 'id, noteId, digest, side, kind, updatedAt', mediaBlobs: 'digest, verifiedAt', noteTypes: 'id, name, updatedAt', deckOptionGroups: 'id, name, updatedAt',
+    }).upgrade(async (transaction) => {
+      await transaction.table('deckOptionGroups').toCollection().modify((group: LegacyDeckOptionGroup) => Object.assign(group, canonicalDeckOptionGroup(group)))
       if (!await transaction.table('deckOptionGroups').get(DEFAULT_DECK_OPTION_GROUP_ID)) await transaction.table('deckOptionGroups').put(defaultDeckOptionGroup)
     })
     this.on('populate', (transaction) => {
@@ -1411,6 +1436,9 @@ export class Collection extends Dexie {
       const decks = new Map(subtree.map((deck) => [deck.id, deck]))
       const groupsById = new Map(groups.map((group) => [group.id, group]))
       const notesById = new Map(notes.map((note) => [note.id, note]))
+      const selectedDeck = decks.get(deckId)
+      const selectedGroup = selectedDeck && groupsById.get(selectedDeck.optionGroupId)
+      if (!selectedGroup) throw new Error('Deck option group not found')
       const { start, end } = studyDayWindow(now)
       const reviewedToday = new Map<string, { new: number; review: number }>()
       for (const review of reviewEntries) {
@@ -1418,7 +1446,7 @@ export class Collection extends Dexie {
         if (!decks.has(review.deckId) || timestamp < start || timestamp >= end) continue
         const totals = reviewedToday.get(review.deckId) ?? { new: 0, review: 0 }
         if (review.state === State.New) totals.new += 1
-        if (review.state === State.Review) totals.review += 1
+        if (review.state === State.Review || ((review.state === State.Learning || review.state === State.Relearning) && review.scheduledDays >= 1)) totals.review += 1
         reviewedToday.set(review.deckId, totals)
       }
       const orderKey = (card: CardRecord, group: DeckOptionGroup, kind: 'new' | 'review' | 'learning') => {
@@ -1439,16 +1467,25 @@ export class Collection extends Dexie {
         const group = groupsById.get(deck.optionGroupId)
         if (!group) throw new Error('Deck option group not found')
         const own = cards.filter((card) => card.deckId === deck.id && isQueueEligible(card, now))
-        const learning = sortWithinDeck(own.filter((card) => (card.state === State.Learning || card.state === State.Relearning) && new Date(card.due).getTime() <= now.getTime()), group, 'learning')
+        const learning = sortWithinDeck(own.filter((card) => isLearningCard(card) && new Date(card.due).getTime() <= now.getTime()), group, 'learning')
+        const intradayLearning = learning.filter((card) => !isInterdayLearning(card))
+        const interdayLearning = learning.filter(isInterdayLearning)
         const reviewsDue = sortWithinDeck(own.filter((card) => card.state === State.Review && new Date(card.due).getTime() <= now.getTime()), group, 'review')
         const newCards = sortWithinDeck(own.filter((card) => card.state === State.New), group, 'new')
         const totals = reviewedToday.get(deck.id) ?? { new: 0, review: 0 }
-        selected.push(...learning, ...reviewsDue.slice(0, Math.max(0, group.dailyReviewLimit - totals.review)), ...newCards.slice(0, Math.max(0, group.dailyNewLimit - totals.new)))
+        const limited = selectedGroup.interdayLearningOrder === 'before-reviews'
+          ? [...interdayLearning, ...reviewsDue]
+          : [...reviewsDue, ...interdayLearning]
+        selected.push(...intradayLearning, ...limited.slice(0, Math.max(0, group.dailyReviewLimit - totals.review)), ...newCards.slice(0, Math.max(0, group.dailyNewLimit - totals.new)))
       }
-      const learning = sortQueue(selected.filter((card) => card.state === State.Learning || card.state === State.Relearning), 'learning')
+      const intradayLearning = sortQueue(selected.filter((card) => isLearningCard(card) && !isInterdayLearning(card)), 'learning')
+      const interdayLearning = sortQueue(selected.filter(isInterdayLearning), 'learning')
       const orderedReviews = sortQueue(selected.filter((card) => card.state === State.Review), 'review')
       const newCards = sortQueue(selected.filter((card) => card.state === State.New), 'new')
-      return [...learning, ...orderedReviews, ...newCards]
+      const reviewQueue = selectedGroup.interdayLearningOrder === 'before-reviews'
+        ? [...interdayLearning, ...orderedReviews]
+        : [...orderedReviews, ...interdayLearning]
+      return [...intradayLearning, ...reviewQueue, ...newCards]
     })
   }
 
