@@ -178,6 +178,8 @@ export interface CardRecord {
   manualSuspended?: boolean
   templateSuspended?: boolean
   buriedUntil?: string | null
+  /** Anki-compatible card flag: 0 is none, 1–7 are the standard colors. */
+  flag?: number
   due: string
   stability: number
   difficulty: number
@@ -190,6 +192,33 @@ export interface CardRecord {
   lastReview: string | null
   /** Source modification time for deterministic Anki package updates. */
   sourceModifiedAt?: string
+}
+
+type ReviewUndo = {
+  review: ReviewEntry
+  syncEpoch: number
+  operationIds: string[]
+  cards: Array<{ before: CardRecord; after: CardRecord }>
+  note?: { before: Note; after: Note }
+}
+
+type NoteDeletionUndo = {
+  syncEpoch: number
+  operationId: string
+  occurredAt: string
+  note: Note
+  noteType: NoteType
+  cards: CardRecord[]
+  reviews: ReviewEntry[]
+  media: NoteMediaReference[]
+}
+
+type CardMaintenanceUndo = {
+  syncEpoch: number
+  operationId: string
+  action: 'suspend' | 'bury' | 'flag'
+  before: CardRecord
+  after: CardRecord
 }
 
 type LegacyNote = Omit<Note, 'typeId'> & { typeId?: string }
@@ -316,10 +345,11 @@ function orderInboundChanges(changes: SyncOperation[]) {
 
 function relatedEntityIds(change: SyncOperation) {
   if (!change.payload || typeof change.payload !== 'object') return {}
-  const payload = change.payload as { deckId?: unknown; noteId?: unknown; parentId?: unknown; optionGroupId?: unknown }
+  const payload = change.payload as { deckId?: unknown; noteId?: unknown; cardId?: unknown; parentId?: unknown; optionGroupId?: unknown }
   return {
     deckId: typeof payload.deckId === 'string' ? payload.deckId : undefined,
     noteId: typeof payload.noteId === 'string' ? payload.noteId : undefined,
+    cardId: typeof payload.cardId === 'string' ? payload.cardId : undefined,
     parentId: typeof payload.parentId === 'string' ? payload.parentId : undefined,
     optionGroupId: typeof payload.optionGroupId === 'string' ? payload.optionGroupId : undefined,
   }
@@ -483,6 +513,7 @@ function withPolicyDefaults(card: CardRecord): CardRecord {
     templateSuspended: templateSuspended(card),
     manualSuspended: card.manualSuspended ?? false,
     buriedUntil: card.buriedUntil ?? null,
+    flag: card.flag ?? 0,
   }
 }
 
@@ -587,6 +618,7 @@ function canonicalCard(card: LegacyCard): CardRecord {
   if (card.templateSuspended !== undefined && typeof card.templateSuspended !== 'boolean') throw new Error('Card template suspension is invalid')
   if (card.templateSuspended !== undefined && card.suspended !== undefined && card.templateSuspended !== card.suspended) throw new Error('Card suspension fields conflict')
   if (card.buriedUntil !== undefined && card.buriedUntil !== null && typeof card.buriedUntil !== 'string') throw new Error('Card burial time is invalid')
+  if (card.flag !== undefined && (!Number.isSafeInteger(card.flag) || card.flag < 0 || card.flag > 7)) throw new Error('Card flag is invalid')
   const buriedUntil = card.buriedUntil ?? null
   if (buriedUntil !== null && (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(buriedUntil) || Number.isNaN(new Date(buriedUntil).getTime()))) throw new Error('Card burial time is invalid')
   return withPolicyDefaults({ ...card, templateId: card.templateId ?? BASIC_TEMPLATE_ID, buriedUntil })
@@ -609,13 +641,14 @@ const defaultDeckOptionGroup: DeckOptionGroup = {
   updatedAt: '1970-01-01T00:00:00.000Z',
 }
 
-function serializeCard(card: FsrsCard, identity: Pick<CardRecord, 'id' | 'deckId' | 'noteId' | 'templateId' | 'clozeOrdinal'>): CardRecord {
+function serializeCard(card: FsrsCard, identity: Pick<CardRecord, 'id' | 'deckId' | 'noteId' | 'templateId' | 'clozeOrdinal' | 'flag'>): CardRecord {
   return {
     manualSuspended: false,
     templateSuspended: false,
     buriedUntil: null,
     suspended: false,
     ...identity,
+    flag: identity.flag ?? 0,
     due: card.due.toISOString(),
     stability: card.stability,
     difficulty: card.difficulty,
@@ -763,6 +796,11 @@ export class Collection extends Dexie {
     }).upgrade(async (transaction) => {
       await transaction.table('deckOptionGroups').toCollection().modify((group: LegacyDeckOptionGroup) => Object.assign(group, canonicalDeckOptionGroup(group)))
       if (!await transaction.table('deckOptionGroups').get(DEFAULT_DECK_OPTION_GROUP_ID)) await transaction.table('deckOptionGroups').put(defaultDeckOptionGroup)
+    })
+    this.version(13).stores({
+      decks: 'id, parentId, optionGroupId, name, createdAt', notes: 'id, deckId, typeId, updatedAt', cards: 'id, deckId, noteId, templateId, due, state', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId', deletedEntities: 'key, entityType, entityId, occurredAt', noteMedia: 'id, noteId, digest, side, kind, updatedAt', mediaBlobs: 'digest, verifiedAt', noteTypes: 'id, name, updatedAt', deckOptionGroups: 'id, name, updatedAt',
+    }).upgrade(async (transaction) => {
+      await transaction.table('cards').toCollection().modify((card: CardRecord) => { if (card.flag === undefined) card.flag = 0 })
     })
     this.on('populate', (transaction) => {
       transaction.table('noteTypes').put(basicNoteType)
@@ -1232,6 +1270,69 @@ export class Collection extends Dexie {
     })
   }
 
+  async deleteNote(noteId: string, now = new Date()): Promise<void> {
+    await this.transaction('rw', [this.noteTypes, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.outbox, this.deletedEntities, this.settings], async () => {
+      const note = await this.notes.get(noteId)
+      if (!note) throw new Error('Note not found')
+      const noteType = await this.noteTypes.get(note.typeId)
+      if (!noteType) throw new Error('Note type not found')
+      const cards = await this.cards.where('noteId').equals(noteId).toArray()
+      const cardIds = cards.map((card) => card.id)
+      const reviews = cardIds.length ? await this.reviewEntries.where('cardId').anyOf(cardIds).toArray() : []
+      const media = await this.noteMedia.where('noteId').equals(noteId).toArray()
+      const occurredAt = now.toISOString()
+      const tombstones: DeletionTombstone[] = [
+        { key: tombstoneKey('note', noteId), entityType: 'note', entityId: noteId, occurredAt },
+        ...cards.map((card) => ({ key: tombstoneKey('card', card.id), entityType: 'card' as const, entityId: card.id, occurredAt })),
+        ...reviews.map((review) => ({ key: tombstoneKey('review', review.id), entityType: 'review' as const, entityId: review.id, occurredAt })),
+        ...media.map((reference) => ({ key: tombstoneKey('noteMedia', reference.id), entityType: 'noteMedia' as const, entityId: reference.id, occurredAt })),
+      ]
+      await this.notes.delete(noteId)
+      if (cardIds.length) {
+        await this.cards.bulkDelete(cardIds)
+        await this.reviewEntries.where('cardId').anyOf(cardIds).delete()
+      }
+      await this.noteMedia.where('noteId').equals(noteId).delete()
+      await this.deletedEntities.bulkPut(tombstones)
+      const operationId = id()
+      await this.outbox.add({ opId: operationId, entityType: 'note', entityId: noteId, action: 'delete', occurredAt, payload: { id: noteId } })
+      const syncEpoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
+      await this.settings.put({ key: 'noteDeletionUndo', value: { syncEpoch, operationId, occurredAt, note, noteType, cards, reviews, media } satisfies NoteDeletionUndo })
+    })
+  }
+
+  async latestNoteDeletionUndo(): Promise<NoteDeletionUndo | null> {
+    const undo = (await this.settings.get('noteDeletionUndo'))?.value as NoteDeletionUndo | undefined
+    const epoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
+    if (!undo || undo.syncEpoch !== epoch || !await this.outbox.get(undo.operationId) || await this.notes.get(undo.note.id)) return null
+    if (!await this.decks.get(undo.note.deckId) || !await this.noteTypes.get(undo.note.typeId)) return null
+    if (JSON.stringify(await this.noteTypes.get(undo.note.typeId)) !== JSON.stringify(undo.noteType)) return null
+    return undo
+  }
+
+  async undoLastNoteDeletion(): Promise<string> {
+    return this.transaction('rw', [this.decks, this.noteTypes, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.outbox, this.deletedEntities, this.settings], async () => {
+      const undo = (await this.settings.get('noteDeletionUndo'))?.value as NoteDeletionUndo | undefined
+      if (!undo) throw new Error('No recent note deletion to undo')
+      const epoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
+      if (epoch !== undo.syncEpoch || !await this.outbox.get(undo.operationId)) throw new Error('This deletion cannot be undone after a sync attempt')
+      if (!await this.decks.get(undo.note.deckId) || !await this.noteTypes.get(undo.note.typeId)) throw new Error('The original deck or note type was deleted; undo is unavailable')
+      if (JSON.stringify(await this.noteTypes.get(undo.note.typeId)) !== JSON.stringify(undo.noteType)) throw new Error('The note type changed since deletion; undo is unavailable')
+      const keys = [tombstoneKey('note', undo.note.id), ...undo.cards.map((card) => tombstoneKey('card', card.id)), ...undo.reviews.map((review) => tombstoneKey('review', review.id)), ...undo.media.map((reference) => tombstoneKey('noteMedia', reference.id))]
+      const tombstones = await this.deletedEntities.bulkGet(keys)
+      if (tombstones.some((tombstone) => tombstone?.occurredAt !== undo.occurredAt)) throw new Error('The deleted note changed; undo is unavailable')
+      if (await this.notes.get(undo.note.id) || (await this.cards.bulkGet(undo.cards.map((card) => card.id))).some(Boolean) || (await this.reviewEntries.bulkGet(undo.reviews.map((review) => review.id))).some(Boolean) || (await this.noteMedia.bulkGet(undo.media.map((reference) => reference.id))).some(Boolean)) throw new Error('The deleted note changed; undo is unavailable')
+      await this.notes.add(undo.note)
+      if (undo.cards.length) await this.cards.bulkAdd(undo.cards)
+      if (undo.reviews.length) await this.reviewEntries.bulkAdd(undo.reviews)
+      if (undo.media.length) await this.noteMedia.bulkAdd(undo.media)
+      await this.deletedEntities.bulkDelete(keys)
+      await this.outbox.delete(undo.operationId)
+      await this.settings.delete('noteDeletionUndo')
+      return undo.note.id
+    })
+  }
+
   async deleteDeck(deckId: string, options: DeleteDeckOptions, now = new Date()): Promise<void> {
     await this.transaction('rw', [this.decks, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.outbox, this.deletedEntities], async () => {
       const deck = await this.decks.get(deckId)
@@ -1345,6 +1446,17 @@ export class Collection extends Dexie {
       },
         updatedAt: now.toISOString(),
       }
+      await this.notes.put(updated)
+      await this.outbox.add({ opId: id(), entityType: 'note', entityId: noteId, action: 'update', occurredAt: updated.updatedAt, payload: updated })
+    })
+  }
+
+  async updateNoteTags(noteId: string, tags: string[], now = new Date()): Promise<void> {
+    const normalizedTags = normalizeTags(tags)
+    await this.transaction('rw', [this.notes, this.outbox], async () => {
+      const note = await this.notes.get(noteId)
+      if (!note) throw new Error('Note not found')
+      const updated: Note = { ...note, tags: normalizedTags, updatedAt: now.toISOString() }
       await this.notes.put(updated)
       await this.outbox.add({ opId: id(), entityType: 'note', entityId: noteId, action: 'update', occurredAt: updated.updatedAt, payload: updated })
     })
@@ -1522,7 +1634,7 @@ export class Collection extends Dexie {
   }
 
   async answer(cardId: string, rating: Grade, now = new Date()): Promise<ReviewEntry> {
-    return this.transaction('rw', [this.decks, this.deckOptionGroups, this.notes, this.cards, this.reviewEntries, this.outbox], async () => {
+    return this.transaction('rw', [this.decks, this.deckOptionGroups, this.notes, this.cards, this.reviewEntries, this.outbox, this.settings], async () => {
       const existing = await this.cards.get(cardId)
       if (!existing) throw new Error('Card not found')
       if (!isQueueEligible(existing, now)) throw new Error('Card is unavailable because it is suspended or buried')
@@ -1538,6 +1650,8 @@ export class Collection extends Dexie {
         deckId: existing.deckId,
       })
       const operations: SyncOperation[] = []
+      const changedCards: ReviewUndo['cards'] = []
+      let changedNote: ReviewUndo['note']
       const note = await this.notes.get(card.noteId)
       if (!note) throw new Error('Card note not found')
       if (card.lapses >= group.leechThreshold) {
@@ -1545,6 +1659,7 @@ export class Collection extends Dexie {
         if (tags.length !== (note.tags ?? []).length || tags.some((tag, index) => tag !== note.tags?.[index])) {
           const revisedNote = { ...note, tags, updatedAt: review.reviewedAt }
           await this.notes.put(revisedNote)
+          changedNote = { before: note, after: revisedNote }
           operations.push({ opId: id(), entityType: 'note', entityId: note.id, action: 'update', occurredAt: review.reviewedAt, payload: revisedNote })
         }
         if (group.leechAction === 'suspend') card = { ...card, manualSuspended: true }
@@ -1560,28 +1675,65 @@ export class Collection extends Dexie {
         if (!bury) continue
         const revised = withPolicyDefaults({ ...sibling, buriedUntil })
         await this.cards.put(revised)
+        changedCards.push({ before: sibling, after: revised })
         operations.push({ opId: id(), entityType: 'card', entityId: revised.id, action: 'update', occurredAt: review.reviewedAt, payload: revised })
       }
       await this.cards.put(card)
+      changedCards.push({ before: existing, after: card })
       await this.reviewEntries.add(review)
-      await this.outbox.bulkAdd([
+      const outbound: SyncOperation[] = [
         { opId: id(), entityType: 'card', entityId: card.id, action: 'update', occurredAt: review.reviewedAt, payload: card },
         { opId: id(), entityType: 'review', entityId: review.id, action: 'create', occurredAt: review.reviewedAt, payload: review },
         ...operations,
-      ])
+      ]
+      await this.outbox.bulkAdd(outbound)
+      const syncEpoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
+      await this.settings.put({ key: 'reviewUndo', value: { review, syncEpoch, operationIds: outbound.map((operation) => operation.opId), cards: changedCards, ...(changedNote ? { note: changedNote } : {}) } satisfies ReviewUndo })
       return review
     })
   }
 
-  async suspendCard(cardId: string, now = new Date()): Promise<void> {
-    await this.transaction('rw', [this.cards, this.outbox], async () => {
-      const card = await this.cards.get(cardId)
-      if (!card) throw new Error('Card not found')
-      if (card.manualSuspended) return
-      const updated = withPolicyDefaults({ ...card, manualSuspended: true })
-      await this.cards.put(updated)
-      await this.outbox.add({ opId: id(), entityType: 'card', entityId: cardId, action: 'update', occurredAt: now.toISOString(), payload: updated })
+  async latestReviewUndo(): Promise<ReviewUndo | null> {
+    const undo = (await this.settings.get('reviewUndo'))?.value as ReviewUndo | undefined
+    const epoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
+    if (!undo || undo.syncEpoch !== epoch) return null
+    if ((await this.outbox.bulkGet(undo.operationIds)).some((operation) => !operation)) return null
+    if ((await this.cards.bulkGet(undo.cards.map(({ after }) => after.id))).some((card, index) => JSON.stringify(card) !== JSON.stringify(undo.cards[index].after))) return null
+    if (undo.note && JSON.stringify(await this.notes.get(undo.note.after.id)) !== JSON.stringify(undo.note.after)) return null
+    if (JSON.stringify(await this.reviewEntries.get(undo.review.id)) !== JSON.stringify(undo.review)) return null
+    return undo
+  }
+
+  async beginSyncAttempt(): Promise<void> {
+    await this.transaction('rw', this.settings, async () => {
+      const epoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
+      await this.settings.put({ key: 'syncEpoch', value: epoch + 1 })
     })
+  }
+
+  async undoLastReview(): Promise<string> {
+    return this.transaction('rw', [this.settings, this.cards, this.notes, this.reviewEntries, this.outbox], async () => {
+      const undo = (await this.settings.get('reviewUndo'))?.value as ReviewUndo | undefined
+      if (!undo) throw new Error('No recent review to undo')
+      const epoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
+      if (epoch !== undo.syncEpoch) throw new Error('This review cannot be undone after a sync attempt')
+      const pending = await this.outbox.bulkGet(undo.operationIds)
+      if (pending.some((operation) => !operation)) throw new Error('This review has already synchronized and cannot be undone')
+      const currentCards = await this.cards.bulkGet(undo.cards.map(({ after }) => after.id))
+      if (currentCards.some((card, index) => JSON.stringify(card) !== JSON.stringify(undo.cards[index].after))) throw new Error('A card changed since this review; undo is unavailable')
+      if (undo.note && JSON.stringify(await this.notes.get(undo.note.after.id)) !== JSON.stringify(undo.note.after)) throw new Error('The note changed since this review; undo is unavailable')
+      if (JSON.stringify(await this.reviewEntries.get(undo.review.id)) !== JSON.stringify(undo.review)) throw new Error('The review log changed; undo is unavailable')
+      await this.cards.bulkPut(undo.cards.map(({ before }) => before))
+      if (undo.note) await this.notes.put(undo.note.before)
+      await this.reviewEntries.delete(undo.review.id)
+      await this.outbox.bulkDelete(undo.operationIds)
+      await this.settings.delete('reviewUndo')
+      return undo.review.cardId
+    })
+  }
+
+  async suspendCard(cardId: string, now = new Date()): Promise<void> {
+    await this.updateCardWithUndo(cardId, 'suspend', now, (card) => card.manualSuspended ? null : withPolicyDefaults({ ...card, manualSuspended: true }))
   }
 
   async unsuspendCard(cardId: string, now = new Date()): Promise<void> {
@@ -1596,15 +1748,8 @@ export class Collection extends Dexie {
   }
 
   async buryCard(cardId: string, now = new Date()): Promise<void> {
-    await this.transaction('rw', [this.cards, this.outbox], async () => {
-      const card = await this.cards.get(cardId)
-      if (!card) throw new Error('Card not found')
-      const buriedUntil = nextStudyBoundary(now).toISOString()
-      if (card.buriedUntil === buriedUntil) return
-      const updated = withPolicyDefaults({ ...card, buriedUntil })
-      await this.cards.put(updated)
-      await this.outbox.add({ opId: id(), entityType: 'card', entityId: cardId, action: 'update', occurredAt: now.toISOString(), payload: updated })
-    })
+    const buriedUntil = nextStudyBoundary(now).toISOString()
+    await this.updateCardWithUndo(cardId, 'bury', now, (card) => card.buriedUntil === buriedUntil ? null : withPolicyDefaults({ ...card, buriedUntil }))
   }
 
   async unburyCard(cardId: string, now = new Date()): Promise<void> {
@@ -1631,8 +1776,59 @@ export class Collection extends Dexie {
     })
   }
 
+  async setCardFlag(cardId: string, flag: number, now = new Date()): Promise<void> {
+    if (!Number.isSafeInteger(flag) || flag < 0 || flag > 7) throw new Error('Card flag is invalid')
+    await this.updateCardWithUndo(cardId, 'flag', now, (card) => (card.flag ?? 0) === flag ? null : withPolicyDefaults({ ...card, flag }))
+  }
+
+  private async updateCardWithUndo(cardId: string, action: CardMaintenanceUndo['action'], now: Date, update: (card: CardRecord) => CardRecord | null): Promise<void> {
+    await this.transaction('rw', [this.cards, this.outbox, this.settings], async () => {
+      const card = await this.cards.get(cardId)
+      if (!card) throw new Error('Card not found')
+      const updated = update(card)
+      if (!updated) return
+      await this.cards.put(updated)
+      const operationId = id()
+      await this.outbox.add({ opId: operationId, entityType: 'card', entityId: cardId, action: 'update', occurredAt: now.toISOString(), payload: updated })
+      const syncEpoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
+      await this.settings.put({ key: 'cardMaintenanceUndo', value: { syncEpoch, operationId, action, before: card, after: updated } satisfies CardMaintenanceUndo })
+    })
+  }
+
+  async latestCardMaintenanceUndo(): Promise<CardMaintenanceUndo | null> {
+    const undo = (await this.settings.get('cardMaintenanceUndo'))?.value as CardMaintenanceUndo | undefined
+    const epoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
+    if (!undo || undo.syncEpoch !== epoch || !await this.outbox.get(undo.operationId)) return null
+    if (JSON.stringify(await this.cards.get(undo.after.id)) !== JSON.stringify(undo.after)) return null
+    return undo
+  }
+
+  async undoLastCardMaintenance(): Promise<string> {
+    return this.transaction('rw', [this.cards, this.outbox, this.settings], async () => {
+      const undo = (await this.settings.get('cardMaintenanceUndo'))?.value as CardMaintenanceUndo | undefined
+      if (!undo) throw new Error('No recent card action to undo')
+      const epoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
+      if (epoch !== undo.syncEpoch || !await this.outbox.get(undo.operationId)) throw new Error('This card action cannot be undone after a sync attempt')
+      if (JSON.stringify(await this.cards.get(undo.after.id)) !== JSON.stringify(undo.after)) throw new Error('The card changed since this action; undo is unavailable')
+      await this.cards.put(undo.before)
+      await this.outbox.delete(undo.operationId)
+      await this.settings.delete('cardMaintenanceUndo')
+      return undo.before.id
+    })
+  }
+
   async pendingOperations(): Promise<SyncOperation[]> {
     return this.outbox.orderBy('occurredAt').toArray()
+  }
+
+  async captureSyncOperations(): Promise<SyncOperation[]> {
+    return this.transaction('rw', [this.outbox, this.settings], async () => {
+      // Reviews can be recorded while preflight or media upload is running.
+      // Invalidate their undo in the same transaction that captures the batch.
+      const epoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
+      await this.settings.put({ key: 'syncEpoch', value: epoch + 1 })
+      return this.outbox.orderBy('occurredAt').toArray()
+    })
   }
 
   async acknowledgeOperations(opIds: string[]) {
@@ -1675,6 +1871,7 @@ export class Collection extends Dexie {
             this.deletedEntities.get(tombstoneKey(change.entityType, change.entityId)),
             related.deckId ? this.deletedEntities.get(tombstoneKey('deck', related.deckId)) : undefined,
             related.noteId ? this.deletedEntities.get(tombstoneKey('note', related.noteId)) : undefined,
+            related.cardId ? this.deletedEntities.get(tombstoneKey('card', related.cardId)) : undefined,
             related.parentId ? this.deletedEntities.get(tombstoneKey('deck', related.parentId)) : undefined,
             related.optionGroupId ? this.deletedEntities.get(tombstoneKey('deckOptionGroup', related.optionGroupId)) : undefined,
           ])
@@ -1814,8 +2011,16 @@ export class Collection extends Dexie {
             await this.reviewEntries.where('deckId').anyOf(deckIds).delete()
             if (noteIds.length) await this.noteMedia.where('noteId').anyOf(noteIds).delete()
           } else if (change.entityType === 'note') {
+            const cards = await this.cards.where('noteId').equals(change.entityId).toArray()
+            const cardIds = cards.map((card) => card.id)
+            const reviews = cardIds.length ? await this.reviewEntries.where('cardId').anyOf(cardIds).toArray() : []
+            const media = await this.noteMedia.where('noteId').equals(change.entityId).toArray()
+            await this.deletedEntities.bulkPut([
+              ...cards.map((card) => ({ key: tombstoneKey('card', card.id), entityType: 'card' as const, entityId: card.id, occurredAt: change.occurredAt })),
+              ...reviews.map((review) => ({ key: tombstoneKey('review', review.id), entityType: 'review' as const, entityId: review.id, occurredAt: change.occurredAt })),
+              ...media.map((reference) => ({ key: tombstoneKey('noteMedia', reference.id), entityType: 'noteMedia' as const, entityId: reference.id, occurredAt: change.occurredAt })),
+            ])
             await this.notes.delete(change.entityId)
-            const cardIds = (await this.cards.where('noteId').equals(change.entityId).primaryKeys()) as string[]
             await this.cards.bulkDelete(cardIds)
             if (cardIds.length) await this.reviewEntries.where('cardId').anyOf(cardIds).delete()
             await this.noteMedia.where('noteId').equals(change.entityId).delete()

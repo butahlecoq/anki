@@ -322,6 +322,135 @@ test('answering a card refreshes queued siblings that the policy buries', async 
   }
 })
 
+test('editing and moving the current note work without leaving the reviewer', async () => {
+  const source = await collection.createDeck(`Reviewer source ${crypto.randomUUID()}`)
+  const destination = await collection.createDeck(`Reviewer target ${crypto.randomUUID()}`)
+  const note = await collection.createBasicNote(source.id, { front: '古い', back: 'old' })
+  window.location.hash = `#review/${source.id}`
+  render(<CollectionWorkspace />)
+  try {
+    fireEvent.click(await screen.findByRole('button', { name: 'Card info' }))
+    expect(within(await screen.findByRole('dialog', { name: 'Card info' })).getAllByText('Basic')).toHaveLength(2)
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit note' }))
+    const editor = await screen.findByRole('dialog', { name: 'Edit Basic note' })
+    fireEvent.change(within(editor).getByLabelText('Front'), { target: { value: '新しい' } })
+    fireEvent.click(within(editor).getByRole('button', { name: 'Save changes' }))
+    await waitFor(async () => expect(await collection.notes.get(note.id)).toMatchObject({ fields: { front: '新しい', back: 'old' } }))
+    expect(screen.getByRole('button', { name: 'Show answer' })).toBeVisible()
+    await waitFor(() => expect(screen.getByTitle('Review card')).toHaveAttribute('srcdoc', expect.stringContaining('新しい')))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit tags' }))
+    const tags = await screen.findByRole('dialog', { name: 'Edit tags' })
+    fireEvent.change(within(tags).getByLabelText('Tags'), { target: { value: 'kanji, sentence, kanji' } })
+    fireEvent.click(within(tags).getByRole('button', { name: 'Save tags' }))
+    await waitFor(async () => expect(await collection.notes.get(note.id)).toMatchObject({ tags: ['kanji', 'sentence'] }))
+    expect((await collection.pendingOperations()).some((operation) => operation.entityType === 'note' && operation.entityId === note.id && (operation.payload as { tags?: string[] }).tags?.includes('sentence'))).toBe(true)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move note' }))
+    const mover = await screen.findByRole('dialog', { name: 'Move note' })
+    await waitFor(() => expect(within(mover).getByRole('option', { name: destination.name })).toBeVisible())
+    fireEvent.change(within(mover).getByLabelText('Destination deck'), { target: { value: destination.id } })
+    fireEvent.click(within(mover).getByRole('button', { name: 'Move note' }))
+    await waitFor(async () => expect(await collection.notes.get(note.id)).toMatchObject({ deckId: destination.id }))
+    expect(await screen.findByRole('heading', { name: 'Session complete' })).toBeVisible()
+  } finally {
+    await collection.deleteDeck(source.id, { mode: 'delete-subtree' })
+    await collection.deleteDeck(destination.id, { mode: 'delete-subtree' })
+  }
+})
+
+test('review keyboard shortcuts use the same answer and rating actions as touch controls', async () => {
+  const deck = await collection.createDeck(`Keyboard review ${crypto.randomUUID()}`)
+  const note = await collection.createBasicNote(deck.id, { front: '聞く', back: 'listen' })
+  const card = (await collection.cards.where('noteId').equals(note.id).first())!
+  window.location.hash = `#review/${deck.id}`
+  render(<CollectionWorkspace />)
+  try {
+    await screen.findByRole('button', { name: 'Show answer' })
+    fireEvent.keyDown(window, { key: 'e' })
+    const editor = await screen.findByRole('dialog', { name: 'Edit Basic note' })
+    fireEvent.keyDown(window, { key: '3' })
+    expect(await collection.reviewEntries.where('cardId').equals(card.id).count()).toBe(0)
+    fireEvent.click(within(editor).getByRole('button', { name: 'Cancel' }))
+    fireEvent.keyDown(window, { key: ' ' })
+    const good = await screen.findByRole('button', { name: /^Good ·/ })
+    expect(good).toBeVisible()
+    fireEvent.keyDown(good, { key: '3' })
+    await waitFor(async () => expect(await collection.reviewEntries.where('cardId').equals(card.id).count()).toBe(1))
+    await screen.findByRole('heading', { name: 'Session complete' })
+    const undo = await screen.findByRole('button', { name: 'Undo last review' })
+    await waitFor(() => expect(undo).toBeEnabled())
+    fireEvent.click(undo)
+    await waitFor(async () => expect(await collection.reviewEntries.where('cardId').equals(card.id).count()).toBe(0))
+    expect(await screen.findByRole('button', { name: 'Show answer' })).toBeVisible()
+  } finally {
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+  }
+})
+
+test('reviewer flag control and keyboard shortcut update the current card', async () => {
+  const deck = await collection.createDeck(`Flag review ${crypto.randomUUID()}`)
+  const note = await collection.createBasicNote(deck.id, { front: '旗', back: 'flag' })
+  const card = (await collection.cards.where('noteId').equals(note.id).first())!
+  window.location.hash = `#review/${deck.id}`
+  render(<CollectionWorkspace />)
+  try {
+    const flagControl = await screen.findByRole('combobox', { name: 'Card flag' })
+    fireEvent.change(flagControl, { target: { value: '1' } })
+    await waitFor(async () => expect(await collection.cards.get(card.id)).toMatchObject({ flag: 1 }))
+    expect(screen.getByRole('button', { name: 'Show answer' })).toBeVisible()
+    fireEvent.keyDown(window, { key: 'f' })
+    await waitFor(async () => expect(await collection.cards.get(card.id)).toMatchObject({ flag: 2 }))
+    fireEvent.click(screen.getByRole('button', { name: 'Mark note' }))
+    await waitFor(async () => expect(await collection.notes.get(note.id)).toMatchObject({ tags: ['marked'] }))
+    expect(screen.getByRole('button', { name: 'Unmark note' })).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Card info' }))
+    expect(within(await screen.findByRole('dialog', { name: 'Card info' })).getByText('Orange')).toBeVisible()
+  } finally {
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+  }
+})
+
+test('reviewer deletion can restore the note and card before sync', async () => {
+  const deck = await collection.createDeck(`Delete review ${crypto.randomUUID()}`)
+  const note = await collection.createBasicNote(deck.id, { front: '消す', back: 'delete' })
+  const card = (await collection.cards.where('noteId').equals(note.id).first())!
+  window.location.hash = `#review/${deck.id}`
+  render(<CollectionWorkspace />)
+  try {
+    await screen.findByRole('button', { name: 'Delete note' })
+    fireEvent.keyDown(window, { key: 'd' })
+    const dialog = await screen.findByRole('dialog', { name: 'Delete note' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete note and cards' }))
+    expect(await screen.findByRole('heading', { name: 'Session complete' })).toBeVisible()
+    expect(await collection.notes.get(note.id)).toBeUndefined()
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo note deletion' }))
+    expect(await screen.findByRole('button', { name: 'Show answer' })).toBeVisible()
+    expect(await collection.cards.get(card.id)).toBeDefined()
+  } finally {
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+  }
+})
+
+test('reviewer can undo a suspension from the completed session', async () => {
+  const deck = await collection.createDeck(`Suspend review ${crypto.randomUUID()}`)
+  const note = await collection.createBasicNote(deck.id, { front: '待つ', back: 'wait' })
+  const card = (await collection.cards.where('noteId').equals(note.id).first())!
+  window.location.hash = `#review/${deck.id}`
+  render(<CollectionWorkspace />)
+  try {
+    fireEvent.click(await screen.findByRole('button', { name: 'Suspend card' }))
+    expect(await screen.findByRole('heading', { name: 'Session complete' })).toBeVisible()
+    fireEvent.keyDown(window, { key: 'v' })
+    expect(await screen.findByRole('button', { name: 'Show answer' })).toBeVisible()
+    expect(await collection.cards.get(card.id)).toMatchObject({ manualSuspended: false })
+  } finally {
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+  }
+})
+
 test('a learner moves a deck under a different parent', async () => {
   const firstParent = await collection.createDeck(`First ${crypto.randomUUID()}`)
   const secondParent = await collection.createDeck(`Second ${crypto.randomUUID()}`)

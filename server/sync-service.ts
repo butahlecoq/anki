@@ -43,6 +43,7 @@ function schemaRequiredByOperation(operation: Pick<SyncOperation, 'entityType' |
   if (operation.entityType === 'card' && ('manualSuspended' in payload || 'templateSuspended' in payload || 'buriedUntil' in payload)) required = Math.max(required, 11)
   if (operation.entityType === 'deckOptionGroup' && ['buryNewSiblings', 'buryReviewSiblings', 'leechThreshold', 'leechAction', 'leechTag'].some((field) => field in payload)) required = Math.max(required, 11)
   if (operation.entityType === 'deckOptionGroup' && 'interdayLearningOrder' in payload) required = Math.max(required, 12)
+  if (operation.entityType === 'card' && 'flag' in payload) required = Math.max(required, 13)
   return required
 }
 

@@ -295,10 +295,11 @@ describe('local collection', () => {
     const source = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const remote = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     try {
-      const deck = await source.createDeck('Sync policy')
-      const note = await source.createBasicNote(deck.id, { front: '猫', back: 'cat' })
-      const card = (await source.cards.where('noteId').equals(note.id).first())!
       const now = new Date('2026-10-01T12:00:00.000Z')
+      const createdAt = new Date('2026-10-01T11:59:00.000Z')
+      const deck = await source.createDeck('Sync policy', createdAt)
+      const note = await source.createBasicNote(deck.id, { front: '猫', back: 'cat' }, createdAt)
+      const card = (await source.cards.where('noteId').equals(note.id).first())!
       await source.suspendCard(card.id, now)
       await source.buryCard(card.id, new Date('2026-10-01T12:01:00.000Z'))
       await source.rescheduleCard(card.id, new Date('2026-10-03T12:00:00.000Z'), new Date('2026-10-01T12:02:00.000Z'))
@@ -310,6 +311,175 @@ describe('local collection', () => {
       const returnOperations = await remote.pendingOperations()
       await source.applyRemoteChanges(returnOperations, outbound.length + returnOperations.length)
       await expect(source.cards.get(card.id)).resolves.toMatchObject({ manualSuspended: false, buriedUntil: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString(), due: '2026-10-03T12:00:00.000Z' })
+    } finally {
+      await source.delete()
+      await remote.delete()
+    }
+  })
+
+  test('undo restores scheduling, review log, leech tag, and sibling burial before sync', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const group = await collection.createDeckOptionGroup('Undo policy')
+    await collection.updateDeckOptionGroup(group.id, { ...group, buryNewSiblings: true, leechThreshold: 1, leechAction: 'suspend', leechTag: 'leech' })
+    const deck = await collection.createDeck('Undo review', { optionGroupId: group.id })
+    const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
+    const card = (await collection.cards.where('noteId').equals(note.id).first())!
+    const now = new Date('2026-10-01T12:00:00.000Z')
+    await collection.cards.update(card.id, { state: State.Review, due: now.toISOString(), stability: 2, difficulty: 5, reps: 3 })
+    const sibling = directCard('undo-sibling', deck.id, note.id, State.New, now.toISOString())
+    await collection.cards.add(sibling)
+    const before = (await collection.cards.get(card.id))!
+    const pendingBefore = (await collection.pendingOperations()).map((operation) => operation.opId)
+    const review = await collection.answer(card.id, Rating.Again, now)
+    expect(await collection.cards.get(card.id)).toMatchObject({ manualSuspended: true })
+    expect(await collection.cards.get(sibling.id)).toMatchObject({ buriedUntil: expect.any(String) })
+    expect(await collection.notes.get(note.id)).toMatchObject({ tags: ['leech'] })
+
+    await expect(collection.undoLastReview()).resolves.toBe(card.id)
+    expect(await collection.cards.get(card.id)).toEqual(before)
+    expect(await collection.cards.get(sibling.id)).toEqual(sibling)
+    expect(await collection.notes.get(note.id)).toEqual(note)
+    expect(await collection.reviewEntries.get(review.id)).toBeUndefined()
+    expect((await collection.pendingOperations()).map((operation) => operation.opId)).toEqual(pendingBefore)
+  })
+
+  test('review undo refuses an in-flight sync attempt or later card edit', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Undo boundary')
+    const note = await collection.createBasicNote(deck.id, { front: '犬', back: 'dog' })
+    const card = (await collection.cards.where('noteId').equals(note.id).first())!
+    const now = new Date('2026-10-01T12:00:00.000Z')
+    const review = await collection.answer(card.id, Rating.Good, now)
+    await collection.beginSyncAttempt()
+    await expect(collection.latestReviewUndo()).resolves.toBeNull()
+    await expect(collection.undoLastReview()).rejects.toThrow(/sync attempt/i)
+    expect(await collection.reviewEntries.get(review.id)).toBeDefined()
+
+    await collection.cards.put({ ...card, due: now.toISOString() })
+    await collection.answer(card.id, Rating.Good, now)
+    await collection.setCardFlag(card.id, 1, now)
+    await expect(collection.undoLastReview()).rejects.toThrow(/card changed/i)
+  })
+
+  test('deleting and undoing a note restores its cards, reviews, and media before sync', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const createdAt = new Date('2026-10-01T11:59:00.000Z')
+    const deck = await collection.createDeck('Delete note', createdAt)
+    const note = await collection.createBasicNote(deck.id, { front: '音', back: 'sound' }, createdAt)
+    const card = (await collection.cards.where('noteId').equals(note.id).first())!
+    const media = await collection.attachMedia(note.id, { file: new File(['sound'], 'sound.mp3', { type: 'audio/mpeg' }), side: 'front' })
+    const review = await collection.answer(card.id, Rating.Good, new Date('2026-10-01T12:00:00.000Z'))
+    const answered = (await collection.cards.get(card.id))!
+    await collection.deleteNote(note.id, new Date('2026-10-01T12:01:00.000Z'))
+    expect(await collection.notes.get(note.id)).toBeUndefined()
+    expect(await collection.cards.get(card.id)).toBeUndefined()
+    expect(await collection.reviewEntries.get(review.id)).toBeUndefined()
+    expect(await collection.noteMedia.get(media.id)).toBeUndefined()
+    expect(await collection.deletedEntities.get(`note:${note.id}`)).toBeDefined()
+
+    await expect(collection.undoLastNoteDeletion()).resolves.toBe(note.id)
+    expect(await collection.notes.get(note.id)).toEqual(note)
+    expect(await collection.cards.get(card.id)).toEqual(answered)
+    expect(await collection.reviewEntries.get(review.id)).toEqual(review)
+    expect(await collection.noteMedia.get(media.id)).toEqual(media)
+    expect(await collection.deletedEntities.get(`note:${note.id}`)).toBeUndefined()
+    expect((await collection.pendingOperations()).some((operation) => operation.entityType === 'note' && operation.entityId === note.id && operation.action === 'delete')).toBe(false)
+
+    await collection.deleteNote(note.id, new Date('2026-10-01T12:02:00.000Z'))
+    await collection.beginSyncAttempt()
+    await expect(collection.undoLastNoteDeletion()).rejects.toThrow(/sync attempt/i)
+  })
+
+  test('note deletion syncs its child tombstones and suppresses stale offline card edits', async () => {
+    const source = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const remote = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    try {
+      const createdAt = new Date('2026-10-01T11:59:00.000Z')
+      const deck = await source.createDeck('Delete sync', createdAt)
+      const note = await source.createBasicNote(deck.id, { front: '古い', back: 'old' }, createdAt)
+      const card = (await source.cards.where('noteId').equals(note.id).first())!
+      const created = await source.pendingOperations()
+      await remote.applyRemoteChanges(created, created.length)
+      await source.deleteNote(note.id, new Date('2026-10-01T12:00:00.000Z'))
+      const deletion = (await source.pendingOperations()).filter((operation) => operation.action === 'delete')
+      await remote.applyRemoteChanges(deletion, created.length + deletion.length)
+      expect(await remote.notes.get(note.id)).toBeUndefined()
+      expect(await remote.cards.get(card.id)).toBeUndefined()
+      expect(await remote.deletedEntities.get(`card:${card.id}`)).toBeDefined()
+      await remote.applyRemoteChanges([{ opId: 'stale-card', entityType: 'card', entityId: card.id, action: 'update', occurredAt: '2026-10-01T12:01:00.000Z', payload: { ...card, flag: 1 } }], created.length + deletion.length + 1)
+      expect(await remote.cards.get(card.id)).toBeUndefined()
+      await remote.applyRemoteChanges([{ opId: 'stale-review', entityType: 'review', entityId: 'stale-review', action: 'create', occurredAt: '2026-10-01T12:02:00.000Z', payload: { id: 'stale-review', cardId: card.id, deckId: deck.id } }], created.length + deletion.length + 2)
+      expect(await remote.reviewEntries.get('stale-review')).toBeUndefined()
+    } finally {
+      await source.delete()
+      await remote.delete()
+    }
+  })
+
+  test('note deletion undo cannot restore material into a subsequently deleted deck', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Deleted parent')
+    const note = await collection.createBasicNote(deck.id, { front: '消す', back: 'delete' })
+    await collection.deleteNote(note.id)
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+    await expect(collection.latestNoteDeletionUndo()).resolves.toBeNull()
+    await expect(collection.undoLastNoteDeletion()).rejects.toThrow(/original deck/i)
+    expect(await collection.notes.get(note.id)).toBeUndefined()
+  })
+
+  test('note deletion undo refuses a changed note type instead of restoring obsolete cards', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Changed template')
+    const type = await collection.createNoteType({ name: 'Term', fields: [{ name: 'Term' }], templates: [{ name: 'Forward', front: '{{Term}}', back: '{{Term}}', css: '' }] })
+    const note = await collection.createNote(deck.id, type.id, { [type.fields[0].id]: '猫' })
+    await collection.deleteNote(note.id)
+    await collection.updateNoteType(type.id, { ...type, templates: [{ ...type.templates[0], front: 'Changed {{Term}}' }] })
+    await expect(collection.latestNoteDeletionUndo()).resolves.toBeNull()
+    await expect(collection.undoLastNoteDeletion()).rejects.toThrow(/note type changed/i)
+    expect(await collection.notes.get(note.id)).toBeUndefined()
+  })
+
+  test('card maintenance undo restores suspension and burial only before sync', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Card undo')
+    const note = await collection.createBasicNote(deck.id, { front: '戻す', back: 'restore' })
+    const card = (await collection.cards.where('noteId').equals(note.id).first())!
+    const now = new Date('2026-10-01T12:00:00.000Z')
+    const before = (await collection.cards.get(card.id))!
+    const pendingBefore = (await collection.pendingOperations()).map((operation) => operation.opId)
+
+    await collection.suspendCard(card.id, now)
+    await expect(collection.undoLastCardMaintenance()).resolves.toBe(card.id)
+    expect(await collection.cards.get(card.id)).toEqual(before)
+    expect((await collection.pendingOperations()).map((operation) => operation.opId)).toEqual(pendingBefore)
+
+    await collection.buryCard(card.id, now)
+    await expect(collection.latestCardMaintenanceUndo()).resolves.toMatchObject({ action: 'bury' })
+    await collection.undoLastCardMaintenance()
+    expect(await collection.cards.get(card.id)).toEqual(before)
+
+    await collection.setCardFlag(card.id, 1, now)
+    await collection.beginSyncAttempt()
+    await expect(collection.latestCardMaintenanceUndo()).resolves.toBeNull()
+    await expect(collection.undoLastCardMaintenance()).rejects.toThrow(/sync attempt/i)
+    expect(await collection.cards.get(card.id)).toMatchObject({ flag: 1 })
+  })
+
+  test('preserves and syncs a card flag across review scheduling', async () => {
+    const source = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const remote = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    try {
+      const createdAt = new Date('2026-10-01T11:59:00.000Z')
+      const deck = await source.createDeck('Flagged', createdAt)
+      const note = await source.createBasicNote(deck.id, { front: '旗', back: 'flag' }, createdAt)
+      const card = (await source.cards.where('noteId').equals(note.id).first())!
+      await source.setCardFlag(card.id, 1, new Date('2026-10-01T12:00:00.000Z'))
+      await source.answer(card.id, Rating.Good, new Date('2026-10-01T12:01:00.000Z'))
+      expect(await source.cards.get(card.id)).toMatchObject({ flag: 1, reps: 1 })
+      const outbound = await source.pendingOperations()
+      await remote.applyRemoteChanges(outbound, outbound.length)
+      expect(await remote.cards.get(card.id)).toMatchObject({ flag: 1, reps: 1 })
+      await expect(source.setCardFlag(card.id, 8)).rejects.toThrow('Card flag is invalid')
     } finally {
       await source.delete()
       await remote.delete()
@@ -1310,7 +1480,7 @@ describe('local collection', () => {
 
     await expect(collection.decks.get(deck.id)).resolves.toEqual({ ...deck, parentId: null, optionGroupId: 'default' })
     await expect(collection.notes.get(note.id)).resolves.toEqual({ ...note, typeId: BASIC_NOTE_TYPE_ID })
-    await expect(collection.cards.get(card.id)).resolves.toEqual({ ...card, templateId: 'basic', suspended: false, manualSuspended: false, templateSuspended: false, buriedUntil: null })
+    await expect(collection.cards.get(card.id)).resolves.toEqual({ ...card, templateId: 'basic', suspended: false, manualSuspended: false, templateSuspended: false, buriedUntil: null, flag: 0 })
     await expect(collection.receivedOperations.count()).resolves.toBe(3)
     await expect(collection.pendingOperations()).resolves.toHaveLength(0)
   })

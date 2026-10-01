@@ -113,6 +113,9 @@ export async function foregroundSync(settings: SyncSettings, operations: Partial
 export async function syncCollection(collection: Collection, fetcher: Fetcher = fetch): Promise<SyncResult> {
   const settings = await collection.syncSettings()
   if (!settings) return { state: 'authentication-required' }
+  // An in-flight upload may already hold a snapshot of pending operations.
+  // Invalidate local-only undo before any network work can begin.
+  await collection.beginSyncAttempt()
   const preflight = await preflightSync(settings, fetcher)
   if (preflight.state !== 'ready') return preflight
   let uploaded = 0
@@ -131,7 +134,7 @@ export async function syncCollection(collection: Collection, fetcher: Fetcher = 
       uploadError = error instanceof MediaTransferError ? error.state : 'unreachable'
     }
   }
-  const operations = await collection.pendingOperations()
+  const operations = await collection.captureSyncOperations()
   const result = await foregroundSync(settings, operations, fetcher)
   if (result.state === 'complete') {
     await collection.applyRemoteChanges(result.changes as SyncOperation[], result.cursor)

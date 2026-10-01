@@ -1,9 +1,9 @@
 import { expect, test, vi } from 'vitest'
 import { foregroundSync, pairCollection, preflightSync, syncCollection } from './sync-client'
-import { createCollection } from './collection'
+import { createCollection, Rating } from './collection'
 import { digestMedia } from './media'
 
-const health = (collectionSchemaVersion = 12, maximumCollectionSchemaVersion = 12) => new Response(JSON.stringify({ ready: true, schemaVersion: 1, protocolVersion: 2, collectionSchemaVersion, maximumCollectionSchemaVersion, store: 'sqlite' }), { status: 200 })
+const health = (collectionSchemaVersion = 13, maximumCollectionSchemaVersion = 13) => new Response(JSON.stringify({ ready: true, schemaVersion: 1, protocolVersion: 2, collectionSchemaVersion, maximumCollectionSchemaVersion, store: 'sqlite' }), { status: 200 })
 
 test('sends pending operations with the local pairing credential', async () => {
   const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ accepted: 2, cursor: 2, changes: [] }), { status: 200 }))
@@ -11,13 +11,13 @@ test('sends pending operations with the local pairing credential', async () => {
 
   expect(result).toEqual({ state: 'complete', accepted: 2, cursor: 2, changes: [] })
   expect(fetcher).toHaveBeenCalledWith('https://pc.example.test/api/sync', expect.objectContaining({ method: 'POST', headers: expect.objectContaining({ authorization: 'Bearer token' }) }))
-  expect(JSON.parse(fetcher.mock.calls[0][1].body as string)).toMatchObject({ protocolVersion: 2, collectionSchemaVersion: 12, cursor: 0 })
+  expect(JSON.parse(fetcher.mock.calls[0][1].body as string)).toMatchObject({ protocolVersion: 2, collectionSchemaVersion: 13, cursor: 0 })
 })
 
 test('preflights the service and gives an actionable upgrade result without posting local changes', async () => {
-  const fetcher = vi.fn().mockResolvedValue(health(13, 13))
+  const fetcher = vi.fn().mockResolvedValue(health(14, 14))
 
-  await expect(preflightSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 }, fetcher)).resolves.toMatchObject({ state: 'upgrade-required', target: 'this-device', requiredSchemaVersion: 13 })
+  await expect(preflightSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 }, fetcher)).resolves.toMatchObject({ state: 'upgrade-required', target: 'this-device', requiredSchemaVersion: 14 })
   expect(fetcher).toHaveBeenCalledWith('https://pc.example.test/api/health')
 })
 
@@ -27,7 +27,7 @@ test('does not upload media or acknowledge local operations when the preflight r
   const deck = await collection.createDeck('Words')
   const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
   await collection.attachMedia(note.id, { file: new File(['image'], 'cat.png', { type: 'image/png' }), side: 'front' })
-  const fetcher = vi.fn().mockResolvedValue(health(13, 13))
+  const fetcher = vi.fn().mockResolvedValue(health(14, 14))
 
   await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'upgrade-required', target: 'this-device' })
   expect(fetcher).toHaveBeenCalledTimes(1)
@@ -39,6 +39,51 @@ test('does not upload media or acknowledge local operations when the preflight r
 test('distinguishes authentication and unreachable service failures', async () => {
   await expect(foregroundSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 }, [], vi.fn().mockResolvedValue(new Response('', { status: 401 })))).resolves.toEqual({ state: 'authentication-required' })
   await expect(foregroundSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 }, [], vi.fn().mockRejectedValue(new TypeError('network')))).resolves.toEqual({ state: 'unreachable' })
+})
+
+test('invalidates local undo before an in-flight sync can capture review operations', async () => {
+  const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+  try {
+    await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 })
+    const now = new Date('2026-10-01T12:00:00.000Z')
+    const deck = await collection.createDeck('Undo sync', now)
+    const note = await collection.createBasicNote(deck.id, { front: '戻す', back: 'restore' }, now)
+    const card = (await collection.cards.where('noteId').equals(note.id).first())!
+    await collection.answer(card.id, Rating.Good, now)
+    const fetcher = vi.fn(async () => {
+      await expect(collection.undoLastReview()).rejects.toThrow(/sync attempt/i)
+      throw new TypeError('network')
+    })
+    await expect(syncCollection(collection, fetcher)).resolves.toMatchObject({ state: 'unreachable' })
+    expect(await collection.reviewEntries.where('cardId').equals(card.id).count()).toBe(1)
+    expect(await collection.pendingOperations()).not.toHaveLength(0)
+  } finally {
+    await collection.delete()
+  }
+})
+
+test('also invalidates undo for a review recorded during sync preflight', async () => {
+  const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+  try {
+    await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 })
+    const now = new Date('2026-10-01T12:00:00.000Z')
+    const deck = await collection.createDeck('Concurrent review', now)
+    const note = await collection.createBasicNote(deck.id, { front: '同時', back: 'concurrent' }, now)
+    const card = (await collection.cards.where('noteId').equals(note.id).first())!
+    const fetcher = vi.fn(async (url: RequestInfo | URL) => {
+      if (String(url).endsWith('/api/health')) {
+        await collection.answer(card.id, Rating.Good, now)
+        expect(await collection.latestReviewUndo()).not.toBeNull()
+        return health()
+      }
+      await expect(collection.undoLastReview()).rejects.toThrow(/sync attempt/i)
+      return new Response(JSON.stringify({ accepted: 4, cursor: 4, changes: [] }), { status: 200 })
+    })
+    await expect(syncCollection(collection, fetcher)).resolves.toMatchObject({ state: 'complete' })
+    expect(await collection.reviewEntries.where('cardId').equals(card.id).count()).toBe(1)
+  } finally {
+    await collection.delete()
+  }
 })
 
 test('pairs a collection and persists only the returned device credential', async () => {

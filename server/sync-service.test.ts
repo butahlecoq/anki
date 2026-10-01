@@ -11,7 +11,7 @@ import { createSyncService } from './sync-service.js'
 import { createSyncHttpHandler } from './sync-http.js'
 
 let runtimeDirectory: string | undefined
-const serviceHealth = (collectionSchemaVersion = 1) => ({ ready: true, schemaVersion: 1, protocolVersion: 2, collectionSchemaVersion, maximumCollectionSchemaVersion: 12, store: 'sqlite' as const })
+const serviceHealth = (collectionSchemaVersion = 1) => ({ ready: true, schemaVersion: 1, protocolVersion: 2, collectionSchemaVersion, maximumCollectionSchemaVersion: 13, store: 'sqlite' as const })
 
 afterEach(async () => {
   if (runtimeDirectory) await rm(runtimeDirectory, { recursive: true, force: true })
@@ -71,7 +71,7 @@ test('persists a collection schema watermark and rejects an incompatible client 
   assert.equal(service.changeCount(), 0)
   assert.equal(service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 12, cursor: 0, operations: [] }).accepted, 0)
   assert.equal(service.health().collectionSchemaVersion, 12)
-  assert.throws(() => service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 13, cursor: 0, operations: [] }), /supports collection schemas through 12/i)
+  assert.throws(() => service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 14, cursor: 0, operations: [] }), /supports collection schemas through 13/i)
   assert.equal(service.changeCount(), 0)
   service.close()
 
@@ -176,6 +176,8 @@ test('serves health, pairing, and authenticated sync over HTTP', async () => {
   assert.ok(address && typeof address !== 'string')
   const origin = `http://127.0.0.1:${address.port}`
 
+  try {
+
   const health = await fetch(`${origin}/api/health`)
   assert.deepEqual(await health.json(), serviceHealth())
 
@@ -187,7 +189,7 @@ test('serves health, pairing, and authenticated sync over HTTP', async () => {
   const rejectedOrigin = await fetch(`${origin}/api/health`, { headers: { origin: 'https://untrusted.example.test' } })
   assert.equal(rejectedOrigin.headers.get('access-control-allow-origin'), null)
 
-  const code = service.createPairingCode(new Date('2026-10-01T12:00:00.000Z'))
+  const code = service.createPairingCode()
   const paired = await fetch(`${origin}/api/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code, deviceId: 'phone-1' }) })
   const credential = await paired.json() as { token: string }
   const denied = await fetch(`${origin}/api/sync`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cursor: 0, operations: [] }) })
@@ -212,7 +214,22 @@ test('serves health, pairing, and authenticated sync over HTTP', async () => {
   assert.match(downloaded.headers.get('access-control-expose-headers') ?? '', /x-content-sha256/)
   assert.deepEqual(new Uint8Array(await downloaded.arrayBuffer()), mediaBytes)
 
-  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+    service.close()
+  }
+})
+
+test('requires schema 13 before accepting a flagged card operation', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
+  const service = createSyncService({ databasePath: join(runtimeDirectory, 'collection.sqlite') })
+  const code = service.createPairingCode()
+  const { token } = service.pair({ code, deviceId: 'phone-1' })
+  const operation = { opId: 'card-flag', entityType: 'card', entityId: 'card-1', action: 'update', occurredAt: '2026-10-01T12:00:00.000Z', payload: { id: 'card-1', flag: 1 } }
+  assert.throws(() => service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 12, cursor: 0, operations: [operation] }), /declares schema 12/i)
+  assert.equal(service.changeCount(), 0)
+  assert.equal(service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 13, cursor: 0, operations: [operation] }).accepted, 1)
+  assert.equal(service.health().collectionSchemaVersion, 13)
   service.close()
 })
 
