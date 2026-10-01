@@ -182,6 +182,10 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--acid); outline-
 .form-error { margin: 0; color: #ff826f; font-size: 10px; }
 .options-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .options-fields label:nth-child(3), .options-fields label:nth-child(4), .options-fields label:nth-child(5) { grid-column: 1 / -1; }
+.options-fields > .policy-settings { grid-column: 1 / -1; }
+.policy-settings { margin: 0; padding: 14px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; border: 1px solid var(--line); }
+.policy-settings legend { padding: 0 5px; color: var(--muted); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+.policy-settings .options-note { grid-column: 1 / -1; }
 .affected-decks { padding: 13px; border: 1px solid var(--line); background: #0c0f12; }
 .affected-decks h3 { margin: 0 0 7px; color: var(--text); font-size: 10px; font-weight: 500; }
 .affected-decks p, .options-note { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.55; }
@@ -190,6 +194,13 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--acid); outline-
 .delete-mode { margin: 0; padding: 0; display: grid; gap: 11px; border: 0; }
 .delete-mode legend { padding: 0; color: var(--muted); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
 .dialog label small { display: block; margin-top: 6px; color: var(--faint); font-size: 9px; line-height: 1.45; }
+.card-management-dialog { width: min(680px, 100%); display: grid; gap: 18px; }
+.card-management-list { display: grid; gap: 10px; }
+.card-management-row { padding: 14px; display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: end; border: 1px solid var(--line); background: #0c0f12; }
+.card-management-row > div > p { margin: 7px 0 0; color: var(--muted); font-size: 10px; }
+.card-management-row > label { grid-column: 1 / -1; }
+.card-management-row > .text-button { justify-self: end; }
+.card-management-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
 .media-attachment { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; padding: 9px 10px; border: 1px solid var(--line); color: var(--muted); font-size: 10px; }
 .media-attachment strong { color: var(--text); overflow-wrap: anywhere; }
 .media-attachment label { display: flex; align-items: center; gap: 5px; margin: 0; font-size: 9px; }
@@ -243,6 +254,7 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--acid); outline-
 
 .review-session { min-height: calc(100vh - 95px); padding: 28px 0 45px; display: flex; flex-direction: column; }
 .review-progress { display: flex; justify-content: space-between; align-items: center; color: var(--faint); font-size: 8px; letter-spacing: .13em; }
+.review-session-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
 .review-card { width: min(800px, 100%); min-height: 390px; margin: 45px auto 24px; padding: 38px; display: grid; place-items: center; align-content: center; border: 1px solid var(--line); background: radial-gradient(circle at 50% 30%, rgba(195,255,90,.035), transparent 50%), #101317; text-align: center; }
 .card-side { margin-bottom: 35px; color: var(--acid-dark); font-size: 8px; letter-spacing: .2em; }
 .review-card .template-preview { width: 100%; }
@@ -324,11 +336,16 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--acid); outline-
   .dialog.occlusion-dialog { width: 100%; }
   .options-fields { grid-template-columns: 1fr; }
   .options-fields label { grid-column: auto !important; }
+  .policy-settings { grid-template-columns: 1fr; }
+  .card-management-row { grid-template-columns: 1fr; }
+  .card-management-row > .text-button { justify-self: start; }
+  .card-management-actions { justify-content: flex-start; }
   .occlusion-canvas { max-height: 42vh; }
   .occlusion-mask-controls fieldset { grid-template-columns: 1fr 1fr; }
   .occlusion-mask-controls .text-button { grid-column: 1 / -1; justify-content: center; min-height: 44px; }
   .editor-row { grid-template-columns: 1fr; }
   .review-card { min-height: 350px; margin-top: 26px; padding: 27px 18px; }
+  .review-progress { align-items: flex-start; gap: 12px; }
   .rating-grid { grid-template-columns: 1fr 1fr; }
   .rating { min-height: 54px; }
 }

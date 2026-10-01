@@ -129,6 +129,109 @@ test('a learner creates and assigns reusable scheduling options', async () => {
   }
 })
 
+test('a learner configures interday ordering, sibling burial, and leech handling', async () => {
+  const deck = await collection.createDeck(`Policy controls ${crypto.randomUUID()}`)
+  window.location.hash = `#deck/${deck.id}`
+  render(<CollectionWorkspace />)
+  try {
+    fireEvent.click(await screen.findByRole('button', { name: 'Scheduling options' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Scheduling options' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create option group' }))
+    fireEvent.change(within(dialog).getByLabelText('Option group name'), { target: { value: 'Focused policy' } })
+    fireEvent.change(within(dialog).getByLabelText('Interday learning order'), { target: { value: 'after-reviews' } })
+    fireEvent.click(within(dialog).getByLabelText('Bury new siblings'))
+    fireEvent.click(within(dialog).getByLabelText('Bury review siblings'))
+    fireEvent.change(within(dialog).getByLabelText('Leech threshold'), { target: { value: '3' } })
+    fireEvent.change(within(dialog).getByLabelText('Leech action'), { target: { value: 'tag-only' } })
+    fireEvent.change(within(dialog).getByLabelText('Leech tag'), { target: { value: 'Needs attention' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save options' }))
+    await waitFor(async () => {
+      const updated = await collection.decks.get(deck.id)
+      const group = updated && await collection.deckOptionGroups.get(updated.optionGroupId)
+      expect(group).toMatchObject({
+        name: 'Focused policy',
+        interdayLearningOrder: 'after-reviews',
+        buryNewSiblings: true,
+        buryReviewSiblings: true,
+        leechThreshold: 3,
+        leechAction: 'tag-only',
+        leechTag: 'Needs attention',
+      })
+    })
+  } finally {
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+  }
+})
+
+test('a learner resumes, unburies, and reschedules a card from its deck', async () => {
+  const deck = await collection.createDeck(`Card controls ${crypto.randomUUID()}`)
+  const note = await collection.createBasicNote(deck.id, { front: '再開', back: 'resume' })
+  const card = (await collection.cards.where('noteId').equals(note.id).first())!
+  await collection.suspendCard(card.id)
+  await collection.buryCard(card.id)
+  window.location.hash = `#deck/${deck.id}`
+  render(<CollectionWorkspace />)
+  try {
+    fireEvent.click(await screen.findByRole('button', { name: 'Manage cards' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Manage cards' })
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Resume card' }))
+    await waitFor(async () => expect(await collection.cards.get(card.id)).toMatchObject({ manualSuspended: false }))
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Unbury card' }))
+    await waitFor(async () => expect(await collection.cards.get(card.id)).toMatchObject({ buriedUntil: null }))
+    fireEvent.change(await within(dialog).findByLabelText('Reschedule due'), { target: { value: '2026-11-02T09:30' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Reschedule card' }))
+    await waitFor(async () => expect(await collection.cards.get(card.id)).toMatchObject({
+      manualSuspended: false,
+      buriedUntil: null,
+      due: new Date('2026-11-02T09:30').toISOString(),
+    }))
+  } finally {
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+  }
+})
+
+test('a learner can suspend or bury the current review card and the queue refreshes', async () => {
+  const deck = await collection.createDeck(`Review controls ${crypto.randomUUID()}`)
+  const note = await collection.createBasicNote(deck.id, { front: '隠す', back: 'hide' })
+  const card = (await collection.cards.where('noteId').equals(note.id).first())!
+  window.location.hash = `#review/${deck.id}`
+  render(<CollectionWorkspace />)
+  try {
+    fireEvent.click(await screen.findByRole('button', { name: 'Suspend card' }))
+    await waitFor(async () => expect(await collection.cards.get(card.id)).toMatchObject({ manualSuspended: true }))
+    expect(await screen.findByRole('heading', { name: 'Session complete' })).toBeVisible()
+  } finally {
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+  }
+})
+
+test('answering a card refreshes queued siblings that the policy buries', async () => {
+  const deck = await collection.createDeck(`Sibling refresh ${crypto.randomUUID()}`)
+  const type = await collection.createNoteType({
+    name: `Two cards ${crypto.randomUUID()}`,
+    kind: 'standard',
+    fields: [{ name: 'Front' }, { name: 'Back' }],
+    templates: [
+      { name: 'Front card', front: '{{Front}}', back: '{{Back}}', css: '' },
+      { name: 'Back card', front: '{{Back}}', back: '{{Front}}', css: '' },
+    ],
+  })
+  const group = (await collection.deckOptionGroups.get(deck.optionGroupId))!
+  await collection.updateDeckOptionGroup(group.id, { ...group, buryNewSiblings: true })
+  await collection.createNote(deck.id, type.id, { [type.fields[0].id]: '表', [type.fields[1].id]: '裏' })
+  window.location.hash = `#review/${deck.id}`
+  render(<CollectionWorkspace />)
+  try {
+    fireEvent.click(await screen.findByRole('button', { name: 'Show answer' }))
+    fireEvent.click((await screen.findAllByRole('button', { name: /^Good ·/ }))[0])
+    expect(await screen.findByRole('heading', { name: 'Session complete' })).toBeVisible()
+    await waitFor(async () => expect((await collection.cards.where('deckId').equals(deck.id).toArray()).some((card) => card.buriedUntil)).toBe(true))
+  } finally {
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+    await collection.deleteNoteType(type.id)
+  }
+})
+
 test('a learner moves a deck under a different parent', async () => {
   const firstParent = await collection.createDeck(`First ${crypto.randomUUID()}`)
   const secondParent = await collection.createDeck(`Second ${crypto.randomUUID()}`)

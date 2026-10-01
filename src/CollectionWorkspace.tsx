@@ -11,6 +11,7 @@ import {
   type DeckOptionGroup,
   type DeckOptionSettings,
   type DeckSummary,
+  type CardRecord,
   type Grade,
   type Note,
   type NoteMediaReference,
@@ -372,6 +373,12 @@ function settingsFromGroup(group: DeckOptionGroup): DeckOptionSettings {
     relearningSteps: group.relearningSteps,
     newCardOrder: group.newCardOrder,
     reviewCardOrder: group.reviewCardOrder,
+    interdayLearningOrder: group.interdayLearningOrder,
+    buryNewSiblings: group.buryNewSiblings,
+    buryReviewSiblings: group.buryReviewSiblings,
+    leechThreshold: group.leechThreshold,
+    leechAction: group.leechAction,
+    leechTag: group.leechTag,
   }
 }
 
@@ -508,12 +515,82 @@ function DeckOptionsDialog({ deck, onClose }: { deck: Deck; onClose: () => void 
         <label>Relearning steps<input aria-label="Relearning steps" value={selectedSettings.relearningSteps.join(', ')} onChange={(event) => update('relearningSteps', stepList(event.target.value))} /></label>
         <label>New card order<select aria-label="New card order" value={selectedSettings.newCardOrder} onChange={(event) => update('newCardOrder', event.target.value as DeckOptionSettings['newCardOrder'])}><option value="added">Added</option><option value="random">Random</option></select></label>
         <label>Review card order<select aria-label="Review card order" value={selectedSettings.reviewCardOrder} onChange={(event) => update('reviewCardOrder', event.target.value as DeckOptionSettings['reviewCardOrder'])}><option value="due">Due</option><option value="random">Random</option></select></label>
+        <label>Interday learning order<select aria-label="Interday learning order" value={selectedSettings.interdayLearningOrder} onChange={(event) => update('interdayLearningOrder', event.target.value as DeckOptionSettings['interdayLearningOrder'])}><option value="before-reviews">Before reviews</option><option value="after-reviews">After reviews</option></select></label>
+        <fieldset className="policy-settings"><legend>Sibling burial</legend>
+          <label className="choice"><input aria-label="Bury new siblings" type="checkbox" checked={Boolean(selectedSettings.buryNewSiblings)} onChange={(event) => update('buryNewSiblings', event.target.checked)} />Bury new siblings</label>
+          <label className="choice"><input aria-label="Bury review siblings" type="checkbox" checked={Boolean(selectedSettings.buryReviewSiblings)} onChange={(event) => update('buryReviewSiblings', event.target.checked)} />Bury review siblings</label>
+          <p className="options-note">After you answer a card, matching siblings stay out of the queue until the next local study day.</p>
+        </fieldset>
+        <fieldset className="policy-settings"><legend>Leeches</legend>
+          <label>Leech threshold<input aria-label="Leech threshold" type="number" min="1" max="9999" value={selectedSettings.leechThreshold} onChange={(event) => update('leechThreshold', Number(event.target.value))} /></label>
+          <label>Leech action<select aria-label="Leech action" value={selectedSettings.leechAction} onChange={(event) => update('leechAction', event.target.value as DeckOptionSettings['leechAction'])}><option value="suspend">Tag and suspend</option><option value="tag-only">Tag only</option></select></label>
+          <label>Leech tag<input aria-label="Leech tag" value={selectedSettings.leechTag} onChange={(event) => update('leechTag', event.target.value)} maxLength={120} /></label>
+        </fieldset>
       </div>
       <section className="affected-decks" aria-label="Decks using this option group"><h3>Decks using this option group</h3><p>{creating ? 'This new group will be assigned to this deck.' : affected.length ? affected.map((candidate) => candidate.name).join(', ') : 'No decks use this group yet.'}</p></section>
       <p className="options-note">Changes apply to future scheduling. Existing review history remains unchanged.</p>
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="dialog-actions"><button className="text-button" type="button" onClick={onClose}>Cancel</button><button className="primary-action" type="submit">Save options</button></div>
     </form>
+  </section></div>
+}
+
+function localDateTimeValue(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const pad = (part: number) => String(part).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+function cardStatus(card: CardRecord) {
+  if (card.templateSuspended || card.suspended) return 'Template content unavailable'
+  if (card.manualSuspended) return 'Suspended manually'
+  if (card.buriedUntil && new Date(card.buriedUntil).getTime() > Date.now()) return `Buried until ${new Date(card.buriedUntil).toLocaleString()}`
+  return 'Available for scheduling'
+}
+
+function CardManagementDialog({ note, onClose }: { note: Note; onClose: () => void }) {
+  const cards = useLiveQuery(() => collection.cards.where('noteId').equals(note.id).sortBy('templateId'), [note.id], [])
+  const [dueByCard, setDueByCard] = useState<Record<string, string>>({})
+  const [busyCardId, setBusyCardId] = useState<string | null>(null)
+  const [error, setError] = useState('')
+
+  async function perform(cardId: string, action: () => Promise<void>) {
+    setBusyCardId(cardId)
+    setError('')
+    try {
+      await action()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Unable to update card')
+    } finally {
+      setBusyCardId(null)
+    }
+  }
+
+  return <div className="dialog-backdrop"><section className="dialog card-management-dialog" role="dialog" aria-modal="true" aria-labelledby="card-management-title">
+    <span className="section-code">NOTE // CARDS</span><h2 id="card-management-title">Manage cards</h2>
+    <p className="options-note">Suspend or bury a card temporarily. Rescheduling keeps its review history and scheduling data.</p>
+    <div className="card-management-list">
+      {cards.map((card, index) => {
+        const due = dueByCard[card.id] ?? localDateTimeValue(card.due)
+        const busy = busyCardId === card.id
+        return <article className="card-management-row" key={card.id}>
+          <div><span className="section-code">CARD // {String(index + 1).padStart(2, '0')}</span><p aria-live="polite">{cardStatus(card)}</p></div>
+          <div className="card-management-actions">
+            {card.manualSuspended
+              ? <button className="text-button" type="button" disabled={busy} onClick={() => void perform(card.id, () => collection.unsuspendCard(card.id))}>Resume card</button>
+              : <button className="text-button" type="button" disabled={busy || Boolean(card.templateSuspended || card.suspended)} onClick={() => void perform(card.id, () => collection.suspendCard(card.id))}>Suspend card</button>}
+            {card.buriedUntil
+              ? <button className="text-button" type="button" disabled={busy} onClick={() => void perform(card.id, () => collection.unburyCard(card.id))}>Unbury card</button>
+              : <button className="text-button" type="button" disabled={busy} onClick={() => void perform(card.id, () => collection.buryCard(card.id))}>Bury card</button>}
+          </div>
+          <label>Reschedule due<input aria-label="Reschedule due" type="datetime-local" value={due} onChange={(event) => setDueByCard((current) => ({ ...current, [card.id]: event.target.value }))} /></label>
+          <button className="text-button" type="button" disabled={busy || !due} onClick={() => void perform(card.id, () => collection.rescheduleCard(card.id, new Date(due)))}>Reschedule card</button>
+        </article>
+      })}
+    </div>
+    {error && <p className="form-error" role="alert">{error}</p>}
+    <div className="dialog-actions"><button className="primary-action" type="button" onClick={onClose}>Done</button></div>
   </section></div>
 }
 
@@ -529,6 +606,7 @@ function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () =>
   const [deleteDialog, setDeleteDialog] = useState(false)
   const [optionsDialog, setOptionsDialog] = useState(false)
   const [moveNote, setMoveNote] = useState<Note | null>(null)
+  const [manageCardsNote, setManageCardsNote] = useState<Note | null>(null)
   const [noteDialog, setNoteDialog] = useState<{ note?: Note } | null>(null)
 
   if (deck === undefined || summary === undefined) return <div className="loading-state" role="status">Loading local deck…</div>
@@ -562,7 +640,7 @@ function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () =>
           return <article className="note-row" key={note.id}>
             <div><span>{type?.fields[0]?.name.toUpperCase() ?? 'FIELD'}</span><strong lang="ja">{note.fields[type?.fields[0]?.id ?? 'front']}</strong></div>
             <div><span>{type?.fields[1]?.name.toUpperCase() ?? type?.name.toUpperCase() ?? 'NOTE'}</span><p lang="ja">{note.fields[type?.fields[1]?.id ?? 'back']}</p></div>
-            <div className="note-row-actions"><button className="text-button" type="button" onClick={() => setNoteDialog({ note })}>Edit note</button><button className="text-button" type="button" onClick={() => setMoveNote(note)}>Move note</button></div>
+            <div className="note-row-actions"><button className="text-button" type="button" onClick={() => setNoteDialog({ note })}>Edit note</button><button className="text-button" type="button" onClick={() => setMoveNote(note)}>Move note</button><button className="text-button" type="button" onClick={() => setManageCardsNote(note)}>Manage cards</button></div>
           </article>
         })}
       </section>
@@ -572,6 +650,7 @@ function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () =>
       {deleteDialog && <DeleteDeckDialog deck={deck} onClose={() => setDeleteDialog(false)} onDeleted={onBack} />}
       {optionsDialog && <DeckOptionsDialog deck={deck} onClose={() => setOptionsDialog(false)} />}
       {moveNote && <MoveNoteDialog note={moveNote} onClose={() => setMoveNote(null)} />}
+      {manageCardsNote && <CardManagementDialog note={manageCardsNote} onClose={() => setManageCardsNote(null)} />}
       {noteDialog && <NoteDialog deckId={deckId} note={noteDialog.note} onClose={() => setNoteDialog(null)} />}
     </>
   )
@@ -585,6 +664,10 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   const [typedDraft, setTypedDraft] = useState<{ cardId?: string; value: string }>({ value: '' })
   const typedResultRef = useRef<HTMLDivElement>(null)
   const cardId = queue?.[0]
+  async function refreshQueue() {
+    const dueCards = await collection.dueCards(deckId, new Date())
+    setQueue(dueCards.map((dueCard) => dueCard.id))
+  }
   const typedInput = typedDraft.cardId === cardId ? typedDraft.value : ''
   const card = useLiveQuery(async () => cardId ? await collection.cards.get(cardId) ?? null : undefined, [cardId])
   const note = useLiveQuery(async () => card ? await collection.notes.get(card.noteId) ?? null : undefined, [card?.noteId])
@@ -600,11 +683,12 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   const renderError = frontResult && !frontResult.ok ? frontResult.error : backResult && !backResult.ok ? backResult.error : undefined
   const imageOcclusion = noteType?.kind === 'image-occlusion'
   const unavailable = card === null || note === null || noteType === null ||
-    Boolean(card?.suspended) || (Boolean(noteType && card) && !template) ||
+    Boolean(card?.suspended || card?.manualSuspended || card?.templateSuspended) ||
+    (Boolean(noteType && card) && !template) ||
     Boolean(frontResult?.ok && frontResult.value.isEmpty && !imageOcclusion)
 
   useEffect(() => {
-    collection.dueCards(deckId, new Date()).then((cards) => setQueue(cards.map((card) => card.id)))
+    void collection.dueCards(deckId, new Date()).then((cards) => setQueue(cards.map((dueCard) => dueCard.id)))
   }, [deckId])
 
   useEffect(() => {
@@ -622,6 +706,15 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     }
   }, [deckId, cardId, card, note, noteType, unavailable])
 
+  useEffect(() => {
+    if (cardId && card?.buriedUntil) {
+      void collection.dueCards(deckId, new Date()).then((cards) => {
+        setShowAnswer(false)
+        setQueue(cards.map((dueCard) => dueCard.id))
+      })
+    }
+  }, [deckId, cardId, card?.buriedUntil])
+
   async function answer(rating: Grade) {
     if (!cardId || isAnswering) return
     setIsAnswering(true)
@@ -629,7 +722,19 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
       await collection.answer(cardId, rating, new Date())
       setReviewsRecorded((count) => count + 1)
       setShowAnswer(false)
-      setQueue((current) => current?.slice(1) ?? [])
+      await refreshQueue()
+    } finally {
+      setIsAnswering(false)
+    }
+  }
+
+  async function updateCurrentCard(action: (id: string) => Promise<void>) {
+    if (!cardId || isAnswering) return
+    setIsAnswering(true)
+    try {
+      await action(cardId)
+      setShowAnswer(false)
+      await refreshQueue()
     } finally {
       setIsAnswering(false)
     }
@@ -654,8 +759,10 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     setQueue((current) => current?.slice(1) ?? [])
   }
 
+  const reviewActions = <div className="review-session-actions"><button className="text-button" type="button" disabled={isAnswering} onClick={() => void updateCurrentCard((id) => collection.suspendCard(id))}>Suspend card</button><button className="text-button" type="button" disabled={isAnswering} onClick={() => void updateCurrentCard((id) => collection.buryCard(id))}>Bury card</button><button className="text-button" type="button" onClick={onBack}>End session</button></div>
+
   if (renderError) return <section className="review-session">
-    <div className="review-progress"><span>REVIEW // {String(reviewsRecorded + 1).padStart(2, '0')}</span><button className="text-button" onClick={onBack}>End session</button></div>
+    <div className="review-progress"><span>REVIEW // {String(reviewsRecorded + 1).padStart(2, '0')}</span>{reviewActions}</div>
     <article className="review-card"><p className="form-error" role="alert">Unable to render card: {renderError}</p></article>
     <button className="primary-action" type="button" onClick={skipCard}>Skip card</button>
   </section>
@@ -665,7 +772,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
 
   return (
     <section className="review-session">
-      <div className="review-progress"><span>REVIEW // {String(reviewsRecorded + 1).padStart(2, '0')}</span><button className="text-button" onClick={onBack}>End session</button></div>
+      <div className="review-progress"><span>REVIEW // {String(reviewsRecorded + 1).padStart(2, '0')}</span>{reviewActions}</div>
       <article className="review-card">
         <span className="card-side">{showAnswer ? 'ANSWER' : 'QUESTION'}</span>
         {imageOcclusion
