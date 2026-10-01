@@ -416,6 +416,17 @@ describe('local collection', () => {
     }
   })
 
+  test('note deletion undo cannot restore material into a subsequently deleted deck', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Deleted parent')
+    const note = await collection.createBasicNote(deck.id, { front: '消す', back: 'delete' })
+    await collection.deleteNote(note.id)
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+    await expect(collection.latestNoteDeletionUndo()).resolves.toBeNull()
+    await expect(collection.undoLastNoteDeletion()).rejects.toThrow(/original deck/i)
+    expect(await collection.notes.get(note.id)).toBeUndefined()
+  })
+
   test('card maintenance undo restores suspension and burial only before sync', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const deck = await collection.createDeck('Card undo')

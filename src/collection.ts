@@ -1302,15 +1302,17 @@ export class Collection extends Dexie {
     const undo = (await this.settings.get('noteDeletionUndo'))?.value as NoteDeletionUndo | undefined
     const epoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
     if (!undo || undo.syncEpoch !== epoch || !await this.outbox.get(undo.operationId) || await this.notes.get(undo.note.id)) return null
+    if (!await this.decks.get(undo.note.deckId) || !await this.noteTypes.get(undo.note.typeId)) return null
     return undo
   }
 
   async undoLastNoteDeletion(): Promise<string> {
-    return this.transaction('rw', [this.notes, this.cards, this.reviewEntries, this.noteMedia, this.outbox, this.deletedEntities, this.settings], async () => {
+    return this.transaction('rw', [this.decks, this.noteTypes, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.outbox, this.deletedEntities, this.settings], async () => {
       const undo = (await this.settings.get('noteDeletionUndo'))?.value as NoteDeletionUndo | undefined
       if (!undo) throw new Error('No recent note deletion to undo')
       const epoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
       if (epoch !== undo.syncEpoch || !await this.outbox.get(undo.operationId)) throw new Error('This deletion cannot be undone after a sync attempt')
+      if (!await this.decks.get(undo.note.deckId) || !await this.noteTypes.get(undo.note.typeId)) throw new Error('The original deck or note type was deleted; undo is unavailable')
       const keys = [tombstoneKey('note', undo.note.id), ...undo.cards.map((card) => tombstoneKey('card', card.id)), ...undo.reviews.map((review) => tombstoneKey('review', review.id)), ...undo.media.map((reference) => tombstoneKey('noteMedia', reference.id))]
       const tombstones = await this.deletedEntities.bulkGet(keys)
       if (tombstones.some((tombstone) => tombstone?.occurredAt !== undo.occurredAt)) throw new Error('The deleted note changed; undo is unavailable')

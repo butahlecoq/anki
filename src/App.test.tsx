@@ -378,6 +378,7 @@ test('review keyboard shortcuts use the same answer and rating actions as touch 
     expect(await screen.findByRole('button', { name: /^Good ·/ })).toBeVisible()
     fireEvent.keyDown(window, { key: '3' })
     await waitFor(async () => expect(await collection.reviewEntries.where('cardId').equals(card.id).count()).toBe(1))
+    await screen.findByRole('heading', { name: 'Session complete' })
     const undo = await screen.findByRole('button', { name: 'Undo last review' })
     await waitFor(() => expect(undo).toBeEnabled())
     fireEvent.click(undo)

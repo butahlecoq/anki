@@ -1,6 +1,6 @@
 import { expect, test, vi } from 'vitest'
 import { foregroundSync, pairCollection, preflightSync, syncCollection } from './sync-client'
-import { createCollection } from './collection'
+import { createCollection, Rating } from './collection'
 import { digestMedia } from './media'
 
 const health = (collectionSchemaVersion = 13, maximumCollectionSchemaVersion = 13) => new Response(JSON.stringify({ ready: true, schemaVersion: 1, protocolVersion: 2, collectionSchemaVersion, maximumCollectionSchemaVersion, store: 'sqlite' }), { status: 200 })
@@ -39,6 +39,27 @@ test('does not upload media or acknowledge local operations when the preflight r
 test('distinguishes authentication and unreachable service failures', async () => {
   await expect(foregroundSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 }, [], vi.fn().mockResolvedValue(new Response('', { status: 401 })))).resolves.toEqual({ state: 'authentication-required' })
   await expect(foregroundSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 }, [], vi.fn().mockRejectedValue(new TypeError('network')))).resolves.toEqual({ state: 'unreachable' })
+})
+
+test('invalidates local undo before an in-flight sync can capture review operations', async () => {
+  const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+  try {
+    await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 })
+    const now = new Date('2026-10-01T12:00:00.000Z')
+    const deck = await collection.createDeck('Undo sync', now)
+    const note = await collection.createBasicNote(deck.id, { front: '戻す', back: 'restore' }, now)
+    const card = (await collection.cards.where('noteId').equals(note.id).first())!
+    await collection.answer(card.id, Rating.Good, now)
+    const fetcher = vi.fn(async () => {
+      await expect(collection.undoLastReview()).rejects.toThrow(/sync attempt/i)
+      throw new TypeError('network')
+    })
+    await expect(syncCollection(collection, fetcher)).resolves.toMatchObject({ state: 'unreachable' })
+    expect(await collection.reviewEntries.where('cardId').equals(card.id).count()).toBe(1)
+    expect(await collection.pendingOperations()).not.toHaveLength(0)
+  } finally {
+    await collection.delete()
+  }
 })
 
 test('pairs a collection and persists only the returned device credential', async () => {
