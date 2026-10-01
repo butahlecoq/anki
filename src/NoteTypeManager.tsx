@@ -134,7 +134,7 @@ function TypeEditor({ noteType, onClose }: { noteType?: NoteType; onClose: () =>
               {kind === 'cloze' && <label>Preview ordinal<select value={shownOrdinal ?? ''} onChange={(event) => setPreviewOrdinal(Number(event.target.value))}>{previewOrdinals.map((ordinal) => <option value={ordinal} key={ordinal}>c{ordinal}</option>)}</select></label>}
             </div>
             <div className="preview-samples">{fields.map((field) => <label key={field.key}>Sample {field.name || 'field'}<input value={displayFields[field.name] ?? ''} onChange={(event) => setSampleOverrides((current) => ({ ...current, [field.id ?? field.key]: event.target.value }))} /></label>)}</div>
-            {selected && <TemplatePreview front={selected.front} back={selected.back} css={selected.css} fields={displayFields} kind={kind} ordinal={shownOrdinal} side={previewSide} />}
+            {selected && <TemplatePreview front={selected.front} back={selected.back} css={selected.css} fields={displayFields} kind={kind} ordinal={shownOrdinal} templateOrdinal={previewTemplate + 1} side={previewSide} />}
           </section>
           {error && <p className="form-error" role="alert">{error}</p>}
           <div className="dialog-actions"><button className="text-button" type="button" onClick={onClose}>Cancel</button><button className="primary-action" type="submit">{noteType ? 'Save changes' : 'Save note type'}</button></div>

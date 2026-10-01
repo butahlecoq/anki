@@ -146,6 +146,7 @@ function decodeTypes(data: CollectionData, fallback: Date, issues: AnkiImportIss
       for (const template of templates) {
         validateTemplate(template.front, fields.map((field) => field.name), 'front', kind)
         validateTemplate(template.back, fields.map((field) => field.name), 'back', kind)
+        validateSupportedTemplateMarkup(template.front, template.back, template.css)
       }
       result.set(row.id, {
         id: row.id,
@@ -168,6 +169,24 @@ function decodeTypes(data: CollectionData, fallback: Date, issues: AnkiImportIss
 function mimeType(name: string): string | undefined {
   const extension = name.toLocaleLowerCase().split('.').pop()
   return ({ png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', mp3: 'audio/mpeg', ogg: 'audio/ogg', wav: 'audio/wav' } as Record<string, string>)[extension ?? '']
+}
+
+function validateMediaBytes(bytes: Uint8Array, mime: string) {
+  const text = (start: number, end: number) => textDecoder.decode(bytes.slice(start, end))
+  const valid = mime === 'image/png' ? bytes.length >= 24 && bytes.slice(0, 8).every((byte, index) => byte === [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a][index])
+    : mime === 'image/jpeg' ? bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+      : mime === 'image/webp' ? bytes.length >= 16 && text(0, 4) === 'RIFF' && text(8, 12) === 'WEBP'
+        : mime === 'audio/wav' ? bytes.length >= 44 && text(0, 4) === 'RIFF' && text(8, 12) === 'WAVE'
+          : mime === 'audio/ogg' ? bytes.length >= 27 && text(0, 4) === 'OggS'
+            : mime === 'audio/mpeg' ? bytes.length >= 3 && (text(0, 3) === 'ID3' || (bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0))
+              : false
+  if (!valid) throw new Error(`“${mime}” bytes do not match the declared media format.`)
+}
+
+function validateSupportedTemplateMarkup(front: string, back: string, css: string) {
+  const html = `${front}\n${back}`
+  if (/<\s*(?:script|iframe|object|embed|link|form)\b/i.test(html) || /\son[a-z]+\s*=/i.test(html)) throw new Error('Executable or embedded template markup is unsupported')
+  if (/\b(?:src|href)\s*=\s*["']\s*(?:https?:|\/\/)/i.test(html) || /(?:@import|url\s*\(\s*["']?\s*(?:https?:|\/\/))/i.test(css)) throw new Error('Templates that depend on remote resources are unsupported')
 }
 
 function mediaKind(mime: string): MediaKind { return mime.startsWith('image/') ? 'image' : 'audio' }
@@ -222,6 +241,10 @@ function memoryState(card: CardRow) {
 
 function intervalDays(interval: number) {
   return interval >= 0 ? interval : Math.max(0, Math.round(Math.abs(interval) / 86_400))
+}
+
+function intervalMilliseconds(interval: number) {
+  return interval >= 0 ? interval * day : Math.abs(interval) * 1000
 }
 
 function reviewState(review: RevlogRow): State {
@@ -397,6 +420,7 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
         const mime = media && mimeType(media.name)
         if (!media || !mime || !mime.startsWith('image/')) throw new Error(`Image occlusion source “${parsed.imageName}” is missing or unsupported`)
         validateMedia(new File([ownedBuffer(media.data)], media.name, { type: mime }))
+        validateMediaBytes(media.data, mime)
         const dimensions = imageDimensions(media.data)
         if (!dimensions) throw new Error(`Image dimensions for “${parsed.imageName}” could not be read`)
         const digest = await digestMedia(new Blob([ownedBuffer(media.data)], { type: mime }))
@@ -429,6 +453,10 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
           const mediaFile = new File([ownedBuffer(media.data)], media.name, { type: mime })
           try { validateMedia(mediaFile) } catch (reason) {
             issues.push({ severity: 'warning', code: 'media-unsupported', subject: name, detail: reason instanceof Error ? reason.message : 'Media is unsupported' })
+            continue
+          }
+          try { validateMediaBytes(media.data, mime) } catch (reason) {
+            issues.push({ severity: 'error', code: 'media-malformed', subject: name, detail: reason instanceof Error ? reason.message : 'Media bytes are malformed' })
             continue
           }
           const digest = await digestMedia(mediaFile)
@@ -508,7 +536,8 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
     }
   }
 
-  for (const row of data.revlog) {
+  const previousReviewByCard = new Map<number, { reviewedAt: number; elapsedDays: number }>()
+  for (const row of [...data.revlog].sort((left, right) => left.id - right.id)) {
     const cardId = sourceCardIds.get(row.cid)
     const card = cards.find((candidate) => candidate.id === cardId)
     if (!cardId || !card || row.ease < 1 || row.ease > 4) {
@@ -516,22 +545,26 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
       continue
     }
     const reviewedAt = new Date(row.id).toISOString()
-    const scheduledDays = intervalDays(row.ivl)
+    const previous = previousReviewByCard.get(row.cid)
+    const elapsedDays = previous ? Math.max(0, Math.floor((row.id - previous.reviewedAt) / day)) : 0
+    const scheduledDays = intervalDays(row.lastIvl)
     reviews.push({
       id: stableId('review', row.id),
       cardId,
       deckId: card.deckId,
       rating: row.ease,
       state: reviewState(row),
-      due: new Date(row.id + (row.ivl >= 0 ? row.ivl * day : Math.abs(row.ivl) * 1000)).toISOString(),
+      due: new Date(previous ? previous.reviewedAt + intervalMilliseconds(row.lastIvl) : row.id).toISOString(),
       stability: scheduledDays,
       difficulty: row.factor >= 100 && row.factor <= 1100 ? row.factor / 100 : card.difficulty,
-      elapsedDays: intervalDays(row.lastIvl),
-      lastElapsedDays: intervalDays(row.lastIvl),
+      elapsedDays,
+      lastElapsedDays: previous?.elapsedDays ?? 0,
       scheduledDays,
       learningSteps: 0,
       reviewedAt,
     })
+    previousReviewByCard.set(row.cid, { reviewedAt: row.id, elapsedDays })
+    if (!previous) issues.push({ severity: 'warning', code: 'first-review-approximation', subject: String(row.id), detail: 'Anki does not retain the original due and FSRS memory state before the first review log; its review time and prior interval are used as the supported approximation.' })
     if (row.type > 2) issues.push({ severity: 'warning', code: 'review-kind-fallback', subject: String(row.id), detail: 'Filtered or manual review kind was retained as review history without its special queue semantics.' })
   }
 

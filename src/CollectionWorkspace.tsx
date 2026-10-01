@@ -660,13 +660,14 @@ function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () =>
   )
 }
 
-function ReviewTemplatePreview({ template, fields, kind, ordinal, side, media }: {
+function ReviewTemplatePreview({ template, fields, kind, ordinal, side, media, templateOrdinal }: {
   template: { front: string; back: string; css: string }
   fields: Record<string, string>
   kind: 'standard' | 'cloze'
   ordinal?: number
   side: 'front' | 'back'
   media: NoteMediaReference[]
+  templateOrdinal?: number
 }) {
   const [sources, setSources] = useState<Record<string, { kind: 'image' | 'audio'; url: string; automatic?: boolean }>>({})
   useEffect(() => {
@@ -691,7 +692,7 @@ function ReviewTemplatePreview({ template, fields, kind, ordinal, side, media }:
       for (const url of urls) URL.revokeObjectURL(url)
     }
   }, [media])
-  return <TemplatePreview title="Review card" front={template.front} back={template.back} css={template.css} fields={fields} kind={kind} ordinal={ordinal} side={side} media={sources} />
+  return <TemplatePreview title="Review card" front={template.front} back={template.back} css={template.css} fields={fields} kind={kind} ordinal={ordinal} templateOrdinal={templateOrdinal} side={side} media={sources} />
 }
 
 function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void }) {
@@ -788,7 +789,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
         <span className="card-side">{showAnswer ? 'ANSWER' : 'QUESTION'}</span>
         {imageOcclusion
           ? <ImageOcclusionReview note={note} card={card} showAnswer={showAnswer} />
-          : <ReviewTemplatePreview key={card.id} template={template} fields={fields} kind={noteType.kind} ordinal={card.clozeOrdinal} side={showAnswer ? 'back' : 'front'} media={templateMedia} />}
+          : <ReviewTemplatePreview key={card.id} template={template} fields={fields} kind={noteType.kind} ordinal={card.clozeOrdinal} templateOrdinal={Math.max(1, noteType.templates.findIndex((candidate) => candidate.id === template.id) + 1)} side={showAnswer ? 'back' : 'front'} media={templateMedia} />}
         {noteType.kind !== 'image-occlusion' && media.filter((reference) => !reference.inline && reference.side === 'front' && (!reference.templateId || reference.templateId === card.templateId)).map((reference) => <MediaRenderer key={reference.id} reference={reference} automatic />)}
         {noteType.kind !== 'image-occlusion' && showAnswer && media.filter((reference) => !reference.inline && reference.side === 'back' && (!reference.templateId || reference.templateId === card.templateId)).map((reference) => <MediaRenderer key={reference.id} reference={reference} automatic />)}
         {typedAnswer !== undefined && !showAnswer && <label className="typed-answer">Type your answer

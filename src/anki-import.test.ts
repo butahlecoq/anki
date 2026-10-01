@@ -129,6 +129,35 @@ async function unsupportedPackage() {
   return new File([(await pkg.toUint8Array(SQL)).slice().buffer as ArrayBuffer], 'unsupported.apkg', { type: 'application/octet-stream' })
 }
 
+async function malformedMediaPackage() {
+  const type = new Notetype({
+    id: 1_700_000_000_040,
+    name: 'Malformed media',
+    fields: [{ name: 'Front' }, { name: 'Back' }],
+    templates: [{ name: 'Card', questionFormat: '{{Front}}', answerFormat: '{{Back}}' }],
+  })
+  const deck = new Deck({ id: 1_700_000_000_041, name: 'Malformed media' })
+  deck.addNote(new AnkiNote({ notetype: type, guid: 'malformed-media-guid', fields: ['<img src="broken.png">', 'answer'] }))
+  const pkg = new Package()
+  pkg.addDeck(deck)
+  pkg.addMedia('broken.png', new Uint8Array([1, 2, 3, 4]))
+  return new File([(await pkg.toUint8Array(SQL)).slice().buffer as ArrayBuffer], 'malformed-media.apkg', { type: 'application/octet-stream' })
+}
+
+async function executableTemplatePackage() {
+  const type = new Notetype({
+    id: 1_700_000_000_050,
+    name: 'Executable template',
+    fields: [{ name: 'Front' }, { name: 'Back' }],
+    templates: [{ name: 'Card', questionFormat: '<script>document.body.textContent = "changed"</script>{{Front}}', answerFormat: '{{Back}}' }],
+  })
+  const deck = new Deck({ id: 1_700_000_000_051, name: 'Executable template' })
+  deck.addNote(new AnkiNote({ notetype: type, guid: 'executable-guid', fields: ['question', 'answer'] }))
+  const pkg = new Package()
+  pkg.addDeck(deck)
+  return new File([(await pkg.toUint8Array(SQL)).slice().buffer as ArrayBuffer], 'executable.apkg', { type: 'application/octet-stream' })
+}
+
 describe('Anki package import', () => {
   test('previews and transactionally imports templates, scheduling, history, tags, and media from a modern package', async () => {
     collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
@@ -160,7 +189,13 @@ describe('Anki package import', () => {
     expect(notes.find((note) => note.id === 'anki-note:stable-cloze-guid')?.fields).toEqual(expect.objectContaining({ 'anki-field:1700000000002:0': '{{c1::東京}}へ{{c2::行く}}' }))
     const scheduled = (await collection.cards.toArray()).find((card) => card.reps === 5)
     expect(scheduled).toMatchObject({ state: State.Review, stability: 12.5, difficulty: 4.25, scheduledDays: 12, lapses: 1 })
-    await expect(collection.reviewEntries.count()).resolves.toBe(1)
+    await expect(collection.reviewEntries.toArray()).resolves.toEqual([expect.objectContaining({
+      id: 'anki-review:1725192000000',
+      reviewedAt: '2024-09-01T12:00:00.000Z',
+      due: '2024-09-01T12:00:00.000Z',
+      scheduledDays: 5,
+      elapsedDays: 0,
+    })])
     const media = await collection.mediaForNote('anki-note:stable-vocabulary-guid')
     expect(media).toEqual(expect.arrayContaining([
       expect.objectContaining({ displayName: 'cat.png', kind: 'image', side: 'front' }),
@@ -292,6 +327,16 @@ describe('Anki package import', () => {
     await expect(prepared.commit()).rejects.toThrow(/resolve package errors/i)
     await expect(collection.decks.count()).resolves.toBe(0)
     await expect(collection.notes.count()).resolves.toBe(0)
+  })
+
+  test('blocks executable templates and malformed media bytes with detailed errors', async () => {
+    collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
+    const executable = await prepareAnkiImport(await executableTemplatePackage(), collection, { SQL })
+    expect(executable.issues).toEqual(expect.arrayContaining([expect.objectContaining({ severity: 'error', code: 'unsupported-note-type', subject: 'Executable template', detail: expect.stringMatching(/executable/i) })]))
+    await expect(executable.commit()).rejects.toThrow(/resolve package errors/i)
+    const malformed = await prepareAnkiImport(await malformedMediaPackage(), collection, { SQL })
+    expect(malformed.issues).toEqual(expect.arrayContaining([expect.objectContaining({ severity: 'error', code: 'media-malformed', subject: 'broken.png' })]))
+    await expect(malformed.commit()).rejects.toThrow(/resolve package errors/i)
   })
 
 })

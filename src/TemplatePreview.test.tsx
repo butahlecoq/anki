@@ -17,3 +17,8 @@ test('contains malformed synced templates as an actionable preview error', () =>
   expect(screen.getByRole('alert')).toHaveTextContent(/unmatched template delimiter/i)
   expect(screen.queryByTitle('Card preview')).not.toBeInTheDocument()
 })
+
+test('applies Anki card and template-ordinal CSS classes', () => {
+  render(<TemplatePreview front="{{Front}}" back="{{FrontSide}}" css=".card2 { color: red }" fields={{ Front: 'question' }} templateOrdinal={2} side="front" />)
+  expect(screen.getByTitle('Card preview')).toHaveAttribute('srcdoc', expect.stringContaining('<body class="card card2">'))
+})

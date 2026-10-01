@@ -105,6 +105,7 @@ test('learner previews and imports an Anki package before studying its media off
   await page.getByRole('button', { name: 'Study now' }).click()
   const review = page.frameLocator('iframe[title="Review card"]')
   await expect(review.locator('ruby')).toHaveText('猫ねこ')
+  await expect(review.locator('body')).toHaveCSS('color', 'rgb(30, 40, 50)')
   const image = review.getByRole('img', { name: 'cat.png' })
   await expect(image).toBeVisible()
   await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true)
