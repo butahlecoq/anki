@@ -113,6 +113,9 @@ export async function foregroundSync(settings: SyncSettings, operations: Partial
 export async function syncCollection(collection: Collection, fetcher: Fetcher = fetch): Promise<SyncResult> {
   const settings = await collection.syncSettings()
   if (!settings) return { state: 'authentication-required' }
+  // An in-flight upload may already hold a snapshot of pending operations.
+  // Invalidate local-only undo before any network work can begin.
+  await collection.beginSyncAttempt()
   const preflight = await preflightSync(settings, fetcher)
   if (preflight.state !== 'ready') return preflight
   let uploaded = 0

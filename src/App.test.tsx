@@ -378,6 +378,9 @@ test('review keyboard shortcuts use the same answer and rating actions as touch 
     expect(await screen.findByRole('button', { name: /^Good ·/ })).toBeVisible()
     fireEvent.keyDown(window, { key: '3' })
     await waitFor(async () => expect(await collection.reviewEntries.where('cardId').equals(card.id).count()).toBe(1))
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo last review' }))
+    await waitFor(async () => expect(await collection.reviewEntries.where('cardId').equals(card.id).count()).toBe(0))
+    expect(await screen.findByRole('button', { name: 'Show answer' })).toBeVisible()
   } finally {
     await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
   }
@@ -396,8 +399,32 @@ test('reviewer flag control and keyboard shortcut update the current card', asyn
     expect(screen.getByRole('button', { name: 'Show answer' })).toBeVisible()
     fireEvent.keyDown(window, { key: 'f' })
     await waitFor(async () => expect(await collection.cards.get(card.id)).toMatchObject({ flag: 2 }))
+    fireEvent.click(screen.getByRole('button', { name: 'Mark note' }))
+    await waitFor(async () => expect(await collection.notes.get(note.id)).toMatchObject({ tags: ['marked'] }))
+    expect(screen.getByRole('button', { name: 'Unmark note' })).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: 'Card info' }))
     expect(within(await screen.findByRole('dialog', { name: 'Card info' })).getByText('Orange')).toBeVisible()
+  } finally {
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+  }
+})
+
+test('reviewer deletion can restore the note and card before sync', async () => {
+  const deck = await collection.createDeck(`Delete review ${crypto.randomUUID()}`)
+  const note = await collection.createBasicNote(deck.id, { front: '消す', back: 'delete' })
+  const card = (await collection.cards.where('noteId').equals(note.id).first())!
+  window.location.hash = `#review/${deck.id}`
+  render(<CollectionWorkspace />)
+  try {
+    await screen.findByRole('button', { name: 'Delete note' })
+    fireEvent.keyDown(window, { key: 'd' })
+    const dialog = await screen.findByRole('dialog', { name: 'Delete note' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete note and cards' }))
+    expect(await screen.findByRole('heading', { name: 'Session complete' })).toBeVisible()
+    expect(await collection.notes.get(note.id)).toBeUndefined()
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo note deletion' }))
+    expect(await screen.findByRole('button', { name: 'Show answer' })).toBeVisible()
+    expect(await collection.cards.get(card.id)).toBeDefined()
   } finally {
     await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
   }
