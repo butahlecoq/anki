@@ -15,19 +15,25 @@ function useStatisticsClock() {
   return now
 }
 
-export function TodayWorkload() {
+export function TodayWorkload({ deckId = '', showLink = true }: { deckId?: string; showLink?: boolean }) {
   const now = useStatisticsClock()
   const data = useLiveQuery(async () => {
     const decks = await collection.decks.toArray()
-    const cards = (await Promise.all(decks.filter((deck) => !deck.parentId).map((deck) => collection.reviewQueue(deck.id, now)))).flat()
-    const today = reviewStatistics(await collection.reviewEntries.toArray(), 'day', now)
+    const targets = deckId ? decks.filter((deck) => deck.id === deckId) : decks.filter((deck) => !deck.parentId)
+    const cards = (await Promise.all(targets.map((deck) => collection.reviewQueue(deck.id, now)))).flat()
+    const included = new Set(targets.map((deck) => deck.id))
+    for (let changed = true; changed;) {
+      changed = false
+      for (const deck of decks) if (deck.parentId && included.has(deck.parentId) && !included.has(deck.id)) { included.add(deck.id); changed = true }
+    }
+    const today = reviewStatistics((await collection.reviewEntries.toArray()).filter((entry) => !deckId || included.has(entry.deckId)), 'day', now)
     return { cards, today }
-  }, [now.getTime()])
+  }, [now.getTime(), deckId])
   return <section className="today-workload" aria-label="Today's workload">
     <span className="section-code">TODAY // READY TO STUDY</span>
     <div className="count-strip"><span>NEW <strong>{data?.cards.filter((card) => card.state === State.New).length ?? '…'}</strong></span><span>LEARNING <strong>{data?.cards.filter((card) => card.state === State.Learning || card.state === State.Relearning).length ?? '…'}</strong></span><span>REVIEW <strong>{data?.cards.filter((card) => card.state === State.Review).length ?? '…'}</strong></span><span>STUDIED <strong>{data?.today.count ?? '…'}</strong></span></div>
     <small>Available now, after daily limits and burial. Studied counts answers, including repeated learning steps.</small>
-    <a className="text-button" href="#statistics">View progress →</a>
+    {showLink && <a className="text-button" href="#statistics">View progress →</a>}
   </section>
 }
 
@@ -76,8 +82,8 @@ export function Statistics() {
   const reviewedCards = [...new Set(stats.reviews.map((entry) => entry.cardId))]
   return <div className="statistics-workspace">
     <section className="compact-hero"><div><span className="section-code">04 // PROGRESS</span><h1>Every answer <em>adds up</em></h1><p>Your real study history, available offline.</p></div></section>
-    <TodayWorkload />
-    <div className="statistics-controls"><label>Statistics deck<select value={deckId} onChange={(event) => { setDeckId(event.target.value); setSelectedCard(null) }}><option value="">All decks</option>{data.decks.map((deck) => <option key={deck.id} value={deck.id}>{deck.name} (with children)</option>)}</select></label><label>Period<select value={period} onChange={(event) => setPeriod(event.target.value as StatisticsPeriod)}><option value="day">Daily</option><option value="week">Weekly</option><option value="month">Monthly</option><option value="all">All time</option></select></label><label>Date<input type="date" disabled={period === 'all'} value={localDayKey(anchor)} onChange={(event) => setAnchorKey(event.target.value)} /></label><button className="text-button" type="button" onClick={() => setAnchorKey('')}>Today</button></div>
+    <TodayWorkload deckId={deckId} showLink={false} />
+    <div className="statistics-controls"><label>Statistics deck<select aria-label="Statistics deck" value={deckId} onChange={(event) => { setDeckId(event.target.value); setSelectedCard(null) }}><option value="">All decks</option>{data.decks.map((deck) => <option key={deck.id} value={deck.id}>{deck.name} (with children)</option>)}</select></label><label>Period<select aria-label="Period" value={period} onChange={(event) => setPeriod(event.target.value as StatisticsPeriod)}><option value="day">Daily</option><option value="week">Weekly</option><option value="month">Monthly</option><option value="all">All time</option></select></label><label>Date<input type="date" disabled={period === 'all'} value={localDayKey(anchor)} onChange={(event) => setAnchorKey(event.target.value)} /></label><button className="text-button" type="button" onClick={() => setAnchorKey('')}>Today</button></div>
     <p className="statistics-period">{period === 'all' ? 'All recorded history' : `${new Date(start).toLocaleDateString()} – ${new Date(end - 1).toLocaleDateString()}`} · Local midnight starts each study day. Weeks start Monday.</p>
     <section className="statistics-metrics" aria-label="Period totals">
       <article><span>ANSWERS</span><strong>{stats.count}</strong><small>{stats.cards} distinct cards</small></article>

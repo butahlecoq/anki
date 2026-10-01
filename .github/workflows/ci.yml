@@ -26,6 +26,9 @@ jobs:
         if: always()
         with:
           name: statistics-browser-previews
-          path: test-results/**/statistics.png
+          path: |
+            test-results/**/statistics.png
+            test-results/**/test-failed*.png
+            test-results/**/error-context.md
           if-no-files-found: ignore
           retention-days: 7

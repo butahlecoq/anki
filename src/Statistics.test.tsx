@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, test } from 'vitest'
 import { App } from './App'
-import { Statistics } from './Statistics'
+import { Statistics, TodayWorkload } from './Statistics'
 import { collection, Rating } from './collection'
 import { localDayKey } from './progress-statistics'
 
@@ -49,4 +49,21 @@ test('live offline answers and undo update totals, heatmap selection, and chrono
     await collection.undoLastReview()
     await waitFor(() => expect(screen.getByText('ANSWERS').parentElement).toHaveTextContent('0'))
   } finally { cleanup(); await collection.deleteDeck(deck.id, { mode: 'delete-subtree' }) }
+})
+
+test('a selected deck workload excludes answers and cards from unrelated decks', async () => {
+  const now = new Date()
+  const selected = await collection.createDeck(`Selected ${crypto.randomUUID()}`, now)
+  const other = await collection.createDeck(`Other ${crypto.randomUUID()}`, now)
+  try {
+    await collection.createBasicNote(selected.id, { front: '猫', back: 'cat' }, now)
+    const otherNote = await collection.createBasicNote(other.id, { front: '犬', back: 'dog' }, now)
+    const [otherCard] = await collection.cards.where('noteId').equals(otherNote.id).toArray()
+    await collection.answer(otherCard.id, Rating.Easy, now, 1000)
+    render(<TodayWorkload deckId={selected.id} showLink={false} />)
+    const workload = screen.getByRole('region', { name: "Today's workload" })
+    await waitFor(() => expect(workload).toHaveTextContent('NEW 1'))
+    expect(workload).toHaveTextContent('STUDIED 0')
+    expect(within(workload).queryByRole('link')).not.toBeInTheDocument()
+  } finally { cleanup(); await collection.deleteDeck(selected.id, { mode: 'delete-subtree' }); await collection.deleteDeck(other.id, { mode: 'delete-subtree' }) }
 })

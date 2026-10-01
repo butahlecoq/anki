@@ -426,8 +426,8 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--acid); outline-
   .statistics-grid { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .statistics-metrics strong { font-size: 24px; }
   .statistics-metrics article { padding: 18px 12px; }
-  .review-heatmap { gap: 4px; }
-  .review-heatmap button { height: 28px; }
+  .review-heatmap { grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+  .review-heatmap button { height: 44px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
