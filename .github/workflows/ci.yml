@@ -25,10 +25,9 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: statistics-browser-previews
+          name: browser-evidence
           path: |
-            test-results/**/statistics.png
-            test-results/**/test-failed*.png
-            test-results/**/error-context.md
+            test-results/
+            playwright-report/
           if-no-files-found: ignore
           retention-days: 7
