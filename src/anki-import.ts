@@ -193,12 +193,24 @@ function validMp3(bytes: Uint8Array) {
     if (bytes.length < 10 || bytes.slice(6, 10).some((byte) => byte > 0x7f)) return false
     offset = 10 + bytes.slice(6, 10).reduce((size, byte) => size * 128 + byte, 0) + (bytes[5] & 0x10 ? 10 : 0)
   }
-  if (offset + 4 > bytes.length || bytes[offset] !== 0xff || (bytes[offset + 1] & 0xe0) !== 0xe0) return false
+  let frames = 0
+  while (offset < bytes.length) {
+    if (bytes.length - offset === 128 && textDecoder.decode(bytes.slice(offset, offset + 3)) === 'TAG') return frames > 0
+    const frameLength = mp3FrameLength(bytes, offset)
+    if (!frameLength || offset + frameLength > bytes.length) return false
+    offset += frameLength
+    frames += 1
+  }
+  return frames > 0
+}
+
+function mp3FrameLength(bytes: Uint8Array, offset: number) {
+  if (offset + 4 > bytes.length || bytes[offset] !== 0xff || (bytes[offset + 1] & 0xe0) !== 0xe0) return 0
   const version = (bytes[offset + 1] >> 3) & 0x03
   const layer = (bytes[offset + 1] >> 1) & 0x03
   const bitrateIndex = bytes[offset + 2] >> 4
   const rateIndex = (bytes[offset + 2] >> 2) & 0x03
-  if (version === 1 || layer === 0 || bitrateIndex === 0 || bitrateIndex === 15 || rateIndex === 3) return false
+  if (version === 1 || layer === 0 || bitrateIndex === 0 || bitrateIndex === 15 || rateIndex === 3) return 0
   const mpeg1Bitrates = layer === 3
     ? [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448]
     : layer === 2
@@ -210,10 +222,9 @@ function validMp3(bytes: Uint8Array) {
   const bitrate = (version === 3 ? mpeg1Bitrates : laterBitrates)[bitrateIndex] * 1000
   const sampleRate = [44_100, 48_000, 32_000][rateIndex] / (version === 3 ? 1 : version === 2 ? 2 : 4)
   const padding = (bytes[offset + 2] >> 1) & 1
-  const frameLength = layer === 3
+  return layer === 3
     ? Math.floor((12 * bitrate / sampleRate) + padding) * 4
     : Math.floor(((layer === 1 && version !== 3 ? 72 : 144) * bitrate / sampleRate) + padding)
-  return frameLength > 4 && offset + frameLength <= bytes.length
 }
 
 function validOgg(bytes: Uint8Array) {
