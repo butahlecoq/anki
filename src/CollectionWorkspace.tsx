@@ -829,6 +829,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   const reviewCount = useLiveQuery(() => card ? collection.reviewEntries.where('cardId').equals(card.id).count() : 0, [card?.id], 0)
   const recentReview = useLiveQuery(() => collection.latestReviewUndo(), [])
   const recentDeletion = useLiveQuery(() => collection.latestNoteDeletionUndo(), [])
+  const recentCardAction = useLiveQuery(() => collection.latestCardMaintenanceUndo(), [])
   const choices = useLiveQuery(() => card ? collection.reviewChoices(card.id, new Date()) : [], [card?.id], [])
   const template = noteType?.templates.find((candidate) => candidate.id === card?.templateId)
   const frontResult = template && noteType && note && card
@@ -934,11 +935,29 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     }
   }, [isAnswering])
 
+  const undoCardAction = useCallback(async () => {
+    if (isAnswering) return
+    setIsAnswering(true)
+    setActionError('')
+    try {
+      await collection.undoLastCardMaintenance()
+      setShownAnswerCardId(null)
+    } catch (reason) {
+      setActionError(reason instanceof Error && reason.message ? reason.message : 'Unable to undo card action')
+    } finally {
+      setIsAnswering(false)
+    }
+  }, [isAnswering])
+
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (!cardId || isAnswering || editingNote || movingNote || editingTags || deletingNote || showCardInfo || event.repeat || event.altKey || event.ctrlKey || event.metaKey) return
+      if (isAnswering || editingNote || movingNote || editingTags || deletingNote || showCardInfo || event.repeat || event.altKey || event.ctrlKey || event.metaKey) return
       if (event.target instanceof Element && event.target.closest('input, textarea, select, button, [contenteditable="true"], [role="dialog"]')) return
       const key = event.key.toLowerCase()
+      if (key === 'u' && recentReview) { event.preventDefault(); void undoReview(); return }
+      if (key === 'v' && recentCardAction) { event.preventDefault(); void undoCardAction(); return }
+      if (key === 'x' && recentDeletion) { event.preventDefault(); void undoDeletion(); return }
+      if (!cardId) return
       if ((key === ' ' || key === 'spacebar') && !showAnswer) {
         event.preventDefault()
         setShownAnswerCardId(cardId)
@@ -955,11 +974,10 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
       else if (key === 's') { event.preventDefault(); void updateCurrentCard((id) => collection.suspendCard(id)) }
       else if (key === 'b') { event.preventDefault(); void updateCurrentCard((id) => collection.buryCard(id)) }
       else if (key === 'f') { event.preventDefault(); void updateCurrentCard((id) => collection.setCardFlag(id, ((card?.flag ?? 0) + 1) % 8)) }
-      else if (key === 'u' && recentReview) { event.preventDefault(); void undoReview() }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [cardId, card?.flag, note, isAnswering, editingNote, movingNote, editingTags, deletingNote, showCardInfo, showAnswer, choices, media, answer, replayAudio, updateCurrentCard, recentReview, undoReview])
+  }, [cardId, card?.flag, note, isAnswering, editingNote, movingNote, editingTags, deletingNote, showCardInfo, showAnswer, choices, media, answer, replayAudio, updateCurrentCard, recentReview, undoReview, recentCardAction, undoCardAction, recentDeletion, undoDeletion])
 
   if (queue === undefined || (cardId && (card === undefined || note === undefined || noteType === undefined || unavailable))) return <div className="loading-state" role="status">Preparing review…</div>
 
@@ -972,6 +990,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
         <p>{reviewsRecorded} {reviewsRecorded === 1 ? 'review' : 'reviews'} recorded</p>
         {recentReview && <button className="text-button" type="button" disabled={isAnswering} onClick={() => void undoReview()}>Undo last review</button>}
         {recentDeletion && <button className="text-button" type="button" disabled={isAnswering} onClick={() => void undoDeletion()}>Undo note deletion</button>}
+        {recentCardAction && <button className="text-button" type="button" disabled={isAnswering} onClick={() => void undoCardAction()}>Undo card action</button>}
         {actionError && <p className="form-error" role="alert">{actionError}</p>}
         <button className="primary-action" type="button" onClick={onBack}>Back to deck</button>
       </section>
@@ -992,6 +1011,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     <button className="text-button" type="button" onClick={() => setShowCardInfo(true)}>Card info</button>
     {recentReview && <button className="text-button" type="button" disabled={isAnswering} onClick={() => void undoReview()}>Undo last review</button>}
     {recentDeletion && <button className="text-button" type="button" disabled={isAnswering} onClick={() => void undoDeletion()}>Undo note deletion</button>}
+    {recentCardAction && <button className="text-button" type="button" disabled={isAnswering} onClick={() => void undoCardAction()}>Undo card action</button>}
     <label className="review-flag-control">Flag <select aria-label="Card flag" value={card.flag ?? 0} disabled={isAnswering} onChange={(event) => void updateCurrentCard((id) => collection.setCardFlag(id, Number(event.target.value)))}>
       <option value={0}>None</option><option value={1}>Red</option><option value={2}>Orange</option><option value={3}>Green</option><option value={4}>Blue</option><option value={5}>Pink</option><option value={6}>Turquoise</option><option value={7}>Purple</option>
     </select></label>
@@ -1033,7 +1053,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     <>
     <section className="review-session">
       <div className="review-progress"><span>REVIEW // {String(reviewsRecorded + 1).padStart(2, '0')}</span>{reviewActions}</div>
-      <p className="review-shortcuts">Space reveal · 1–4 rate · E edit · M move · T tags · K mark · I info · F flag · R replay · S suspend · B bury · D delete · U undo. Undo is available until the next sync attempt or affected edit.</p>
+      <p className="review-shortcuts">Space reveal · 1–4 rate · E edit · M move · T tags · K mark · I info · F flag · R replay · S suspend · B bury · D delete · U undo review · V undo card action · X undo deletion. Undo is available until the next sync attempt or affected edit.</p>
       {actionError && <p className="form-error" role="alert">{actionError}</p>}
       {audioMessage && <p className="review-feedback" role="status">{audioMessage}</p>}
       <article className="review-card" ref={reviewCardRef}>

@@ -212,6 +212,14 @@ type NoteDeletionUndo = {
   media: NoteMediaReference[]
 }
 
+type CardMaintenanceUndo = {
+  syncEpoch: number
+  operationId: string
+  action: 'suspend' | 'bury' | 'flag'
+  before: CardRecord
+  after: CardRecord
+}
+
 type LegacyNote = Omit<Note, 'typeId'> & { typeId?: string }
 type LegacyCard = Omit<CardRecord, 'templateId' | 'manualSuspended' | 'templateSuspended' | 'buriedUntil'> & {
   templateId?: string
@@ -1718,14 +1726,7 @@ export class Collection extends Dexie {
   }
 
   async suspendCard(cardId: string, now = new Date()): Promise<void> {
-    await this.transaction('rw', [this.cards, this.outbox], async () => {
-      const card = await this.cards.get(cardId)
-      if (!card) throw new Error('Card not found')
-      if (card.manualSuspended) return
-      const updated = withPolicyDefaults({ ...card, manualSuspended: true })
-      await this.cards.put(updated)
-      await this.outbox.add({ opId: id(), entityType: 'card', entityId: cardId, action: 'update', occurredAt: now.toISOString(), payload: updated })
-    })
+    await this.updateCardWithUndo(cardId, 'suspend', now, (card) => card.manualSuspended ? null : withPolicyDefaults({ ...card, manualSuspended: true }))
   }
 
   async unsuspendCard(cardId: string, now = new Date()): Promise<void> {
@@ -1740,15 +1741,8 @@ export class Collection extends Dexie {
   }
 
   async buryCard(cardId: string, now = new Date()): Promise<void> {
-    await this.transaction('rw', [this.cards, this.outbox], async () => {
-      const card = await this.cards.get(cardId)
-      if (!card) throw new Error('Card not found')
-      const buriedUntil = nextStudyBoundary(now).toISOString()
-      if (card.buriedUntil === buriedUntil) return
-      const updated = withPolicyDefaults({ ...card, buriedUntil })
-      await this.cards.put(updated)
-      await this.outbox.add({ opId: id(), entityType: 'card', entityId: cardId, action: 'update', occurredAt: now.toISOString(), payload: updated })
-    })
+    const buriedUntil = nextStudyBoundary(now).toISOString()
+    await this.updateCardWithUndo(cardId, 'bury', now, (card) => card.buriedUntil === buriedUntil ? null : withPolicyDefaults({ ...card, buriedUntil }))
   }
 
   async unburyCard(cardId: string, now = new Date()): Promise<void> {
@@ -1777,13 +1771,42 @@ export class Collection extends Dexie {
 
   async setCardFlag(cardId: string, flag: number, now = new Date()): Promise<void> {
     if (!Number.isSafeInteger(flag) || flag < 0 || flag > 7) throw new Error('Card flag is invalid')
-    await this.transaction('rw', [this.cards, this.outbox], async () => {
+    await this.updateCardWithUndo(cardId, 'flag', now, (card) => (card.flag ?? 0) === flag ? null : withPolicyDefaults({ ...card, flag }))
+  }
+
+  private async updateCardWithUndo(cardId: string, action: CardMaintenanceUndo['action'], now: Date, update: (card: CardRecord) => CardRecord | null): Promise<void> {
+    await this.transaction('rw', [this.cards, this.outbox, this.settings], async () => {
       const card = await this.cards.get(cardId)
       if (!card) throw new Error('Card not found')
-      if ((card.flag ?? 0) === flag) return
-      const updated = withPolicyDefaults({ ...card, flag })
+      const updated = update(card)
+      if (!updated) return
       await this.cards.put(updated)
-      await this.outbox.add({ opId: id(), entityType: 'card', entityId: cardId, action: 'update', occurredAt: now.toISOString(), payload: updated })
+      const operationId = id()
+      await this.outbox.add({ opId: operationId, entityType: 'card', entityId: cardId, action: 'update', occurredAt: now.toISOString(), payload: updated })
+      const syncEpoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
+      await this.settings.put({ key: 'cardMaintenanceUndo', value: { syncEpoch, operationId, action, before: card, after: updated } satisfies CardMaintenanceUndo })
+    })
+  }
+
+  async latestCardMaintenanceUndo(): Promise<CardMaintenanceUndo | null> {
+    const undo = (await this.settings.get('cardMaintenanceUndo'))?.value as CardMaintenanceUndo | undefined
+    const epoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
+    if (!undo || undo.syncEpoch !== epoch || !await this.outbox.get(undo.operationId)) return null
+    if (JSON.stringify(await this.cards.get(undo.after.id)) !== JSON.stringify(undo.after)) return null
+    return undo
+  }
+
+  async undoLastCardMaintenance(): Promise<string> {
+    return this.transaction('rw', [this.cards, this.outbox, this.settings], async () => {
+      const undo = (await this.settings.get('cardMaintenanceUndo'))?.value as CardMaintenanceUndo | undefined
+      if (!undo) throw new Error('No recent card action to undo')
+      const epoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
+      if (epoch !== undo.syncEpoch || !await this.outbox.get(undo.operationId)) throw new Error('This card action cannot be undone after a sync attempt')
+      if (JSON.stringify(await this.cards.get(undo.after.id)) !== JSON.stringify(undo.after)) throw new Error('The card changed since this action; undo is unavailable')
+      await this.cards.put(undo.before)
+      await this.outbox.delete(undo.operationId)
+      await this.settings.delete('cardMaintenanceUndo')
+      return undo.before.id
     })
   }
 

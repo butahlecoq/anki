@@ -416,6 +416,32 @@ describe('local collection', () => {
     }
   })
 
+  test('card maintenance undo restores suspension and burial only before sync', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Card undo')
+    const note = await collection.createBasicNote(deck.id, { front: '戻す', back: 'restore' })
+    const card = (await collection.cards.where('noteId').equals(note.id).first())!
+    const now = new Date('2026-10-01T12:00:00.000Z')
+    const before = (await collection.cards.get(card.id))!
+    const pendingBefore = (await collection.pendingOperations()).map((operation) => operation.opId)
+
+    await collection.suspendCard(card.id, now)
+    await expect(collection.undoLastCardMaintenance()).resolves.toBe(card.id)
+    expect(await collection.cards.get(card.id)).toEqual(before)
+    expect((await collection.pendingOperations()).map((operation) => operation.opId)).toEqual(pendingBefore)
+
+    await collection.buryCard(card.id, now)
+    await expect(collection.latestCardMaintenanceUndo()).resolves.toMatchObject({ action: 'bury' })
+    await collection.undoLastCardMaintenance()
+    expect(await collection.cards.get(card.id)).toEqual(before)
+
+    await collection.setCardFlag(card.id, 1, now)
+    await collection.beginSyncAttempt()
+    await expect(collection.latestCardMaintenanceUndo()).resolves.toBeNull()
+    await expect(collection.undoLastCardMaintenance()).rejects.toThrow(/sync attempt/i)
+    expect(await collection.cards.get(card.id)).toMatchObject({ flag: 1 })
+  })
+
   test('preserves and syncs a card flag across review scheduling', async () => {
     const source = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const remote = createCollection(`kiroku-test-${crypto.randomUUID()}`)

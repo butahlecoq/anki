@@ -378,7 +378,9 @@ test('review keyboard shortcuts use the same answer and rating actions as touch 
     expect(await screen.findByRole('button', { name: /^Good ·/ })).toBeVisible()
     fireEvent.keyDown(window, { key: '3' })
     await waitFor(async () => expect(await collection.reviewEntries.where('cardId').equals(card.id).count()).toBe(1))
-    fireEvent.click(await screen.findByRole('button', { name: 'Undo last review' }))
+    const undo = await screen.findByRole('button', { name: 'Undo last review' })
+    await waitFor(() => expect(undo).toBeEnabled())
+    fireEvent.click(undo)
     await waitFor(async () => expect(await collection.reviewEntries.where('cardId').equals(card.id).count()).toBe(0))
     expect(await screen.findByRole('button', { name: 'Show answer' })).toBeVisible()
   } finally {
@@ -425,6 +427,23 @@ test('reviewer deletion can restore the note and card before sync', async () => 
     fireEvent.click(await screen.findByRole('button', { name: 'Undo note deletion' }))
     expect(await screen.findByRole('button', { name: 'Show answer' })).toBeVisible()
     expect(await collection.cards.get(card.id)).toBeDefined()
+  } finally {
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+  }
+})
+
+test('reviewer can undo a suspension from the completed session', async () => {
+  const deck = await collection.createDeck(`Suspend review ${crypto.randomUUID()}`)
+  const note = await collection.createBasicNote(deck.id, { front: '待つ', back: 'wait' })
+  const card = (await collection.cards.where('noteId').equals(note.id).first())!
+  window.location.hash = `#review/${deck.id}`
+  render(<CollectionWorkspace />)
+  try {
+    fireEvent.click(await screen.findByRole('button', { name: 'Suspend card' }))
+    expect(await screen.findByRole('heading', { name: 'Session complete' })).toBeVisible()
+    fireEvent.keyDown(window, { key: 'v' })
+    expect(await screen.findByRole('button', { name: 'Show answer' })).toBeVisible()
+    expect(await collection.cards.get(card.id)).toMatchObject({ manualSuspended: false })
   } finally {
     await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
   }
