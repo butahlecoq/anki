@@ -1,4 +1,5 @@
 import type { CardRecord, Collection, Note, NoteType } from './collection'
+import fieldPreviewWorkerUrl from './field-preview-worker.ts?worker&url'
 
 export type BrowserSelection = { view: 'cards' | 'notes'; ids: string[] }
 export type BulkAction =
@@ -132,7 +133,7 @@ export async function applyFieldChanges(db: Collection, changes: FieldChange[], 
   })
 }
 
-export function previewFieldChanges(notes: Note[], types: NoteType[], operation: FieldOperation): Promise<FieldChange[]> {
+export async function previewFieldChanges(notes: Note[], types: NoteType[], operation: FieldOperation): Promise<FieldChange[]> {
   if (notes.length > 5000) return Promise.reject(new Error('Preview up to 5,000 notes at a time. Narrow the selection first.'))
   let size = 0
   for (const note of notes) {
@@ -141,8 +142,16 @@ export function previewFieldChanges(notes: Note[], types: NoteType[], operation:
   }
   const selectedTypes = types.filter((type) => type.id === operation.typeId)
   if (JSON.stringify({ notes, types: selectedTypes }).length > 8 * 1024 * 1024) return Promise.reject(new Error('Preview up to 8 MiB at a time. Narrow the selection first.'))
+  // WebKit does not consistently intercept offline worker-script requests with
+  // the service worker. Read the precached bundle directly, then start a worker
+  // from its source so preview execution needs no network request.
+  const url = new URL(fieldPreviewWorkerUrl, location.href).href
+  const cached = typeof caches === 'undefined' ? undefined : await caches.match(url)
+  const response = cached ?? await fetch(url)
+  if (!response.ok) throw new Error('The field preview could not load. Nothing was changed.')
+  const source = await response.text()
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL('./field-preview-worker.ts', import.meta.url), { type: 'module' })
+    const worker = new Worker(`data:text/javascript;charset=utf-8,${encodeURIComponent(source)}`)
     const timer = window.setTimeout(() => { worker.terminate(); reject(new Error('This pattern took too long. Simplify it or use literal replacement. Nothing was changed.')) }, 2000)
     const finish = () => { window.clearTimeout(timer); worker.terminate() }
     worker.onmessage = (event: MessageEvent<{ changes?: FieldChange[]; error?: string }>) => {
