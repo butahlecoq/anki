@@ -37,12 +37,14 @@ export async function selectionSummary(db: Collection, selection: BrowserSelecti
 }
 
 /** All selected records and outbox mutations commit together or roll back together. */
-export async function applyBulkAction(db: Collection, selection: BrowserSelection, action: BulkAction, now = new Date()) {
+export async function applyBulkAction(db: Collection, selection: BrowserSelection, action: BulkAction, now = new Date(), expected?: { notes: number; selectedCards: number; generatedCards: number }) {
   return db.transaction('rw', db.tables, async () => {
     const { cards, notes } = await resolveSelection(db, selection)
+    if (expected && (notes.length !== expected.notes || cards.length !== expected.selectedCards || await db.cards.where('noteId').anyOf(notes.map((note) => note.id)).count() !== expected.generatedCards)) throw new Error('The affected counts changed. Review a fresh confirmation before applying.')
     if (action.kind === 'move' && !await db.decks.get(action.deckId)) throw new Error('Destination deck no longer exists.')
     if (action.kind === 'tags') {
       const remove = new Set(action.tags.map((tag) => tag.trim()).filter(Boolean))
+      if (!remove.size) throw new Error('Enter at least one tag.')
       for (const note of notes) await db.updateNoteTags(note.id, action.mode === 'add' ? [...(note.tags ?? []), ...action.tags] : (note.tags ?? []).filter((tag) => !remove.has(tag)), now)
     } else if (action.kind === 'move') {
       for (const note of notes) await db.moveNote(note.id, action.deckId, now)

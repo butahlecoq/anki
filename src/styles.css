@@ -429,6 +429,42 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--acid); outline-
   .review-heatmap { grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
   .review-heatmap button { height: 44px; }
 }
+.browser-search { display: flex; align-items: end; gap: 12px; margin: 24px 0 14px; }
+.browser-search label { flex: 1; display: grid; gap: 8px; min-width: 0; color: var(--muted); font-size: 11px; }
+.browser-search input, .browser-controls select { width: 100%; min-height: 44px; padding: 12px; border: 1px solid var(--line); background: var(--panel); color: var(--text); font: inherit; }
+.browser-search-help { padding: 14px 0; color: var(--muted); font-size: 11px; line-height: 1.9; }
+.browser-search-help summary { cursor: pointer; color: var(--text); min-height: 44px; }
+.browser-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 16px; margin: 18px 0; }
+.browser-controls label { display: grid; gap: 8px; font-size: 11px; color: var(--muted); }
+.browser-controls > span { padding-bottom: 12px; color: var(--acid); font-size: 11px; }
+.browser-bulk-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 16px 0; border-top: 1px solid var(--line); }
+.browser-bulk-actions button { min-height: 44px; }
+.browser-selection-note { font-size: 11px; color: var(--muted); line-height: 1.8; }
+.browser-table-scroll { width: 100%; max-width: 100%; overflow-x: auto; margin-top: 20px; border: 1px solid var(--line); }
+.browser-table { width: 100%; min-width: 900px; border-collapse: collapse; font-size: 11px; }
+.browser-table caption { text-align: left; padding: 14px; color: var(--muted); }
+.browser-table th, .browser-table td { padding: 12px; border-bottom: 1px solid var(--line); text-align: left; }
+.browser-table td { max-width: 260px; overflow-wrap: anywhere; }
+.browser-table th { white-space: nowrap; background: var(--panel); }
+.browser-table tr.selected { background: color-mix(in srgb, var(--acid) 8%, var(--panel)); }
+.browser-table input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--acid); }
+.browser-table td:first-child, .browser-table th:first-child { width: 44px; }
+.browser-expression { text-align: left; min-height: 44px; max-width: 220px; overflow-wrap: anywhere; }
+.browser-pagination { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 18px 0 28px; font-size: 11px; }
+.browser-pagination button { min-height: 44px; }
+.collection-browser .form-error pre { max-width: 100%; overflow-x: auto; white-space: pre; }
+.dialog .checkbox-label { display: flex; align-items: start; gap: 12px; line-height: 1.8; }
+.dialog .checkbox-label input { flex: 0 0 auto; width: 20px; height: 20px; margin-top: 2px; accent-color: var(--acid); }
+.field-change-preview { max-height: 45vh; overflow-y: auto; margin-top: 18px; border-top: 1px solid var(--line); padding-top: 12px; }
+.field-change-preview > div { border-bottom: 1px solid var(--line); padding-block: 16px; }
+.field-change-preview strong { display: block; font-size: 10px; overflow-wrap: anywhere; color: var(--muted); }
+@media (max-width: 680px) {
+  .browser-search { align-items: stretch; flex-direction: column; }
+  .browser-controls { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .browser-controls select { max-width: 100%; }
+  .browser-pagination { flex-wrap: wrap; }
+  .browser-search-help p { overflow-wrap: anywhere; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
