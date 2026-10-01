@@ -26,10 +26,31 @@ export interface Deck {
 export const DEFAULT_DECK_OPTION_GROUP_ID = 'default'
 
 /** Reusable scheduling settings are introduced independently of any individual deck. */
+export type NewCardOrder = 'added' | 'random'
+export type ReviewCardOrder = 'due' | 'random'
+type FsrsStep = `${number}${'m' | 'h' | 'd'}`
+
+export interface DeckOptionSettings {
+  dailyNewLimit: number
+  dailyReviewLimit: number
+  desiredRetention: number
+  learningSteps: readonly string[]
+  relearningSteps: readonly string[]
+  newCardOrder: NewCardOrder
+  reviewCardOrder: ReviewCardOrder
+}
+
 export interface DeckOptionGroup {
   id: string
   name: string
   protected: boolean
+  dailyNewLimit: number
+  dailyReviewLimit: number
+  desiredRetention: number
+  learningSteps: readonly string[]
+  relearningSteps: readonly string[]
+  newCardOrder: NewCardOrder
+  reviewCardOrder: ReviewCardOrder
   createdAt: string
   updatedAt: string
 }
@@ -152,6 +173,7 @@ type LegacyNote = Omit<Note, 'typeId'> & { typeId?: string }
 type LegacyCard = Omit<CardRecord, 'templateId'> & { templateId?: string }
 type LegacyNoteType = Omit<NoteType, 'kind'> & { kind?: NoteType['kind'] }
 type LegacyDeck = Omit<Deck, 'parentId' | 'optionGroupId'> & { parentId?: string | null; optionGroupId?: string }
+type LegacyDeckOptionGroup = Omit<DeckOptionGroup, keyof DeckOptionSettings> & Partial<DeckOptionSettings>
 
 export interface ReviewEntry {
   id: string
@@ -203,14 +225,15 @@ export interface MediaBlob { digest: string; blob: Blob; byteLength: number; mim
 interface StoredMediaBlob extends Omit<MediaBlob, 'blob'> { blob: Blob | ArrayBuffer }
 export interface NoteMediaAttachment { file: File; side: MediaSide; playback?: AudioPlayback }
 
-const scheduler = fsrs({
-  request_retention: 0.9,
-  maximum_interval: 36500,
-  enable_fuzz: false,
-  enable_short_term: true,
-  learning_steps: ['1m', '10m'],
-  relearning_steps: ['10m'],
-})
+const defaultDeckOptionSettings: DeckOptionSettings = {
+  dailyNewLimit: 20,
+  dailyReviewLimit: 200,
+  desiredRetention: 0.9,
+  learningSteps: ['1m', '10m'],
+  relearningSteps: ['10m'],
+  newCardOrder: 'added',
+  reviewCardOrder: 'due',
+}
 
 function id() {
   return crypto.randomUUID()
@@ -272,6 +295,87 @@ function requiredText(value: string, label: string) {
   const normalized = value.trim()
   if (!normalized) throw new Error(`${label} is required`)
   return normalized
+}
+
+function copiedDeckOptionSettings(settings: DeckOptionSettings): DeckOptionSettings {
+  return { ...settings, learningSteps: [...settings.learningSteps], relearningSteps: [...settings.relearningSteps] }
+}
+
+function validateDailyLimit(value: number, label: string) {
+  if (!Number.isSafeInteger(value) || value < 0 || value > 9999) throw new Error(`${label} must be a whole number from 0 to 9999`)
+  return value
+}
+
+function validateSteps(value: readonly string[], label: string): FsrsStep[] {
+  if (!Array.isArray(value) || value.length > 10) throw new Error(`${label} are invalid`)
+  const steps = value.map((step) => {
+    if (typeof step !== 'string' || !/^(?:[1-9]\d*(?:\.\d+)?)(?:m|h|d)$/.test(step)) throw new Error(`${label} contain an invalid learning step`)
+    const duration = Number.parseFloat(step)
+    if (!Number.isFinite(duration) || duration > 365) throw new Error(`${label} contain an invalid learning step`)
+    return step as FsrsStep
+  })
+  return steps
+}
+
+function validateDeckOptionSettings(input: DeckOptionSettings): DeckOptionSettings {
+  if (!input || typeof input !== 'object') throw new Error('Deck option settings are invalid')
+  if (!Number.isFinite(input.desiredRetention) || input.desiredRetention <= 0 || input.desiredRetention > 1) throw new Error('Desired retention must be greater than 0 and at most 1')
+  if (input.newCardOrder !== 'added' && input.newCardOrder !== 'random') throw new Error('New card order is invalid')
+  if (input.reviewCardOrder !== 'due' && input.reviewCardOrder !== 'random') throw new Error('Review card order is invalid')
+  return {
+    dailyNewLimit: validateDailyLimit(input.dailyNewLimit, 'Daily new limit'),
+    dailyReviewLimit: validateDailyLimit(input.dailyReviewLimit, 'Daily review limit'),
+    desiredRetention: input.desiredRetention,
+    learningSteps: validateSteps(input.learningSteps, 'Learning steps'),
+    relearningSteps: validateSteps(input.relearningSteps, 'Relearning steps'),
+    newCardOrder: input.newCardOrder,
+    reviewCardOrder: input.reviewCardOrder,
+  }
+}
+
+function canonicalDeckOptionGroup(group: LegacyDeckOptionGroup): DeckOptionGroup {
+  return {
+    ...group,
+    ...validateDeckOptionSettings({
+      dailyNewLimit: group.dailyNewLimit ?? defaultDeckOptionSettings.dailyNewLimit,
+      dailyReviewLimit: group.dailyReviewLimit ?? defaultDeckOptionSettings.dailyReviewLimit,
+      desiredRetention: group.desiredRetention ?? defaultDeckOptionSettings.desiredRetention,
+      learningSteps: group.learningSteps ?? defaultDeckOptionSettings.learningSteps,
+      relearningSteps: group.relearningSteps ?? defaultDeckOptionSettings.relearningSteps,
+      newCardOrder: group.newCardOrder ?? defaultDeckOptionSettings.newCardOrder,
+      reviewCardOrder: group.reviewCardOrder ?? defaultDeckOptionSettings.reviewCardOrder,
+    }),
+  }
+}
+
+function schedulerFor(group: DeckOptionGroup) {
+  return fsrs({
+    request_retention: group.desiredRetention,
+    maximum_interval: 36500,
+    enable_fuzz: false,
+    enable_short_term: true,
+    learning_steps: validateSteps(group.learningSteps, 'Learning steps'),
+    relearning_steps: validateSteps(group.relearningSteps, 'Relearning steps'),
+  })
+}
+
+function studyDay(value: Date) {
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`
+}
+
+function studyDayWindow(value: Date) {
+  const start = new Date(value.getFullYear(), value.getMonth(), value.getDate())
+  const end = new Date(value.getFullYear(), value.getMonth(), value.getDate() + 1)
+  return { start: start.getTime(), end: end.getTime() }
+}
+
+function stableRank(value: string) {
+  let hash = 2166136261
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return hash >>> 0
 }
 
 async function mediaBytes(file: Blob) {
@@ -376,6 +480,7 @@ const defaultDeckOptionGroup: DeckOptionGroup = {
   id: DEFAULT_DECK_OPTION_GROUP_ID,
   name: 'Default',
   protected: true,
+  ...copiedDeckOptionSettings(defaultDeckOptionSettings),
   createdAt: '1970-01-01T00:00:00.000Z',
   updatedAt: '1970-01-01T00:00:00.000Z',
 }
@@ -511,6 +616,12 @@ export class Collection extends Dexie {
         if (!deck.optionGroupId) deck.optionGroupId = DEFAULT_DECK_OPTION_GROUP_ID
       })
       await transaction.table('deckOptionGroups').put(defaultDeckOptionGroup)
+    })
+    this.version(10).stores({
+      decks: 'id, parentId, optionGroupId, name, createdAt', notes: 'id, deckId, typeId, updatedAt', cards: 'id, deckId, noteId, templateId, due, state', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId', deletedEntities: 'key, entityType, entityId, occurredAt', noteMedia: 'id, noteId, digest, side, kind, updatedAt', mediaBlobs: 'digest, verifiedAt', noteTypes: 'id, name, updatedAt', deckOptionGroups: 'id, name, updatedAt',
+    }).upgrade(async (transaction) => {
+      await transaction.table('deckOptionGroups').toCollection().modify((group: LegacyDeckOptionGroup) => Object.assign(group, canonicalDeckOptionGroup(group)))
+      if (!await transaction.table('deckOptionGroups').get(DEFAULT_DECK_OPTION_GROUP_ID)) await transaction.table('deckOptionGroups').put(defaultDeckOptionGroup)
     })
     this.on('populate', (transaction) => {
       transaction.table('noteTypes').put(basicNoteType)
@@ -917,7 +1028,7 @@ export class Collection extends Dexie {
   }
 
   async createDeckOptionGroup(name: string, now = new Date()): Promise<DeckOptionGroup> {
-    const group: DeckOptionGroup = { id: id(), name: requiredText(name, 'Deck option group name'), protected: false, createdAt: now.toISOString(), updatedAt: now.toISOString() }
+    const group: DeckOptionGroup = { id: id(), name: requiredText(name, 'Deck option group name'), protected: false, ...copiedDeckOptionSettings(defaultDeckOptionSettings), createdAt: now.toISOString(), updatedAt: now.toISOString() }
     await this.transaction('rw', this.deckOptionGroups, this.outbox, async () => {
       await this.deckOptionGroups.add(group)
       await this.outbox.add({ opId: id(), entityType: 'deckOptionGroup', entityId: group.id, action: 'create', occurredAt: group.createdAt, payload: group })
@@ -931,6 +1042,17 @@ export class Collection extends Dexie {
       if (!group) throw new Error('Deck option group not found')
       if (group.protected) throw new Error('The Default deck option group is protected')
       const updated = { ...group, name: requiredText(name, 'Deck option group name'), updatedAt: now.toISOString() }
+      await this.deckOptionGroups.put(updated)
+      await this.outbox.add({ opId: id(), entityType: 'deckOptionGroup', entityId: group.id, action: 'update', occurredAt: updated.updatedAt, payload: updated })
+    })
+  }
+
+  async updateDeckOptionGroup(groupId: string, settings: DeckOptionSettings, now = new Date()): Promise<void> {
+    const validated = validateDeckOptionSettings(settings)
+    await this.transaction('rw', this.deckOptionGroups, this.outbox, async () => {
+      const group = await this.deckOptionGroups.get(groupId)
+      if (!group) throw new Error('Deck option group not found')
+      const updated: DeckOptionGroup = { ...group, ...validated, updatedAt: now.toISOString() }
       await this.deckOptionGroups.put(updated)
       await this.outbox.add({ opId: id(), entityType: 'deckOptionGroup', entityId: group.id, action: 'update', occurredAt: updated.updatedAt, payload: updated })
     })
@@ -1152,16 +1274,67 @@ export class Collection extends Dexie {
   }
 
   async dueCards(deckId: string, now = new Date()): Promise<CardRecord[]> {
-    const cards = await this.cards.where('deckId').equals(deckId).toArray()
-    return cards
-      .filter((card) => !card.suspended && (card.state === State.New || new Date(card.due).getTime() <= now.getTime()))
-      .sort((left, right) => left.due.localeCompare(right.due))
+    return this.transaction('r', [this.decks, this.deckOptionGroups, this.notes, this.cards, this.reviewEntries], async () => {
+      const subtree = await this.deckSubtree(deckId)
+      if (!subtree.length) return []
+      const deckIds = subtree.map((deck) => deck.id)
+      const [cards, notes, groups, reviewEntries] = await Promise.all([
+        this.cards.where('deckId').anyOf(deckIds).toArray(),
+        this.notes.where('deckId').anyOf(deckIds).toArray(),
+        this.deckOptionGroups.toArray(),
+        this.reviewEntries.toArray(),
+      ])
+      const decks = new Map(subtree.map((deck) => [deck.id, deck]))
+      const groupsById = new Map(groups.map((group) => [group.id, group]))
+      const notesById = new Map(notes.map((note) => [note.id, note]))
+      const { start, end } = studyDayWindow(now)
+      const reviewedToday = new Map<string, { new: number; review: number }>()
+      for (const review of reviewEntries) {
+        const timestamp = new Date(review.reviewedAt).getTime()
+        if (!decks.has(review.deckId) || timestamp < start || timestamp >= end) continue
+        const totals = reviewedToday.get(review.deckId) ?? { new: 0, review: 0 }
+        if (review.state === State.New) totals.new += 1
+        if (review.state === State.Review) totals.review += 1
+        reviewedToday.set(review.deckId, totals)
+      }
+      const orderKey = (card: CardRecord, group: DeckOptionGroup, kind: 'new' | 'review' | 'learning') => {
+        const random = kind === 'new' ? group.newCardOrder === 'random' : kind === 'review' ? group.reviewCardOrder === 'random' : false
+        if (random) return String(stableRank(`${studyDay(now)}:${card.deckId}:${card.id}`)).padStart(10, '0')
+        return kind === 'new' ? notesById.get(card.noteId)?.createdAt ?? card.due : card.due
+      }
+      const sortWithinDeck = (candidates: CardRecord[], group: DeckOptionGroup, kind: 'new' | 'review' | 'learning') => candidates.sort((left, right) => orderKey(left, group, kind).localeCompare(orderKey(right, group, kind)) || left.id.localeCompare(right.id))
+      const sortQueue = (candidates: CardRecord[], kind: 'new' | 'review' | 'learning') => candidates.sort((left, right) => {
+        if (left.deckId !== right.deckId) return left.deckId.localeCompare(right.deckId)
+        const deck = decks.get(left.deckId)!
+        const group = groupsById.get(deck.optionGroupId)
+        if (!group) throw new Error('Deck option group not found')
+        return orderKey(left, group, kind).localeCompare(orderKey(right, group, kind)) || left.id.localeCompare(right.id)
+      })
+      const selected: CardRecord[] = []
+      for (const deck of subtree) {
+        const group = groupsById.get(deck.optionGroupId)
+        if (!group) throw new Error('Deck option group not found')
+        const own = cards.filter((card) => card.deckId === deck.id && !card.suspended)
+        const learning = sortWithinDeck(own.filter((card) => (card.state === State.Learning || card.state === State.Relearning) && new Date(card.due).getTime() <= now.getTime()), group, 'learning')
+        const reviewsDue = sortWithinDeck(own.filter((card) => card.state === State.Review && new Date(card.due).getTime() <= now.getTime()), group, 'review')
+        const newCards = sortWithinDeck(own.filter((card) => card.state === State.New), group, 'new')
+        const totals = reviewedToday.get(deck.id) ?? { new: 0, review: 0 }
+        selected.push(...learning, ...reviewsDue.slice(0, Math.max(0, group.dailyReviewLimit - totals.review)), ...newCards.slice(0, Math.max(0, group.dailyNewLimit - totals.new)))
+      }
+      const learning = sortQueue(selected.filter((card) => card.state === State.Learning || card.state === State.Relearning), 'learning')
+      const orderedReviews = sortQueue(selected.filter((card) => card.state === State.Review), 'review')
+      const newCards = sortQueue(selected.filter((card) => card.state === State.New), 'new')
+      return [...learning, ...orderedReviews, ...newCards]
+    })
   }
 
   async reviewChoices(cardId: string, now = new Date()): Promise<ReviewChoice[]> {
     const card = await this.cards.get(cardId)
     if (!card || card.suspended) return []
-    const preview = scheduler.repeat(deserializeCard(card), now)
+    const deck = await this.decks.get(card.deckId)
+    const group = deck ? await this.deckOptionGroups.get(deck.optionGroupId) : undefined
+    if (!deck || !group) throw new Error('Deck option group not found')
+    const preview = schedulerFor(group).repeat(deserializeCard(card), now)
     const choices: Array<[Grade, ReviewChoice['label']]> = [
       [Rating.Again, 'Again'],
       [Rating.Hard, 'Hard'],
@@ -1179,7 +1352,10 @@ export class Collection extends Dexie {
     const existing = await this.cards.get(cardId)
     if (!existing) throw new Error('Card not found')
     if (existing.suspended) throw new Error('Card is suspended because its template front is empty')
-    const result = scheduler.next(deserializeCard(existing), now, rating)
+    const deck = await this.decks.get(existing.deckId)
+    const group = deck ? await this.deckOptionGroups.get(deck.optionGroupId) : undefined
+    if (!deck || !group) throw new Error('Deck option group not found')
+    const result = schedulerFor(group).next(deserializeCard(existing), now, rating)
     const card = serializeCard(result.card, existing)
     const review = serializeReview(result.log, {
       id: id(),
@@ -1231,7 +1407,7 @@ export class Collection extends Dexie {
           await this.receivedOperations.add({ opId: change.opId })
           continue
         }
-        if (change.entityType === 'deckOptionGroup' && change.entityId === DEFAULT_DECK_OPTION_GROUP_ID) {
+        if (change.entityType === 'deckOptionGroup' && change.entityId === DEFAULT_DECK_OPTION_GROUP_ID && change.action === 'delete') {
           await this.receivedOperations.add({ opId: change.opId })
           continue
         }
@@ -1251,8 +1427,9 @@ export class Collection extends Dexie {
             continue
           }
           if (change.entityType === 'deckOptionGroup') {
-            const incoming = change.payload as DeckOptionGroup
-            if (!incoming || incoming.id !== change.entityId || incoming.protected || !requiredText(incoming.name, 'Deck option group name')) throw new Error('Synced deck option group is invalid')
+            const incoming = canonicalDeckOptionGroup(change.payload as LegacyDeckOptionGroup)
+            if (!incoming || incoming.id !== change.entityId || !requiredText(incoming.name, 'Deck option group name') || (incoming.id === DEFAULT_DECK_OPTION_GROUP_ID ? !incoming.protected : incoming.protected)) throw new Error('Synced deck option group is invalid')
+            if (incoming.id === DEFAULT_DECK_OPTION_GROUP_ID && incoming.name !== defaultDeckOptionGroup.name) throw new Error('The Default deck option group identity cannot change')
           }
           if (change.entityType === 'deck') {
             const incoming = canonicalDeck(change.payload as LegacyDeck)
@@ -1402,7 +1579,13 @@ export class Collection extends Dexie {
             await this.reviewEntries.delete(change.entityId)
           }
         } else if (change.entityType === 'deck') await this.decks.put(canonicalDeck(change.payload as LegacyDeck))
-        else if (change.entityType === 'deckOptionGroup') await this.deckOptionGroups.put(change.payload as DeckOptionGroup)
+        else if (change.entityType === 'deckOptionGroup') {
+          const incoming = canonicalDeckOptionGroup(change.payload as LegacyDeckOptionGroup)
+          if (incoming.id === DEFAULT_DECK_OPTION_GROUP_ID) {
+            const existing = await this.deckOptionGroups.get(DEFAULT_DECK_OPTION_GROUP_ID)
+            await this.deckOptionGroups.put({ ...(existing ?? defaultDeckOptionGroup), ...copiedDeckOptionSettings(incoming), updatedAt: incoming.updatedAt })
+          } else await this.deckOptionGroups.put(incoming)
+        }
         else if (change.entityType === 'note') await this.notes.put(canonicalNote(change.payload as LegacyNote))
         else if (change.entityType === 'card') await this.cards.put(canonicalCard(change.payload as LegacyCard))
         else if (change.entityType === 'noteMedia') await this.noteMedia.put(change.payload as NoteMediaReference)
