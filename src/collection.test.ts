@@ -48,10 +48,17 @@ describe('local collection', () => {
     await collection.answer(card.id, Rating.Good, new Date('2026-10-01T12:00:00Z'))
 
     await collection.moveNote(note.id, destination.id, new Date('2026-10-02T00:00:00Z'))
+    await collection.applyRemoteChanges([{
+      opId: 'historical-review-after-move', entityType: 'review', entityId: 'historical-review', action: 'create', occurredAt: '2026-10-01T12:01:00Z',
+      payload: { id: 'historical-review', cardId: card.id, deckId: child.id, rating: Rating.Good, state: 0, due: '2026-10-01T12:01:00Z', stability: 1, difficulty: 1, elapsedDays: 0, lastElapsedDays: 0, scheduledDays: 0, learningSteps: 0, reviewedAt: '2026-10-01T12:01:00Z' },
+    }], 1)
 
     await expect(collection.notes.get(note.id)).resolves.toMatchObject({ deckId: destination.id })
     await expect(collection.cards.get(card.id)).resolves.toMatchObject({ id: card.id, deckId: destination.id, reps: 1 })
-    await expect(collection.reviewEntries.where('cardId').equals(card.id).toArray()).resolves.toEqual([expect.objectContaining({ deckId: destination.id })])
+    await expect(collection.reviewEntries.where('cardId').equals(card.id).toArray()).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ deckId: child.id }),
+      expect.objectContaining({ id: 'historical-review', deckId: child.id }),
+    ]))
     await expect(collection.moveDeck(parent.id, child.id)).rejects.toThrow(/descendant|cycle/i)
   })
 

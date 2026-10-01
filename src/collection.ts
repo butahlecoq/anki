@@ -898,7 +898,7 @@ export class Collection extends Dexie {
   }
 
   async moveNote(noteId: string, destinationDeckId: string, now = new Date()): Promise<void> {
-    await this.transaction('rw', [this.decks, this.notes, this.cards, this.reviewEntries, this.outbox], async () => {
+    await this.transaction('rw', [this.decks, this.notes, this.cards, this.outbox], async () => {
       const [note, destination] = await Promise.all([this.notes.get(noteId), this.decks.get(destinationDeckId)])
       if (!note) throw new Error('Note not found')
       if (!destination) throw new Error('Destination deck not found')
@@ -907,15 +907,11 @@ export class Collection extends Dexie {
       const updatedNote = { ...note, deckId: destinationDeckId, updatedAt: occurredAt }
       const cards = await this.cards.where('noteId').equals(noteId).toArray()
       const updatedCards = cards.map((card) => ({ ...card, deckId: destinationDeckId }))
-      const reviews = cards.length ? await this.reviewEntries.where('cardId').anyOf(cards.map((card) => card.id)).toArray() : []
-      const updatedReviews = reviews.map((review) => ({ ...review, deckId: destinationDeckId }))
       await this.notes.put(updatedNote)
       if (updatedCards.length) await this.cards.bulkPut(updatedCards)
-      if (updatedReviews.length) await this.reviewEntries.bulkPut(updatedReviews)
       await this.outbox.bulkAdd([
         { opId: id(), entityType: 'note', entityId: noteId, action: 'update', occurredAt, payload: updatedNote },
         ...updatedCards.map((card) => ({ opId: id(), entityType: 'card' as const, entityId: card.id, action: 'update' as const, occurredAt, payload: card })),
-        ...updatedReviews.map((review) => ({ opId: id(), entityType: 'review' as const, entityId: review.id, action: 'update' as const, occurredAt, payload: review })),
       ])
     })
   }
@@ -988,14 +984,11 @@ export class Collection extends Dexie {
           this.decks.where('parentId').equals(deckId).toArray(),
         ])
         const cards = notes.length ? await this.cards.where('noteId').anyOf(notes.map((note) => note.id)).toArray() : []
-        const reviews = cards.length ? await this.reviewEntries.where('cardId').anyOf(cards.map((card) => card.id)).toArray() : []
         const updatedNotes = notes.map((note) => ({ ...note, deckId: destination.id, updatedAt: occurredAt }))
         const updatedCards = cards.map((card) => ({ ...card, deckId: destination.id }))
-        const updatedReviews = reviews.map((review) => ({ ...review, deckId: destination.id }))
         const updatedChildren = children.map((child) => ({ ...child, parentId: destination.id, updatedAt: occurredAt }))
         if (updatedNotes.length) await this.notes.bulkPut(updatedNotes)
         if (updatedCards.length) await this.cards.bulkPut(updatedCards)
-        if (updatedReviews.length) await this.reviewEntries.bulkPut(updatedReviews)
         if (updatedChildren.length) await this.decks.bulkPut(updatedChildren)
         await this.decks.delete(deckId)
         await this.deletedEntities.put({ key: tombstoneKey('deck', deckId), entityType: 'deck', entityId: deckId, occurredAt })
@@ -1003,7 +996,6 @@ export class Collection extends Dexie {
           ...updatedChildren.map((child) => ({ opId: id(), entityType: 'deck' as const, entityId: child.id, action: 'update' as const, occurredAt, payload: child })),
           ...updatedNotes.map((note) => ({ opId: id(), entityType: 'note' as const, entityId: note.id, action: 'update' as const, occurredAt, payload: note })),
           ...updatedCards.map((card) => ({ opId: id(), entityType: 'card' as const, entityId: card.id, action: 'update' as const, occurredAt, payload: card })),
-          ...updatedReviews.map((review) => ({ opId: id(), entityType: 'review' as const, entityId: review.id, action: 'update' as const, occurredAt, payload: review })),
           { opId: id(), entityType: 'deck', entityId: deckId, action: 'delete', occurredAt, payload: { id: deckId } },
         ])
         return
@@ -1327,7 +1319,6 @@ export class Collection extends Dexie {
             }
             const card = await this.cards.get(review.cardId)
             if (!card) throw new Error('Synced review card was not found')
-            if (review.deckId !== card.deckId) throw new Error('Synced review deck does not match its card deck')
             const note = card && await this.notes.get(card.noteId)
             const noteType = note && await this.noteTypes.get(note.typeId)
             if (card && note && (!noteType || !this.cardIsEligible(noteType, note, card))) {
