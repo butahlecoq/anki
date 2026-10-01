@@ -91,10 +91,10 @@
 **Interfaces:**
 - Consumes generated cards and the renderer from Tasks 1–3.
 
-- [ ] **Step 1: Write failing reviewer tests** for a second generated card, styled front/back rendering, and a card skipped when its template is empty.
-- [ ] **Step 2: Implement template-based review rendering** while preserving the existing media renderer for the Basic type.
-- [ ] **Step 3: Document supported template syntax and field-deletion behavior in `README.md`.**
-- [ ] **Step 4: Run `npm run check`** and commit `Complete reusable note types`.
+- [x] **Step 1: Write failing reviewer tests** for a second generated card, styled front/back rendering, and a card skipped when its template is empty.
+- [x] **Step 2: Implement template-based review rendering** while preserving the existing media renderer for the Basic type.
+- [x] **Step 3: Document supported template syntax and field-deletion behavior in `README.md`.**
+- [x] **Step 4: Run `npm run check`** and commit `Complete reusable note types`.
 
 ## Self-review
 
