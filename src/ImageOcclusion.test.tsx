@@ -41,6 +41,30 @@ describe('image occlusion canvas', () => {
     expect(onChange).toHaveBeenLastCalledWith([{ id: 'alpha', ordinal: 7, x: .2, y: .2, width: .4, height: .4 }])
   })
 
+  test('keeps identity through pointer move, resize, and removal', () => {
+    const onChange = vi.fn()
+    const { container } = render(<ImageOcclusionCanvas imageUrl="blob:test" masks={[
+      { id: 'alpha', ordinal: 7, x: .1, y: .1, width: .2, height: .2 },
+      { id: 'beta', ordinal: 8, x: .6, y: .6, width: .2, height: .2 },
+    ]} onChange={onChange} />)
+    const canvas = screen.getByLabelText('Draw image occlusion masks')
+    Object.defineProperty(canvas, 'getBoundingClientRect', { value: () => ({ left: 0, top: 0, width: 400, height: 400 }) })
+
+    fireEvent.pointerDown(container.querySelector('.occlusion-selection')!, { pointerId: 1, clientX: 80, clientY: 80 })
+    fireEvent.pointerMove(canvas, { pointerId: 1, clientX: 120, clientY: 120 })
+    fireEvent.pointerUp(canvas, { pointerId: 1, clientX: 120, clientY: 120 })
+    fireEvent.pointerDown(container.querySelector('.occlusion-resize')!, { pointerId: 2, clientX: 160, clientY: 160 })
+    fireEvent.pointerMove(canvas, { pointerId: 2, clientX: 200, clientY: 240 })
+    fireEvent.pointerUp(canvas, { pointerId: 2, clientX: 200, clientY: 240 })
+
+    expect(onChange).toHaveBeenLastCalledWith([
+      { id: 'alpha', ordinal: 7, x: .2, y: .2, width: .3, height: .4 },
+      { id: 'beta', ordinal: 8, x: .6, y: .6, width: .2, height: .2 },
+    ])
+    fireEvent.click(screen.getByRole('button', { name: 'Remove mask 1' }))
+    expect(onChange).toHaveBeenLastCalledWith([{ id: 'beta', ordinal: 8, x: .6, y: .6, width: .2, height: .2 }])
+  })
+
   test('shows only the active mask after revealing a multi-mask review card', () => {
     const { container } = render(<ImageOcclusionCanvas
       imageUrl="blob:test"
