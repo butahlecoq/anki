@@ -66,19 +66,11 @@ export function App() {
         </a>
         <nav className="primary-nav" aria-label="Primary navigation">
           <span className="nav-label">Workspace</span>
-<<<<<<< HEAD
-          <a className={`nav-item${onNoteTypes || onStatistics ? '' : ' active'}`} href="#decks" aria-current={onNoteTypes || onStatistics ? undefined : 'page'}><span>Decks</span></a>
-          <a className={`nav-item${onNoteTypes ? ' active' : ''}`} href="#note-types" aria-current={onNoteTypes ? 'page' : undefined}><span>Note types</span></a>
-          <a className="nav-item planned" href="#study" aria-disabled="true" onClick={(event) => event.preventDefault()}>Study</a>
-          <a className="nav-item planned" href="#browse" aria-disabled="true" onClick={(event) => event.preventDefault()}>Browse</a>
-          <a className={`nav-item${onStatistics ? ' active' : ''}`} href="#statistics" aria-current={onStatistics ? 'page' : undefined}>Statistics</a>
-=======
-          <a className={`nav-item${onNoteTypes || onBrowse ? '' : ' active'}`} href="#decks" aria-current={onNoteTypes || onBrowse ? undefined : 'page'}><span>Decks</span></a>
+          <a className={`nav-item${onNoteTypes || onBrowse || onStatistics ? '' : ' active'}`} href="#decks" aria-current={onNoteTypes || onBrowse || onStatistics ? undefined : 'page'}><span>Decks</span></a>
           <a className={`nav-item${onNoteTypes ? ' active' : ''}`} href="#note-types" aria-current={onNoteTypes ? 'page' : undefined}><span>Note types</span></a>
           <a className="nav-item planned" href="#study" aria-disabled="true" onClick={(event) => event.preventDefault()}>Study</a>
           <a className={`nav-item${onBrowse ? ' active' : ''}`} href="#browse" aria-current={onBrowse ? 'page' : undefined}>Browse</a>
-          <a className="nav-item planned" href="#statistics" aria-disabled="true" onClick={(event) => event.preventDefault()}>Statistics</a>
->>>>>>> 27193d3 (Open the collection browser from desktop and phone navigation)
+          <a className={`nav-item${onStatistics ? ' active' : ''}`} href="#statistics" aria-current={onStatistics ? 'page' : undefined}>Statistics</a>
         </nav>
         <div className="sidebar-footer"><div className="local-profile"><span className="avatar">私</span><span><strong>Local profile</strong><small>Private on this device</small></span></div></div>
       </aside>
@@ -88,19 +80,11 @@ export function App() {
         <footer className="footer-line"><span>KIROKU / PRIVATE WORKSPACE</span><span>BUILD 0002</span></footer>
       </main>
       <nav className="mobile-nav" aria-label="Mobile navigation">
-<<<<<<< HEAD
-        <a className={onNoteTypes || onStatistics ? '' : 'active'} href="#decks" aria-label="Decks"><span>Decks</span></a>
-        <a className={onNoteTypes ? 'active' : ''} href="#note-types" aria-label="Note types"><span>Note types</span></a>
-        <a className="planned" href="#study" aria-label="Study (planned)" aria-disabled="true" onClick={(event) => event.preventDefault()}><span>Study</span></a>
-        <a className="planned" href="#browse" aria-label="Browse (planned)" aria-disabled="true" onClick={(event) => event.preventDefault()}><span>Browse</span></a>
-        <a className={onStatistics ? 'active' : ''} href="#statistics" aria-label="Statistics"><span>Stats</span></a>
-=======
-        <a className={onNoteTypes || onBrowse ? '' : 'active'} href="#decks" aria-label="Decks"><span>Decks</span></a>
+        <a className={onNoteTypes || onBrowse || onStatistics ? '' : 'active'} href="#decks" aria-label="Decks"><span>Decks</span></a>
         <a className={onNoteTypes ? 'active' : ''} href="#note-types" aria-label="Note types"><span>Note types</span></a>
         <a className="planned" href="#study" aria-label="Study (planned)" aria-disabled="true" onClick={(event) => event.preventDefault()}><span>Study</span></a>
         <a className={onBrowse ? 'active' : ''} href="#browse" aria-label="Browse"><span>Browse</span></a>
-        <a className="planned" href="#statistics" aria-label="Statistics (planned)" aria-disabled="true" onClick={(event) => event.preventDefault()}><span>Stats</span></a>
->>>>>>> 27193d3 (Open the collection browser from desktop and phone navigation)
+        <a className={onStatistics ? 'active' : ''} href="#statistics" aria-label="Statistics"><span>Stats</span></a>
       </nav>
       {updateReady && <div className="update-toast" role="status"><span>A new version is ready.</span><button type="button" onClick={() => window.location.reload()}>Reload</button></div>}
     </div>

@@ -443,6 +443,9 @@ test('reviewer can undo a suspension from the completed session', async () => {
   try {
     fireEvent.click(await screen.findByRole('button', { name: 'Suspend card' }))
     expect(await screen.findByRole('heading', { name: 'Session complete' })).toBeVisible()
+    // The queue can empty before the maintenance transaction finishes. The
+    // shortcut is available once the visible undo control becomes enabled.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Undo card action' })).toBeEnabled())
     fireEvent.keyDown(window, { key: 'v' })
     expect(await screen.findByRole('button', { name: 'Show answer' })).toBeVisible()
     expect(await collection.cards.get(card.id)).toMatchObject({ manualSuspended: false })
