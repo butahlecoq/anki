@@ -73,4 +73,5 @@ test('bounded search parsing rejects excessive length and nesting', () => {
 test('literal display text decoding preserves non-HTML content without executing it', () => {
   expect(plainField('<b>猫</b> &amp; &#x72ac; &#34;')).toBe(' 猫  & 犬 "')
   expect(plainField('&#9999999999999;')).toBe('&#9999999999999;')
+  expect(plainField('<'.repeat(65_536))).toBe('<'.repeat(65_536))
 })

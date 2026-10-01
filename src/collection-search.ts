@@ -17,7 +17,16 @@ type Token = { value: string; position: number; kind: 'word' | 'or' | '(' | ')' 
 const normalized = (text: string) => text.normalize('NFKC').toLocaleLowerCase()
 
 export function plainField(text: string) {
-  return text.replace(/<[^>]*>/g, ' ').replace(/&(?:amp|lt|gt|quot|apos|nbsp);/g, (entity) => ({ '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&apos;': "'", '&nbsp;': ' ' })[entity]!)
+  // Scan once: a tag regexp repeatedly rescans fields containing many unmatched <.
+  let stripped = '', cursor = 0
+  while (cursor < text.length) {
+    const open = text.indexOf('<', cursor)
+    if (open < 0) { stripped += text.slice(cursor); break }
+    const close = text.indexOf('>', open + 1)
+    if (close < 0) { stripped += text.slice(cursor); break }
+    stripped += text.slice(cursor, open) + ' '; cursor = close + 1
+  }
+  return stripped.replace(/&(?:amp|lt|gt|quot|apos|nbsp);/g, (entity) => ({ '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&apos;': "'", '&nbsp;': ' ' })[entity]!)
     .replace(/&#(x[\da-f]+|\d+);/gi, (entity, digits: string) => {
       const code = digits[0].toLowerCase() === 'x' ? parseInt(digits.slice(1), 16) : Number(digits)
       return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : entity

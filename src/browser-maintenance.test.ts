@@ -75,6 +75,19 @@ test('stale selections and missing destinations fail before mutating available r
   } finally { db.close(); await db.delete() }
 })
 
+test('new sibling cards invalidate previously reviewed affected counts', async () => {
+  const { db, note, cards } = await fixture()
+  try {
+    const selection = { view: 'cards' as const, ids: [cards[0].id] }
+    const expected = await selectionSummary(db, selection)
+    await db.cards.add({ ...cards[1], id: crypto.randomUUID() })
+    const outbox = await db.pendingOperations()
+    await expect(applyBulkAction(db, selection, { kind: 'delete' }, new Date(), expected)).rejects.toThrow('affected counts changed')
+    expect(await db.notes.get(note.id)).toBeDefined()
+    expect(await db.pendingOperations()).toEqual(outbox)
+  } finally { db.close(); await db.delete() }
+})
+
 test('literal replacement keeps $ text literal while regex replacement supports capture groups and field selection', async () => {
   const { db, type, note } = await fixture()
   try {
