@@ -6,6 +6,8 @@ import { BASIC_NOTE_TYPE_ID, createCollection, Rating, State, type CardRecord, t
 let collection: Collection | undefined
 
 type SchedulingSettings = DeckOptionSettings
+type NodeRuntime = { execPath: string; cwd(): string; env: Record<string, string | undefined> }
+type SpawnSync = (command: string, args: string[], options: { cwd: string; encoding: 'utf8'; env: Record<string, string | undefined> }) => { status: number | null; stderr: string }
 
 function directCard(id: string, deckId: string, noteId: string, state: State, due: string): CardRecord {
   return { id, deckId, noteId, templateId: 'basic', due, stability: 0, difficulty: 0, elapsedDays: 0, scheduledDays: 0, learningSteps: 0, reps: 0, lapses: 0, state, lastReview: null }
@@ -136,6 +138,19 @@ describe('local collection', () => {
   })
 
   test('applies new-card caps to the learner local study day across a UTC midnight offset', async () => {
+    const runtime = (globalThis as unknown as { process: NodeRuntime }).process
+    if (runtime.env.KIROKU_LOCAL_DAY_CHILD !== '1') {
+      const moduleName = ['node', 'child_process'].join(':')
+      const { spawnSync } = await import(/* @vite-ignore */ moduleName) as { spawnSync: SpawnSync }
+      const child = spawnSync(runtime.execPath, [`${runtime.cwd()}/node_modules/vitest/vitest.mjs`, 'run', 'src/collection.test.ts', '-t', 'applies new-card caps to the learner local study day'], {
+        cwd: runtime.cwd(),
+        encoding: 'utf8',
+        env: { ...runtime.env, TZ: 'Europe/Moscow', KIROKU_LOCAL_DAY_CHILD: '1' },
+      })
+      expect(child.status, child.stderr).toBe(0)
+      return
+    }
+    expect(new Date(2026, 9, 1).getTimezoneOffset()).not.toBe(0)
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const group = await collection.createDeckOptionGroup('One per local day')
     await collection.updateDeckOptionGroup(group.id, { dailyNewLimit: 1, dailyReviewLimit: 10, desiredRetention: 0.9, learningSteps: ['1m'], relearningSteps: ['10m'], newCardOrder: 'added', reviewCardOrder: 'due' })
