@@ -361,6 +361,28 @@ test('editing and moving the current note work without leaving the reviewer', as
   }
 })
 
+test('review keyboard shortcuts use the same answer and rating actions as touch controls', async () => {
+  const deck = await collection.createDeck(`Keyboard review ${crypto.randomUUID()}`)
+  const note = await collection.createBasicNote(deck.id, { front: '聞く', back: 'listen' })
+  const card = (await collection.cards.where('noteId').equals(note.id).first())!
+  window.location.hash = `#review/${deck.id}`
+  render(<CollectionWorkspace />)
+  try {
+    await screen.findByRole('button', { name: 'Show answer' })
+    fireEvent.keyDown(window, { key: 'e' })
+    const editor = await screen.findByRole('dialog', { name: 'Edit Basic note' })
+    fireEvent.keyDown(window, { key: '3' })
+    expect(await collection.reviewEntries.where('cardId').equals(card.id).count()).toBe(0)
+    fireEvent.click(within(editor).getByRole('button', { name: 'Cancel' }))
+    fireEvent.keyDown(window, { key: ' ' })
+    expect(await screen.findByRole('button', { name: /^Good ·/ })).toBeVisible()
+    fireEvent.keyDown(window, { key: '3' })
+    await waitFor(async () => expect(await collection.reviewEntries.where('cardId').equals(card.id).count()).toBe(1))
+  } finally {
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+  }
+})
+
 test('a learner moves a deck under a different parent', async () => {
   const firstParent = await collection.createDeck(`First ${crypto.randomUUID()}`)
   const secondParent = await collection.createDeck(`Second ${crypto.randomUUID()}`)

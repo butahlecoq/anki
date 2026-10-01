@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import {
   Rating,
@@ -844,7 +844,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     if (showAnswer && typedAnswer !== undefined) typedResultRef.current?.focus()
   }, [cardId, showAnswer, typedAnswer])
 
-  async function answer(rating: Grade) {
+  const answer = useCallback(async (rating: Grade) => {
     if (!cardId || isAnswering) return
     setIsAnswering(true)
     setActionError('')
@@ -857,9 +857,9 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     } finally {
       setIsAnswering(false)
     }
-  }
+  }, [cardId, isAnswering])
 
-  async function updateCurrentCard(action: (id: string) => Promise<void>) {
+  const updateCurrentCard = useCallback(async (action: (id: string) => Promise<void>) => {
     if (!cardId || isAnswering) return
     setIsAnswering(true)
     setActionError('')
@@ -871,9 +871,9 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     } finally {
       setIsAnswering(false)
     }
-  }
+  }, [cardId, isAnswering])
 
-  async function replayAudio() {
+  const replayAudio = useCallback(async () => {
     const surface = reviewCardRef.current
     if (!surface) return
     const audio = [
@@ -886,7 +886,30 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
       await element.play()
     }))
     setAudioMessage(results.some((result) => result.status === 'fulfilled') ? 'Audio replayed.' : 'Audio could not play on this device.')
-  }
+  }, [])
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (!cardId || isAnswering || editingNote || movingNote || editingTags || showCardInfo || event.repeat || event.altKey || event.ctrlKey || event.metaKey) return
+      if (event.target instanceof Element && event.target.closest('input, textarea, select, button, [contenteditable="true"], [role="dialog"]')) return
+      const key = event.key.toLowerCase()
+      if ((key === ' ' || key === 'spacebar') && !showAnswer) {
+        event.preventDefault()
+        setShownAnswerCardId(cardId)
+      } else if (showAnswer && /^[1-4]$/.test(key)) {
+        const choice = choices[Number(key) - 1]
+        if (choice) { event.preventDefault(); void answer(choice.rating) }
+      } else if (key === 'e') { event.preventDefault(); setEditingNote(true) }
+      else if (key === 'm') { event.preventDefault(); setMovingNote(true) }
+      else if (key === 't') { event.preventDefault(); setEditingTags(true) }
+      else if (key === 'i') { event.preventDefault(); setShowCardInfo(true) }
+      else if (key === 'r' && media.some((reference) => reference.kind === 'audio')) { event.preventDefault(); void replayAudio() }
+      else if (key === 's') { event.preventDefault(); void updateCurrentCard((id) => collection.suspendCard(id)) }
+      else if (key === 'b') { event.preventDefault(); void updateCurrentCard((id) => collection.buryCard(id)) }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [cardId, isAnswering, editingNote, movingNote, editingTags, showCardInfo, showAnswer, choices, media, answer, replayAudio, updateCurrentCard])
 
   if (queue === undefined || (cardId && (card === undefined || note === undefined || noteType === undefined || unavailable))) return <div className="loading-state" role="status">Preparing review…</div>
 
@@ -944,6 +967,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     <>
     <section className="review-session">
       <div className="review-progress"><span>REVIEW // {String(reviewsRecorded + 1).padStart(2, '0')}</span>{reviewActions}</div>
+      <p className="review-shortcuts">Space reveal · 1–4 rate · E edit · M move · T tags · I info · R replay · S suspend · B bury</p>
       {actionError && <p className="form-error" role="alert">{actionError}</p>}
       {audioMessage && <p className="review-feedback" role="status">{audioMessage}</p>}
       <article className="review-card" ref={reviewCardRef}>
