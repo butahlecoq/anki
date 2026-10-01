@@ -719,7 +719,7 @@ test('two clients sync cloze ordinals and review history', async ({ browser, pag
     await pc.getByRole('button', { name: 'Sync now' }).click()
     await phone.getByRole('button', { name: 'Sync now' }).click()
     await phone.getByRole('button', { name: `Open ${deckName}` }).click()
-    await expect(phone.getByText('NEW 2')).toBeVisible()
+    await expect(phone.getByLabel('Deck counts').getByText('NEW 2')).toBeVisible()
     await phone.getByRole('button', { name: 'Study now' }).click()
     await expect(phone.frameLocator('iframe[title="Review card"]').getByText('[…]と犬')).toBeVisible()
     await phone.getByRole('button', { name: 'Show answer' }).click()
