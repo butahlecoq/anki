@@ -173,20 +173,41 @@ function mimeType(name: string): string | undefined {
 
 function validateMediaBytes(bytes: Uint8Array, mime: string) {
   const text = (start: number, end: number) => textDecoder.decode(bytes.slice(start, end))
-  const valid = mime === 'image/png' ? bytes.length >= 24 && bytes.slice(0, 8).every((byte, index) => byte === [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a][index])
-    : mime === 'image/jpeg' ? bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
-      : mime === 'image/webp' ? bytes.length >= 16 && text(0, 4) === 'RIFF' && text(8, 12) === 'WEBP'
-        : mime === 'audio/wav' ? bytes.length >= 44 && text(0, 4) === 'RIFF' && text(8, 12) === 'WAVE'
-          : mime === 'audio/ogg' ? bytes.length >= 27 && text(0, 4) === 'OggS'
-            : mime === 'audio/mpeg' ? bytes.length >= 3 && (text(0, 3) === 'ID3' || (bytes[0] === 0xff && (bytes[1] & 0xe0) === 0xe0))
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  const valid = mime === 'image/png' ? bytes.length >= 45
+      && bytes.slice(0, 8).every((byte, index) => byte === [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a][index])
+      && text(12, 16) === 'IHDR' && view.getUint32(16) > 0 && view.getUint32(20) > 0
+      && bytes.slice(-8).every((byte, index) => byte === [0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82][index])
+    : mime === 'image/jpeg' ? bytes.length >= 16 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes.at(-2) === 0xff && bytes.at(-1) === 0xd9 && Boolean(imageDimensions(bytes))
+      : mime === 'image/webp' ? bytes.length >= 20 && text(0, 4) === 'RIFF' && text(8, 12) === 'WEBP' && view.getUint32(4, true) + 8 <= bytes.length && ['VP8 ', 'VP8L', 'VP8X'].includes(text(12, 16)) && 20 + view.getUint32(16, true) <= bytes.length
+        : mime === 'audio/wav' ? bytes.length >= 45 && text(0, 4) === 'RIFF' && text(8, 12) === 'WAVE' && view.getUint32(4, true) + 8 <= bytes.length && text(12, 16) === 'fmt ' && text(36, 40) === 'data' && view.getUint32(40, true) <= bytes.length - 44
+          : mime === 'audio/ogg' ? bytes.length >= 28 && text(0, 4) === 'OggS' && bytes[4] === 0 && 27 + bytes[26] + bytes.slice(27, 27 + bytes[26]).reduce((total, byte) => total + byte, 0) <= bytes.length
+            : mime === 'audio/mpeg' ? validMp3(bytes)
               : false
   if (!valid) throw new Error(`“${mime}” bytes do not match the declared media format.`)
 }
 
+function validMp3(bytes: Uint8Array) {
+  let offset = 0
+  if (textDecoder.decode(bytes.slice(0, 3)) === 'ID3') {
+    if (bytes.length < 10 || bytes.slice(6, 10).some((byte) => byte > 0x7f)) return false
+    offset = 10 + bytes.slice(6, 10).reduce((size, byte) => size * 128 + byte, 0)
+  }
+  return offset + 24 <= bytes.length && bytes[offset] === 0xff && (bytes[offset + 1] & 0xe0) === 0xe0 && (bytes[offset + 2] & 0xf0) !== 0xf0 && (bytes[offset + 2] & 0x0c) !== 0x0c
+}
+
 function validateSupportedTemplateMarkup(front: string, back: string, css: string) {
   const html = `${front}\n${back}`
-  if (/<\s*(?:script|iframe|object|embed|link|form)\b/i.test(html) || /\son[a-z]+\s*=/i.test(html)) throw new Error('Executable or embedded template markup is unsupported')
-  if (/\b(?:src|href)\s*=\s*["']\s*(?:https?:|\/\/)/i.test(html) || /(?:@import|url\s*\(\s*["']?\s*(?:https?:|\/\/))/i.test(css)) throw new Error('Templates that depend on remote resources are unsupported')
+  const document = new DOMParser().parseFromString(html, 'text/html')
+  for (const element of document.querySelectorAll('*')) {
+    if (['SCRIPT', 'IFRAME', 'OBJECT', 'EMBED', 'LINK', 'FORM'].includes(element.tagName) || [...element.attributes].some((attribute) => attribute.name.toLocaleLowerCase().startsWith('on'))) throw new Error('Executable or embedded template markup is unsupported')
+    for (const attribute of ['src', 'href', 'srcset', 'poster']) {
+      const value = element.getAttribute(attribute)?.trim()
+      if (value && !value.toLocaleLowerCase().startsWith('data:')) throw new Error('Template-static or remote resource references are unsupported; media must come from note fields')
+    }
+    if (/url\s*\(/i.test(element.getAttribute('style') ?? '')) throw new Error('Inline style resource URLs are unsupported')
+  }
+  if (/@import/i.test(css) || /url\s*\(\s*["']?(?!data:)/i.test(css)) throw new Error('Template CSS resource URLs are unsupported unless embedded as data')
 }
 
 function mediaKind(mime: string): MediaKind { return mime.startsWith('image/') ? 'image' : 'audio' }
@@ -426,7 +447,7 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
         const digest = await digestMedia(new Blob([ownedBuffer(media.data)], { type: mime }))
         const referenceId = `${noteId}:image-occlusion-source`
         noteTypeId = 'image-occlusion'
-        fields = { header: parsed.header, backExtra: parsed.backExtra }
+        fields = { header: parsed.header, backExtra: [parsed.backExtra, parsed.comments].filter(Boolean).join('\n') }
         imageOcclusion = { version: 1, sourceMediaId: referenceId, imageWidth: dimensions.width, imageHeight: dimensions.height, nextOrdinal: Math.max(...parsed.masks.map((mask) => mask.ordinal)) + 1, masks: parsed.masks }
         references.push({ id: referenceId, noteId, digest, kind: 'image', mimeType: mime, displayName: media.name, side: 'front', playback: 'manual', createdAt: noteCreatedAt, updatedAt: referenceUpdatedAt })
         blobs.set(digest, { digest, blob: ownedBuffer(media.data), byteLength: media.data.byteLength, mimeType: mime, verifiedAt: importedAt })

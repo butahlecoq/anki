@@ -140,7 +140,12 @@ async function malformedMediaPackage() {
   deck.addNote(new AnkiNote({ notetype: type, guid: 'malformed-media-guid', fields: ['<img src="broken.png">', 'answer'] }))
   const pkg = new Package()
   pkg.addDeck(deck)
-  pkg.addMedia('broken.png', new Uint8Array([1, 2, 3, 4]))
+  const truncatedPng = new Uint8Array(24)
+  truncatedPng.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  truncatedPng.set([0x49, 0x48, 0x44, 0x52], 12)
+  new DataView(truncatedPng.buffer).setUint32(16, 1)
+  new DataView(truncatedPng.buffer).setUint32(20, 1)
+  pkg.addMedia('broken.png', truncatedPng)
   return new File([(await pkg.toUint8Array(SQL)).slice().buffer as ArrayBuffer], 'malformed-media.apkg', { type: 'application/octet-stream' })
 }
 
@@ -294,7 +299,7 @@ describe('Anki package import', () => {
     const note = await collection.notes.get('anki-note:stable-occlusion-guid')
     expect(note).toMatchObject({
       typeId: 'image-occlusion',
-      fields: { header: 'Skull bones', backExtra: 'Name the hidden bone.' },
+      fields: { header: 'Skull bones', backExtra: 'Name the hidden bone.\nImported fixture' },
       imageOcclusion: { imageWidth: 1, imageHeight: 1, masks: [
         expect.objectContaining({ ordinal: 1, x: .1, y: .2, width: .3, height: .2 }),
         expect.objectContaining({ ordinal: 2, x: .6, y: .5, width: .2, height: .3 }),
