@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { navigateOfflineDocument, openOfflineProfileDocument, WEBKIT_COLD_OFFLINE_LIMITATION } from './offline-navigation'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -172,7 +173,9 @@ test('unsafe archive previews keep existing Japanese material intact', async ({ 
   await expect(page.getByText('NEW 1', { exact: true })).toBeVisible()
 })
 
-test('learner previews and imports an Anki package before studying its media offline', async ({ page, browserName }) => {
+for (const reopen of [false, true]) {
+test(`learner previews and imports an Anki package before studying its media offline${reopen ? ' in a fresh document' : ' in the current session'}`, async ({ page, browserName }) => {
+  test.skip(reopen && browserName === 'webkit', WEBKIT_COLD_OFFLINE_LIMITATION)
   await page.getByRole('button', { name: 'Import Anki package' }).click()
   const dialog = page.getByRole('dialog', { name: 'Import Anki package' })
   await dialog.getByLabel('Anki package', { exact: true }).setInputFiles({ name: 'japanese.apkg', mimeType: 'application/octet-stream', buffer: await importFixture() })
@@ -198,7 +201,8 @@ test('learner previews and imports an Anki package before studying its media off
   await expectAudioReady(audio, browserName)
   await page.evaluate(async () => { await navigator.serviceWorker.ready })
   await page.context().setOffline(true)
-  await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => undefined)
+  if (reopen) await navigateOfflineDocument(page)
+  else await page.getByRole('button', { name: 'Show answer' }).click()
   await expect(page.frameLocator('iframe[title="Review card"]').locator('ruby')).toHaveText('猫ねこ')
   const offlineReview = page.frameLocator('iframe[title="Review card"]')
   const offlineImage = offlineReview.getByRole('img', { name: 'cat.png' })
@@ -210,8 +214,12 @@ test('learner previews and imports an Anki package before studying its media off
   await expect(page.getByText('Audio replayed.', { exact: true })).toBeVisible()
   await expect(page.getByText('Offline shell active')).toBeVisible()
 })
+}
 
-test('a clean phone syncs imported package media and keeps it offline', async ({ browser, browserName, page: pc }) => {
+
+for (const reopen of [false, true]) {
+test(`a clean phone syncs imported package media and keeps it offline${reopen ? ' in a fresh document' : ' in the current session'}`, async ({ browser, browserName, page: pc }) => {
+  test.skip(reopen && browserName === 'webkit', WEBKIT_COLD_OFFLINE_LIMITATION)
   const phoneContext = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
   try {
     const phone = await phoneContext.newPage()
@@ -238,7 +246,8 @@ test('a clean phone syncs imported package media and keeps it offline', async ({
     await expectAudioReady(audio, browserName)
     await phone.evaluate(async () => { await navigator.serviceWorker.ready })
     await phoneContext.setOffline(true)
-    await phone.reload({ waitUntil: 'domcontentloaded' }).catch(() => undefined)
+    if (reopen) await navigateOfflineDocument(phone)
+    else await phone.getByRole('button', { name: 'Show answer' }).click()
     const offlineReview = phone.frameLocator('iframe[title="Review card"]')
     const offlineImage = offlineReview.getByRole('img', { name: 'cat.png' })
     await expect(offlineImage).toBeVisible()
@@ -250,6 +259,8 @@ test('a clean phone syncs imported package media and keeps it offline', async ({
     await phoneContext.close()
   }
 })
+}
+
 
 test('learner manages a note type and previews a second card in isolation', async ({ page }) => {
   await page.getByRole('link', { name: 'Note types' }).click()
@@ -603,7 +614,9 @@ test('empty card warning and type deletion preserve mapped note values', async (
   await expect(retired.getByText(/Retired field · [\da-f-]{36}/)).toBeVisible()
 })
 
-test('learner creates, edits, and reviews a Japanese card offline', async ({ browserName, context, page }) => {
+for (const reopen of [false, true]) {
+test(`learner creates, edits, and reviews a Japanese card offline${reopen ? ' in a fresh document' : ' in the current session'}`, async ({ browserName, context, page }) => {
+  test.skip(reopen && browserName === 'webkit', WEBKIT_COLD_OFFLINE_LIMITATION)
   await createDeck(page, 'Japanese Core')
 
   await page.getByRole('button', { name: 'Open Japanese Core' }).click()
@@ -621,6 +634,8 @@ test('learner creates, edits, and reviews a Japanese card offline', async ({ bro
   await page.getByRole('button', { name: 'Save changes' }).click()
   await expect(page.getByText('ねこ · cat · feline')).toBeVisible()
 
+  await page.evaluate(async () => { await navigator.serviceWorker.ready })
+  await context.setOffline(true)
   await page.getByRole('button', { name: 'Study now' }).click()
   const review = page.frameLocator('iframe[title="Review card"]')
   await expect(review.getByText('猫')).toBeVisible()
@@ -644,11 +659,7 @@ test('learner creates, edits, and reviews a Japanese card offline', async ({ bro
     await navigator.serviceWorker.ready
   })
   await context.setOffline(true)
-  try {
-    await page.reload({ waitUntil: 'domcontentloaded' })
-  } catch (error) {
-    if (browserName !== 'webkit' || !(error instanceof Error) || !error.message.includes('internal error')) throw error
-  }
+  if (reopen) await navigateOfflineDocument(page)
 
   await expect(page.getByRole('heading', { name: 'Japanese Core' })).toBeVisible()
   await expect(page.getByText('NEW 0')).toBeVisible()
@@ -656,9 +667,11 @@ test('learner creates, edits, and reviews a Japanese card offline', async ({ bro
   await expect(page.getByText('REVIEWS 1')).toBeVisible()
   await expect(page.getByText('Offline shell active')).toBeVisible()
 })
+}
+
 
 test('persistent profile reopens offline and continues a remaining Japanese review', async ({ browserName, browser }) => {
-  test.skip(browserName === 'webkit', 'The WebKit runner discards IndexedDB when a persistent profile is reopened.')
+  test.skip(browserName === 'webkit', WEBKIT_COLD_OFFLINE_LIMITATION)
   const profile = await mkdtemp(join(tmpdir(), 'kiroku-profile-'))
   let firstContext: import('@playwright/test').BrowserContext | undefined
   let reopenedContext: import('@playwright/test').BrowserContext | undefined
@@ -696,11 +709,7 @@ test('persistent profile reopens offline and continues a remaining Japanese revi
 
     const reopenedPage = reopenedContext.pages()[0] ?? await reopenedContext.newPage()
     await reopenedPage.clock.setFixedTime(REVIEW_TIME)
-    try {
-      await reopenedPage.goto(`${WEB_URL}/#deck/${deckId}`, { waitUntil: 'domcontentloaded' })
-    } catch (error) {
-      if (browserName !== 'webkit' || !(error instanceof Error) || !error.message.includes('internal error')) throw error
-    }
+    await openOfflineProfileDocument(reopenedPage, `${WEB_URL}/#deck/${deckId}`)
 
     await expect(reopenedPage.getByRole('heading', { name: 'Offline Japanese' })).toBeVisible()
     await expect(reopenedPage.getByText('NEW 1')).toBeVisible()
@@ -773,7 +782,7 @@ test('PC and phone contexts exchange a collection and an FSRS review through the
 })
 
 test('a phone keeps verified synced media after a cold offline reload', async ({ browserName, browser, page: pc }, testInfo) => {
-  test.skip(browserName === 'webkit', 'The WebKit runner discards IndexedDB when a persistent profile is reopened.')
+  test.skip(browserName === 'webkit', WEBKIT_COLD_OFFLINE_LIMITATION)
   const profile = await mkdtemp(join(tmpdir(), 'kiroku-media-profile-'))
   const deckName = `Media Japanese ${testInfo.project.name} ${Date.now()}`
   let phoneContext: import('@playwright/test').BrowserContext | undefined
@@ -820,7 +829,7 @@ test('a phone keeps verified synced media after a cold offline reload', async ({
     await reopenedContext.setOffline(true)
     const reopened = reopenedContext.pages()[0] ?? await reopenedContext.newPage()
     await reopened.clock.setFixedTime(REVIEW_TIME)
-    await reopened.goto(`${WEB_URL}/#deck/${deckId}`, { waitUntil: 'domcontentloaded' })
+    await openOfflineProfileDocument(reopened, `${WEB_URL}/#deck/${deckId}`)
     await reopened.getByRole('button', { name: 'Study now' }).click()
     const offlineImage = reopened.getByRole('img', { name: 'cat.png' })
     await expect(offlineImage).toBeVisible()
@@ -837,7 +846,7 @@ test('a phone keeps verified synced media after a cold offline reload', async ({
 })
 
 test('a phone reopens a synced image occlusion source offline', async ({ browserName, browser, page: pc }, testInfo) => {
-  test.skip(browserName === 'webkit', 'The WebKit runner discards IndexedDB when a persistent profile is reopened.')
+  test.skip(browserName === 'webkit', WEBKIT_COLD_OFFLINE_LIMITATION)
   const profile = await mkdtemp(join(tmpdir(), 'kiroku-occlusion-profile-'))
   const deckName = `Occlusion sync ${testInfo.project.name} ${Date.now()}`
   let phoneContext: import('@playwright/test').BrowserContext | undefined
@@ -881,7 +890,7 @@ test('a phone reopens a synced image occlusion source offline', async ({ browser
     await reopenedContext.setOffline(true)
     const reopened = reopenedContext.pages()[0] ?? await reopenedContext.newPage()
     await reopened.clock.setFixedTime(REVIEW_TIME)
-    await reopened.goto(`${WEB_URL}/#deck/${deckId}`, { waitUntil: 'domcontentloaded' })
+    await openOfflineProfileDocument(reopened, `${WEB_URL}/#deck/${deckId}`)
     await reopened.getByRole('button', { name: 'Study now' }).click()
     await expect(reopened.getByLabel('Image occlusion card')).toBeVisible()
     await expect(reopened.locator('.occlusion-review-canvas image')).toHaveAttribute('href', /^data:image\/png;base64,/)
@@ -968,7 +977,7 @@ test('a typed-only front creates a card and announces the comparison after Enter
 })
 
 test('a cloze review survives a cold offline profile restart', async ({ browserName, browser }) => {
-  test.skip(browserName === 'webkit', 'The WebKit runner discards IndexedDB when a persistent profile is reopened.')
+  test.skip(browserName === 'webkit', WEBKIT_COLD_OFFLINE_LIMITATION)
   const profile = await mkdtemp(join(tmpdir(), 'kiroku-cloze-profile-'))
   let firstContext: import('@playwright/test').BrowserContext | undefined
   let reopenedContext: import('@playwright/test').BrowserContext | undefined
@@ -1001,7 +1010,7 @@ test('a cloze review survives a cold offline profile restart', async ({ browserN
     await reopenedContext.setOffline(true)
     const reopened = reopenedContext.pages()[0] ?? await reopenedContext.newPage()
     await reopened.clock.setFixedTime(REVIEW_TIME)
-    await reopened.goto(`${WEB_URL}/#deck/${deckId}`, { waitUntil: 'domcontentloaded' })
+    await openOfflineProfileDocument(reopened, `${WEB_URL}/#deck/${deckId}`)
     await expect(reopened.getByText('NEW 1')).toBeVisible()
     await expect(reopened.getByText('LEARNING 1')).toBeVisible()
     await reopened.getByRole('button', { name: 'Study now' }).click()

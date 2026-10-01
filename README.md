@@ -166,7 +166,7 @@ Run every current check:
 npm run check
 ```
 
-The browser suite builds the production app, starts it locally, then verifies desktop Chromium and phone-sized WebKit. Statistics are exercised offline in both engines; a separate Chromium test opens a fresh document offline and reads the stored answers. Playwright [supports service workers only in Chromium](https://playwright.dev/docs/service-workers), so the fresh-document statistics test explicitly skips WebKit. Automated phone-sized WebKit checks do not prove that an installed iPhone app reopens offline: verify that on physical Safari before release.
+The browser suite builds the production app, starts it locally, then verifies desktop Chromium and phone-sized WebKit. Offline evidence distinguishes warm sessions, fresh documents, and restarted persistent profiles. Chromium fresh-document tests require successful service-worker navigation and loss of a previous-document marker; restarted-profile tests start at `about:blank` and read Japanese cards, scheduling, and media from persisted storage. Statistics additionally opens a fresh page offline and reads saved answers. Navigation errors fail those tests instead of leaving assertions on the old page. Both engines cover warm offline interactions. Playwright service-worker automation is supported only in Chromium, so fresh offline WebKit tests are explicitly skipped; phone-sized WebKit results do not prove installed Safari cold reopening. See [the offline evidence and physical iPhone checklist](docs/offline-verification.md).
 
 ## Privacy
 
