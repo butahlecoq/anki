@@ -177,6 +177,7 @@ export interface SyncSettings { endpoint: string; token: string; cursor: number 
 interface DeletionTombstone { key: string; entityType: SyncOperation['entityType']; entityId: string; occurredAt: string }
 export interface NoteMediaReference { id: string; noteId: string; digest: string; kind: MediaKind; mimeType: string; displayName: string; side: MediaSide; playback: AudioPlayback; createdAt: string; updatedAt: string }
 export interface MediaBlob { digest: string; blob: Blob; byteLength: number; mimeType: string; verifiedAt: string }
+interface StoredMediaBlob extends Omit<MediaBlob, 'blob'> { blob: Blob | ArrayBuffer }
 export interface NoteMediaAttachment { file: File; side: MediaSide; playback?: AudioPlayback }
 
 const scheduler = fsrs({
@@ -210,7 +211,7 @@ function requiredText(value: string, label: string) {
   return normalized
 }
 
-async function storableBlob(file: File) {
+async function mediaBytes(file: Blob) {
   const bytes = 'arrayBuffer' in file && typeof file.arrayBuffer === 'function'
     ? await file.arrayBuffer()
     : await new Promise<ArrayBuffer>((resolve, reject) => {
@@ -219,7 +220,7 @@ async function storableBlob(file: File) {
       reader.onload = () => resolve(reader.result as ArrayBuffer)
       reader.readAsArrayBuffer(file)
     })
-  return new Blob([bytes], { type: file.type })
+  return bytes
 }
 
 function renameTemplateFields(template: string, renamed: ReadonlyMap<string, string>, known: ReadonlySet<string>) {
@@ -381,7 +382,7 @@ export class Collection extends Dexie {
   receivedOperations!: EntityTable<{ opId: string }, 'opId'>
   deletedEntities!: EntityTable<DeletionTombstone, 'key'>
   noteMedia!: EntityTable<NoteMediaReference, 'id'>
-  mediaBlobs!: EntityTable<MediaBlob, 'digest'>
+  mediaBlobs!: EntityTable<StoredMediaBlob, 'digest'>
 
   constructor(name: string) {
     super(name)
@@ -644,7 +645,7 @@ export class Collection extends Dexie {
     const definition = validateMedia(input.image)
     if (definition.kind !== 'image') throw new Error('Image occlusion requires an image')
     const digest = await digestMedia(input.image)
-    const storedImage = await storableBlob(input.image)
+    const storedImage = await mediaBytes(input.image)
     const noteId = id()
     const mediaId = id()
     const createdAt = now.toISOString()
@@ -652,7 +653,7 @@ export class Collection extends Dexie {
     validateImageOcclusion(imageOcclusion)
     const note: Note = { id: noteId, deckId, type: 'custom', typeId: IMAGE_OCCLUSION_NOTE_TYPE_ID, fields: { header: input.header, backExtra: input.backExtra }, tags: normalizeTags(input.tags), imageOcclusion, createdAt, updatedAt: createdAt }
     const reference: NoteMediaReference = { id: mediaId, noteId, digest, kind: 'image', mimeType: input.image.type, displayName: input.image.name, side: 'front', playback: 'manual', createdAt, updatedAt: createdAt }
-    const blob: MediaBlob = { digest, blob: storedImage, byteLength: input.image.size, mimeType: input.image.type, verifiedAt: createdAt }
+    const blob: StoredMediaBlob = { digest, blob: storedImage, byteLength: input.image.size, mimeType: input.image.type, verifiedAt: createdAt }
     return this.transaction('rw', [this.decks, this.notes, this.cards, this.noteMedia, this.mediaBlobs, this.outbox], async () => {
       if (!await this.decks.get(deckId)) throw new Error('Deck not found')
       await this.mediaBlobs.put(blob)
@@ -673,7 +674,7 @@ export class Collection extends Dexie {
     const definition = input.image ? validateMedia(input.image) : undefined
     if (definition && definition.kind !== 'image') throw new Error('Image occlusion requires an image')
     const digest = input.image ? await digestMedia(input.image) : undefined
-    const storedImage = input.image ? await storableBlob(input.image) : undefined
+    const storedImage = input.image ? await mediaBytes(input.image) : undefined
     await this.transaction('rw', [this.notes, this.cards, this.noteMedia, this.mediaBlobs, this.outbox], async () => {
       const note = await this.notes.get(noteId)
       if (!note || note.typeId !== IMAGE_OCCLUSION_NOTE_TYPE_ID || !note.imageOcclusion) throw new Error('Image occlusion note not found')
@@ -784,7 +785,7 @@ export class Collection extends Dexie {
     const prepared = await Promise.all(attachments.map(async ({ file, side, playback = 'manual' }) => {
       const definition = validateMedia(file)
       const digest = await digestMedia(file)
-      return { definition, file, digest, side, playback }
+      return { definition, file, digest, bytes: await mediaBytes(file), side, playback }
     }))
     const noteId = id()
     const note: Note = {
@@ -802,7 +803,7 @@ export class Collection extends Dexie {
     const emptyCard = createEmptyCard(now)
     const card = serializeCard(emptyCard, { id: `${noteId}:${BASIC_TEMPLATE_ID}`, deckId, noteId, templateId: BASIC_TEMPLATE_ID })
     const references: NoteMediaReference[] = prepared.map(({ definition, file, digest, side, playback }) => ({ id: id(), noteId, digest, kind: definition.kind, mimeType: file.type, displayName: file.name, side, playback, createdAt, updatedAt: createdAt }))
-    const blobs = [...new Map(prepared.map(({ file, digest }) => [digest, { digest, blob: file as Blob, byteLength: file.size, mimeType: file.type, verifiedAt: createdAt } satisfies MediaBlob])).values()]
+    const blobs = [...new Map(prepared.map(({ file, digest, bytes }) => [digest, { digest, blob: bytes, byteLength: file.size, mimeType: file.type, verifiedAt: createdAt } satisfies StoredMediaBlob])).values()]
 
     await this.transaction('rw', [this.decks, this.notes, this.cards, this.noteMedia, this.mediaBlobs, this.outbox], async () => {
       if (!await this.decks.get(deckId)) throw new Error('Deck not found')
@@ -841,7 +842,7 @@ export class Collection extends Dexie {
     const definition = validateMedia(file)
     const digest = await digestMedia(file)
     const reference: NoteMediaReference = { id: id(), noteId, digest, kind: definition.kind, mimeType: file.type, displayName: file.name, side, playback, createdAt: now.toISOString(), updatedAt: now.toISOString() }
-    const blob: MediaBlob = { digest, blob: file, byteLength: file.size, mimeType: file.type, verifiedAt: now.toISOString() }
+    const blob: StoredMediaBlob = { digest, blob: await mediaBytes(file), byteLength: file.size, mimeType: file.type, verifiedAt: now.toISOString() }
     await this.transaction('rw', this.noteMedia, this.mediaBlobs, this.outbox, async () => {
       await this.mediaBlobs.put(blob)
       await this.noteMedia.add(reference)
@@ -860,13 +861,16 @@ export class Collection extends Dexie {
     return references.filter((reference) => !available.has(reference.digest))
   }
 
-  async verifiedMediaBlob(digest: string) {
-    return this.mediaBlobs.get(digest)
+  async verifiedMediaBlob(digest: string): Promise<MediaBlob | undefined> {
+    const stored = await this.mediaBlobs.get(digest)
+    if (!stored) return undefined
+    if (stored.blob instanceof Blob) return stored as MediaBlob
+    return { ...stored, blob: new Blob([stored.blob], { type: stored.mimeType }) }
   }
 
   async storeDownloadedMedia(digest: string, blob: Blob, now = new Date()) {
     if (await digestMedia(blob) !== digest) throw new Error('Downloaded media did not match its content digest.')
-    await this.mediaBlobs.put({ digest, blob, byteLength: blob.size, mimeType: blob.type, verifiedAt: now.toISOString() })
+    await this.mediaBlobs.put({ digest, blob: await mediaBytes(blob), byteLength: blob.size, mimeType: blob.type, verifiedAt: now.toISOString() })
   }
 
   async removeMedia(referenceId: string, now = new Date()) {
