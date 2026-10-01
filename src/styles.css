@@ -94,6 +94,7 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--acid); outline-
 .empty-card h3 { margin: 0 0 8px; font-family: 'Hiragino Kaku Gothic ProN', 'Yu Gothic', Meiryo, sans-serif; font-size: 15px; font-weight: 500; }
 .empty-card p { max-width: 490px; margin: 0; color: var(--muted); font-family: 'Hiragino Kaku Gothic ProN', 'Yu Gothic', Meiryo, sans-serif; font-size: 11px; line-height: 1.7; }
 .empty-card small { grid-column: 2 / 4; color: var(--faint); font-size: 8px; }
+.empty-actions, .collection-actions { display: flex; flex-wrap: wrap; gap: 9px; }
 .primary-action { height: 42px; padding: 0 15px; display: flex; align-items: center; gap: 13px; border: 1px solid #596944; background: rgba(195,255,90,.07); color: #91ad61; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
 .primary-action:disabled { cursor: not-allowed; opacity: .55; }
 .primary-action .icon { width: 15px; }
@@ -231,6 +232,22 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--acid); outline-
 .preview-controls, .preview-samples { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
 .template-preview iframe { width: 100%; min-height: 190px; border: 1px solid var(--line-strong); background: white; }
 .form-warning { margin: 0; color: var(--amber); font-size: 10px; line-height: 1.5; }
+.dialog.import-dialog { width: min(760px, 100%); }
+.dialog-intro { margin: -14px 0 22px; color: var(--muted); font-size: 10px; line-height: 1.6; }
+.import-summary, .import-policy, .import-report { margin-top: 18px; padding: 15px; border: 1px solid var(--line); }
+.import-summary h3, .import-policy h3, .import-report h3 { margin: 0 0 12px; font-size: 12px; font-weight: 500; }
+.import-summary ul { margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; list-style: none; color: var(--text); font-size: 10px; }
+.import-policy p { margin: 0 0 12px; color: var(--muted); font-size: 10px; line-height: 1.6; }
+.import-policy dl { margin: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.import-policy dl div { padding: 8px; background: #0c0f12; }
+.import-policy dt { color: var(--faint); font-size: 8px; text-transform: uppercase; }
+.import-policy dd { margin: 5px 0 0; color: var(--text); font-size: 13px; }
+.import-report ul { max-height: 220px; margin: 0; padding: 0; overflow-y: auto; display: grid; gap: 6px; list-style: none; }
+.import-report li { padding: 8px; display: grid; gap: 4px; border-left: 2px solid var(--line-strong); color: var(--muted); font-size: 9px; line-height: 1.45; }
+.import-report li strong { color: var(--text); overflow-wrap: anywhere; }
+.import-report .import-info { border-left-color: var(--acid-dark); }
+.import-report .import-warning { border-left-color: var(--amber); }
+.import-report .import-error { border-left-color: #ff826f; }
 .card-generation-status { margin: 0; color: var(--acid); font-size: 10px; }
 .retired-fields { padding: 14px; border: 1px solid var(--line-strong); }
 .retired-fields h3 { margin: 0 0 7px; font-size: 12px; font-weight: 500; }
@@ -293,6 +310,8 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--acid); outline-
   .empty-card { min-height: 310px; padding: 28px 20px; grid-template-columns: 48px 1fr; grid-template-rows: auto auto auto; }
   .empty-glyph { grid-row: 1; width: 48px; height: 48px; }
   .empty-card > div { align-self: center; }
+  .empty-actions { grid-column: 1 / 3; }
+  .empty-actions button { flex: 1; }
   .primary-action { grid-column: 1 / 3; justify-content: center; margin-top: 10px; }
   .empty-card small { grid-column: 1 / 3; text-align: center; }
   .status-list { padding-inline: 18px; }
@@ -305,6 +324,8 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--acid); outline-
   .mobile-nav .icon { width: 18px; height: 18px; }
   .update-toast { left: 12px; right: 12px; bottom: 80px; justify-content: space-between; }
   .compact-hero { min-height: 250px; padding: 38px 0 28px; align-items: flex-start; flex-direction: column; }
+  .collection-actions { width: 100%; }
+  .collection-actions button { flex: 1; }
   .sync-controls { align-items: flex-start; flex-direction: column; gap: 14px; }
   .sync-actions { width: 100%; }
   .sync-actions button { flex: 1; }
@@ -324,6 +345,8 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--acid); outline-
   .dialog.occlusion-dialog { width: 100%; }
   .options-fields { grid-template-columns: 1fr; }
   .options-fields label { grid-column: auto !important; }
+  .import-summary ul { grid-template-columns: 1fr 1fr; }
+  .import-policy dl { grid-template-columns: 1fr 1fr; }
   .occlusion-canvas { max-height: 42vh; }
   .occlusion-mask-controls fieldset { grid-template-columns: 1fr 1fr; }
   .occlusion-mask-controls .text-button { grid-column: 1 / -1; justify-content: center; min-height: 44px; }

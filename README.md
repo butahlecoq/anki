@@ -50,7 +50,7 @@ Enter the service’s `https://` address and the one-time code in **Connect a PC
 
 ## Offline media
 
-Basic notes accept PNG, JPEG, and WebP images up to 10 MB, plus MP3, Ogg, and WAV audio up to 20 MB. Choose whether an attachment belongs on the front or back; audio can play automatically or through its built-in controls. Kiroku verifies a SHA-256 digest before storing an attachment, stores identical bytes once per collection, and transfers the blob separately from card changes. A successful sync leaves verified media in the browser database, so reviewed cards keep displaying and playing after an offline restart.
+Basic notes accept PNG, JPEG, and WebP images up to 10 MB, plus MP3, Ogg, and WAV audio up to 20 MB. Choose whether an attachment belongs on the front or back; audio can play automatically or through its built-in controls. Imported media is attached to the template side that references it. Kiroku verifies a SHA-256 digest before storing an attachment, stores identical bytes once per collection, and transfers the blob separately from card changes. A successful sync leaves verified media in the browser database, so reviewed cards keep displaying and playing after an offline restart.
 
 ### Image Occlusion
 
@@ -58,7 +58,15 @@ The built-in **Image Occlusion** note accepts a PNG, JPEG, or WebP source image.
 
 Use **Header** for prompt context, **Back Extra** for answer-side context, and comma-separated tags to organize the note. Each saved mask has a stable ID and never-reused ordinal: moving or resizing it retains its card and review history, while deleting it suspends that card. Source images sync as verified media and the supported persistent browser-profile test covers opening an image-occlusion card after a cold offline restart.
 
-The native interchange fixture covers the rectangular subset only. Ellipses, polygons, groups, and hide-all behavior are unsupported. Anki package import and export are tracked separately in [Issue #15](https://github.com/butahlecoq/anki/issues/15) and [Issue #16](https://github.com/butahlecoq/anki/issues/16).
+The native interchange fixture and package importer cover the rectangular hide-one subset only. Ellipses, polygons, groups, and hide-all behavior are unsupported. Anki package export is tracked separately in [Issue #16](https://github.com/butahlecoq/anki/issues/16).
+
+## Import Anki packages
+
+Choose **Import Anki package** on the collection screen to preview a local `.apkg` or `.colpkg`. Kiroku reads legacy schema-11 and current schema-18 packages, including modern zstd-compressed collections and media indexes. The preview counts decks, note types, notes, cards, reviews, and media, shows the duplicate policy, and lists every compatibility finding before one IndexedDB transaction commits the package.
+
+Stable Anki note GUIDs become stable local identities. A first import creates the note; a later package updates it only when the package note is newer, while a newer local edit wins. Review identities are imported once, and an older package never overwrites newer local card scheduling. Nested deck paths, tags, card state, due state, counters, FSRS stability/difficulty when present, and supported review history are mapped explicitly. Packages without FSRS memory retain their Anki interval as fallback stability and report that downgrade.
+
+Supported package templates use the documented template subset below, including Basic/reversed, cloze, multiple templates, furigana filters, typed answers, and isolated CSS. PNG/JPEG/WebP and MP3/Ogg/WAV references in note fields become offline media attachments. Native rectangular image-occlusion notes map to the built-in image-occlusion model. Unsupported filters, malformed templates, missing media, unsupported scheduler events, non-rectangular occlusions, and unreferenced static media appear in the import report; errors disable import instead of allowing silent partial loss. Export and broader compatibility proof remain tracked by Issues #16 and #25.
 
 ## Note types and card templates
 

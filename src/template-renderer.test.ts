@@ -2,6 +2,14 @@ import { describe, expect, test } from 'vitest'
 import { clozeOrdinals, renderTemplate, tryRenderTemplate, validateTemplate } from './template-renderer'
 
 describe('renderTemplate', () => {
+  test('renders trusted imported media tokens inline and respects surrounding conditionals', () => {
+    const fields = { Show: 'yes', Media: 'before [[kiroku-media:cat.png]] after' }
+    const media = { 'cat.png': { kind: 'image' as const, url: 'blob:cat' } }
+    expect(renderTemplate('{{#Show}}{{Media}}{{/Show}}', fields, undefined, { media }).html)
+      .toBe('before <img class="card-image" src="blob:cat" alt="cat.png"> after')
+    expect(renderTemplate('{{#Show}}{{Media}}{{/Show}}', { ...fields, Show: '' }, undefined, { media }).html).toBe('')
+  })
+
   test('masks only the active cloze ordinal, using hints and one card for repeated ordinals', () => {
     const fields = { Text: '{{c1::東京::city}}と{{c2::大阪}}へ{{c1::行く}}' }
     expect(clozeOrdinals(fields.Text)).toEqual([1, 2])

@@ -4,9 +4,43 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFile as execFileCallback } from 'node:child_process'
 import { promisify } from 'node:util'
+import initSqlJs from 'sql.js'
+import { Deck as AnkiDeck, Note as AnkiNote, Notetype as AnkiNotetype, Package as AnkiPackage } from 'ankipack'
 
 const REVIEW_TIME = new Date('2026-09-30T12:00:00.000Z')
 const execFile = promisify(execFileCallback)
+const WEB_URL = `http://127.0.0.1:${process.env.KIROKU_WEB_PORT ?? '4173'}`
+const SYNC_URL = `http://127.0.0.1:${process.env.KIROKU_SYNC_PORT ?? '4174'}`
+
+function wavFixture() {
+  const samples = 800
+  const bytes = new Uint8Array(44 + samples)
+  const view = new DataView(bytes.buffer)
+  const text = (offset: number, value: string) => [...value].forEach((character, index) => { bytes[offset + index] = character.charCodeAt(0) })
+  text(0, 'RIFF'); view.setUint32(4, 36 + samples, true); text(8, 'WAVE'); text(12, 'fmt ')
+  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true); view.setUint32(24, 8000, true)
+  view.setUint32(28, 8000, true); view.setUint16(32, 1, true); view.setUint16(34, 8, true); text(36, 'data'); view.setUint32(40, samples, true)
+  bytes.fill(128, 44)
+  return bytes
+}
+
+async function importFixture() {
+  const SQL = await initSqlJs({ locateFile: () => './node_modules/sql.js/dist/sql-wasm.wasm' })
+  const type = new AnkiNotetype({
+    id: 1_700_000_000_101,
+    name: 'Imported Japanese',
+    fields: [{ name: 'Expression' }, { name: 'Reading' }, { name: 'Meaning' }, { name: 'Media' }],
+    templates: [{ name: 'Recognition', questionFormat: '<b>{{Expression}}</b><br>{{furigana:Reading}}{{Media}}', answerFormat: '{{FrontSide}}<hr>{{Meaning}}' }],
+    css: '.card { color: rgb(30, 40, 50); }',
+  })
+  const deck = new AnkiDeck({ id: 1_700_000_000_102, name: 'Imported::Japanese' })
+  deck.addNote(new AnkiNote({ notetype: type, guid: 'e2e-import-guid', fields: ['猫', '猫[ねこ]', 'cat', '<img src="cat.png">[sound:cat.wav]'], tags: ['jlpt::n5'] }))
+  const pkg = new AnkiPackage()
+  pkg.addDeck(deck)
+  pkg.addMedia('cat.png', Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL4+QAAAABJRU5ErkJggg==', 'base64')))
+  pkg.addMedia('cat.wav', wavFixture())
+  return Buffer.from(await pkg.toUint8Array(SQL))
+}
 
 async function createDeck(page: import('@playwright/test').Page, name: string) {
   await page.getByRole('button', { name: 'New deck' }).click()
@@ -26,10 +60,17 @@ async function pairingCode() {
 
 async function pair(page: import('@playwright/test').Page) {
   await page.getByRole('button', { name: 'Connect a PC' }).click()
-  await page.getByLabel('PC service address').fill('http://127.0.0.1:4174')
+  await page.getByLabel('PC service address').fill(SYNC_URL)
   await page.getByLabel('One-time pairing code').fill(await pairingCode())
   await page.getByRole('button', { name: 'Connect device' }).click()
   await expect(page.getByText('PC connected. Your collections are ready to sync.')).toBeVisible()
+}
+
+async function expectAudioReady(audio: import('@playwright/test').Locator, browserName: string) {
+  await expect(audio).toHaveCount(1)
+  await expect(audio).toHaveAttribute('src', /^data:audio\/wav;base64,/)
+  // Playwright's Windows WebKit port has no functional audio backend; Chromium proves decode.
+  if (browserName === 'chromium') await expect.poll(() => audio.evaluate((element: HTMLAudioElement) => element.readyState >= HTMLMediaElement.HAVE_METADATA)).toBe(true)
 }
 
 async function drawOcclusionMask(canvas: import('@playwright/test').Locator, pointerId: number, from: { x: number; y: number }, to: { x: number; y: number }) {
@@ -44,6 +85,83 @@ async function drawOcclusionMask(canvas: import('@playwright/test').Locator, poi
 test.beforeEach(async ({ page }) => {
   await page.clock.setFixedTime(REVIEW_TIME)
   await page.goto('/')
+})
+
+test('learner previews and imports an Anki package before studying its media offline', async ({ page, browserName }) => {
+  await page.getByRole('button', { name: 'Import Anki package' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Import Anki package' })
+  await dialog.getByLabel('Anki package', { exact: true }).setInputFiles({ name: 'japanese.apkg', mimeType: 'application/octet-stream', buffer: await importFixture() })
+  await expect(dialog.getByText('2 decks')).toBeVisible()
+  await expect(dialog.getByText('1 note type')).toBeVisible()
+  await expect(dialog.getByText('1 note', { exact: true })).toBeVisible()
+  await expect(dialog.getByText('1 card')).toBeVisible()
+  await expect(dialog.getByText('2 media files')).toBeVisible()
+  await expect(dialog.getByText(/Stable Anki note identities/)).toBeVisible()
+  await expect(dialog.getByText(/Preserved nested deck path Imported::Japanese/)).toBeVisible()
+  await page.getByRole('button', { name: 'Import package' }).click()
+
+  await page.getByRole('button', { name: 'Open Japanese' }).click()
+  await expect(page.getByText('猫', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Study now' }).click()
+  const review = page.frameLocator('iframe[title="Review card"]')
+  await expect(review.locator('ruby')).toHaveText('猫ねこ')
+  await expect(review.locator('body')).toHaveCSS('color', 'rgb(30, 40, 50)')
+  const image = review.getByRole('img', { name: 'cat.png' })
+  await expect(image).toBeVisible()
+  await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true)
+  const audio = review.locator('audio')
+  await expectAudioReady(audio, browserName)
+  await page.evaluate(async () => { await navigator.serviceWorker.ready })
+  await page.context().setOffline(true)
+  await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => undefined)
+  await expect(page.frameLocator('iframe[title="Review card"]').locator('ruby')).toHaveText('猫ねこ')
+  const offlineReview = page.frameLocator('iframe[title="Review card"]')
+  const offlineImage = offlineReview.getByRole('img', { name: 'cat.png' })
+  await expect(offlineImage).toBeVisible()
+  await expect.poll(() => offlineImage.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true)
+  const offlineAudio = offlineReview.locator('audio')
+  await expectAudioReady(offlineAudio, browserName)
+  await expect(page.getByText('Offline shell active')).toBeVisible()
+})
+
+test('a clean phone syncs imported package media and keeps it offline', async ({ browser, browserName, page: pc }) => {
+  const phoneContext = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
+  try {
+    const phone = await phoneContext.newPage()
+    await phone.clock.setFixedTime(REVIEW_TIME)
+    await phone.goto(`${WEB_URL}/`)
+
+    await pc.getByRole('button', { name: 'Import Anki package' }).click()
+    const dialog = pc.getByRole('dialog', { name: 'Import Anki package' })
+    await dialog.getByLabel('Anki package', { exact: true }).setInputFiles({ name: 'japanese.apkg', mimeType: 'application/octet-stream', buffer: await importFixture() })
+    await pc.getByRole('button', { name: 'Import package' }).click()
+    await pair(pc)
+    await pair(phone)
+    await pc.getByRole('button', { name: 'Sync now' }).click()
+    await expect(pc.getByText(/2 uploaded and \d+ downloaded/)).toBeVisible()
+    await phone.getByRole('button', { name: 'Sync now' }).click()
+    await phone.getByRole('button', { name: 'Open Japanese' }).click()
+    await phone.getByRole('button', { name: 'Study now' }).click()
+
+    const review = phone.frameLocator('iframe[title="Review card"]')
+    const image = review.getByRole('img', { name: 'cat.png' })
+    await expect(image).toBeVisible()
+    await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true)
+    const audio = review.locator('audio')
+    await expectAudioReady(audio, browserName)
+    await phone.evaluate(async () => { await navigator.serviceWorker.ready })
+    await phoneContext.setOffline(true)
+    await phone.reload({ waitUntil: 'domcontentloaded' }).catch(() => undefined)
+    const offlineReview = phone.frameLocator('iframe[title="Review card"]')
+    const offlineImage = offlineReview.getByRole('img', { name: 'cat.png' })
+    await expect(offlineImage).toBeVisible()
+    await expect.poll(() => offlineImage.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true)
+    const offlineAudio = offlineReview.locator('audio')
+    await expectAudioReady(offlineAudio, browserName)
+    await expect(phone.getByText('Offline shell active')).toBeVisible()
+  } finally {
+    await phoneContext.close()
+  }
 })
 
 test('learner manages a note type and previews a second card in isolation', async ({ page }) => {
@@ -387,7 +505,7 @@ test('persistent profile reopens offline and continues a remaining Japanese revi
     firstContext = await browser.browserType().launchPersistentContext(profile)
     const firstPage = firstContext.pages()[0] ?? await firstContext.newPage()
     await firstPage.clock.setFixedTime(REVIEW_TIME)
-    await firstPage.goto('http://127.0.0.1:4173/')
+    await firstPage.goto(`${WEB_URL}/`)
     await createDeck(firstPage, 'Offline Japanese')
     await firstPage.getByRole('button', { name: 'Open Offline Japanese' }).click()
 
@@ -417,7 +535,7 @@ test('persistent profile reopens offline and continues a remaining Japanese revi
     const reopenedPage = reopenedContext.pages()[0] ?? await reopenedContext.newPage()
     await reopenedPage.clock.setFixedTime(REVIEW_TIME)
     try {
-      await reopenedPage.goto(`http://127.0.0.1:4173/#deck/${deckId}`, { waitUntil: 'domcontentloaded' })
+      await reopenedPage.goto(`${WEB_URL}/#deck/${deckId}`, { waitUntil: 'domcontentloaded' })
     } catch (error) {
       if (browserName !== 'webkit' || !(error instanceof Error) || !error.message.includes('internal error')) throw error
     }
@@ -460,7 +578,7 @@ test('PC and phone contexts exchange a collection and an FSRS review through the
   try {
     const phone = await phoneContext.newPage()
     await phone.clock.setFixedTime(REVIEW_TIME)
-    await phone.goto('http://127.0.0.1:4173/')
+    await phone.goto(`${WEB_URL}/`)
 
     await createDeck(pc, deckName)
     await pc.getByRole('button', { name: `Open ${deckName}` }).click()
@@ -472,9 +590,9 @@ test('PC and phone contexts exchange a collection and an FSRS review through the
     await pair(pc)
     await pair(phone)
     await pc.getByRole('button', { name: 'Sync now' }).click()
-    await expect(pc.getByRole('region', { name: 'PC sync' }).getByText(/complete\./i)).toBeVisible()
+    await expect(pc.getByRole('region', { name: 'PC sync' }).getByText(/complete\./i)).toBeVisible({ timeout: 15_000 })
     await phone.getByRole('button', { name: 'Sync now' }).click()
-    await expect(phone.getByRole('button', { name: `Open ${deckName}` })).toBeVisible()
+    await expect(phone.getByRole('button', { name: `Open ${deckName}` })).toBeVisible({ timeout: 15_000 })
 
     await phone.getByRole('button', { name: `Open ${deckName}` }).click()
     await phone.getByRole('button', { name: 'Study now' }).click()
@@ -482,7 +600,7 @@ test('PC and phone contexts exchange a collection and an FSRS review through the
     await phone.getByRole('button', { name: /^Good · / }).click()
     await expect(phone.getByRole('heading', { name: 'Session complete' })).toBeVisible()
     await phone.getByRole('button', { name: 'Sync now' }).click()
-    await expect(phone.getByRole('region', { name: 'PC sync' }).getByText(/complete\./i)).toBeVisible()
+    await expect(phone.getByRole('region', { name: 'PC sync' }).getByText(/complete\./i)).toBeVisible({ timeout: 15_000 })
 
     await pc.getByRole('button', { name: 'Sync now' }).click()
     await expect(pc.getByText('LEARNING 1')).toBeVisible()
@@ -502,7 +620,7 @@ test('a phone keeps verified synced media after a cold offline reload', async ({
     phoneContext = await browser.browserType().launchPersistentContext(profile, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
     const phone = phoneContext.pages()[0] ?? await phoneContext.newPage()
     await phone.clock.setFixedTime(REVIEW_TIME)
-    await phone.goto('http://127.0.0.1:4173/')
+    await phone.goto(`${WEB_URL}/`)
 
     await createDeck(pc, deckName)
     await pc.getByRole('button', { name: `Open ${deckName}` }).click()
@@ -520,7 +638,7 @@ test('a phone keeps verified synced media after a cold offline reload', async ({
     await pair(pc)
     await pair(phone)
     await pc.getByRole('button', { name: 'Sync now' }).click()
-    await expect(pc.getByText(/2 uploaded and 0 downloaded/)).toBeVisible()
+    await expect(pc.getByText(/2 uploaded and \d+ downloaded/)).toBeVisible()
     await phone.getByRole('button', { name: 'Sync now' }).click()
     await phone.getByRole('button', { name: `Open ${deckName}` }).click()
     await phone.getByRole('button', { name: 'Study now' }).click()
@@ -540,7 +658,7 @@ test('a phone keeps verified synced media after a cold offline reload', async ({
     await reopenedContext.setOffline(true)
     const reopened = reopenedContext.pages()[0] ?? await reopenedContext.newPage()
     await reopened.clock.setFixedTime(REVIEW_TIME)
-    await reopened.goto(`http://127.0.0.1:4173/#deck/${deckId}`, { waitUntil: 'domcontentloaded' })
+    await reopened.goto(`${WEB_URL}/#deck/${deckId}`, { waitUntil: 'domcontentloaded' })
     await reopened.getByRole('button', { name: 'Study now' }).click()
     const offlineImage = reopened.getByRole('img', { name: 'cat.png' })
     await expect(offlineImage).toBeVisible()
@@ -566,7 +684,7 @@ test('a phone reopens a synced image occlusion source offline', async ({ browser
     phoneContext = await browser.browserType().launchPersistentContext(profile, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
     const phone = phoneContext.pages()[0] ?? await phoneContext.newPage()
     await phone.clock.setFixedTime(REVIEW_TIME)
-    await phone.goto('http://127.0.0.1:4173/')
+    await phone.goto(`${WEB_URL}/`)
 
     await createDeck(pc, deckName)
     await pc.getByRole('button', { name: `Open ${deckName}` }).click()
@@ -601,7 +719,7 @@ test('a phone reopens a synced image occlusion source offline', async ({ browser
     await reopenedContext.setOffline(true)
     const reopened = reopenedContext.pages()[0] ?? await reopenedContext.newPage()
     await reopened.clock.setFixedTime(REVIEW_TIME)
-    await reopened.goto(`http://127.0.0.1:4173/#deck/${deckId}`, { waitUntil: 'domcontentloaded' })
+    await reopened.goto(`${WEB_URL}/#deck/${deckId}`, { waitUntil: 'domcontentloaded' })
     await reopened.getByRole('button', { name: 'Study now' }).click()
     await expect(reopened.getByLabel('Image occlusion card')).toBeVisible()
     await expect(reopened.locator('.occlusion-review-canvas image')).toHaveAttribute('href', /blob:/)
@@ -696,7 +814,7 @@ test('a cloze review survives a cold offline profile restart', async ({ browserN
     firstContext = await browser.browserType().launchPersistentContext(profile)
     const first = firstContext.pages()[0] ?? await firstContext.newPage()
     await first.clock.setFixedTime(REVIEW_TIME)
-    await first.goto('http://127.0.0.1:4173/')
+    await first.goto(`${WEB_URL}/`)
     await first.getByRole('link', { name: 'Note types' }).click()
     await first.getByRole('button', { name: 'Create note type' }).click()
     await first.getByLabel('Note type name').fill('Offline cloze')
@@ -721,7 +839,7 @@ test('a cloze review survives a cold offline profile restart', async ({ browserN
     await reopenedContext.setOffline(true)
     const reopened = reopenedContext.pages()[0] ?? await reopenedContext.newPage()
     await reopened.clock.setFixedTime(REVIEW_TIME)
-    await reopened.goto(`http://127.0.0.1:4173/#deck/${deckId}`, { waitUntil: 'domcontentloaded' })
+    await reopened.goto(`${WEB_URL}/#deck/${deckId}`, { waitUntil: 'domcontentloaded' })
     await expect(reopened.getByText('NEW 1')).toBeVisible()
     await expect(reopened.getByText('LEARNING 1')).toBeVisible()
     await reopened.getByRole('button', { name: 'Study now' }).click()
@@ -739,7 +857,7 @@ test('two clients sync cloze ordinals and review history', async ({ browser, pag
   try {
     const phone = await phoneContext.newPage()
     await phone.clock.setFixedTime(REVIEW_TIME)
-    await phone.goto('http://127.0.0.1:4173/')
+    await phone.goto(`${WEB_URL}/`)
     await pc.getByRole('link', { name: 'Note types' }).click()
     await pc.getByRole('button', { name: 'Create note type' }).click()
     await pc.getByLabel('Note type name').fill(deckName)

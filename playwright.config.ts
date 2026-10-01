@@ -4,6 +4,10 @@ import { join } from 'node:path'
 
 const syncRuntimeDirectory = process.env.KIROKU_RUNTIME_DIRECTORY ?? join(tmpdir(), `kiroku-e2e-sync-${process.pid}`)
 process.env.KIROKU_RUNTIME_DIRECTORY = syncRuntimeDirectory
+const webPort = process.env.KIROKU_WEB_PORT ?? '4173'
+const webURL = `http://127.0.0.1:${webPort}`
+const syncPort = process.env.KIROKU_SYNC_PORT ?? '4174'
+const syncURL = `http://127.0.0.1:${syncPort}`
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -14,7 +18,7 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
-    baseURL: 'http://127.0.0.1:4173',
+    baseURL: webURL,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
@@ -31,15 +35,15 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: 'npm run build && npm run preview -- --host 127.0.0.1 --port 4173',
-      url: 'http://127.0.0.1:4173',
+      command: `npm run build && npm run preview -- --host 127.0.0.1 --port ${webPort}`,
+      url: webURL,
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
     },
     {
       command: 'npm run server:start',
-      url: 'http://127.0.0.1:4174/api/health',
-      env: { ...process.env, KIROKU_RUNTIME_DIRECTORY: syncRuntimeDirectory, KIROKU_ALLOWED_ORIGIN: 'http://127.0.0.1:4173' },
+      url: `${syncURL}/api/health`,
+      env: { ...process.env, PORT: syncPort, KIROKU_RUNTIME_DIRECTORY: syncRuntimeDirectory, KIROKU_ALLOWED_ORIGIN: webURL },
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
     },
