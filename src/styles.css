@@ -215,6 +215,8 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--acid); outline-
 .review-progress { display: flex; justify-content: space-between; align-items: center; color: var(--faint); font-size: 8px; letter-spacing: .13em; }
 .review-card { width: min(800px, 100%); min-height: 390px; margin: 45px auto 24px; padding: 38px; display: grid; place-items: center; align-content: center; border: 1px solid var(--line); background: radial-gradient(circle at 50% 30%, rgba(195,255,90,.035), transparent 50%), #101317; text-align: center; }
 .card-side { margin-bottom: 35px; color: var(--acid-dark); font-size: 8px; letter-spacing: .2em; }
+.review-card .template-preview { width: 100%; }
+.review-card .template-preview iframe { min-height: 260px; border: 0; }
 .review-card h1 { margin: 0; color: #f1f4ec; font-family: 'Hiragino Kaku Gothic ProN', 'Yu Gothic', Meiryo, sans-serif; font-size: clamp(44px, 8vw, 82px); font-weight: 500; }
 .review-answer { width: min(600px, 100%); margin-top: 36px; padding-top: 29px; border-top: 1px solid var(--line); color: #b8c0b5; font-family: 'Hiragino Kaku Gothic ProN', 'Yu Gothic', Meiryo, sans-serif; font-size: clamp(18px, 3vw, 26px); }
 .reveal-action { align-self: center; min-width: 210px; justify-content: center; }
@@ -259,10 +261,10 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--acid); outline-
   .status-list { padding-inline: 18px; }
   .system-note { margin-inline: 18px; }
   .footer-line { display: none; }
-  .mobile-nav { position: fixed; z-index: 12; left: 0; right: 0; bottom: 0; min-height: calc(66px + env(safe-area-inset-bottom)); padding: 8px 12px env(safe-area-inset-bottom); display: grid; grid-template-columns: repeat(5, 1fr); border-top: 1px solid var(--line); background: rgba(11,13,16,.96); backdrop-filter: blur(16px); }
-  .mobile-nav a { min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: var(--faint); font-size: 8px; }
+  .mobile-nav { position: fixed; z-index: 12; left: 0; right: 0; bottom: 0; min-height: calc(66px + env(safe-area-inset-bottom)); padding: 8px 12px env(safe-area-inset-bottom); display: grid; grid-template-columns: repeat(5, 1fr); border-top: 1px solid var(--line); background: rgba(11,13,16,.96); backdrop-filter: blur(16px); pointer-events: none; }
+  .mobile-nav a { min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: var(--faint); font-size: 8px; pointer-events: auto; }
   .mobile-nav a.active { color: var(--acid); }
-  .mobile-nav a.planned { color: #4f5861; }
+  .mobile-nav a.planned { color: #4f5861; pointer-events: none; }
   .mobile-nav .icon { width: 18px; height: 18px; }
   .update-toast { left: 12px; right: 12px; bottom: 80px; justify-content: space-between; }
   .compact-hero { min-height: 250px; padding: 38px 0 28px; align-items: flex-start; flex-direction: column; }
@@ -271,6 +273,7 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--acid); outline-
   .sync-actions button { flex: 1; }
   .compact-hero h1, .deck-detail-header h1, .session-complete h1 { font-size: 38px; }
   .deck-grid { grid-template-columns: 1fr; padding-top: 18px; }
+  .tile-action { scroll-margin-bottom: 92px; }
   .deck-detail-header { padding-top: 25px; }
   .deck-actions { display: grid; grid-template-columns: 1fr 1fr; }
   .deck-actions button { justify-content: center; }

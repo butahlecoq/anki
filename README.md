@@ -52,6 +52,23 @@ Enter the service’s `https://` address and the one-time code in **Connect a PC
 
 Basic notes accept PNG, JPEG, and WebP images up to 10 MB, plus MP3, Ogg, and WAV audio up to 20 MB. Choose whether an attachment belongs on the front or back; audio can play automatically or through its built-in controls. Kiroku verifies a SHA-256 digest before storing an attachment, stores identical bytes once per collection, and transfers the blob separately from card changes. A successful sync leaves verified media in the browser database, so reviewed cards keep displaying and playing after an offline restart.
 
+## Note types and card templates
+
+Open **Note types** to create a reusable set of fields and one or more card templates. Each template generates a separate study card from a note when its front uses a field with a visible value. The note editor shows how many cards will be created and why an empty template is skipped. If an existing card becomes empty, it is suspended from review; its review history remains available if the card becomes eligible again.
+
+Templates support HTML, CSS, and this small replacement syntax:
+
+| Syntax | Effect |
+| --- | --- |
+| `{{Field}}` | Insert a field value by its displayed name. Field values are escaped and shown as text, including any HTML they contain. |
+| `{{#Field}}…{{/Field}}` | Include content when the field has a nonblank value. |
+| `{{^Field}}…{{/Field}}` | Include content when the field is blank. |
+| `{{FrontSide}}` | Insert the rendered front on the back of the card. |
+
+`{{FrontSide}}` is available only on the back. Conditional sections cannot be nested. Template HTML and CSS render in a sandboxed frame, so their styles stay inside the card and scripts cannot access the app. Basic notes retain their image and audio attachments in review.
+
+Removing a field with saved values requires choosing **Keep as retired data** or **Discard saved values**. Retired values remain on the note under **Retired fields** and no longer fill templates. Deleting a note type used by notes requires a replacement type and an explicit mapping for fields you want to carry over; unmapped values are kept as retired data. Renaming a field updates its template references while preserving its saved values.
+
 ## Verify
 
 Install the Playwright browser engines once:

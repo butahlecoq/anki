@@ -4,6 +4,7 @@ import {
   Rating,
   BASIC_NOTE_TYPE_ID,
   collection,
+  renderNoteTemplate,
   type Deck,
   type DeckCounts,
   type DeckSummary,
@@ -13,6 +14,7 @@ import {
 } from './collection'
 import { MediaRenderer } from './MediaRenderer'
 import { NoteTypeManager } from './NoteTypeManager'
+import { TemplatePreview } from './TemplatePreview'
 import { validateMedia } from './media'
 import { pairCollection, syncCollection } from './sync-client'
 
@@ -374,14 +376,30 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   const [reviewsRecorded, setReviewsRecorded] = useState(0)
   const [isAnswering, setIsAnswering] = useState(false)
   const cardId = queue?.[0]
-  const card = useLiveQuery(() => cardId ? collection.cards.get(cardId) : undefined, [cardId])
-  const note = useLiveQuery(() => card ? collection.notes.get(card.noteId) : undefined, [card?.noteId])
+  const card = useLiveQuery(async () => cardId ? await collection.cards.get(cardId) ?? null : undefined, [cardId])
+  const note = useLiveQuery(async () => card ? await collection.notes.get(card.noteId) ?? null : undefined, [card?.noteId])
+  const noteType = useLiveQuery(async () => note ? await collection.noteTypes.get(note.typeId) ?? null : undefined, [note?.typeId])
   const media = useLiveQuery(() => card ? collection.mediaForNote(card.noteId) : [], [card?.noteId], [])
-  const choices = useLiveQuery(() => cardId ? collection.reviewChoices(cardId, new Date()) : [], [cardId], [])
+  const choices = useLiveQuery(() => card ? collection.reviewChoices(card.id, new Date()) : [], [card?.id], [])
+  const template = noteType?.templates.find((candidate) => candidate.id === card?.templateId)
+  const unavailable = card === null || note === null || noteType === null ||
+    Boolean(card?.suspended) || (Boolean(noteType && card) && !template) ||
+    Boolean(template && noteType && note && renderNoteTemplate(template.front, noteType, note.fields).isEmpty)
 
   useEffect(() => {
     collection.dueCards(deckId, new Date()).then((cards) => setQueue(cards.map((card) => card.id)))
   }, [deckId])
+
+  useEffect(() => {
+    if (cardId && unavailable && (card === null || note === null || noteType === null ||
+      (card !== undefined && note !== undefined && noteType !== undefined))) {
+      void collection.dueCards(deckId, new Date()).then((cards) => {
+        const dueIds = new Set(cards.map((dueCard) => dueCard.id))
+        setShowAnswer(false)
+        setQueue((current) => current?.filter((queuedId) => queuedId !== cardId && dueIds.has(queuedId)) ?? [])
+      })
+    }
+  }, [deckId, cardId, card, note, noteType, unavailable])
 
   async function answer(rating: Grade) {
     if (!cardId || isAnswering) return
@@ -396,9 +414,9 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     }
   }
 
-  if (queue === null || (cardId && (!card || !note))) return <div className="loading-state" role="status">Preparing review…</div>
+  if (queue === null || (cardId && (card === undefined || note === undefined || noteType === undefined || unavailable))) return <div className="loading-state" role="status">Preparing review…</div>
 
-  if (!cardId || !card || !note) {
+  if (!cardId || !card || !note || !noteType || !template) {
     return (
       <section className="session-complete">
         <span className="completion-mark">✓</span>
@@ -410,15 +428,16 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     )
   }
 
+  const fields = Object.fromEntries(noteType.fields.map((field) => [field.name, note.fields[field.id] ?? '']))
+
   return (
     <section className="review-session">
       <div className="review-progress"><span>REVIEW // {String(reviewsRecorded + 1).padStart(2, '0')}</span><button className="text-button" onClick={onBack}>End session</button></div>
       <article className="review-card">
         <span className="card-side">{showAnswer ? 'ANSWER' : 'QUESTION'}</span>
-        <h1 lang="ja">{note.fields.front}</h1>
-        {media.filter((reference) => reference.side === 'front').map((reference) => <MediaRenderer key={reference.id} reference={reference} automatic />)}
-        {showAnswer && <div className="review-answer" lang="ja">{note.fields.back}</div>}
-        {showAnswer && media.filter((reference) => reference.side === 'back').map((reference) => <MediaRenderer key={reference.id} reference={reference} automatic />)}
+        <TemplatePreview key={card.id} title="Review card" front={template.front} back={template.back} css={template.css} fields={fields} side={showAnswer ? 'back' : 'front'} />
+        {noteType.id === BASIC_NOTE_TYPE_ID && media.filter((reference) => reference.side === 'front').map((reference) => <MediaRenderer key={reference.id} reference={reference} automatic />)}
+        {noteType.id === BASIC_NOTE_TYPE_ID && showAnswer && media.filter((reference) => reference.side === 'back').map((reference) => <MediaRenderer key={reference.id} reference={reference} automatic />)}
       </article>
       {!showAnswer ? (
         <button className="primary-action reveal-action" type="button" onClick={() => setShowAnswer(true)}>Show answer</button>

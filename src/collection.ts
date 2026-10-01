@@ -703,7 +703,7 @@ export class Collection extends Dexie {
 
   async reviewChoices(cardId: string, now = new Date()): Promise<ReviewChoice[]> {
     const card = await this.cards.get(cardId)
-    if (!card) throw new Error('Card not found')
+    if (!card || card.suspended) return []
     const preview = scheduler.repeat(deserializeCard(card), now)
     const choices: Array<[Grade, ReviewChoice['label']]> = [
       [Rating.Again, 'Again'],
