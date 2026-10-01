@@ -51,7 +51,7 @@ describe('local collection', () => {
 
     await expect(collection.notes.get(note.id)).resolves.toMatchObject({ deckId: destination.id })
     await expect(collection.cards.get(card.id)).resolves.toMatchObject({ id: card.id, deckId: destination.id, reps: 1 })
-    await expect(collection.reviewEntries.where('cardId').equals(card.id).toArray()).resolves.toHaveLength(1)
+    await expect(collection.reviewEntries.where('cardId').equals(card.id).toArray()).resolves.toEqual([expect.objectContaining({ deckId: destination.id })])
     await expect(collection.moveDeck(parent.id, child.id)).rejects.toThrow(/descendant|cycle/i)
   })
 
@@ -115,6 +115,49 @@ describe('local collection', () => {
 
     await expect(collection.decks.get(child.id)).resolves.toMatchObject({ parentId: parent.id, optionGroupId: group.id })
     await expect(collection.deckOptionGroups.get(group.id)).resolves.toMatchObject(group)
+  })
+
+  test('rejects inbound notes, cards, reviews, and media with missing owners', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const timestamp = '2026-10-02T00:00:00Z'
+    const note = { id: 'orphan-note', deckId: 'missing-deck', type: 'basic' as const, fields: { front: '猫', back: 'cat' }, createdAt: timestamp, updatedAt: timestamp }
+    const card = { id: 'orphan-card', noteId: note.id, deckId: note.deckId, templateId: 'basic', due: timestamp, stability: 0, difficulty: 0, elapsedDays: 0, scheduledDays: 0, learningSteps: 0, reps: 0, lapses: 0, state: 0, lastReview: null }
+    const review = { id: 'orphan-review', cardId: card.id, deckId: note.deckId, rating: Rating.Good, state: 0, due: timestamp, stability: 0, difficulty: 0, elapsedDays: 0, lastElapsedDays: 0, scheduledDays: 0, learningSteps: 0, reviewedAt: timestamp }
+    const media = { id: 'orphan-media', noteId: note.id, digest: 'a'.repeat(64), kind: 'image' as const, mimeType: 'image/png', displayName: 'cat.png', side: 'front' as const, playback: 'manual' as const, createdAt: timestamp, updatedAt: timestamp }
+
+    await expect(collection.applyRemoteChanges([{ opId: 'orphan-note', entityType: 'note', entityId: note.id, action: 'create', occurredAt: timestamp, payload: note }], 1)).rejects.toThrow(/deck/i)
+    await expect(collection.applyRemoteChanges([{ opId: 'orphan-card', entityType: 'card', entityId: card.id, action: 'create', occurredAt: timestamp, payload: card }], 1)).rejects.toThrow(/note/i)
+    await expect(collection.applyRemoteChanges([{ opId: 'orphan-review', entityType: 'review', entityId: review.id, action: 'create', occurredAt: timestamp, payload: review }], 1)).rejects.toThrow(/card/i)
+    await expect(collection.applyRemoteChanges([{ opId: 'orphan-media', entityType: 'noteMedia', entityId: media.id, action: 'create', occurredAt: timestamp, payload: media }], 1)).rejects.toThrow(/note/i)
+    await expect(collection.receivedOperations.count()).resolves.toBe(0)
+  })
+
+  test('suppresses a historical create-and-subtree-delete batch without orphaned records', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const timestamp = '2026-10-02T00:00:00Z'
+    const root = { id: 'history-root', name: 'Root', parentId: null, optionGroupId: 'default', createdAt: timestamp, updatedAt: timestamp }
+    const child = { id: 'history-child', name: 'Child', parentId: root.id, optionGroupId: 'default', createdAt: timestamp, updatedAt: timestamp }
+    const note = { id: 'history-note', deckId: child.id, type: 'basic' as const, fields: { front: '犬', back: 'dog' }, createdAt: timestamp, updatedAt: timestamp }
+    const card = { id: 'history-card', noteId: note.id, deckId: child.id, templateId: 'basic', due: timestamp, stability: 0, difficulty: 0, elapsedDays: 0, scheduledDays: 0, learningSteps: 0, reps: 0, lapses: 0, state: 0, lastReview: null }
+    const review = { id: 'history-review', cardId: card.id, deckId: child.id, rating: Rating.Good, state: 0, due: timestamp, stability: 0, difficulty: 0, elapsedDays: 0, lastElapsedDays: 0, scheduledDays: 0, learningSteps: 0, reviewedAt: timestamp }
+    const media = { id: 'history-media', noteId: note.id, digest: 'b'.repeat(64), kind: 'image' as const, mimeType: 'image/png', displayName: 'dog.png', side: 'front' as const, playback: 'manual' as const, createdAt: timestamp, updatedAt: timestamp }
+
+    await collection.applyRemoteChanges([
+      { opId: 'history-root-create', entityType: 'deck', entityId: root.id, action: 'create', occurredAt: timestamp, payload: root },
+      { opId: 'history-child-create', entityType: 'deck', entityId: child.id, action: 'create', occurredAt: timestamp, payload: child },
+      { opId: 'history-root-delete', entityType: 'deck', entityId: root.id, action: 'delete', occurredAt: timestamp, payload: { id: root.id } },
+      { opId: 'history-note-create', entityType: 'note', entityId: note.id, action: 'create', occurredAt: timestamp, payload: note },
+      { opId: 'history-card-create', entityType: 'card', entityId: card.id, action: 'create', occurredAt: timestamp, payload: card },
+      { opId: 'history-review-create', entityType: 'review', entityId: review.id, action: 'create', occurredAt: timestamp, payload: review },
+      { opId: 'history-media-create', entityType: 'noteMedia', entityId: media.id, action: 'create', occurredAt: timestamp, payload: media },
+    ], 7)
+
+    await expect(collection.decks.count()).resolves.toBe(0)
+    await expect(collection.notes.count()).resolves.toBe(0)
+    await expect(collection.cards.count()).resolves.toBe(0)
+    await expect(collection.reviewEntries.count()).resolves.toBe(0)
+    await expect(collection.noteMedia.count()).resolves.toBe(0)
+    await expect(collection.receivedOperations.count()).resolves.toBe(7)
   })
 
   test('deletes an entire deck subtree and rejects a delayed child note update', async () => {
@@ -582,7 +625,8 @@ describe('local collection', () => {
   test('keeps the protected Basic type when an older Basic note syncs in twice', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const basic = await collection.noteTypes.get(BASIC_NOTE_TYPE_ID)
-    const note = { id: 'old-note', deckId: 'remote-deck', type: 'basic', fields: { front: '猫', back: 'cat' }, createdAt: '2026-01-01', updatedAt: '2026-01-01' }
+    const deck = await collection.createDeck('Remote')
+    const note = { id: 'old-note', deckId: deck.id, type: 'basic', fields: { front: '猫', back: 'cat' }, createdAt: '2026-01-01', updatedAt: '2026-01-01' }
     const operation = { opId: 'old-note-create', entityType: 'note' as const, entityId: note.id, action: 'create' as const, occurredAt: note.createdAt, payload: note }
     await collection.applyRemoteChanges([operation], 1)
     await collection.applyRemoteChanges([operation], 1)
@@ -691,7 +735,10 @@ describe('local collection', () => {
 
   test('applies a remote review only once', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
-    const operation = { opId: 'remote-review', entityType: 'review' as const, entityId: 'review-1', action: 'create' as const, occurredAt: '2026-10-01T12:00:00.000Z', payload: { id: 'review-1', cardId: 'card-1', deckId: 'deck-1', rating: 3, state: 0, due: '2026-10-01T12:00:00.000Z', stability: 1, difficulty: 1, elapsedDays: 0, lastElapsedDays: 0, scheduledDays: 0, learningSteps: 0, reviewedAt: '2026-10-01T12:00:00.000Z' } }
+    const deck = await collection.createDeck('Remote')
+    const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
+    const card = (await collection.cards.where('noteId').equals(note.id).first())!
+    const operation = { opId: 'remote-review', entityType: 'review' as const, entityId: 'review-1', action: 'create' as const, occurredAt: '2026-10-01T12:00:00.000Z', payload: { id: 'review-1', cardId: card.id, deckId: deck.id, rating: 3, state: 0, due: '2026-10-01T12:00:00.000Z', stability: 1, difficulty: 1, elapsedDays: 0, lastElapsedDays: 0, scheduledDays: 0, learningSteps: 0, reviewedAt: '2026-10-01T12:00:00.000Z' } }
     await collection.applyRemoteChanges([operation], 1)
     await collection.applyRemoteChanges([operation], 1)
     await expect(collection.reviewEntries.count()).resolves.toBe(1)
@@ -736,7 +783,9 @@ describe('local collection', () => {
 
   test('applies a remote media reference only once', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
-    const reference = { id: 'media-1', noteId: 'note-1', digest: 'a'.repeat(64), kind: 'image' as const, mimeType: 'image/png', displayName: 'cat.png', side: 'front' as const, playback: 'manual' as const, createdAt: '2026-10-01T12:00:00.000Z', updatedAt: '2026-10-01T12:00:00.000Z' }
+    const deck = await collection.createDeck('Remote')
+    const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
+    const reference = { id: 'media-1', noteId: note.id, digest: 'a'.repeat(64), kind: 'image' as const, mimeType: 'image/png', displayName: 'cat.png', side: 'front' as const, playback: 'manual' as const, createdAt: '2026-10-01T12:00:00.000Z', updatedAt: '2026-10-01T12:00:00.000Z' }
     const operation = { opId: 'remote-media', entityType: 'noteMedia' as const, entityId: reference.id, action: 'create' as const, occurredAt: reference.createdAt, payload: reference }
     await collection.applyRemoteChanges([operation], 1)
     await collection.applyRemoteChanges([operation], 1)

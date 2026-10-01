@@ -898,7 +898,7 @@ export class Collection extends Dexie {
   }
 
   async moveNote(noteId: string, destinationDeckId: string, now = new Date()): Promise<void> {
-    await this.transaction('rw', [this.decks, this.notes, this.cards, this.outbox], async () => {
+    await this.transaction('rw', [this.decks, this.notes, this.cards, this.reviewEntries, this.outbox], async () => {
       const [note, destination] = await Promise.all([this.notes.get(noteId), this.decks.get(destinationDeckId)])
       if (!note) throw new Error('Note not found')
       if (!destination) throw new Error('Destination deck not found')
@@ -907,11 +907,15 @@ export class Collection extends Dexie {
       const updatedNote = { ...note, deckId: destinationDeckId, updatedAt: occurredAt }
       const cards = await this.cards.where('noteId').equals(noteId).toArray()
       const updatedCards = cards.map((card) => ({ ...card, deckId: destinationDeckId }))
+      const reviews = cards.length ? await this.reviewEntries.where('cardId').anyOf(cards.map((card) => card.id)).toArray() : []
+      const updatedReviews = reviews.map((review) => ({ ...review, deckId: destinationDeckId }))
       await this.notes.put(updatedNote)
       if (updatedCards.length) await this.cards.bulkPut(updatedCards)
+      if (updatedReviews.length) await this.reviewEntries.bulkPut(updatedReviews)
       await this.outbox.bulkAdd([
         { opId: id(), entityType: 'note', entityId: noteId, action: 'update', occurredAt, payload: updatedNote },
         ...updatedCards.map((card) => ({ opId: id(), entityType: 'card' as const, entityId: card.id, action: 'update' as const, occurredAt, payload: card })),
+        ...updatedReviews.map((review) => ({ opId: id(), entityType: 'review' as const, entityId: review.id, action: 'update' as const, occurredAt, payload: review })),
       ])
     })
   }
@@ -984,11 +988,14 @@ export class Collection extends Dexie {
           this.decks.where('parentId').equals(deckId).toArray(),
         ])
         const cards = notes.length ? await this.cards.where('noteId').anyOf(notes.map((note) => note.id)).toArray() : []
+        const reviews = cards.length ? await this.reviewEntries.where('cardId').anyOf(cards.map((card) => card.id)).toArray() : []
         const updatedNotes = notes.map((note) => ({ ...note, deckId: destination.id, updatedAt: occurredAt }))
         const updatedCards = cards.map((card) => ({ ...card, deckId: destination.id }))
+        const updatedReviews = reviews.map((review) => ({ ...review, deckId: destination.id }))
         const updatedChildren = children.map((child) => ({ ...child, parentId: destination.id, updatedAt: occurredAt }))
         if (updatedNotes.length) await this.notes.bulkPut(updatedNotes)
         if (updatedCards.length) await this.cards.bulkPut(updatedCards)
+        if (updatedReviews.length) await this.reviewEntries.bulkPut(updatedReviews)
         if (updatedChildren.length) await this.decks.bulkPut(updatedChildren)
         await this.decks.delete(deckId)
         await this.deletedEntities.put({ key: tombstoneKey('deck', deckId), entityType: 'deck', entityId: deckId, occurredAt })
@@ -996,6 +1003,7 @@ export class Collection extends Dexie {
           ...updatedChildren.map((child) => ({ opId: id(), entityType: 'deck' as const, entityId: child.id, action: 'update' as const, occurredAt, payload: child })),
           ...updatedNotes.map((note) => ({ opId: id(), entityType: 'note' as const, entityId: note.id, action: 'update' as const, occurredAt, payload: note })),
           ...updatedCards.map((card) => ({ opId: id(), entityType: 'card' as const, entityId: card.id, action: 'update' as const, occurredAt, payload: card })),
+          ...updatedReviews.map((review) => ({ opId: id(), entityType: 'review' as const, entityId: review.id, action: 'update' as const, occurredAt, payload: review })),
           { opId: id(), entityType: 'deck', entityId: deckId, action: 'delete', occurredAt, payload: { id: deckId } },
         ])
         return
@@ -1217,6 +1225,9 @@ export class Collection extends Dexie {
     await this.transaction('rw', [this.decks, this.deckOptionGroups, this.noteTypes, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.receivedOperations, this.settings, this.deletedEntities], async () => {
       const affectedNoteIds = new Set<string>()
       const affectedTypeIds = new Set<string>()
+      // A parent-deck tombstone can suppress a historical note before its later media/card operations arrive.
+      const suppressedNoteIds = new Set<string>()
+      const suppressedCardIds = new Set<string>()
       // Resolve type and note changes before their cards, even when equal timestamps arrive in index order.
       for (const change of orderInboundChanges(changes)) {
         if (await this.receivedOperations.get(change.opId)) continue
@@ -1242,6 +1253,8 @@ export class Collection extends Dexie {
             related.optionGroupId ? this.deletedEntities.get(tombstoneKey('deckOptionGroup', related.optionGroupId)) : undefined,
           ])
           if (deleted.some(Boolean)) {
+            if (change.entityType === 'note') suppressedNoteIds.add(change.entityId)
+            if (change.entityType === 'card') suppressedCardIds.add(change.entityId)
             await this.receivedOperations.add({ opId: change.opId })
             continue
           }
@@ -1257,6 +1270,7 @@ export class Collection extends Dexie {
           }
           if (change.entityType === 'note') {
             const incoming = canonicalNote(change.payload as LegacyNote)
+            if (!await this.decks.get(incoming.deckId)) throw new Error('Synced note deck was not found')
             if (incoming.typeId === IMAGE_OCCLUSION_NOTE_TYPE_ID) {
               if (!incoming.imageOcclusion) throw new Error('Synced image occlusion metadata is missing')
               validateImageOcclusion(incoming.imageOcclusion)
@@ -1281,8 +1295,14 @@ export class Collection extends Dexie {
           }
           if (change.entityType === 'card') {
             const incoming = canonicalCard(change.payload as LegacyCard)
+            if (suppressedNoteIds.has(incoming.noteId)) {
+              suppressedCardIds.add(change.entityId)
+              await this.receivedOperations.add({ opId: change.opId })
+              continue
+            }
             const note = await this.notes.get(incoming.noteId)
-            if (note && incoming.deckId !== note.deckId) throw new Error('Synced card deck does not match its note deck')
+            if (!note) throw new Error('Synced card note was not found')
+            if (incoming.deckId !== note.deckId) throw new Error('Synced card deck does not match its note deck')
             const noteType = note && await this.noteTypes.get(note.typeId)
             const deletedType = note && !noteType && await this.deletedEntities.get(tombstoneKey('noteType', note.typeId))
             if (note && noteType?.kind === 'image-occlusion') {
@@ -1301,7 +1321,13 @@ export class Collection extends Dexie {
           }
           if (change.entityType === 'review') {
             const review = change.payload as ReviewEntry
+            if (suppressedCardIds.has(review.cardId)) {
+              await this.receivedOperations.add({ opId: change.opId })
+              continue
+            }
             const card = await this.cards.get(review.cardId)
+            if (!card) throw new Error('Synced review card was not found')
+            if (review.deckId !== card.deckId) throw new Error('Synced review deck does not match its card deck')
             const note = card && await this.notes.get(card.noteId)
             const noteType = note && await this.noteTypes.get(note.typeId)
             if (card && note && (!noteType || !this.cardIsEligible(noteType, note, card))) {
@@ -1311,7 +1337,12 @@ export class Collection extends Dexie {
           }
           if (change.entityType === 'noteMedia') {
             const reference = change.payload as NoteMediaReference
+            if (suppressedNoteIds.has(reference.noteId)) {
+              await this.receivedOperations.add({ opId: change.opId })
+              continue
+            }
             const note = await this.notes.get(reference.noteId)
+            if (!note) throw new Error('Synced media note was not found')
             if (note?.imageOcclusion?.sourceMediaId === reference.id &&
               (reference.kind !== 'image' || !['image/png', 'image/jpeg', 'image/webp'].includes(reference.mimeType) || reference.side !== 'front' || !/^[a-f0-9]{64}$/.test(reference.digest))) {
               throw new Error('Synced source image reference is invalid')
