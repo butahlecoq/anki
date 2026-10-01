@@ -787,7 +787,13 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   const [isAnswering, setIsAnswering] = useState(false)
   const [actionError, setActionError] = useState('')
   const [typedDraft, setTypedDraft] = useState<{ cardId?: string; value: string }>({ value: '' })
+  const [editingNote, setEditingNote] = useState(false)
+  const [movingNote, setMovingNote] = useState(false)
+  const [editingTags, setEditingTags] = useState(false)
+  const [showCardInfo, setShowCardInfo] = useState(false)
+  const [audioMessage, setAudioMessage] = useState('')
   const typedResultRef = useRef<HTMLDivElement>(null)
+  const reviewCardRef = useRef<HTMLElement>(null)
   const dueQueue = useLiveQuery(async () => {
     const scheduled = await collection.dueCards(deckId, new Date())
     if (!scheduled.length) return []
@@ -819,6 +825,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   const note = useLiveQuery(async () => card ? await collection.notes.get(card.noteId) ?? null : undefined, [card?.noteId])
   const noteType = useLiveQuery(async () => note ? await collection.noteTypes.get(note.typeId) ?? null : undefined, [note?.typeId])
   const media = useLiveQuery(() => card ? collection.mediaForNote(card.noteId) : [], [card?.noteId], [])
+  const reviewCount = useLiveQuery(() => card ? collection.reviewEntries.where('cardId').equals(card.id).count() : 0, [card?.id], 0)
   const choices = useLiveQuery(() => card ? collection.reviewChoices(card.id, new Date()) : [], [card?.id], [])
   const template = noteType?.templates.find((candidate) => candidate.id === card?.templateId)
   const frontResult = template && noteType && note && card
@@ -866,6 +873,21 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     }
   }
 
+  async function replayAudio() {
+    const surface = reviewCardRef.current
+    if (!surface) return
+    const audio = [
+      ...surface.querySelectorAll('audio'),
+      ...[...surface.querySelectorAll('iframe')].flatMap((frame) => [...(frame.contentDocument?.querySelectorAll('audio') ?? [])]),
+    ]
+    if (!audio.length) { setAudioMessage('Audio is still loading. Try again in a moment.'); return }
+    const results = await Promise.allSettled(audio.map(async (element) => {
+      element.currentTime = 0
+      await element.play()
+    }))
+    setAudioMessage(results.some((result) => result.status === 'fulfilled') ? 'Audio replayed.' : 'Audio could not play on this device.')
+  }
+
   if (queue === undefined || (cardId && (card === undefined || note === undefined || noteType === undefined || unavailable))) return <div className="loading-state" role="status">Preparing review…</div>
 
   if (!cardId || !card || !note || !noteType || !template) {
@@ -886,24 +908,45 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     setSkippedCardIds((current) => new Set(current).add(cardId))
   }
 
-  const reviewActions = <div className="review-session-actions"><button className="text-button" type="button" disabled={isAnswering} onClick={() => void updateCurrentCard((id) => collection.suspendCard(id))}>Suspend card</button><button className="text-button" type="button" disabled={isAnswering} onClick={() => void updateCurrentCard((id) => collection.buryCard(id))}>Bury card</button><button className="text-button" type="button" onClick={onBack}>End session</button></div>
+  const reviewActions = <div className="review-session-actions">
+    <button className="text-button" type="button" disabled={isAnswering} onClick={() => setEditingNote(true)}>Edit note</button>
+    <button className="text-button" type="button" disabled={isAnswering} onClick={() => setMovingNote(true)}>Move note</button>
+    <button className="text-button" type="button" disabled={isAnswering} onClick={() => setEditingTags(true)}>Edit tags</button>
+    <button className="text-button" type="button" onClick={() => setShowCardInfo(true)}>Card info</button>
+    {media.some((reference) => reference.kind === 'audio') && <button className="text-button" type="button" onClick={() => void replayAudio()}>Replay audio</button>}
+    <button className="text-button" type="button" disabled={isAnswering} onClick={() => void updateCurrentCard((id) => collection.suspendCard(id))}>Suspend card</button>
+    <button className="text-button" type="button" disabled={isAnswering} onClick={() => void updateCurrentCard((id) => collection.buryCard(id))}>Bury card</button>
+    <button className="text-button" type="button" onClick={onBack}>End session</button>
+  </div>
+  const reviewerDialogs = <>
+    {editingNote && <NoteDialog key={note.id} deckId={note.deckId} note={note} onClose={() => setEditingNote(false)} />}
+    {movingNote && <MoveNoteDialog note={note} onClose={() => setMovingNote(false)} />}
+    {editingTags && <NoteTagsDialog key={note.id} note={note} onClose={() => setEditingTags(false)} />}
+    {showCardInfo && <div className="dialog-backdrop"><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="review-card-info-title">
+      <span className="section-code">CARD // DETAILS</span><h2 id="review-card-info-title">Card info</h2>
+      <dl className="review-card-info"><div><dt>Note type</dt><dd>{noteType.name}</dd></div><div><dt>Card template</dt><dd>{template.name}</dd></div><div><dt>Due</dt><dd>{new Date(card.due).toLocaleString()}</dd></div><div><dt>Reviews</dt><dd>{reviewCount}</dd></div><div><dt>Lapses</dt><dd>{card.lapses}</dd></div><div><dt>Tags</dt><dd>{note.tags?.join(', ') || 'None'}</dd></div></dl>
+      <div className="dialog-actions"><button className="primary-action" type="button" onClick={() => setShowCardInfo(false)}>Done</button></div>
+    </section></div>}
+  </>
 
-  if (renderError) return <section className="review-session">
+  if (renderError) return <><section className="review-session">
     <div className="review-progress"><span>REVIEW // {String(reviewsRecorded + 1).padStart(2, '0')}</span>{reviewActions}</div>
     {actionError && <p className="form-error" role="alert">{actionError}</p>}
     <article className="review-card"><p className="form-error" role="alert">Unable to render card: {renderError}</p></article>
     <button className="primary-action" type="button" onClick={skipCard}>Skip card</button>
-  </section>
+  </section>{reviewerDialogs}</>
 
   const fields = Object.fromEntries(noteType.fields.map((field) => [field.name, note.fields[field.id] ?? '']))
   const answerDiff = showAnswer && typedAnswer !== undefined ? compareTypedAnswer(typedAnswer, typedInput) : []
   const templateMedia = media.filter((reference) => reference.inline && (!reference.templateId || reference.templateId === card.templateId))
 
   return (
+    <>
     <section className="review-session">
       <div className="review-progress"><span>REVIEW // {String(reviewsRecorded + 1).padStart(2, '0')}</span>{reviewActions}</div>
       {actionError && <p className="form-error" role="alert">{actionError}</p>}
-      <article className="review-card">
+      {audioMessage && <p className="review-feedback" role="status">{audioMessage}</p>}
+      <article className="review-card" ref={reviewCardRef}>
         <span className="card-side">{showAnswer ? 'ANSWER' : 'QUESTION'}</span>
         {imageOcclusion
           ? <ImageOcclusionReview note={note} card={card} showAnswer={showAnswer} />
@@ -931,7 +974,31 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
         </div>
       )}
     </section>
+    {reviewerDialogs}
+    </>
   )
+}
+
+function NoteTagsDialog({ note, onClose }: { note: Note; onClose: () => void }) {
+  const [tags, setTags] = useState((note.tags ?? []).join(', '))
+  const [error, setError] = useState('')
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    try {
+      await collection.updateNoteTags(note.id, tags.split(','))
+      onClose()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Unable to save tags')
+    }
+  }
+  return <div className="dialog-backdrop"><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="note-tags-title">
+    <span className="section-code">NOTE // TAGS</span><h2 id="note-tags-title">Edit tags</h2>
+    <form onSubmit={submit}><label>Tags<input autoFocus value={tags} onChange={(event) => setTags(event.target.value)} /></label>
+      <p className="options-note">Separate tags with commas. Tags apply to every card generated from this note.</p>
+      {error && <p className="form-error" role="alert">{error}</p>}
+      <div className="dialog-actions"><button className="text-button" type="button" onClick={onClose}>Cancel</button><button className="primary-action" type="submit">Save tags</button></div>
+    </form>
+  </section></div>
 }
 
 export function CollectionWorkspace() {

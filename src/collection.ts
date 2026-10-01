@@ -1350,6 +1350,17 @@ export class Collection extends Dexie {
     })
   }
 
+  async updateNoteTags(noteId: string, tags: string[], now = new Date()): Promise<void> {
+    const normalizedTags = normalizeTags(tags)
+    await this.transaction('rw', [this.notes, this.outbox], async () => {
+      const note = await this.notes.get(noteId)
+      if (!note) throw new Error('Note not found')
+      const updated: Note = { ...note, tags: normalizedTags, updatedAt: now.toISOString() }
+      await this.notes.put(updated)
+      await this.outbox.add({ opId: id(), entityType: 'note', entityId: noteId, action: 'update', occurredAt: updated.updatedAt, payload: updated })
+    })
+  }
+
   async attachMedia(noteId: string, { file, side, playback = 'manual' }: NoteMediaAttachment, now = new Date()): Promise<NoteMediaReference> {
     if (!await this.notes.get(noteId)) throw new Error('Note not found')
     const definition = validateMedia(file)

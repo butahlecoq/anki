@@ -322,6 +322,44 @@ test('answering a card refreshes queued siblings that the policy buries', async 
   }
 })
 
+test('editing and moving the current note work without leaving the reviewer', async () => {
+  const source = await collection.createDeck(`Reviewer source ${crypto.randomUUID()}`)
+  const destination = await collection.createDeck(`Reviewer target ${crypto.randomUUID()}`)
+  const note = await collection.createBasicNote(source.id, { front: '古い', back: 'old' })
+  window.location.hash = `#review/${source.id}`
+  render(<CollectionWorkspace />)
+  try {
+    fireEvent.click(await screen.findByRole('button', { name: 'Card info' }))
+    expect(within(await screen.findByRole('dialog', { name: 'Card info' })).getAllByText('Basic')).toHaveLength(2)
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit note' }))
+    const editor = await screen.findByRole('dialog', { name: 'Edit Basic note' })
+    fireEvent.change(within(editor).getByLabelText('Front'), { target: { value: '新しい' } })
+    fireEvent.click(within(editor).getByRole('button', { name: 'Save changes' }))
+    await waitFor(async () => expect(await collection.notes.get(note.id)).toMatchObject({ fields: { front: '新しい', back: 'old' } }))
+    expect(screen.getByRole('button', { name: 'Show answer' })).toBeVisible()
+    await waitFor(() => expect(screen.getByTitle('Review card')).toHaveAttribute('srcdoc', expect.stringContaining('新しい')))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit tags' }))
+    const tags = await screen.findByRole('dialog', { name: 'Edit tags' })
+    fireEvent.change(within(tags).getByLabelText('Tags'), { target: { value: 'kanji, sentence, kanji' } })
+    fireEvent.click(within(tags).getByRole('button', { name: 'Save tags' }))
+    await waitFor(async () => expect(await collection.notes.get(note.id)).toMatchObject({ tags: ['kanji', 'sentence'] }))
+    expect((await collection.pendingOperations()).some((operation) => operation.entityType === 'note' && operation.entityId === note.id && (operation.payload as { tags?: string[] }).tags?.includes('sentence'))).toBe(true)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move note' }))
+    const mover = await screen.findByRole('dialog', { name: 'Move note' })
+    fireEvent.change(within(mover).getByLabelText('Destination deck'), { target: { value: destination.id } })
+    fireEvent.click(within(mover).getByRole('button', { name: 'Move note' }))
+    await waitFor(async () => expect(await collection.notes.get(note.id)).toMatchObject({ deckId: destination.id }))
+    expect(await screen.findByRole('heading', { name: 'Session complete' })).toBeVisible()
+  } finally {
+    await collection.deleteDeck(source.id, { mode: 'delete-subtree' })
+    await collection.deleteDeck(destination.id, { mode: 'delete-subtree' })
+  }
+})
+
 test('a learner moves a deck under a different parent', async () => {
   const firstParent = await collection.createDeck(`First ${crypto.randomUUID()}`)
   const secondParent = await collection.createDeck(`Second ${crypto.randomUUID()}`)
