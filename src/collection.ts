@@ -459,6 +459,14 @@ function isQueueEligible(card: CardRecord, now: Date) {
   return card.manualSuspended !== true && !templateSuspended(card) && !isBuried(card, now)
 }
 
+function isDueForStudy(card: CardRecord, now: Date) {
+  return card.state === State.New || new Date(card.due).getTime() <= now.getTime()
+}
+
+function isReviewEligible(card: CardRecord, now: Date) {
+  return isQueueEligible(card, now) && isDueForStudy(card, now)
+}
+
 function isLearningCard(card: CardRecord) {
   return card.state === State.Learning || card.state === State.Relearning
 }
@@ -1468,11 +1476,11 @@ export class Collection extends Dexie {
       for (const deck of subtree) {
         const group = groupsById.get(deck.optionGroupId)
         if (!group) throw new Error('Deck option group not found')
-        const own = cards.filter((card) => card.deckId === deck.id && isQueueEligible(card, now))
-        const learning = sortWithinDeck(own.filter((card) => isLearningCard(card) && new Date(card.due).getTime() <= now.getTime()), group, 'learning')
+        const own = cards.filter((card) => card.deckId === deck.id && isReviewEligible(card, now))
+        const learning = sortWithinDeck(own.filter(isLearningCard), group, 'learning')
         const intradayLearning = learning.filter((card) => !isInterdayLearning(card))
         const interdayLearning = learning.filter(isInterdayLearning)
-        const reviewsDue = sortWithinDeck(own.filter((card) => card.state === State.Review && new Date(card.due).getTime() <= now.getTime()), group, 'review')
+        const reviewsDue = sortWithinDeck(own.filter((card) => card.state === State.Review), group, 'review')
         const newCards = sortWithinDeck(own.filter((card) => card.state === State.New), group, 'new')
         const totals = reviewedToday.get(deck.id) ?? { new: 0, review: 0 }
         // Each owning deck applies its own policy while gathering from its daily review budget.
@@ -1495,7 +1503,7 @@ export class Collection extends Dexie {
 
   async reviewChoices(cardId: string, now = new Date()): Promise<ReviewChoice[]> {
     const card = await this.cards.get(cardId)
-    if (!card || !isQueueEligible(card, now)) return []
+    if (!card || !isReviewEligible(card, now)) return []
     const deck = await this.decks.get(card.deckId)
     const group = deck ? await this.deckOptionGroups.get(deck.optionGroupId) : undefined
     if (!deck || !group) throw new Error('Deck option group not found')
@@ -1518,6 +1526,7 @@ export class Collection extends Dexie {
       const existing = await this.cards.get(cardId)
       if (!existing) throw new Error('Card not found')
       if (!isQueueEligible(existing, now)) throw new Error('Card is unavailable because it is suspended or buried')
+      if (!isDueForStudy(existing, now)) throw new Error('Card is not due')
       const deck = await this.decks.get(existing.deckId)
       const group = deck ? await this.deckOptionGroups.get(deck.optionGroupId) : undefined
       if (!deck || !group) throw new Error('Deck option group not found')
