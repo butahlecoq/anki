@@ -235,6 +235,7 @@ describe('Anki package import', () => {
     await expect(collection.reviewEntries.toArray()).resolves.toEqual([expect.objectContaining({
       id: 'anki-review:1725192000000',
       reviewedAt: '2024-09-01T12:00:00.000Z',
+      durationMs: 1200,
       due: '2024-09-01T12:00:00.000Z',
       scheduledDays: 5,
       elapsedDays: 0,

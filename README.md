@@ -48,6 +48,14 @@ npm run server:start
 
 Enter the service’s `https://` address and the one-time code in **Connect a PC**. Credentials remain in that browser’s local collection settings and are never included in the web build.
 
+## Progress statistics
+
+Open **Statistics** from the desktop sidebar or the iPhone navigation bar. The home dashboard counts cards available now using the same queue as the reviewer, including daily limits, suspended cards, buried siblings, and renderable templates. **Studied** counts answers today, including repeated learning steps.
+
+Daily, weekly, monthly, and all-time views summarize recorded answers, distinct cards, measured review time, and observed recall. Study days start at local midnight; weeks start Monday and months follow the local calendar. Recall is the share of review-state answers rated Hard, Good, or Easy; learning steps are excluded. The heatmap opens a selected day's answers and card histories. Difficulty and interval distributions describe current active scheduled cards. The 30-day forecast uses their current due dates, counting overdue cards today; future answers, new cards, and daily limits can change that workload.
+
+New reviews measure active time while the card is visible, excluding background tabs and maintenance dialogs, capped at 60 seconds per answer. Imported Anki logs retain their recorded answer time. Older Kiroku logs without time remain unmeasured, and the view shows timing coverage. Statistics read the local database, update after offline answers and undo, and count each durable review identity once after synchronization.
+
 ## Offline media
 
 Basic notes accept PNG, JPEG, and WebP images up to 10 MB, plus MP3, Ogg, and WAV audio up to 20 MB. Choose whether an attachment belongs on the front or back; audio can play automatically or through its built-in controls. Imported media is attached to the template side that references it. Kiroku verifies a SHA-256 digest before storing an attachment, stores identical bytes once per collection, and transfers the blob separately from card changes. A successful sync leaves verified media in the browser database, so reviewed cards keep displaying and playing after an offline restart.
@@ -132,7 +140,7 @@ Run every current check:
 npm run check
 ```
 
-The browser suite builds the production app, starts it locally, then verifies desktop Chromium and phone-sized WebKit. It includes a service-worker-backed offline cold reload rather than testing only a warm page.
+The browser suite builds the production app, starts it locally, then verifies desktop Chromium and phone-sized WebKit. Statistics are exercised offline in both engines; a separate Chromium test opens a fresh document offline and reads the stored answers. Playwright [supports service workers only in Chromium](https://playwright.dev/docs/service-workers), so the fresh-document statistics test explicitly skips WebKit. Automated phone-sized WebKit checks do not prove that an installed iPhone app reopens offline: verify that on physical Safari before release.
 
 ## Privacy
 

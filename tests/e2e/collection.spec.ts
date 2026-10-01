@@ -13,6 +13,60 @@ const execFile = promisify(execFileCallback)
 const WEB_URL = `http://127.0.0.1:${process.env.KIROKU_WEB_PORT ?? '4173'}`
 const SYNC_URL = `http://127.0.0.1:${process.env.KIROKU_SYNC_PORT ?? '4174'}`
 
+for (const reopen of [false, true]) {
+test(`statistics follow an offline Japanese review, heatmap selection, and undo${reopen ? ' in a fresh document' : ' in the current session'}`, async ({ page, context, browserName }) => {
+  test.skip(reopen && browserName === 'webkit', 'Playwright supports service workers only in Chromium; fresh offline navigation needs physical Safari verification. https://playwright.dev/docs/service-workers')
+  await context.setOffline(false)
+  await page.clock.setFixedTime(REVIEW_TIME)
+  await page.goto('/')
+  await createDeck(page, '日本語 progress')
+  await page.getByRole('button', { name: 'Open 日本語 progress' }).click()
+  await page.getByRole('button', { name: 'Add note' }).click()
+  await page.getByLabel('Front', { exact: true }).fill('猫')
+  await page.getByLabel('Back', { exact: true }).fill('cat')
+  await page.getByRole('button', { name: 'Save note' }).click()
+  await expect(page.getByText('Offline shell ready', { exact: true })).toBeVisible()
+  try {
+    await context.setOffline(true)
+    await page.getByRole('button', { name: 'Study now' }).click()
+    const reviewURL = page.url()
+    await page.getByRole('button', { name: 'Show answer' }).click()
+    await page.getByRole('button', { name: /^Easy ·/ }).click()
+    await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
+    await page.getByRole('link', { name: 'Statistics', exact: true }).click()
+    await expect(page.getByRole('heading', { name: 'Every answer adds up' })).toBeVisible()
+    await expect(page.getByText('ANSWERS', { exact: true }).locator('..').locator('strong')).toHaveText('1')
+    await expect(page.getByText('REVIEW TIME', { exact: true }).locator('..')).toContainText('Measured for 1 of 1 answers')
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+    await page.screenshot({ path: test.info().outputPath('statistics.png'), fullPage: true })
+    await page.getByRole('button', { name: '2026-09-30: 1 answers' }).click()
+    await expect(page.getByLabel('Period', { exact: true })).toHaveValue('day')
+    await page.getByRole('button', { name: '猫 · basic' }).click()
+    await expect(page.getByRole('dialog', { name: 'Card progress' })).toContainText('Review history')
+    await expect(page.getByRole('dialog', { name: 'Card progress' })).toContainText('Easy')
+    await page.getByRole('button', { name: 'Close', exact: true }).click()
+    if (reopen) {
+      const statisticsURL = page.url()
+      const previousPage = page
+      await page.evaluate(() => { Reflect.set(window, 'kirokuStatisticsReloadMarker', true) })
+      page = await context.newPage()
+      await page.clock.setFixedTime(REVIEW_TIME)
+      await page.goto(statisticsURL, { waitUntil: 'domcontentloaded' })
+      await expect(page.getByRole('heading', { name: 'Every answer adds up' })).toBeVisible()
+      await expect.poll(() => page.evaluate(() => Reflect.has(window, 'kirokuStatisticsReloadMarker'))).toBe(false)
+      await previousPage.close()
+    }
+    await expect(page.getByText('ANSWERS', { exact: true }).locator('..').locator('strong')).toHaveText('1')
+    await page.getByRole('link', { name: 'Decks', exact: true }).click()
+    await expect(page.getByRole('region', { name: "Today's workload" })).toContainText('STUDIED 1')
+    await page.evaluate((url) => { window.location.hash = new URL(url).hash }, reviewURL)
+    await page.getByRole('button', { name: 'Undo last review' }).click()
+    await page.getByRole('link', { name: 'Statistics', exact: true }).click()
+    await expect(page.getByText('ANSWERS', { exact: true }).locator('..').locator('strong')).toHaveText('0')
+  } finally { await context.setOffline(false) }
+})
+}
+
 function wavFixture() {
   const samples = 800
   const bytes = new Uint8Array(44 + samples)

@@ -22,3 +22,13 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium webkit
       - run: npm run check
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: statistics-browser-previews
+          path: |
+            test-results/**/statistics.png
+            test-results/**/test-failed*.png
+            test-results/**/error-context.md
+          if-no-files-found: ignore
+          retention-days: 7

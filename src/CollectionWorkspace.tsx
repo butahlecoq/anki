@@ -25,15 +25,18 @@ import { pairCollection, syncCollection } from './sync-client'
 import { clozeOrdinals } from './template-renderer'
 import { compareTypedAnswer } from './typed-answer'
 import { prepareAnkiImport, type PreparedAnkiImport } from './anki-import'
+import { CardHistory, Statistics, TodayWorkload } from './Statistics'
 
 type Route =
   | { view: 'decks' }
   | { view: 'note-types' }
+  | { view: 'statistics' }
   | { view: 'deck'; deckId: string }
   | { view: 'review'; deckId: string }
 
 function routeFromHash(): Route {
   if (window.location.hash === '#note-types') return { view: 'note-types' }
+  if (window.location.hash === '#statistics') return { view: 'statistics' }
   const match = window.location.hash.match(/^#(deck|review)\/([^/]+)$/)
   if (!match) return { view: 'decks' }
   return { view: match[1] as 'deck' | 'review', deckId: decodeURIComponent(match[2]) }
@@ -49,7 +52,7 @@ function useRoute() {
   }, [])
 
   const navigate = (next: Route) => {
-    const hash = next.view === 'decks' ? '#decks' : next.view === 'note-types' ? '#note-types' : `#${next.view}/${encodeURIComponent(next.deckId)}`
+    const hash = next.view === 'decks' ? '#decks' : next.view === 'note-types' ? '#note-types' : next.view === 'statistics' ? '#statistics' : `#${next.view}/${encodeURIComponent(next.deckId)}`
     if (window.location.hash === hash) setRoute(next)
     else window.location.hash = hash
   }
@@ -438,6 +441,7 @@ function DeckList({ decks, onNewDeck, onImport, onOpen }: { decks: DeckSummary[]
         <div><span className="section-code">01 // COLLECTION</span><h1>Choose what to <em>remember</em></h1><p>Everything here is stored locally and ready whenever you are.</p></div>
         <div className="collection-actions"><button className="text-button" type="button" onClick={onImport}>Import Anki package</button><button className="primary-action" type="button" onClick={onNewDeck}>New deck</button></div>
       </section>
+      <TodayWorkload />
       <section className="deck-grid deck-tree" role="tree" aria-label="Deck hierarchy">
         {ordered.map(({ deck, depth }) => (
           <article className="deck-tile" role="treeitem" aria-level={depth} style={{ '--deck-depth': depth - 1 } as CSSProperties} key={deck.id}>
@@ -795,29 +799,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   const [audioMessage, setAudioMessage] = useState('')
   const typedResultRef = useRef<HTMLDivElement>(null)
   const reviewCardRef = useRef<HTMLElement>(null)
-  const dueQueue = useLiveQuery(async () => {
-    const scheduled = await collection.dueCards(deckId, new Date())
-    if (!scheduled.length) return []
-    const [storedCards, noteTypes] = await Promise.all([
-      collection.cards.bulkGet(scheduled.map((card) => card.id)),
-      collection.noteTypes.toArray(),
-    ])
-    const cards = storedCards.filter((card): card is CardRecord => Boolean(card))
-    if (!cards.length) return []
-    const notes = await collection.notes.bulkGet(cards.map((card) => card.noteId))
-    const notesById = new Map(notes.filter((note): note is Note => Boolean(note)).map((note) => [note.id, note]))
-    const noteTypesById = new Map(noteTypes.map((noteType) => [noteType.id, noteType]))
-    return cards.filter((candidate) => {
-      if (candidate.suspended || candidate.manualSuspended || candidate.templateSuspended) return false
-      const note = notesById.get(candidate.noteId)
-      const noteType = note && noteTypesById.get(note.typeId)
-      const template = noteType?.templates.find((item) => item.id === candidate.templateId)
-      if (!note || !noteType || !template) return false
-      if (noteType.kind === 'image-occlusion') return true
-      const front = tryRenderNoteTemplate(template.front, noteType, note.fields, undefined, candidate.clozeOrdinal, 'front')
-      return !front.ok || !front.value.isEmpty
-    })
-  }, [deckId])
+  const dueQueue = useLiveQuery(() => collection.reviewQueue(deckId, new Date()), [deckId])
   const queue = dueQueue?.filter((candidate) => !skippedCardIds.has(candidate.id))
   const cardId = queue?.[0]?.id
   const showAnswer = shownAnswerCardId === cardId
@@ -848,12 +830,30 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     if (showAnswer && typedAnswer !== undefined) typedResultRef.current?.focus()
   }, [cardId, showAnswer, typedAnswer])
 
+  const activeTime = useRef<{ cardId?: string; elapsed: number; started: number | null }>({ elapsed: 0, started: null })
+  useEffect(() => {
+    if (activeTime.current.cardId !== cardId) activeTime.current = { cardId, elapsed: 0, started: null }
+    const timer = activeTime.current
+    const blocked = editingNote || movingNote || editingTags || deletingNote || showCardInfo || unavailable || !note
+    const update = () => {
+      if (timer.started !== null) timer.elapsed += performance.now() - timer.started
+      timer.started = !blocked && document.visibilityState === 'visible' ? performance.now() : null
+    }
+    update()
+    document.addEventListener('visibilitychange', update)
+    return () => {
+      document.removeEventListener('visibilitychange', update)
+      if (timer.started !== null) timer.elapsed += performance.now() - timer.started
+      timer.started = null
+    }
+  }, [cardId, editingNote, movingNote, editingTags, deletingNote, showCardInfo, unavailable, note])
+
   const answer = useCallback(async (rating: Grade) => {
     if (!cardId || isAnswering) return
     setIsAnswering(true)
     setActionError('')
     try {
-      await collection.answer(cardId, rating, new Date())
+      await collection.answer(cardId, rating, new Date(), activeTime.current.elapsed + (activeTime.current.started === null ? 0 : performance.now() - activeTime.current.started))
       setReviewsRecorded((count) => count + 1)
       setShownAnswerCardId(null)
     } catch (reason) {
@@ -1035,6 +1035,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     {showCardInfo && <div className="dialog-backdrop"><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="review-card-info-title">
       <span className="section-code">CARD // DETAILS</span><h2 id="review-card-info-title">Card info</h2>
       <dl className="review-card-info"><div><dt>Note type</dt><dd>{noteType.name}</dd></div><div><dt>Card template</dt><dd>{template.name}</dd></div><div><dt>Due</dt><dd>{new Date(card.due).toLocaleString()}</dd></div><div><dt>Reviews</dt><dd>{reviewCount}</dd></div><div><dt>Lapses</dt><dd>{card.lapses}</dd></div><div><dt>Flag</dt><dd>{['None', 'Red', 'Orange', 'Green', 'Blue', 'Pink', 'Turquoise', 'Purple'][card.flag ?? 0]}</dd></div><div><dt>Tags</dt><dd>{note.tags?.join(', ') || 'None'}</dd></div></dl>
+      <CardHistory key={card.id} card={card} />
       <div className="dialog-actions"><button className="primary-action" type="button" onClick={() => setShowCardInfo(false)}>Done</button></div>
     </section></div>}
   </>
@@ -1121,6 +1122,7 @@ export function CollectionWorkspace() {
   const content = useMemo(() => {
     if (route.view === 'review') return <ReviewSession deckId={route.deckId} onBack={() => navigate({ view: 'deck', deckId: route.deckId })} />
     if (route.view === 'deck') return <DeckDetail deckId={route.deckId} onBack={() => navigate({ view: 'decks' })} onStudy={() => navigate({ view: 'review', deckId: route.deckId })} />
+    if (route.view === 'statistics') return <Statistics />
     if (route.view === 'note-types') return <NoteTypeManager onNewDeck={() => { navigate({ view: 'decks' }); setNewDeck(true) }} />
     if (decks.length === 0) return <EmptyCollection onNewDeck={() => setNewDeck(true)} onImport={() => setImporting(true)} />
     return <DeckList decks={decks} onNewDeck={() => setNewDeck(true)} onImport={() => setImporting(true)} onOpen={(deckId) => navigate({ view: 'deck', deckId })} />
