@@ -137,6 +137,19 @@ test('infers v12 interday learning ordering from a legacy deck-option change log
   service.close()
 })
 
+test('infers v10 scheduling options from a legacy deck-option change log', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
+  const databasePath = join(runtimeDirectory, 'collection.sqlite')
+  const legacy = new DatabaseSync(databasePath)
+  legacy.exec(`CREATE TABLE changes (cursor INTEGER PRIMARY KEY AUTOINCREMENT, op_id TEXT UNIQUE NOT NULL, device_id TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, action TEXT NOT NULL, occurred_at TEXT NOT NULL, payload TEXT NOT NULL);`)
+  legacy.prepare('INSERT INTO changes (op_id, device_id, entity_type, entity_id, action, occurred_at, payload) VALUES (?, ?, ?, ?, ?, ?, ?)').run('schedule-options', 'old-device', 'deckOptionGroup', 'group-1', 'update', '2026-10-01T12:00:00.000Z', JSON.stringify({ id: 'group-1', dailyNewLimit: 20, dailyReviewLimit: 200, desiredRetention: 0.9, learningSteps: ['1m'], relearningSteps: ['10m'], newCardOrder: 'added', reviewCardOrder: 'due' }))
+  legacy.close()
+
+  const service = createSyncService({ databasePath })
+  assert.equal(service.health().collectionSchemaVersion, 10)
+  service.close()
+})
+
 test('reserves durable media metadata by verified digest', async () => {
   runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
   const service = createSyncService({ databasePath: join(runtimeDirectory, 'collection.sqlite'), mediaDirectory: join(runtimeDirectory, 'media') })

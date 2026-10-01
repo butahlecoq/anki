@@ -39,6 +39,7 @@ function schemaRequiredByOperation(operation: Pick<SyncOperation, 'entityType' |
   if (operation.entityType === 'noteType' && payload.kind === 'image-occlusion') required = Math.max(required, 8)
   if (operation.entityType === 'card' && ('occlusionId' in payload || 'occlusionOrdinal' in payload)) required = Math.max(required, 8)
   if (operation.entityType === 'deck' && ('parentId' in payload || 'optionGroupId' in payload)) required = Math.max(required, 9)
+  if (operation.entityType === 'deckOptionGroup' && ['dailyNewLimit', 'dailyReviewLimit', 'desiredRetention', 'learningSteps', 'relearningSteps', 'newCardOrder', 'reviewCardOrder'].some((field) => field in payload)) required = Math.max(required, 10)
   if (operation.entityType === 'card' && ('manualSuspended' in payload || 'templateSuspended' in payload || 'buriedUntil' in payload)) required = Math.max(required, 11)
   if (operation.entityType === 'deckOptionGroup' && ['buryNewSiblings', 'buryReviewSiblings', 'leechThreshold', 'leechAction', 'leechTag'].some((field) => field in payload)) required = Math.max(required, 11)
   if (operation.entityType === 'deckOptionGroup' && 'interdayLearningOrder' in payload) required = Math.max(required, 12)
