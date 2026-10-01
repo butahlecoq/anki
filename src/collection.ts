@@ -17,9 +17,31 @@ export type { Grade }
 export interface Deck {
   id: string
   name: string
+  parentId: string | null
+  optionGroupId: string
   createdAt: string
   updatedAt: string
 }
+
+export const DEFAULT_DECK_OPTION_GROUP_ID = 'default'
+
+/** Reusable scheduling settings are introduced independently of any individual deck. */
+export interface DeckOptionGroup {
+  id: string
+  name: string
+  protected: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CreateDeckOptions {
+  parentId?: string | null
+  optionGroupId?: string
+}
+
+export type DeleteDeckOptions =
+  | { mode: 'delete-subtree' }
+  | { mode: 'relocate'; destinationDeckId: string }
 
 export interface BasicNoteFields {
   front: string
@@ -129,6 +151,7 @@ export interface CardRecord {
 type LegacyNote = Omit<Note, 'typeId'> & { typeId?: string }
 type LegacyCard = Omit<CardRecord, 'templateId'> & { templateId?: string }
 type LegacyNoteType = Omit<NoteType, 'kind'> & { kind?: NoteType['kind'] }
+type LegacyDeck = Omit<Deck, 'parentId' | 'optionGroupId'> & { parentId?: string | null; optionGroupId?: string }
 
 export interface ReviewEntry {
   id: string
@@ -166,7 +189,7 @@ export interface ReviewChoice {
 
 export interface SyncOperation {
   opId: string
-  entityType: 'deck' | 'note' | 'card' | 'review' | 'noteMedia' | 'noteType'
+  entityType: 'deck' | 'deckOptionGroup' | 'note' | 'card' | 'review' | 'noteMedia' | 'noteType'
   entityId: string
   action: 'create' | 'update' | 'delete'
   occurredAt: string
@@ -194,14 +217,54 @@ function id() {
 }
 
 const tombstoneKey = (entityType: SyncOperation['entityType'], entityId: string) => `${entityType}:${entityId}`
-const inboundDependencyOrder: Record<SyncOperation['entityType'], number> = { deck: 0, noteType: 1, note: 2, card: 3, review: 4, noteMedia: 5 }
+function inboundDependencyOrder(change: SyncOperation) {
+  if (change.entityType === 'deckOptionGroup') return change.action === 'delete' ? 7 : 0
+  return ({ deck: 1, noteType: 2, note: 3, card: 4, review: 5, noteMedia: 6 } as const)[change.entityType]
+}
+
+/** A sync batch can be delivered in append order from several clients, so deck parents are not necessarily first. */
+function orderInboundChanges(changes: SyncOperation[]) {
+  const indexed = changes.map((change, index) => ({ change, index }))
+  const ordered = indexed.sort((left, right) => inboundDependencyOrder(left.change) - inboundDependencyOrder(right.change) || left.index - right.index)
+  const deckIndexes = ordered.filter(({ change }) => change.entityType === 'deck' && change.action !== 'delete')
+  const byDeckId = new Map<string, typeof deckIndexes[number]>()
+  for (const entry of deckIndexes) if (!byDeckId.has(entry.change.entityId)) byDeckId.set(entry.change.entityId, entry)
+  const visited = new Set<number>()
+  const visiting = new Set<number>()
+  const parentFirst: typeof deckIndexes = []
+  const visit = (entry: typeof deckIndexes[number]) => {
+    if (visited.has(entry.index)) return
+    if (visiting.has(entry.index)) return
+    visiting.add(entry.index)
+    const parentId = (entry.change.payload as Partial<Deck> | undefined)?.parentId
+    if (typeof parentId === 'string') {
+      const parent = byDeckId.get(parentId)
+      if (parent) visit(parent)
+    }
+    visiting.delete(entry.index)
+    visited.add(entry.index)
+    parentFirst.push(entry)
+  }
+  for (const entry of deckIndexes) visit(entry)
+  const replacement = new Map(parentFirst.map((entry, index) => [entry.index, index]))
+  return ordered.sort((left, right) => {
+    const rank = inboundDependencyOrder(left.change) - inboundDependencyOrder(right.change)
+    if (rank) return rank
+    const leftDeck = replacement.get(left.index)
+    const rightDeck = replacement.get(right.index)
+    if (leftDeck !== undefined && rightDeck !== undefined) return leftDeck - rightDeck
+    return left.index - right.index
+  }).map(({ change }) => change)
+}
 
 function relatedEntityIds(change: SyncOperation) {
   if (!change.payload || typeof change.payload !== 'object') return {}
-  const payload = change.payload as { deckId?: unknown; noteId?: unknown }
+  const payload = change.payload as { deckId?: unknown; noteId?: unknown; parentId?: unknown; optionGroupId?: unknown }
   return {
     deckId: typeof payload.deckId === 'string' ? payload.deckId : undefined,
     noteId: typeof payload.noteId === 'string' ? payload.noteId : undefined,
+    parentId: typeof payload.parentId === 'string' ? payload.parentId : undefined,
+    optionGroupId: typeof payload.optionGroupId === 'string' ? payload.optionGroupId : undefined,
   }
 }
 
@@ -305,6 +368,18 @@ function canonicalNoteType(noteType: LegacyNoteType): NoteType {
   return { ...noteType, kind: noteType.kind ?? 'standard' }
 }
 
+function canonicalDeck(deck: LegacyDeck): Deck {
+  return { ...deck, parentId: deck.parentId ?? null, optionGroupId: deck.optionGroupId ?? DEFAULT_DECK_OPTION_GROUP_ID }
+}
+
+const defaultDeckOptionGroup: DeckOptionGroup = {
+  id: DEFAULT_DECK_OPTION_GROUP_ID,
+  name: 'Default',
+  protected: true,
+  createdAt: '1970-01-01T00:00:00.000Z',
+  updatedAt: '1970-01-01T00:00:00.000Z',
+}
+
 function serializeCard(card: FsrsCard, identity: Pick<CardRecord, 'id' | 'deckId' | 'noteId' | 'templateId' | 'clozeOrdinal'>): CardRecord {
   return {
     ...identity,
@@ -374,6 +449,7 @@ function countsFor(cards: CardRecord[]): DeckCounts {
 export class Collection extends Dexie {
   noteTypes!: EntityTable<NoteType, 'id'>
   decks!: EntityTable<Deck, 'id'>
+  deckOptionGroups!: EntityTable<DeckOptionGroup, 'id'>
   notes!: EntityTable<Note, 'id'>
   cards!: EntityTable<CardRecord, 'id'>
   reviewEntries!: EntityTable<ReviewEntry, 'id'>
@@ -427,9 +503,19 @@ export class Collection extends Dexie {
       await transaction.table('notes').toCollection().modify((note: Note) => { if (!note.tags) note.tags = [] })
       await transaction.table('noteTypes').put(imageOcclusionNoteType)
     })
+    this.version(9).stores({
+      decks: 'id, parentId, optionGroupId, name, createdAt', notes: 'id, deckId, typeId, updatedAt', cards: 'id, deckId, noteId, templateId, due, state', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId', deletedEntities: 'key, entityType, entityId, occurredAt', noteMedia: 'id, noteId, digest, side, kind, updatedAt', mediaBlobs: 'digest, verifiedAt', noteTypes: 'id, name, updatedAt', deckOptionGroups: 'id, name, updatedAt',
+    }).upgrade(async (transaction) => {
+      await transaction.table('decks').toCollection().modify((deck: LegacyDeck) => {
+        if (deck.parentId === undefined) deck.parentId = null
+        if (!deck.optionGroupId) deck.optionGroupId = DEFAULT_DECK_OPTION_GROUP_ID
+      })
+      await transaction.table('deckOptionGroups').put(defaultDeckOptionGroup)
+    })
     this.on('populate', (transaction) => {
       transaction.table('noteTypes').put(basicNoteType)
       transaction.table('noteTypes').put(imageOcclusionNoteType)
+      transaction.table('deckOptionGroups').put(defaultDeckOptionGroup)
     })
   }
 
@@ -735,14 +821,54 @@ export class Collection extends Dexie {
     })
   }
 
-  async createDeck(name: string, now = new Date()): Promise<Deck> {
+  private async validateDeckHierarchy(deck: Deck) {
+    if (deck.parentId !== null && typeof deck.parentId !== 'string') throw new Error('Deck parent is invalid')
+    if (!deck.optionGroupId) throw new Error('Deck option group is required')
+    requiredText(deck.name, 'Deck name')
+    const normalizedName = deck.name.trim().toLocaleLowerCase()
+    const sibling = (await this.decks.toArray()).find((candidate) => candidate.id !== deck.id && candidate.parentId === deck.parentId && candidate.name.trim().toLocaleLowerCase() === normalizedName)
+    if (sibling) throw new Error('Deck names must be unique among siblings')
+    if (deck.parentId === deck.id) throw new Error('Deck cannot be its own parent')
+    const seen = new Set([deck.id])
+    let parentId = deck.parentId
+    while (parentId !== null) {
+      if (seen.has(parentId)) throw new Error('Deck hierarchy contains a cycle')
+      seen.add(parentId)
+      const parent = await this.decks.get(parentId)
+      if (!parent) throw new Error('Parent deck not found')
+      parentId = parent.parentId
+    }
+  }
+
+  private async deckSubtree(deckId: string) {
+    const decks = await this.decks.toArray()
+    const descendants = new Set([deckId])
+    let changed = true
+    while (changed) {
+      changed = false
+      for (const deck of decks) {
+        if (deck.parentId !== null && descendants.has(deck.parentId) && !descendants.has(deck.id)) {
+          descendants.add(deck.id)
+          changed = true
+        }
+      }
+    }
+    return decks.filter((deck) => descendants.has(deck.id))
+  }
+
+  async createDeck(name: string, optionsOrNow: CreateDeckOptions | Date = {}, suppliedNow = new Date()): Promise<Deck> {
+    const [options, now] = optionsOrNow instanceof Date ? [{}, optionsOrNow] as const : [optionsOrNow, suppliedNow] as const
     const deck: Deck = {
       id: id(),
       name: requiredText(name, 'Deck name'),
+      parentId: options.parentId ?? null,
+      optionGroupId: options.optionGroupId ?? DEFAULT_DECK_OPTION_GROUP_ID,
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
     }
-    await this.transaction('rw', this.decks, this.outbox, async () => {
+    await this.transaction('rw', [this.decks, this.deckOptionGroups, this.outbox], async () => {
+      if (!await this.deckOptionGroups.get(deck.optionGroupId)) throw new Error('Deck option group not found')
+      await this.validateDeckHierarchy(deck)
       await this.decks.add(deck)
       await this.outbox.add({ opId: id(), entityType: 'deck', entityId: deck.id, action: 'create', occurredAt: deck.createdAt, payload: deck })
     })
@@ -754,25 +880,148 @@ export class Collection extends Dexie {
       const deck = await this.decks.get(deckId)
       if (!deck) throw new Error('Deck not found')
       const updated = { ...deck, name: requiredText(name, 'Deck name'), updatedAt: now.toISOString() }
+      await this.validateDeckHierarchy(updated)
       await this.decks.put(updated)
       await this.outbox.add({ opId: id(), entityType: 'deck', entityId: deckId, action: 'update', occurredAt: updated.updatedAt, payload: updated })
     })
   }
 
-  async deleteDeck(deckId: string, now = new Date()): Promise<void> {
+  async moveDeck(deckId: string, parentId: string | null, now = new Date()): Promise<void> {
+    await this.transaction('rw', this.decks, this.outbox, async () => {
+      const deck = await this.decks.get(deckId)
+      if (!deck) throw new Error('Deck not found')
+      const updated = { ...deck, parentId, updatedAt: now.toISOString() }
+      await this.validateDeckHierarchy(updated)
+      await this.decks.put(updated)
+      await this.outbox.add({ opId: id(), entityType: 'deck', entityId: deckId, action: 'update', occurredAt: updated.updatedAt, payload: updated })
+    })
+  }
+
+  async moveNote(noteId: string, destinationDeckId: string, now = new Date()): Promise<void> {
+    await this.transaction('rw', [this.decks, this.notes, this.cards, this.outbox], async () => {
+      const [note, destination] = await Promise.all([this.notes.get(noteId), this.decks.get(destinationDeckId)])
+      if (!note) throw new Error('Note not found')
+      if (!destination) throw new Error('Destination deck not found')
+      if (note.deckId === destinationDeckId) return
+      const occurredAt = now.toISOString()
+      const updatedNote = { ...note, deckId: destinationDeckId, updatedAt: occurredAt }
+      const cards = await this.cards.where('noteId').equals(noteId).toArray()
+      const updatedCards = cards.map((card) => ({ ...card, deckId: destinationDeckId }))
+      await this.notes.put(updatedNote)
+      if (updatedCards.length) await this.cards.bulkPut(updatedCards)
+      await this.outbox.bulkAdd([
+        { opId: id(), entityType: 'note', entityId: noteId, action: 'update', occurredAt, payload: updatedNote },
+        ...updatedCards.map((card) => ({ opId: id(), entityType: 'card' as const, entityId: card.id, action: 'update' as const, occurredAt, payload: card })),
+      ])
+    })
+  }
+
+  async createDeckOptionGroup(name: string, now = new Date()): Promise<DeckOptionGroup> {
+    const group: DeckOptionGroup = { id: id(), name: requiredText(name, 'Deck option group name'), protected: false, createdAt: now.toISOString(), updatedAt: now.toISOString() }
+    await this.transaction('rw', this.deckOptionGroups, this.outbox, async () => {
+      await this.deckOptionGroups.add(group)
+      await this.outbox.add({ opId: id(), entityType: 'deckOptionGroup', entityId: group.id, action: 'create', occurredAt: group.createdAt, payload: group })
+    })
+    return group
+  }
+
+  async renameDeckOptionGroup(groupId: string, name: string, now = new Date()): Promise<void> {
+    await this.transaction('rw', this.deckOptionGroups, this.outbox, async () => {
+      const group = await this.deckOptionGroups.get(groupId)
+      if (!group) throw new Error('Deck option group not found')
+      if (group.protected) throw new Error('The Default deck option group is protected')
+      const updated = { ...group, name: requiredText(name, 'Deck option group name'), updatedAt: now.toISOString() }
+      await this.deckOptionGroups.put(updated)
+      await this.outbox.add({ opId: id(), entityType: 'deckOptionGroup', entityId: group.id, action: 'update', occurredAt: updated.updatedAt, payload: updated })
+    })
+  }
+
+  async assignDeckOptionGroup(deckId: string, groupId: string, now = new Date()): Promise<void> {
+    await this.transaction('rw', [this.decks, this.deckOptionGroups, this.outbox], async () => {
+      const [deck, group] = await Promise.all([this.decks.get(deckId), this.deckOptionGroups.get(groupId)])
+      if (!deck) throw new Error('Deck not found')
+      if (!group) throw new Error('Deck option group not found')
+      if (deck.optionGroupId === groupId) return
+      const updated = { ...deck, optionGroupId: groupId, updatedAt: now.toISOString() }
+      await this.decks.put(updated)
+      await this.outbox.add({ opId: id(), entityType: 'deck', entityId: deckId, action: 'update', occurredAt: updated.updatedAt, payload: updated })
+    })
+  }
+
+  async deleteDeckOptionGroup(groupId: string, replacementGroupId?: string, now = new Date()): Promise<void> {
+    await this.transaction('rw', [this.decks, this.deckOptionGroups, this.outbox, this.deletedEntities], async () => {
+      const group = await this.deckOptionGroups.get(groupId)
+      if (!group) throw new Error('Deck option group not found')
+      if (group.protected) throw new Error('The Default deck option group is protected')
+      const affected = await this.decks.where('optionGroupId').equals(groupId).toArray()
+      const replacement = replacementGroupId ? await this.deckOptionGroups.get(replacementGroupId) : undefined
+      if (affected.length && !replacement) throw new Error('A replacement deck option group is required for referenced decks')
+      if (replacementGroupId && (!replacement || replacement.id === groupId)) throw new Error('Deck option group replacement is invalid')
+      const occurredAt = now.toISOString()
+      const updated = affected.map((deck) => ({ ...deck, optionGroupId: replacement!.id, updatedAt: occurredAt }))
+      if (updated.length) await this.decks.bulkPut(updated)
+      await this.deckOptionGroups.delete(groupId)
+      await this.deletedEntities.put({ key: tombstoneKey('deckOptionGroup', groupId), entityType: 'deckOptionGroup', entityId: groupId, occurredAt })
+      await this.outbox.bulkAdd([
+        ...updated.map((deck) => ({ opId: id(), entityType: 'deck' as const, entityId: deck.id, action: 'update' as const, occurredAt, payload: deck })),
+        { opId: id(), entityType: 'deckOptionGroup', entityId: groupId, action: 'delete', occurredAt, payload: { id: groupId } },
+      ])
+    })
+  }
+
+  async deleteDeck(deckId: string, options: DeleteDeckOptions, now = new Date()): Promise<void> {
     await this.transaction('rw', [this.decks, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.outbox, this.deletedEntities], async () => {
-      if (!await this.decks.get(deckId)) throw new Error('Deck not found')
-      const noteIds = (await this.notes.where('deckId').equals(deckId).primaryKeys()) as string[]
+      const deck = await this.decks.get(deckId)
+      if (!deck) throw new Error('Deck not found')
+      const occurredAt = now.toISOString()
+      const subtree = await this.deckSubtree(deckId)
+      const subtreeIds = subtree.map((item) => item.id)
+      if (options.mode === 'relocate') {
+        const destination = await this.decks.get(options.destinationDeckId)
+        if (!destination || subtreeIds.includes(destination.id)) throw new Error('Destination deck must be outside the deleted deck subtree')
+        const [notes, children] = await Promise.all([
+          this.notes.where('deckId').equals(deckId).toArray(),
+          this.decks.where('parentId').equals(deckId).toArray(),
+        ])
+        const cards = notes.length ? await this.cards.where('noteId').anyOf(notes.map((note) => note.id)).toArray() : []
+        const updatedNotes = notes.map((note) => ({ ...note, deckId: destination.id, updatedAt: occurredAt }))
+        const updatedCards = cards.map((card) => ({ ...card, deckId: destination.id }))
+        const updatedChildren = children.map((child) => ({ ...child, parentId: destination.id, updatedAt: occurredAt }))
+        if (updatedNotes.length) await this.notes.bulkPut(updatedNotes)
+        if (updatedCards.length) await this.cards.bulkPut(updatedCards)
+        if (updatedChildren.length) await this.decks.bulkPut(updatedChildren)
+        await this.decks.delete(deckId)
+        await this.deletedEntities.put({ key: tombstoneKey('deck', deckId), entityType: 'deck', entityId: deckId, occurredAt })
+        await this.outbox.bulkAdd([
+          ...updatedChildren.map((child) => ({ opId: id(), entityType: 'deck' as const, entityId: child.id, action: 'update' as const, occurredAt, payload: child })),
+          ...updatedNotes.map((note) => ({ opId: id(), entityType: 'note' as const, entityId: note.id, action: 'update' as const, occurredAt, payload: note })),
+          ...updatedCards.map((card) => ({ opId: id(), entityType: 'card' as const, entityId: card.id, action: 'update' as const, occurredAt, payload: card })),
+          { opId: id(), entityType: 'deck', entityId: deckId, action: 'delete', occurredAt, payload: { id: deckId } },
+        ])
+        return
+      }
+      const [notes, cards, reviews] = await Promise.all([
+        this.notes.where('deckId').anyOf(subtreeIds).toArray(),
+        this.cards.where('deckId').anyOf(subtreeIds).toArray(),
+        this.reviewEntries.where('deckId').anyOf(subtreeIds).toArray(),
+      ])
+      const noteIds = notes.map((note) => note.id)
+      const media = noteIds.length ? await this.noteMedia.where('noteId').anyOf(noteIds).toArray() : []
       await Promise.all([
-        this.decks.delete(deckId),
-        this.notes.where('deckId').equals(deckId).delete(),
-        this.cards.where('deckId').equals(deckId).delete(),
-        this.reviewEntries.where('deckId').equals(deckId).delete(),
+        this.decks.bulkDelete(subtreeIds),
+        this.notes.where('deckId').anyOf(subtreeIds).delete(),
+        this.cards.where('deckId').anyOf(subtreeIds).delete(),
+        this.reviewEntries.where('deckId').anyOf(subtreeIds).delete(),
         noteIds.length ? this.noteMedia.where('noteId').anyOf(noteIds).delete() : Promise.resolve(),
       ])
-      const occurredAt = now.toISOString()
-      await this.deletedEntities.put({ key: tombstoneKey('deck', deckId), entityType: 'deck', entityId: deckId, occurredAt })
-      await this.outbox.add({ opId: id(), entityType: 'deck', entityId: deckId, action: 'delete', occurredAt, payload: { id: deckId } })
+      await this.deletedEntities.bulkPut([
+        ...subtreeIds.map((id) => ({ key: tombstoneKey('deck', id), entityType: 'deck' as const, entityId: id, occurredAt })),
+        ...notes.map((note) => ({ key: tombstoneKey('note', note.id), entityType: 'note' as const, entityId: note.id, occurredAt })),
+        ...cards.map((card) => ({ key: tombstoneKey('card', card.id), entityType: 'card' as const, entityId: card.id, occurredAt })),
+        ...reviews.map((review) => ({ key: tombstoneKey('review', review.id), entityType: 'review' as const, entityId: review.id, occurredAt })),
+        ...media.map((reference) => ({ key: tombstoneKey('noteMedia', reference.id), entityType: 'noteMedia' as const, entityId: reference.id, occurredAt })),
+      ])
+      await this.outbox.bulkAdd(subtree.sort((left, right) => Number(right.parentId !== null) - Number(left.parentId !== null)).map((item) => ({ opId: id(), entityType: 'deck' as const, entityId: item.id, action: 'delete' as const, occurredAt, payload: { id: item.id } })))
     })
   }
 
@@ -965,11 +1214,11 @@ export class Collection extends Dexie {
   }
 
   async applyRemoteChanges(changes: SyncOperation[], cursor: number) {
-    await this.transaction('rw', [this.decks, this.noteTypes, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.receivedOperations, this.settings, this.deletedEntities], async () => {
+    await this.transaction('rw', [this.decks, this.deckOptionGroups, this.noteTypes, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.receivedOperations, this.settings, this.deletedEntities], async () => {
       const affectedNoteIds = new Set<string>()
       const affectedTypeIds = new Set<string>()
       // Resolve type and note changes before their cards, even when equal timestamps arrive in index order.
-      for (const change of [...changes].sort((left, right) => inboundDependencyOrder[left.entityType] - inboundDependencyOrder[right.entityType])) {
+      for (const change of orderInboundChanges(changes)) {
         if (await this.receivedOperations.get(change.opId)) continue
         if (change.entityType === 'noteMedia') {
           const previous = await this.noteMedia.get(change.entityId)
@@ -979,16 +1228,32 @@ export class Collection extends Dexie {
           await this.receivedOperations.add({ opId: change.opId })
           continue
         }
+        if (change.entityType === 'deckOptionGroup' && change.entityId === DEFAULT_DECK_OPTION_GROUP_ID) {
+          await this.receivedOperations.add({ opId: change.opId })
+          continue
+        }
         if (change.action !== 'delete') {
           const related = relatedEntityIds(change)
           const deleted = await Promise.all([
             this.deletedEntities.get(tombstoneKey(change.entityType, change.entityId)),
             related.deckId ? this.deletedEntities.get(tombstoneKey('deck', related.deckId)) : undefined,
             related.noteId ? this.deletedEntities.get(tombstoneKey('note', related.noteId)) : undefined,
+            related.parentId ? this.deletedEntities.get(tombstoneKey('deck', related.parentId)) : undefined,
+            related.optionGroupId ? this.deletedEntities.get(tombstoneKey('deckOptionGroup', related.optionGroupId)) : undefined,
           ])
           if (deleted.some(Boolean)) {
             await this.receivedOperations.add({ opId: change.opId })
             continue
+          }
+          if (change.entityType === 'deckOptionGroup') {
+            const incoming = change.payload as DeckOptionGroup
+            if (!incoming || incoming.id !== change.entityId || incoming.protected || !requiredText(incoming.name, 'Deck option group name')) throw new Error('Synced deck option group is invalid')
+          }
+          if (change.entityType === 'deck') {
+            const incoming = canonicalDeck(change.payload as LegacyDeck)
+            if (incoming.id !== change.entityId) throw new Error('Synced deck identity is invalid')
+            if (!await this.deckOptionGroups.get(incoming.optionGroupId)) throw new Error('Synced deck option group was not found')
+            await this.validateDeckHierarchy(incoming)
           }
           if (change.entityType === 'note') {
             const incoming = canonicalNote(change.payload as LegacyNote)
@@ -1017,6 +1282,7 @@ export class Collection extends Dexie {
           if (change.entityType === 'card') {
             const incoming = canonicalCard(change.payload as LegacyCard)
             const note = await this.notes.get(incoming.noteId)
+            if (note && incoming.deckId !== note.deckId) throw new Error('Synced card deck does not match its note deck')
             const noteType = note && await this.noteTypes.get(note.typeId)
             const deletedType = note && !noteType && await this.deletedEntities.get(tombstoneKey('noteType', note.typeId))
             if (note && noteType?.kind === 'image-occlusion') {
@@ -1069,11 +1335,26 @@ export class Collection extends Dexie {
         if (change.action === 'delete') {
           await this.deletedEntities.put({ key: tombstoneKey(change.entityType, change.entityId), entityType: change.entityType, entityId: change.entityId, occurredAt: change.occurredAt })
           if (change.entityType === 'deck') {
-            const noteIds = (await this.notes.where('deckId').equals(change.entityId).primaryKeys()) as string[]
-            await this.decks.delete(change.entityId)
-            await this.notes.where('deckId').equals(change.entityId).delete()
-            await this.cards.where('deckId').equals(change.entityId).delete()
-            await this.reviewEntries.where('deckId').equals(change.entityId).delete()
+            const subtree = await this.deckSubtree(change.entityId)
+            const deckIds = [...new Set([change.entityId, ...subtree.map((deck) => deck.id)])]
+            const [notes, cards, reviews] = await Promise.all([
+              this.notes.where('deckId').anyOf(deckIds).toArray(),
+              this.cards.where('deckId').anyOf(deckIds).toArray(),
+              this.reviewEntries.where('deckId').anyOf(deckIds).toArray(),
+            ])
+            const noteIds = notes.map((note) => note.id)
+            const media = noteIds.length ? await this.noteMedia.where('noteId').anyOf(noteIds).toArray() : []
+            await this.deletedEntities.bulkPut([
+              ...deckIds.map((id) => ({ key: tombstoneKey('deck', id), entityType: 'deck' as const, entityId: id, occurredAt: change.occurredAt })),
+              ...notes.map((note) => ({ key: tombstoneKey('note', note.id), entityType: 'note' as const, entityId: note.id, occurredAt: change.occurredAt })),
+              ...cards.map((card) => ({ key: tombstoneKey('card', card.id), entityType: 'card' as const, entityId: card.id, occurredAt: change.occurredAt })),
+              ...reviews.map((review) => ({ key: tombstoneKey('review', review.id), entityType: 'review' as const, entityId: review.id, occurredAt: change.occurredAt })),
+              ...media.map((reference) => ({ key: tombstoneKey('noteMedia', reference.id), entityType: 'noteMedia' as const, entityId: reference.id, occurredAt: change.occurredAt })),
+            ])
+            await this.decks.bulkDelete(deckIds)
+            await this.notes.where('deckId').anyOf(deckIds).delete()
+            await this.cards.where('deckId').anyOf(deckIds).delete()
+            await this.reviewEntries.where('deckId').anyOf(deckIds).delete()
             if (noteIds.length) await this.noteMedia.where('noteId').anyOf(noteIds).delete()
           } else if (change.entityType === 'note') {
             await this.notes.delete(change.entityId)
@@ -1092,10 +1373,14 @@ export class Collection extends Dexie {
               if (noteIds.length) await this.cards.where('noteId').anyOf(noteIds).modify({ suspended: true })
               await this.noteTypes.delete(change.entityId)
             }
+          } else if (change.entityType === 'deckOptionGroup') {
+            if (await this.decks.where('optionGroupId').equals(change.entityId).count()) throw new Error('Cannot delete a synced deck option group while decks still reference it')
+            await this.deckOptionGroups.delete(change.entityId)
           } else {
             await this.reviewEntries.delete(change.entityId)
           }
-        } else if (change.entityType === 'deck') await this.decks.put(change.payload as Deck)
+        } else if (change.entityType === 'deck') await this.decks.put(canonicalDeck(change.payload as LegacyDeck))
+        else if (change.entityType === 'deckOptionGroup') await this.deckOptionGroups.put(change.payload as DeckOptionGroup)
         else if (change.entityType === 'note') await this.notes.put(canonicalNote(change.payload as LegacyNote))
         else if (change.entityType === 'card') await this.cards.put(canonicalCard(change.payload as LegacyCard))
         else if (change.entityType === 'noteMedia') await this.noteMedia.put(change.payload as NoteMediaReference)

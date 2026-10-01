@@ -24,6 +24,137 @@ describe('local collection', () => {
     await expect(collection.cards.get('old-card')).resolves.toMatchObject({ id: 'old-card', reps: 2, stability: 4 })
   })
 
+  test('upgrades existing decks into the protected Default option group without changing their identities', async () => {
+    const databaseName = `kiroku-test-${crypto.randomUUID()}`
+    const old = new Dexie(databaseName)
+    old.version(8).stores({ decks: 'id, name, createdAt', notes: 'id, deckId, typeId, updatedAt', cards: 'id, deckId, noteId, templateId, due, state', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId', deletedEntities: 'key, entityType, entityId, occurredAt', noteMedia: 'id, noteId, digest, side, kind, updatedAt', mediaBlobs: 'digest, verifiedAt', noteTypes: 'id, name, updatedAt' })
+    await old.table('decks').add({ id: 'legacy-deck', name: 'Legacy', createdAt: '2026-01-01', updatedAt: '2026-01-01' })
+    old.close()
+
+    collection = createCollection(databaseName)
+
+    await expect(collection.decks.get('legacy-deck')).resolves.toMatchObject({ id: 'legacy-deck', parentId: null, optionGroupId: 'default' })
+    await expect(collection.deckOptionGroups.get('default')).resolves.toMatchObject({ id: 'default', name: 'Default', protected: true })
+    await expect(collection.pendingOperations()).resolves.toHaveLength(0)
+  })
+
+  test('nests decks and moves a reviewed note without changing card identity or review history', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const parent = await collection.createDeck('Japanese')
+    const child = await collection.createDeck('Words', { parentId: parent.id })
+    const destination = await collection.createDeck('Sentences')
+    const note = await collection.createBasicNote(child.id, { front: '猫', back: 'cat' })
+    const card = (await collection.cards.where('noteId').equals(note.id).first())!
+    await collection.answer(card.id, Rating.Good, new Date('2026-10-01T12:00:00Z'))
+
+    await collection.moveNote(note.id, destination.id, new Date('2026-10-02T00:00:00Z'))
+
+    await expect(collection.notes.get(note.id)).resolves.toMatchObject({ deckId: destination.id })
+    await expect(collection.cards.get(card.id)).resolves.toMatchObject({ id: card.id, deckId: destination.id, reps: 1 })
+    await expect(collection.reviewEntries.where('cardId').equals(card.id).toArray()).resolves.toHaveLength(1)
+    await expect(collection.moveDeck(parent.id, child.id)).rejects.toThrow(/descendant|cycle/i)
+  })
+
+  test('requires unique names among sibling decks but allows the same name under another parent', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const firstParent = await collection.createDeck('First')
+    const secondParent = await collection.createDeck('Second')
+    const words = await collection.createDeck('Words', { parentId: firstParent.id })
+    const grammar = await collection.createDeck('Grammar', { parentId: firstParent.id })
+    await expect(collection.createDeck('Words', { parentId: firstParent.id })).rejects.toThrow(/sibling/i)
+    const secondWords = await collection.createDeck('Words', { parentId: secondParent.id })
+    await expect(collection.renameDeck(secondWords.id, words.name)).resolves.toBeUndefined()
+    await expect(collection.renameDeck(words.id, grammar.name)).rejects.toThrow(/sibling/i)
+  })
+
+  test("relocates a deck's notes and children safely and requires a replacement for a referenced option group", async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const custom = await collection.createDeckOptionGroup('Focused')
+    const source = await collection.createDeck('Source', { optionGroupId: custom.id })
+    const child = await collection.createDeck('Child', { parentId: source.id })
+    const target = await collection.createDeck('Target')
+    const note = await collection.createBasicNote(source.id, { front: '犬', back: 'dog' })
+
+    await expect(collection.deleteDeckOptionGroup(custom.id)).rejects.toThrow(/referenced|replacement/i)
+    await collection.assignDeckOptionGroup(source.id, 'default')
+    await collection.deleteDeck(source.id, { mode: 'relocate', destinationDeckId: target.id }, new Date('2026-10-02T00:00:00Z'))
+
+    await expect(collection.decks.get(source.id)).resolves.toBeUndefined()
+    await expect(collection.decks.get(child.id)).resolves.toMatchObject({ parentId: target.id })
+    await expect(collection.notes.get(note.id)).resolves.toMatchObject({ deckId: target.id })
+    await collection.deleteDeckOptionGroup(custom.id)
+    await expect(collection.deckOptionGroups.get(custom.id)).resolves.toBeUndefined()
+  })
+
+  test('rejects remote deck cycles, missing option groups, and cards that do not match a moved note deck', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const root = await collection.createDeck('Root')
+    const child = await collection.createDeck('Child', { parentId: root.id })
+    const note = await collection.createBasicNote(child.id, { front: '鳥', back: 'bird' })
+    const card = (await collection.cards.where('noteId').equals(note.id).first())!
+    const changedRoot = { ...root, parentId: child.id, updatedAt: '2026-10-02T00:00:00Z' }
+    await expect(collection.applyRemoteChanges([{ opId: 'cycle', entityType: 'deck', entityId: root.id, action: 'update', occurredAt: changedRoot.updatedAt, payload: changedRoot }], 1)).rejects.toThrow(/cycle/i)
+    const badGroup = { ...child, optionGroupId: 'missing-group', updatedAt: '2026-10-02T00:01:00Z' }
+    await expect(collection.applyRemoteChanges([{ opId: 'bad-group', entityType: 'deck', entityId: child.id, action: 'update', occurredAt: badGroup.updatedAt, payload: badGroup }], 1)).rejects.toThrow(/option group/i)
+    const mismatched = { ...card, deckId: root.id }
+    await expect(collection.applyRemoteChanges([{ opId: 'mismatched-card', entityType: 'card', entityId: card.id, action: 'update', occurredAt: '2026-10-02T00:02:00Z', payload: mismatched }], 1)).rejects.toThrow(/deck/i)
+  })
+
+  test('orders remote parent decks and option groups before dependent decks despite delivery order', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const timestamp = '2026-10-02T00:00:00Z'
+    const group = { id: 'remote-group', name: 'Remote', protected: false, createdAt: timestamp, updatedAt: timestamp }
+    const parent = { id: 'remote-parent', name: 'Parent', parentId: null, optionGroupId: group.id, createdAt: timestamp, updatedAt: timestamp }
+    const child = { id: 'remote-child', name: 'Child', parentId: parent.id, optionGroupId: group.id, createdAt: timestamp, updatedAt: timestamp }
+
+    await collection.applyRemoteChanges([
+      { opId: 'remote-child', entityType: 'deck', entityId: child.id, action: 'create', occurredAt: timestamp, payload: child },
+      { opId: 'remote-parent', entityType: 'deck', entityId: parent.id, action: 'create', occurredAt: timestamp, payload: parent },
+      { opId: 'remote-group', entityType: 'deckOptionGroup', entityId: group.id, action: 'create', occurredAt: timestamp, payload: group },
+    ], 3)
+
+    await expect(collection.decks.get(child.id)).resolves.toMatchObject({ parentId: parent.id, optionGroupId: group.id })
+    await expect(collection.deckOptionGroups.get(group.id)).resolves.toMatchObject(group)
+  })
+
+  test('deletes an entire deck subtree and rejects a delayed child note update', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const root = await collection.createDeck('Root')
+    const child = await collection.createDeck('Child', { parentId: root.id })
+    const note = await collection.createBasicNote(child.id, { front: '木', back: 'tree' })
+    await collection.deleteDeck(root.id, { mode: 'delete-subtree' }, new Date('2026-10-02T00:00:00Z'))
+
+    await expect(collection.decks.get(root.id)).resolves.toBeUndefined()
+    await expect(collection.decks.get(child.id)).resolves.toBeUndefined()
+    await expect(collection.notes.get(note.id)).resolves.toBeUndefined()
+    await expect(collection.deletedEntities.get(`deck:${child.id}`)).resolves.toMatchObject({ entityType: 'deck' })
+    await expect(collection.deletedEntities.get(`note:${note.id}`)).resolves.toMatchObject({ entityType: 'note' })
+    await collection.applyRemoteChanges([{ opId: 'late-child-note', entityType: 'note', entityId: note.id, action: 'update', occurredAt: '2026-10-02T00:01:00Z', payload: { ...note, updatedAt: '2026-10-02T00:01:00Z' } }], 1)
+    await expect(collection.notes.get(note.id)).resolves.toBeUndefined()
+  })
+
+  test('moves referenced option groups before their delete operation on another collection', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const remote = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    try {
+      const source = await collection.createDeckOptionGroup('Source')
+      const replacement = await collection.createDeckOptionGroup('Replacement')
+      const deck = await collection.createDeck('Words', { optionGroupId: source.id })
+      const initial = await collection.pendingOperations()
+      await remote.applyRemoteChanges(initial, initial.length)
+      await collection.acknowledgeOperations(initial.map((operation) => operation.opId))
+
+      await collection.deleteDeckOptionGroup(source.id, replacement.id, new Date('2026-10-02T00:00:00Z'))
+      const changes = await collection.pendingOperations()
+      await remote.applyRemoteChanges(changes, initial.length + changes.length)
+
+      await expect(remote.decks.get(deck.id)).resolves.toMatchObject({ optionGroupId: replacement.id })
+      await expect(remote.deckOptionGroups.get(source.id)).resolves.toBeUndefined()
+    } finally {
+      await remote.delete()
+    }
+  })
+
   test('renders an upgraded v6 template whose field name contains a colon', async () => {
     const databaseName = `kiroku-test-${crypto.randomUUID()}`
     const old = new Dexie(databaseName)
@@ -502,7 +633,7 @@ describe('local collection', () => {
 
     await collection.renameDeck(deck.id, 'Japanese words')
     await collection.updateBasicNote(note.id, { front: '猫', back: 'ねこ — feline' })
-    await collection.deleteDeck(deck.id)
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
 
     await expect(collection.pendingOperations()).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({ entityType: 'deck', entityId: deck.id, action: 'update' }),
@@ -546,7 +677,7 @@ describe('local collection', () => {
     const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'ねこ — cat' })
     await collection.attachMedia(note.id, { file: new File(['image'], 'cat.png', { type: 'image/png' }), side: 'front' })
 
-    await collection.deleteDeck(deck.id)
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
 
     await expect(collection.noteMedia.count()).resolves.toBe(0)
     await expect(collection.mediaBlobs.count()).resolves.toBe(1)
@@ -580,7 +711,7 @@ describe('local collection', () => {
     await collection.applyRemoteChanges(changes, 3)
     await collection.applyRemoteChanges(changes, 3)
 
-    await expect(collection.decks.get(deck.id)).resolves.toEqual(deck)
+    await expect(collection.decks.get(deck.id)).resolves.toEqual({ ...deck, parentId: null, optionGroupId: 'default' })
     await expect(collection.notes.get(note.id)).resolves.toEqual({ ...note, typeId: BASIC_NOTE_TYPE_ID })
     await expect(collection.cards.get(card.id)).resolves.toEqual({ ...card, templateId: 'basic' })
     await expect(collection.receivedOperations.count()).resolves.toBe(3)
@@ -591,7 +722,7 @@ describe('local collection', () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const deck = await collection.createDeck('Japanese foundations')
     const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'ねこ — cat' })
-    await collection.deleteDeck(deck.id, new Date('2026-10-01T12:01:00.000Z'))
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' }, new Date('2026-10-01T12:01:00.000Z'))
     const editedNote = { ...note, fields: { front: '猫', back: 'ねこ — feline' }, updatedAt: '2026-10-01T12:02:00.000Z' }
 
     await collection.applyRemoteChanges([{
