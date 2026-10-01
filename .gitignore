@@ -1,6 +1,10 @@
 node_modules/
 dist/
 dist-server/
+dist-gateway/
+.wrangler/
+.dev.vars
+.dev.vars.*
 coverage/
 playwright-report/
 test-results/
