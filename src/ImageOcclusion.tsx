@@ -127,17 +127,25 @@ export function ImageOcclusionCanvas({
     }))
   }
 
-  function pointerUp(event: ReactPointerEvent<SVGSVGElement>) {
+  function finishPointer(event: ReactPointerEvent<SVGSVGElement>, cancelled = false) {
     const gesture = gestureRef.current
     if (!gesture) return
     try { event.currentTarget.releasePointerCapture?.(event.pointerId) } catch { /* The browser may have already released capture. */ }
     const current = draftsRef.current.find((mask) => mask.localId === gesture.localId)
-    if (gesture.kind === 'draw' && current && (current.width < .01 || current.height < .01)) publish(draftsRef.current.filter((mask) => mask.localId !== gesture.localId))
+    if (gesture.kind === 'draw' && current && (cancelled || current.width < .01 || current.height < .01)) publish(draftsRef.current.filter((mask) => mask.localId !== gesture.localId))
     gestureRef.current = undefined
   }
 
+  function pointerUp(event: ReactPointerEvent<SVGSVGElement>) {
+    finishPointer(event)
+  }
+
+  function pointerCancel(event: ReactPointerEvent<SVGSVGElement>) {
+    finishPointer(event, true)
+  }
+
   function updateMask(localId: string, patch: Partial<OcclusionMaskDraft>) {
-    publish(drafts.map((mask) => {
+    publish(draftsRef.current.map((mask) => {
       if (mask.localId !== localId) return mask
       const x = clamp(patch.x ?? mask.x)
       const y = clamp(patch.y ?? mask.y)
@@ -148,7 +156,7 @@ export function ImageOcclusionCanvas({
   const safeWidth = Number.isFinite(imageWidth) && imageWidth > 0 ? imageWidth : 1000
   const safeHeight = Number.isFinite(imageHeight) && imageHeight > 0 ? imageHeight : 1000
   return <div className="occlusion-canvas-wrap">
-    <svg className={`occlusion-canvas${readOnly ? ' occlusion-review-canvas' : ''}`} viewBox={`0 0 ${safeWidth} ${safeHeight}`} role="img" aria-label={readOnly ? 'Image occlusion card' : 'Draw image occlusion masks'} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp}>
+    <svg className={`occlusion-canvas${readOnly ? ' occlusion-review-canvas' : ''}`} viewBox={`0 0 ${safeWidth} ${safeHeight}`} role="img" aria-label={readOnly ? 'Image occlusion card' : 'Draw image occlusion masks'} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerCancel}>
       <image href={imageUrl} x="0" y="0" width={safeWidth} height={safeHeight} preserveAspectRatio="none" />
       {drafts.map((mask, index) => {
         const active = mask.id === activeMaskId
@@ -264,7 +272,7 @@ export function ImageOcclusionReview({ note, card, showAnswer }: { note: Note; c
   if (!imageUrl) return <p className="media-pending" role="status">The source image will be available after its media sync finishes.</p>
   return <div className="occlusion-review">
     {note.fields.header && <p className="occlusion-header">{note.fields.header}</p>}
-    <ImageOcclusionCanvas imageUrl={imageUrl} imageWidth={note.imageOcclusion.imageWidth} imageHeight={note.imageOcclusion.imageHeight} masks={masks} readOnly activeMaskId={card.occlusionId} revealActive={showAnswer} />
+    <ImageOcclusionCanvas key={`${note.updatedAt}:${card.occlusionId}`} imageUrl={imageUrl} imageWidth={note.imageOcclusion.imageWidth} imageHeight={note.imageOcclusion.imageHeight} masks={masks} readOnly activeMaskId={card.occlusionId} revealActive={showAnswer} />
     {showAnswer && note.fields.backExtra && <p className="occlusion-back-extra">{note.fields.backExtra}</p>}
   </div>
 }
