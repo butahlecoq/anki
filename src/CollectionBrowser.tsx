@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { collection, State, tryRenderNoteTemplate, type Note } from './collection'
-import { collectionSearchRows, compileCollectionSearch, plainField, SearchSyntaxError, type SearchRow } from './collection-search'
+import { collectionDeckPaths, collectionSearchRows, compileCollectionSearch, plainField, SearchSyntaxError, type SearchRow } from './collection-search'
 import { applyBulkAction, applyFieldChanges, previewFieldChanges, selectionSummary, type BrowserSelection, type BulkAction, type FieldChange, type FieldOperation } from './browser-maintenance'
 import { ImageOcclusionEditor } from './ImageOcclusion'
 
@@ -37,6 +37,7 @@ function NoteEditor({ note, onClose }: { note: Note; onClose: () => void }) {
 function BulkDialog({ selection, kind, onClose, onApplied }: { selection: BrowserSelection; kind: BulkAction['kind']; onClose: () => void; onApplied: (message: string) => void }) {
   const summary = useLiveQuery(() => selectionSummary(collection, selection).catch(() => null), [selection])
   const decks = useLiveQuery(() => collection.decks.orderBy('name').toArray(), [], [])
+  const deckPaths = collectionDeckPaths(decks)
   const [tags, setTags] = useState('')
   const [tagMode, setTagMode] = useState<'add' | 'remove'>('add')
   const [destination, setDestination] = useState('')
@@ -59,7 +60,7 @@ function BulkDialog({ selection, kind, onClose, onApplied }: { selection: Browse
     {summary ? <p>{summary.notes} notes · {summary.selectedCards} selected cards · {summary.generatedCards} total generated cards.</p> : <p role="status">{summary === null ? 'The selection changed. Close this dialog and refresh your selection.' : 'Checking selection…'}</p>}
     <form onSubmit={apply}>
       {kind === 'tags' && <><label>Tag operation<select aria-label="Tag operation" value={tagMode} onChange={(event) => setTagMode(event.target.value as 'add' | 'remove')}><option value="add">Add tags</option><option value="remove">Remove tags</option></select></label><label>Tags<input aria-label="Tags" value={tags} onChange={(event) => setTags(event.target.value)} placeholder="jlpt::n5, animal" /></label></>}
-      {kind === 'move' && <label>Destination deck<select aria-label="Destination deck" value={destination} onChange={(event) => setDestination(event.target.value)}><option value="">Choose a deck</option>{decks.map((deck) => <option key={deck.id} value={deck.id}>{deck.name}</option>)}</select></label>}
+      {kind === 'move' && <label>Destination deck<select aria-label="Destination deck" value={destination} onChange={(event) => setDestination(event.target.value)}><option value="">Choose a deck</option>{decks.map((deck) => <option key={deck.id} value={deck.id}>{deckPaths.get(deck.id)}</option>)}</select></label>}
       {kind === 'flag' && <label>Card flag<select aria-label="Card flag" value={flag} onChange={(event) => setFlag(Number(event.target.value))}>{['None', 'Red', 'Orange', 'Green', 'Blue', 'Pink', 'Turquoise', 'Purple'].map((label, index) => <option key={index} value={index}>{index} · {label}</option>)}</select></label>}
       {kind === 'suspend' && <label>Suspension<select aria-label="Suspension" value={suspended ? 'suspend' : 'restore'} onChange={(event) => setSuspended(event.target.value === 'suspend')}><option value="suspend">Suspend</option><option value="restore">Restore manual suspension</option></select></label>}
       {kind !== 'flag' && kind !== 'suspend' && <p>Note actions affect every card generated from those notes, including unselected siblings.</p>}

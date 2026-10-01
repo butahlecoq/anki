@@ -170,12 +170,8 @@ export function compileCollectionSearch(query: string, now = new Date()): Predic
   return predicate
 }
 
-export function collectionSearchRows(data: SearchCollection): SearchRow[] {
-  const notes = new Map(data.notes.map((note) => [note.id, note]))
-  const types = new Map(data.noteTypes.map((type) => [type.id, type]))
-  const decks = new Map(data.decks.map((deck) => [deck.id, deck]))
-  const reviews = new Map<string, ReviewEntry[]>()
-  for (const review of data.reviews) { const list = reviews.get(review.cardId) ?? []; list.push(review); reviews.set(review.cardId, list) }
+export function collectionDeckPaths(records: Deck[]): Map<string, string> {
+  const decks = new Map(records.map((deck) => [deck.id, deck]))
   const paths = new Map<string, string>()
   function deckPath(id: string): string {
     if (paths.has(id)) return paths.get(id)!
@@ -188,6 +184,17 @@ export function collectionSearchRows(data: SearchCollection): SearchRow[] {
     }
     const path = parts.join('::'); paths.set(id, path); return path
   }
+  for (const deck of records) deckPath(deck.id)
+  return paths
+}
+
+export function collectionSearchRows(data: SearchCollection): SearchRow[] {
+  const notes = new Map(data.notes.map((note) => [note.id, note]))
+  const types = new Map(data.noteTypes.map((type) => [type.id, type]))
+  const paths = collectionDeckPaths(data.decks)
+  const deckPath = (id: string) => paths.get(id) ?? ''
+  const reviews = new Map<string, ReviewEntry[]>()
+  for (const review of data.reviews) { const list = reviews.get(review.cardId) ?? []; list.push(review); reviews.set(review.cardId, list) }
   const rows: SearchRow[] = []
   const represented = new Set<string>()
   for (const card of data.cards) {
