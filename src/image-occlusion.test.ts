@@ -156,7 +156,7 @@ test('ignores an inbound card update that changes a mask ordinal even if suspend
   const note = await collection.createImageOcclusionNote(deck.id, { image: image(), imageWidth: 800, imageHeight: 600, header: '', backExtra: '', tags: [], masks: [mask('alpha', 0.1)] })
   const cardId = `${note.id}:${IMAGE_OCCLUSION_TEMPLATE_ID}:malpha`
   const card = (await collection.cards.get(cardId))!
-  await collection.applyRemoteChanges([{ opId: 'mutated-mask-card', entityType: 'card', entityId: cardId, action: 'update', occurredAt: '2026-10-02', payload: { ...card, occlusionOrdinal: 99, suspended: true } }], 1)
+  await collection.applyRemoteChanges([{ opId: 'mutated-mask-card', entityType: 'card', entityId: cardId, action: 'update', occurredAt: '2026-10-02', payload: { ...card, occlusionOrdinal: 99, suspended: true, templateSuspended: true } }], 1)
   await expect(collection.cards.get(cardId)).resolves.toMatchObject({ occlusionOrdinal: 1 })
 })
 

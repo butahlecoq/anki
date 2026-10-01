@@ -28,6 +28,7 @@ export const DEFAULT_DECK_OPTION_GROUP_ID = 'default'
 /** Reusable scheduling settings are introduced independently of any individual deck. */
 export type NewCardOrder = 'added' | 'random'
 export type ReviewCardOrder = 'due' | 'random'
+export type InterdayLearningOrder = 'before-reviews' | 'after-reviews'
 type FsrsStep = `${number}${'m' | 'h' | 'd'}`
 
 export interface DeckOptionSettings {
@@ -38,7 +39,17 @@ export interface DeckOptionSettings {
   relearningSteps: readonly string[]
   newCardOrder: NewCardOrder
   reviewCardOrder: ReviewCardOrder
+  /** Controls where day-crossing learning cards appear relative to review cards. */
+  interdayLearningOrder?: InterdayLearningOrder
+  /** Omitted by pre-policy callers; the owning group retains its current policy. */
+  buryNewSiblings?: boolean
+  buryReviewSiblings?: boolean
+  leechThreshold?: number
+  leechAction?: LeechAction
+  leechTag?: string
 }
+
+export type LeechAction = 'tag-only' | 'suspend'
 
 export interface DeckOptionGroup {
   id: string
@@ -51,6 +62,12 @@ export interface DeckOptionGroup {
   relearningSteps: readonly string[]
   newCardOrder: NewCardOrder
   reviewCardOrder: ReviewCardOrder
+  interdayLearningOrder: InterdayLearningOrder
+  buryNewSiblings: boolean
+  buryReviewSiblings: boolean
+  leechThreshold: number
+  leechAction: LeechAction
+  leechTag: string
   createdAt: string
   updatedAt: string
 }
@@ -156,7 +173,11 @@ export interface CardRecord {
   clozeOrdinal?: number
   occlusionId?: string
   occlusionOrdinal?: number
+  /** Retained only for legacy UI/data compatibility; it mirrors templateSuspended. */
   suspended?: boolean
+  manualSuspended?: boolean
+  templateSuspended?: boolean
+  buriedUntil?: string | null
   due: string
   stability: number
   difficulty: number
@@ -172,7 +193,12 @@ export interface CardRecord {
 }
 
 type LegacyNote = Omit<Note, 'typeId'> & { typeId?: string }
-type LegacyCard = Omit<CardRecord, 'templateId'> & { templateId?: string }
+type LegacyCard = Omit<CardRecord, 'templateId' | 'manualSuspended' | 'templateSuspended' | 'buriedUntil'> & {
+  templateId?: string
+  manualSuspended?: boolean
+  templateSuspended?: boolean
+  buriedUntil?: string | null
+}
 type LegacyNoteType = Omit<NoteType, 'kind'> & { kind?: NoteType['kind'] }
 type LegacyDeck = Omit<Deck, 'parentId' | 'optionGroupId'> & { parentId?: string | null; optionGroupId?: string }
 type LegacyDeckOptionGroup = Omit<DeckOptionGroup, keyof DeckOptionSettings> & Partial<DeckOptionSettings>
@@ -227,7 +253,7 @@ export interface MediaBlob { digest: string; blob: Blob; byteLength: number; mim
 interface StoredMediaBlob extends Omit<MediaBlob, 'blob'> { blob: Blob | ArrayBuffer }
 export interface NoteMediaAttachment { file: File; side: MediaSide; playback?: AudioPlayback }
 
-const defaultDeckOptionSettings: DeckOptionSettings = {
+const defaultDeckOptionSettings: Required<DeckOptionSettings> = {
   dailyNewLimit: 20,
   dailyReviewLimit: 200,
   desiredRetention: 0.9,
@@ -235,6 +261,12 @@ const defaultDeckOptionSettings: DeckOptionSettings = {
   relearningSteps: ['10m'],
   newCardOrder: 'added',
   reviewCardOrder: 'due',
+  interdayLearningOrder: 'before-reviews',
+  buryNewSiblings: false,
+  buryReviewSiblings: false,
+  leechThreshold: 8,
+  leechAction: 'suspend',
+  leechTag: 'leech',
 }
 
 function id() {
@@ -299,8 +331,18 @@ function requiredText(value: string, label: string) {
   return normalized
 }
 
-function copiedDeckOptionSettings(settings: DeckOptionSettings): DeckOptionSettings {
-  return { ...settings, learningSteps: [...settings.learningSteps], relearningSteps: [...settings.relearningSteps] }
+function copiedDeckOptionSettings(settings: DeckOptionSettings): Required<DeckOptionSettings> {
+  return {
+    ...settings,
+    learningSteps: [...settings.learningSteps],
+    relearningSteps: [...settings.relearningSteps],
+    interdayLearningOrder: settings.interdayLearningOrder ?? defaultDeckOptionSettings.interdayLearningOrder,
+    buryNewSiblings: settings.buryNewSiblings ?? defaultDeckOptionSettings.buryNewSiblings,
+    buryReviewSiblings: settings.buryReviewSiblings ?? defaultDeckOptionSettings.buryReviewSiblings,
+    leechThreshold: settings.leechThreshold ?? defaultDeckOptionSettings.leechThreshold,
+    leechAction: settings.leechAction ?? defaultDeckOptionSettings.leechAction,
+    leechTag: settings.leechTag ?? defaultDeckOptionSettings.leechTag,
+  }
 }
 
 function validateDailyLimit(value: number, label: string) {
@@ -319,11 +361,29 @@ function validateSteps(value: readonly string[], label: string): FsrsStep[] {
   return steps
 }
 
-function validateDeckOptionSettings(input: DeckOptionSettings): DeckOptionSettings {
+function validateLeechThreshold(value: number) {
+  if (!Number.isSafeInteger(value) || value < 1 || value > 9999) throw new Error('Leech threshold must be a whole number from 1 to 9999')
+  return value
+}
+
+function validateLeechTag(value: string) {
+  const tag = requiredText(value, 'Leech tag')
+  if (tag.length > 120) throw new Error('Leech tag is too long')
+  return tag
+}
+
+function validateDeckOptionSettings(input: DeckOptionSettings): Required<DeckOptionSettings> {
   if (!input || typeof input !== 'object') throw new Error('Deck option settings are invalid')
   if (!Number.isFinite(input.desiredRetention) || input.desiredRetention <= 0 || input.desiredRetention > 1) throw new Error('Desired retention must be greater than 0 and at most 1')
   if (input.newCardOrder !== 'added' && input.newCardOrder !== 'random') throw new Error('New card order is invalid')
   if (input.reviewCardOrder !== 'due' && input.reviewCardOrder !== 'random') throw new Error('Review card order is invalid')
+  const interdayLearningOrder = input.interdayLearningOrder ?? defaultDeckOptionSettings.interdayLearningOrder
+  if (interdayLearningOrder !== 'before-reviews' && interdayLearningOrder !== 'after-reviews') throw new Error('Interday learning order is invalid')
+  const buryNewSiblings = input.buryNewSiblings ?? defaultDeckOptionSettings.buryNewSiblings
+  const buryReviewSiblings = input.buryReviewSiblings ?? defaultDeckOptionSettings.buryReviewSiblings
+  if (typeof buryNewSiblings !== 'boolean' || typeof buryReviewSiblings !== 'boolean') throw new Error('Sibling burying options are invalid')
+  const leechAction = input.leechAction ?? defaultDeckOptionSettings.leechAction
+  if (leechAction !== 'tag-only' && leechAction !== 'suspend') throw new Error('Leech action is invalid')
   return {
     dailyNewLimit: validateDailyLimit(input.dailyNewLimit, 'Daily new limit'),
     dailyReviewLimit: validateDailyLimit(input.dailyReviewLimit, 'Daily review limit'),
@@ -332,6 +392,12 @@ function validateDeckOptionSettings(input: DeckOptionSettings): DeckOptionSettin
     relearningSteps: validateSteps(input.relearningSteps, 'Relearning steps'),
     newCardOrder: input.newCardOrder,
     reviewCardOrder: input.reviewCardOrder,
+    interdayLearningOrder,
+    buryNewSiblings,
+    buryReviewSiblings,
+    leechThreshold: validateLeechThreshold(input.leechThreshold ?? defaultDeckOptionSettings.leechThreshold),
+    leechAction,
+    leechTag: validateLeechTag(input.leechTag ?? defaultDeckOptionSettings.leechTag),
   }
 }
 
@@ -346,6 +412,12 @@ function canonicalDeckOptionGroup(group: LegacyDeckOptionGroup): DeckOptionGroup
       relearningSteps: group.relearningSteps ?? defaultDeckOptionSettings.relearningSteps,
       newCardOrder: group.newCardOrder ?? defaultDeckOptionSettings.newCardOrder,
       reviewCardOrder: group.reviewCardOrder ?? defaultDeckOptionSettings.reviewCardOrder,
+      interdayLearningOrder: group.interdayLearningOrder ?? defaultDeckOptionSettings.interdayLearningOrder,
+      buryNewSiblings: group.buryNewSiblings ?? defaultDeckOptionSettings.buryNewSiblings,
+      buryReviewSiblings: group.buryReviewSiblings ?? defaultDeckOptionSettings.buryReviewSiblings,
+      leechThreshold: group.leechThreshold ?? defaultDeckOptionSettings.leechThreshold,
+      leechAction: group.leechAction ?? defaultDeckOptionSettings.leechAction,
+      leechTag: group.leechTag ?? defaultDeckOptionSettings.leechTag,
     }),
   }
 }
@@ -369,6 +441,49 @@ function studyDayWindow(value: Date) {
   const start = new Date(value.getFullYear(), value.getMonth(), value.getDate())
   const end = new Date(value.getFullYear(), value.getMonth(), value.getDate() + 1)
   return { start: start.getTime(), end: end.getTime() }
+}
+
+function nextStudyBoundary(value: Date) {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate() + 1)
+}
+
+function templateSuspended(card: CardRecord) {
+  return card.templateSuspended ?? Boolean(card.suspended)
+}
+
+function isBuried(card: CardRecord, now: Date) {
+  return card.buriedUntil !== null && card.buriedUntil !== undefined && new Date(card.buriedUntil).getTime() > now.getTime()
+}
+
+function isQueueEligible(card: CardRecord, now: Date) {
+  return card.manualSuspended !== true && !templateSuspended(card) && !isBuried(card, now)
+}
+
+function isDueForStudy(card: CardRecord, now: Date) {
+  return card.state === State.New || new Date(card.due).getTime() <= now.getTime()
+}
+
+function isReviewEligible(card: CardRecord, now: Date) {
+  return isQueueEligible(card, now) && isDueForStudy(card, now)
+}
+
+function isLearningCard(card: CardRecord) {
+  return card.state === State.Learning || card.state === State.Relearning
+}
+
+/** FSRS records day-crossing (interday) steps with a positive scheduled-day count. */
+function isInterdayLearning(card: CardRecord) {
+  return isLearningCard(card) && card.scheduledDays >= 1
+}
+
+function withPolicyDefaults(card: CardRecord): CardRecord {
+  return {
+    ...card,
+    suspended: templateSuspended(card),
+    templateSuspended: templateSuspended(card),
+    manualSuspended: card.manualSuspended ?? false,
+    buriedUntil: card.buriedUntil ?? null,
+  }
 }
 
 function stableRank(value: string) {
@@ -467,7 +582,14 @@ function canonicalNote(note: LegacyNote): Note {
 }
 
 function canonicalCard(card: LegacyCard): CardRecord {
-  return { ...card, templateId: card.templateId ?? BASIC_TEMPLATE_ID }
+  if (card.suspended !== undefined && typeof card.suspended !== 'boolean') throw new Error('Card legacy suspension is invalid')
+  if (card.manualSuspended !== undefined && typeof card.manualSuspended !== 'boolean') throw new Error('Card manual suspension is invalid')
+  if (card.templateSuspended !== undefined && typeof card.templateSuspended !== 'boolean') throw new Error('Card template suspension is invalid')
+  if (card.templateSuspended !== undefined && card.suspended !== undefined && card.templateSuspended !== card.suspended) throw new Error('Card suspension fields conflict')
+  if (card.buriedUntil !== undefined && card.buriedUntil !== null && typeof card.buriedUntil !== 'string') throw new Error('Card burial time is invalid')
+  const buriedUntil = card.buriedUntil ?? null
+  if (buriedUntil !== null && (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(buriedUntil) || Number.isNaN(new Date(buriedUntil).getTime()))) throw new Error('Card burial time is invalid')
+  return withPolicyDefaults({ ...card, templateId: card.templateId ?? BASIC_TEMPLATE_ID, buriedUntil })
 }
 
 function canonicalNoteType(noteType: LegacyNoteType): NoteType {
@@ -489,6 +611,10 @@ const defaultDeckOptionGroup: DeckOptionGroup = {
 
 function serializeCard(card: FsrsCard, identity: Pick<CardRecord, 'id' | 'deckId' | 'noteId' | 'templateId' | 'clozeOrdinal'>): CardRecord {
   return {
+    manualSuspended: false,
+    templateSuspended: false,
+    buriedUntil: null,
+    suspended: false,
     ...identity,
     due: card.due.toISOString(),
     stability: card.stability,
@@ -625,6 +751,19 @@ export class Collection extends Dexie {
       await transaction.table('deckOptionGroups').toCollection().modify((group: LegacyDeckOptionGroup) => Object.assign(group, canonicalDeckOptionGroup(group)))
       if (!await transaction.table('deckOptionGroups').get(DEFAULT_DECK_OPTION_GROUP_ID)) await transaction.table('deckOptionGroups').put(defaultDeckOptionGroup)
     })
+    this.version(11).stores({
+      decks: 'id, parentId, optionGroupId, name, createdAt', notes: 'id, deckId, typeId, updatedAt', cards: 'id, deckId, noteId, templateId, due, state', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId', deletedEntities: 'key, entityType, entityId, occurredAt', noteMedia: 'id, noteId, digest, side, kind, updatedAt', mediaBlobs: 'digest, verifiedAt', noteTypes: 'id, name, updatedAt', deckOptionGroups: 'id, name, updatedAt',
+    }).upgrade(async (transaction) => {
+      await transaction.table('deckOptionGroups').toCollection().modify((group: LegacyDeckOptionGroup) => Object.assign(group, canonicalDeckOptionGroup(group)))
+      await transaction.table('cards').toCollection().modify((card: LegacyCard) => Object.assign(card, canonicalCard(card)))
+      if (!await transaction.table('deckOptionGroups').get(DEFAULT_DECK_OPTION_GROUP_ID)) await transaction.table('deckOptionGroups').put(defaultDeckOptionGroup)
+    })
+    this.version(12).stores({
+      decks: 'id, parentId, optionGroupId, name, createdAt', notes: 'id, deckId, typeId, updatedAt', cards: 'id, deckId, noteId, templateId, due, state', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId', deletedEntities: 'key, entityType, entityId, occurredAt', noteMedia: 'id, noteId, digest, side, kind, updatedAt', mediaBlobs: 'digest, verifiedAt', noteTypes: 'id, name, updatedAt', deckOptionGroups: 'id, name, updatedAt',
+    }).upgrade(async (transaction) => {
+      await transaction.table('deckOptionGroups').toCollection().modify((group: LegacyDeckOptionGroup) => Object.assign(group, canonicalDeckOptionGroup(group)))
+      if (!await transaction.table('deckOptionGroups').get(DEFAULT_DECK_OPTION_GROUP_ID)) await transaction.table('deckOptionGroups').put(defaultDeckOptionGroup)
+    })
     this.on('populate', (transaction) => {
       transaction.table('noteTypes').put(basicNoteType)
       transaction.table('noteTypes').put(imageOcclusionNoteType)
@@ -678,8 +817,8 @@ export class Collection extends Dexie {
     const eligibleIds = new Set(eligible.map((template) => cardKey({ templateId: template.id, clozeOrdinal: template.clozeOrdinal, occlusionId: template.occlusionId })))
     for (const card of existing) {
       const suspended = !eligibleIds.has(cardKey(card))
-      if (Boolean(card.suspended) === suspended) continue
-      const revised = { ...card, suspended }
+      if (templateSuspended(card) === suspended && card.templateSuspended !== undefined) continue
+      const revised = { ...card, suspended, templateSuspended: suspended, manualSuspended: card.manualSuspended ?? false, buriedUntil: card.buriedUntil ?? null }
       await this.cards.put(revised)
       operations.push({ opId: id(), entityType: 'card', entityId: card.id, action: 'update', occurredAt: now.toISOString(), payload: revised })
     }
@@ -1050,10 +1189,10 @@ export class Collection extends Dexie {
   }
 
   async updateDeckOptionGroup(groupId: string, settings: DeckOptionSettings, now = new Date()): Promise<void> {
-    const validated = validateDeckOptionSettings(settings)
     await this.transaction('rw', this.deckOptionGroups, this.outbox, async () => {
       const group = await this.deckOptionGroups.get(groupId)
       if (!group) throw new Error('Deck option group not found')
+      const validated = validateDeckOptionSettings({ ...group, ...settings })
       const updated: DeckOptionGroup = { ...group, ...validated, updatedAt: now.toISOString() }
       await this.deckOptionGroups.put(updated)
       await this.outbox.add({ opId: id(), entityType: 'deckOptionGroup', entityId: group.id, action: 'update', occurredAt: updated.updatedAt, payload: updated })
@@ -1307,6 +1446,9 @@ export class Collection extends Dexie {
       const decks = new Map(subtree.map((deck) => [deck.id, deck]))
       const groupsById = new Map(groups.map((group) => [group.id, group]))
       const notesById = new Map(notes.map((note) => [note.id, note]))
+      const selectedDeck = decks.get(deckId)
+      const selectedGroup = selectedDeck && groupsById.get(selectedDeck.optionGroupId)
+      if (!selectedGroup) throw new Error('Deck option group not found')
       const { start, end } = studyDayWindow(now)
       const reviewedToday = new Map<string, { new: number; review: number }>()
       for (const review of reviewEntries) {
@@ -1314,7 +1456,7 @@ export class Collection extends Dexie {
         if (!decks.has(review.deckId) || timestamp < start || timestamp >= end) continue
         const totals = reviewedToday.get(review.deckId) ?? { new: 0, review: 0 }
         if (review.state === State.New) totals.new += 1
-        if (review.state === State.Review) totals.review += 1
+        if (review.state === State.Review || ((review.state === State.Learning || review.state === State.Relearning) && review.scheduledDays >= 1)) totals.review += 1
         reviewedToday.set(review.deckId, totals)
       }
       const orderKey = (card: CardRecord, group: DeckOptionGroup, kind: 'new' | 'review' | 'learning') => {
@@ -1334,23 +1476,34 @@ export class Collection extends Dexie {
       for (const deck of subtree) {
         const group = groupsById.get(deck.optionGroupId)
         if (!group) throw new Error('Deck option group not found')
-        const own = cards.filter((card) => card.deckId === deck.id && !card.suspended)
-        const learning = sortWithinDeck(own.filter((card) => (card.state === State.Learning || card.state === State.Relearning) && new Date(card.due).getTime() <= now.getTime()), group, 'learning')
-        const reviewsDue = sortWithinDeck(own.filter((card) => card.state === State.Review && new Date(card.due).getTime() <= now.getTime()), group, 'review')
+        const own = cards.filter((card) => card.deckId === deck.id && isReviewEligible(card, now))
+        const learning = sortWithinDeck(own.filter(isLearningCard), group, 'learning')
+        const intradayLearning = learning.filter((card) => !isInterdayLearning(card))
+        const interdayLearning = learning.filter(isInterdayLearning)
+        const reviewsDue = sortWithinDeck(own.filter((card) => card.state === State.Review), group, 'review')
         const newCards = sortWithinDeck(own.filter((card) => card.state === State.New), group, 'new')
         const totals = reviewedToday.get(deck.id) ?? { new: 0, review: 0 }
-        selected.push(...learning, ...reviewsDue.slice(0, Math.max(0, group.dailyReviewLimit - totals.review)), ...newCards.slice(0, Math.max(0, group.dailyNewLimit - totals.new)))
+        // Each owning deck applies its own policy while gathering from its daily review budget.
+        const limited = group.interdayLearningOrder === 'before-reviews'
+          ? [...interdayLearning, ...reviewsDue]
+          : [...reviewsDue, ...interdayLearning]
+        selected.push(...intradayLearning, ...limited.slice(0, Math.max(0, group.dailyReviewLimit - totals.review)), ...newCards.slice(0, Math.max(0, group.dailyNewLimit - totals.new)))
       }
-      const learning = sortQueue(selected.filter((card) => card.state === State.Learning || card.state === State.Relearning), 'learning')
+      const intradayLearning = sortQueue(selected.filter((card) => isLearningCard(card) && !isInterdayLearning(card)), 'learning')
+      const interdayLearning = sortQueue(selected.filter(isInterdayLearning), 'learning')
       const orderedReviews = sortQueue(selected.filter((card) => card.state === State.Review), 'review')
       const newCards = sortQueue(selected.filter((card) => card.state === State.New), 'new')
-      return [...learning, ...orderedReviews, ...newCards]
+      // The selected deck then provides one stable display policy when its subtree is merged.
+      const reviewQueue = selectedGroup.interdayLearningOrder === 'before-reviews'
+        ? [...interdayLearning, ...orderedReviews]
+        : [...orderedReviews, ...interdayLearning]
+      return [...intradayLearning, ...reviewQueue, ...newCards]
     })
   }
 
   async reviewChoices(cardId: string, now = new Date()): Promise<ReviewChoice[]> {
     const card = await this.cards.get(cardId)
-    if (!card || card.suspended) return []
+    if (!card || !isReviewEligible(card, now)) return []
     const deck = await this.decks.get(card.deckId)
     const group = deck ? await this.deckOptionGroups.get(deck.optionGroupId) : undefined
     if (!deck || !group) throw new Error('Deck option group not found')
@@ -1369,28 +1522,113 @@ export class Collection extends Dexie {
   }
 
   async answer(cardId: string, rating: Grade, now = new Date()): Promise<ReviewEntry> {
-    const existing = await this.cards.get(cardId)
-    if (!existing) throw new Error('Card not found')
-    if (existing.suspended) throw new Error('Card is suspended because its template front is empty')
-    const deck = await this.decks.get(existing.deckId)
-    const group = deck ? await this.deckOptionGroups.get(deck.optionGroupId) : undefined
-    if (!deck || !group) throw new Error('Deck option group not found')
-    const result = schedulerFor(group).next(deserializeCard(existing), now, rating)
-    const card = serializeCard(result.card, existing)
-    const review = serializeReview(result.log, {
-      id: id(),
-      cardId,
-      deckId: existing.deckId,
-    })
-    await this.transaction('rw', this.cards, this.reviewEntries, this.outbox, async () => {
+    return this.transaction('rw', [this.decks, this.deckOptionGroups, this.notes, this.cards, this.reviewEntries, this.outbox], async () => {
+      const existing = await this.cards.get(cardId)
+      if (!existing) throw new Error('Card not found')
+      if (!isQueueEligible(existing, now)) throw new Error('Card is unavailable because it is suspended or buried')
+      if (!isDueForStudy(existing, now)) throw new Error('Card is not due')
+      const deck = await this.decks.get(existing.deckId)
+      const group = deck ? await this.deckOptionGroups.get(deck.optionGroupId) : undefined
+      if (!deck || !group) throw new Error('Deck option group not found')
+      const result = schedulerFor(group).next(deserializeCard(existing), now, rating)
+      let card = withPolicyDefaults(serializeCard(result.card, existing))
+      const review = serializeReview(result.log, {
+        id: id(),
+        cardId,
+        deckId: existing.deckId,
+      })
+      const operations: SyncOperation[] = []
+      const note = await this.notes.get(card.noteId)
+      if (!note) throw new Error('Card note not found')
+      if (card.lapses >= group.leechThreshold) {
+        const tags = normalizeTags([...(note.tags ?? []), group.leechTag])
+        if (tags.length !== (note.tags ?? []).length || tags.some((tag, index) => tag !== note.tags?.[index])) {
+          const revisedNote = { ...note, tags, updatedAt: review.reviewedAt }
+          await this.notes.put(revisedNote)
+          operations.push({ opId: id(), entityType: 'note', entityId: note.id, action: 'update', occurredAt: review.reviewedAt, payload: revisedNote })
+        }
+        if (group.leechAction === 'suspend') card = { ...card, manualSuspended: true }
+      }
+      const buriedUntil = nextStudyBoundary(now).toISOString()
+      const siblings = await this.cards.where('noteId').equals(card.noteId).toArray()
+      for (const sibling of siblings) {
+        if (sibling.id === card.id || isBuried(sibling, now)) continue
+        // Learning and relearning cards carry scheduled material from prior study, so
+        // they share the review-sibling policy. This includes interday learning steps.
+        const bury = (sibling.state === State.New && group.buryNewSiblings)
+          || ((sibling.state === State.Review || isLearningCard(sibling)) && group.buryReviewSiblings)
+        if (!bury) continue
+        const revised = withPolicyDefaults({ ...sibling, buriedUntil })
+        await this.cards.put(revised)
+        operations.push({ opId: id(), entityType: 'card', entityId: revised.id, action: 'update', occurredAt: review.reviewedAt, payload: revised })
+      }
       await this.cards.put(card)
       await this.reviewEntries.add(review)
       await this.outbox.bulkAdd([
         { opId: id(), entityType: 'card', entityId: card.id, action: 'update', occurredAt: review.reviewedAt, payload: card },
         { opId: id(), entityType: 'review', entityId: review.id, action: 'create', occurredAt: review.reviewedAt, payload: review },
+        ...operations,
       ])
+      return review
     })
-    return review
+  }
+
+  async suspendCard(cardId: string, now = new Date()): Promise<void> {
+    await this.transaction('rw', [this.cards, this.outbox], async () => {
+      const card = await this.cards.get(cardId)
+      if (!card) throw new Error('Card not found')
+      if (card.manualSuspended) return
+      const updated = withPolicyDefaults({ ...card, manualSuspended: true })
+      await this.cards.put(updated)
+      await this.outbox.add({ opId: id(), entityType: 'card', entityId: cardId, action: 'update', occurredAt: now.toISOString(), payload: updated })
+    })
+  }
+
+  async unsuspendCard(cardId: string, now = new Date()): Promise<void> {
+    await this.transaction('rw', [this.cards, this.outbox], async () => {
+      const card = await this.cards.get(cardId)
+      if (!card) throw new Error('Card not found')
+      if (!card.manualSuspended) return
+      const updated = withPolicyDefaults({ ...card, manualSuspended: false })
+      await this.cards.put(updated)
+      await this.outbox.add({ opId: id(), entityType: 'card', entityId: cardId, action: 'update', occurredAt: now.toISOString(), payload: updated })
+    })
+  }
+
+  async buryCard(cardId: string, now = new Date()): Promise<void> {
+    await this.transaction('rw', [this.cards, this.outbox], async () => {
+      const card = await this.cards.get(cardId)
+      if (!card) throw new Error('Card not found')
+      const buriedUntil = nextStudyBoundary(now).toISOString()
+      if (card.buriedUntil === buriedUntil) return
+      const updated = withPolicyDefaults({ ...card, buriedUntil })
+      await this.cards.put(updated)
+      await this.outbox.add({ opId: id(), entityType: 'card', entityId: cardId, action: 'update', occurredAt: now.toISOString(), payload: updated })
+    })
+  }
+
+  async unburyCard(cardId: string, now = new Date()): Promise<void> {
+    await this.transaction('rw', [this.cards, this.outbox], async () => {
+      const card = await this.cards.get(cardId)
+      if (!card) throw new Error('Card not found')
+      if (card.buriedUntil === null || card.buriedUntil === undefined) return
+      const updated = withPolicyDefaults({ ...card, buriedUntil: null })
+      await this.cards.put(updated)
+      await this.outbox.add({ opId: id(), entityType: 'card', entityId: cardId, action: 'update', occurredAt: now.toISOString(), payload: updated })
+    })
+  }
+
+  async rescheduleCard(cardId: string, due: Date, now = new Date()): Promise<void> {
+    if (Number.isNaN(due.getTime())) throw new Error('Reschedule time is invalid')
+    await this.transaction('rw', [this.cards, this.outbox], async () => {
+      const card = await this.cards.get(cardId)
+      if (!card) throw new Error('Card not found')
+      const state = card.state === State.New ? State.Review : card.state
+      if (state !== State.Learning && state !== State.Relearning && state !== State.Review) throw new Error('Card state cannot be rescheduled')
+      const updated = withPolicyDefaults({ ...card, state, due: due.toISOString() })
+      await this.cards.put(updated)
+      await this.outbox.add({ opId: id(), entityType: 'card', entityId: cardId, action: 'update', occurredAt: now.toISOString(), payload: updated })
+    })
   }
 
   async pendingOperations(): Promise<SyncOperation[]> {
@@ -1503,7 +1741,7 @@ export class Collection extends Dexie {
                 continue
               }
             }
-            if (note && (deletedType || (noteType && !this.cardIsEligible(noteType, note, incoming))) && !incoming.suspended) {
+            if (note && (deletedType || (noteType && !this.cardIsEligible(noteType, note, incoming))) && !templateSuspended(incoming)) {
               await this.receivedOperations.add({ opId: change.opId })
               continue
             }
@@ -1638,7 +1876,9 @@ export class Collection extends Dexie {
         const eligible = new Set(generation?.ok ? generation.value.eligible.map((template) => cardKey({ templateId: template.id, clozeOrdinal: template.clozeOrdinal, occlusionId: template.occlusionId })) : [])
         for (const card of await this.cards.where('noteId').equals(noteId).toArray()) {
           const active = eligible.has(cardKey(card)) && (noteType?.kind !== 'cloze' || card.id === `${noteId}:${card.templateId}:c${card.clozeOrdinal}`) && (noteType?.kind !== 'image-occlusion' || card.id === `${noteId}:${card.templateId}:m${card.occlusionId}`)
-          if (Boolean(card.suspended) !== !active) await this.cards.put({ ...card, suspended: !active })
+          if (templateSuspended(card) !== !active || card.templateSuspended === undefined) {
+            await this.cards.put({ ...card, suspended: !active, templateSuspended: !active, manualSuspended: card.manualSuspended ?? false, buriedUntil: card.buriedUntil ?? null })
+          }
         }
       }
       const existing = await this.settings.get('sync')
