@@ -94,6 +94,133 @@ test('the add-note chooser opens the dedicated image occlusion editor', async ()
   }
 })
 
+test('a learner creates a child deck from its parent', async () => {
+  const parent = await collection.createDeck(`Parent ${crypto.randomUUID()}`)
+  window.location.hash = `#deck/${parent.id}`
+  render(<CollectionWorkspace />)
+  try {
+    fireEvent.click(await screen.findByRole('button', { name: 'Create child deck' }))
+    fireEvent.change(screen.getByLabelText('Deck name'), { target: { value: 'Verbs' } })
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Create a child deck' })).getByRole('button', { name: 'Create child deck' }))
+    await waitFor(async () => expect(await collection.decks.where('parentId').equals(parent.id).first()).toMatchObject({ name: 'Verbs' }))
+  } finally {
+    await collection.deleteDeck(parent.id, { mode: 'delete-subtree' })
+  }
+})
+
+test('a learner creates and assigns reusable scheduling options', async () => {
+  const deck = await collection.createDeck(`Options ${crypto.randomUUID()}`)
+  window.location.hash = `#deck/${deck.id}`
+  render(<CollectionWorkspace />)
+  try {
+    fireEvent.click(await screen.findByRole('button', { name: 'Scheduling options' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Scheduling options' })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create option group' }))
+    fireEvent.change(within(dialog).getByLabelText('Option group name'), { target: { value: 'Short sessions' } })
+    fireEvent.change(within(dialog).getByLabelText('Daily new limit'), { target: { value: '1' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save options' }))
+    await waitFor(async () => {
+      const updated = await collection.decks.get(deck.id)
+      const group = updated && await collection.deckOptionGroups.get(updated.optionGroupId)
+      expect(group).toMatchObject({ name: 'Short sessions', dailyNewLimit: 1 })
+    })
+  } finally {
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+  }
+})
+
+test('a learner moves a deck under a different parent', async () => {
+  const firstParent = await collection.createDeck(`First ${crypto.randomUUID()}`)
+  const secondParent = await collection.createDeck(`Second ${crypto.randomUUID()}`)
+  const child = await collection.createDeck('Child', { parentId: firstParent.id })
+  window.location.hash = `#deck/${child.id}`
+  render(<CollectionWorkspace />)
+  try {
+    fireEvent.click(await screen.findByRole('button', { name: 'Move deck' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Move deck' })
+    await waitFor(() => expect(within(dialog).getByRole('option', { name: secondParent.name })).toBeVisible())
+    fireEvent.change(within(dialog).getByLabelText('New parent deck'), { target: { value: secondParent.id } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Move deck' }))
+    await waitFor(async () => expect(await collection.decks.get(child.id)).toMatchObject({ parentId: secondParent.id }))
+  } finally {
+    await collection.deleteDeck(firstParent.id, { mode: 'delete-subtree' })
+    await collection.deleteDeck(secondParent.id, { mode: 'delete-subtree' })
+  }
+})
+
+test('the deck list presents nested decks with parent aggregate counts', async () => {
+  const parent = await collection.createDeck(`Japanese ${crypto.randomUUID()}`)
+  const child = await collection.createDeck('Reading', { parentId: parent.id })
+  await collection.createBasicNote(child.id, { front: '読む', back: 'read' })
+  window.location.hash = '#decks'
+  render(<CollectionWorkspace />)
+  try {
+    const hierarchy = await screen.findByRole('tree', { name: 'Deck hierarchy' })
+    expect(within(hierarchy).getByText(parent.name)).toBeVisible()
+    expect(within(hierarchy).getByText('Reading')).toBeVisible()
+    expect(within(hierarchy).getAllByText('NEW')[0]).toHaveTextContent('1')
+  } finally {
+    await collection.deleteDeck(parent.id, { mode: 'delete-subtree' })
+  }
+})
+
+test('a learner relocates a deck through an explicit delete choice', async () => {
+  const source = await collection.createDeck(`Source ${crypto.randomUUID()}`)
+  const destination = await collection.createDeck(`Destination ${crypto.randomUUID()}`)
+  const note = await collection.createBasicNote(source.id, { front: '移す', back: 'move' })
+  window.location.hash = `#deck/${source.id}`
+  render(<CollectionWorkspace />)
+  try {
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete deck' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Delete deck' })
+    fireEvent.click(within(dialog).getByLabelText('Relocate contents and child decks'))
+    await waitFor(() => expect(within(dialog).getByRole('option', { name: destination.name })).toBeVisible())
+    fireEvent.change(within(dialog).getByLabelText('Destination deck'), { target: { value: destination.id } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Relocate and delete deck' }))
+    await waitFor(async () => expect(await collection.notes.get(note.id)).toMatchObject({ deckId: destination.id }))
+  } finally {
+    await collection.deleteDeck(destination.id, { mode: 'delete-subtree' })
+  }
+})
+
+test('a learner moves a note without replacing its card', async () => {
+  const source = await collection.createDeck(`Notes ${crypto.randomUUID()}`)
+  const destination = await collection.createDeck(`Target ${crypto.randomUUID()}`)
+  const note = await collection.createBasicNote(source.id, { front: '動かす', back: 'move' })
+  const card = await collection.cards.where('noteId').equals(note.id).first()
+  window.location.hash = `#deck/${source.id}`
+  render(<CollectionWorkspace />)
+  try {
+    fireEvent.click(await screen.findByRole('button', { name: 'Move note' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Move note' })
+    await waitFor(() => expect(within(dialog).getByRole('option', { name: destination.name })).toBeVisible())
+    fireEvent.change(within(dialog).getByLabelText('Destination deck'), { target: { value: destination.id } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Move note' }))
+    await waitFor(async () => {
+      expect(await collection.notes.get(note.id)).toMatchObject({ deckId: destination.id })
+      expect(await collection.cards.get(card!.id)).toMatchObject({ id: card!.id, deckId: destination.id })
+    })
+  } finally {
+    await collection.deleteDeck(source.id, { mode: 'delete-subtree' })
+    await collection.deleteDeck(destination.id, { mode: 'delete-subtree' })
+  }
+})
+
+test('study availability follows the deck daily limit', async () => {
+  const deck = await collection.createDeck(`Limited ${crypto.randomUUID()}`)
+  await collection.createBasicNote(deck.id, { front: '一', back: 'one' })
+  const group = (await collection.deckOptionGroups.get(deck.optionGroupId))!
+  await collection.updateDeckOptionGroup(group.id, { ...group, dailyNewLimit: 0 })
+  window.location.hash = `#deck/${deck.id}`
+  render(<CollectionWorkspace />)
+  try {
+    expect(await screen.findByRole('button', { name: 'Study now' })).toBeDisabled()
+  } finally {
+    await collection.updateDeckOptionGroup(group.id, group)
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+  }
+})
+
 test('a malformed synced template shows a card error without crashing review', async () => {
   const deck = await collection.createDeck(`Malformed review ${crypto.randomUUID()}`)
   const type = await collection.createNoteType({ name: 'Cloze review', kind: 'cloze', fields: [{ name: 'Text' }], templates: [{ name: 'Deletion', front: '{{cloze:Text}}', back: '{{cloze:Text}}', css: '' }] })

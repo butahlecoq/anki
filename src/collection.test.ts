@@ -128,6 +128,19 @@ describe('local collection', () => {
     expect(queue.find((card) => card.id === reviewDue.id)).toBeUndefined()
   })
 
+  test('summaries aggregate a parent deck with every descendant', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const parent = await collection.createDeck('Japanese')
+    const child = await collection.createDeck('Verbs', { parentId: parent.id })
+    await collection.createBasicNote(parent.id, { front: '読む', back: 'read' })
+    await collection.createBasicNote(child.id, { front: '書く', back: 'write' })
+
+    const summaries = await collection.summaries()
+    const parentSummary = summaries.find((summary) => summary.id === parent.id)!
+
+    expect(parentSummary).toMatchObject({ noteCount: 2, counts: { new: 2, learning: 0, review: 0 } })
+  })
+
   test('returns an empty queue when an active deck has been deleted in another tab', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const deck = await collection.createDeck('Transient')
@@ -135,6 +148,16 @@ describe('local collection', () => {
     await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
 
     await expect(collection.dueCards(deck.id, new Date('2026-10-01T12:00:00.000Z'))).resolves.toEqual([])
+  })
+
+  test('rejects relocation that would duplicate a destination child name', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const source = await collection.createDeck('Source')
+    const destination = await collection.createDeck('Destination')
+    await collection.createDeck('Words', { parentId: source.id })
+    await collection.createDeck('Words', { parentId: destination.id })
+
+    await expect(collection.deleteDeck(source.id, { mode: 'relocate', destinationDeckId: destination.id })).rejects.toThrow(/unique among siblings/i)
   })
 
   test('applies new-card caps to the learner local study day across a UTC midnight offset', async () => {
