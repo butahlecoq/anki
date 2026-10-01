@@ -382,6 +382,54 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--acid); outline-
   .rating { min-height: 54px; }
 }
 
+.today-workload { padding: 22px; border: 1px solid var(--line); background: var(--panel); margin: 18px 0; }
+.today-workload .count-strip { margin: 16px 0; flex-wrap: wrap; }
+.today-workload small { display: block; color: var(--muted); line-height: 1.8; }
+.today-workload > a { display: inline-flex; margin-top: 12px; }
+.statistics-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 16px; margin-top: 28px; }
+.statistics-controls label { display: grid; gap: 8px; color: var(--muted); font-size: 11px; min-width: 0; }
+.statistics-controls input, .statistics-controls select { max-width: 100%; min-height: 44px; padding: 10px; color: var(--text); border: 1px solid var(--line); background: var(--panel); font: inherit; }
+.statistics-controls button { min-height: 44px; }
+.statistics-period { color: var(--muted); font-size: 11px; line-height: 1.8; margin: 16px 0; }
+.statistics-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.statistics-metrics article { padding: 22px 18px; border: 1px solid var(--line); display: grid; gap: 14px; }
+.statistics-metrics article > span { color: var(--muted); font-size: 10px; letter-spacing: .08em; }
+.statistics-metrics strong { font-size: 28px; color: var(--acid); }
+.statistics-metrics small { font-size: 10px; color: var(--muted); line-height: 1.8; }
+.statistics-empty { padding: 22px; border-left: 2px solid var(--acid); line-height: 1.8; }
+.statistics-panel { padding: 24px; border: 1px solid var(--line); margin-top: 18px; min-width: 0; }
+.statistics-panel h2 { font-size: 18px; margin: 0 0 14px; }
+.statistics-panel p, .statistics-panel small { color: var(--muted); font-size: 11px; line-height: 1.8; }
+.statistics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.review-heatmap { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 6px; margin: 22px 0 14px; }
+.review-heatmap button { min-width: 0; height: 32px; border: 1px solid var(--line); background: color-mix(in srgb, var(--acid) calc(var(--activity) * 100%), var(--panel)); cursor: pointer; }
+.review-heatmap button[aria-pressed="true"] { outline: 2px solid var(--text); outline-offset: 2px; }
+.heatmap-legend { color: var(--acid); }
+.stat-bars { list-style: none; padding: 0; margin: 22px 0 0; display: grid; gap: 14px; }
+.stat-bars li { display: grid; grid-template-columns: 95px minmax(0, 1fr) 32px; align-items: center; gap: 12px; font-size: 11px; }
+.stat-bars li > div { height: 8px; background: var(--line); }
+.stat-bars li > div span { display: block; height: 100%; background: var(--acid); }
+.stat-bars strong { text-align: right; }
+.forecast-scroll { max-height: 360px; overflow-y: auto; }
+.studied-cards { list-style: none; padding: 0; max-height: 360px; overflow-y: auto; }
+.studied-cards button { min-height: 44px; text-align: left; overflow-wrap: anywhere; }
+.history-list { padding-left: 22px; font-size: 11px; line-height: 1.8; }
+.history-list li { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.history-list time, .history-list li span { display: block; }
+.history-list li span { color: var(--muted); }
+@media (max-width: 900px) { .statistics-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 680px) {
+  .statistics-controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .statistics-controls label:first-child { grid-column: 1 / -1; }
+  .statistics-controls button { align-self: end; }
+  .statistics-panel, .today-workload { padding: 18px; }
+  .statistics-grid { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .statistics-metrics strong { font-size: 24px; }
+  .statistics-metrics article { padding: 18px 12px; }
+  .review-heatmap { gap: 4px; }
+  .review-heatmap button { height: 28px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }

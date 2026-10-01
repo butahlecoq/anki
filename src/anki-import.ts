@@ -674,6 +674,7 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
       scheduledDays,
       learningSteps: 0,
       reviewedAt,
+      ...(Number.isFinite(row.time) && row.time >= 0 ? { durationMs: row.time } : {}),
     })
     previousReviewByCard.set(row.cid, { reviewedAt: row.id, elapsedDays })
     if (!previous) issues.push({ severity: 'warning', code: 'first-review-approximation', subject: String(row.id), detail: 'Anki does not retain the original due and FSRS memory state before the first review log; its review time and prior interval are used as the supported approximation.' })
