@@ -167,6 +167,8 @@ export interface CardRecord {
   lapses: number
   state: State
   lastReview: string | null
+  /** Source modification time for deterministic Anki package updates. */
+  sourceModifiedAt?: string
 }
 
 type LegacyNote = Omit<Note, 'typeId'> & { typeId?: string }

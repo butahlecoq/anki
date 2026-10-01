@@ -6,6 +6,8 @@ const syncRuntimeDirectory = process.env.KIROKU_RUNTIME_DIRECTORY ?? join(tmpdir
 process.env.KIROKU_RUNTIME_DIRECTORY = syncRuntimeDirectory
 const webPort = process.env.KIROKU_WEB_PORT ?? '4173'
 const webURL = `http://127.0.0.1:${webPort}`
+const syncPort = process.env.KIROKU_SYNC_PORT ?? '4174'
+const syncURL = `http://127.0.0.1:${syncPort}`
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -40,8 +42,8 @@ export default defineConfig({
     },
     {
       command: 'npm run server:start',
-      url: 'http://127.0.0.1:4174/api/health',
-      env: { ...process.env, KIROKU_RUNTIME_DIRECTORY: syncRuntimeDirectory, KIROKU_ALLOWED_ORIGIN: webURL },
+      url: `${syncURL}/api/health`,
+      env: { ...process.env, PORT: syncPort, KIROKU_RUNTIME_DIRECTORY: syncRuntimeDirectory, KIROKU_ALLOWED_ORIGIN: webURL },
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
     },

@@ -24,6 +24,15 @@ afterAll(() => {
 const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL4+QAAAABJRU5ErkJggg=='), (character) => character.charCodeAt(0))
 const wav = new Uint8Array([0x52, 0x49, 0x46, 0x46, 0x25, 0, 0, 0, 0x57, 0x41, 0x56, 0x45, 0x66, 0x6d, 0x74, 0x20, 16, 0, 0, 0, 1, 0, 1, 0, 0x40, 0x1f, 0, 0, 0x40, 0x1f, 0, 0, 1, 0, 8, 0, 0x64, 0x61, 0x74, 0x61, 1, 0, 0, 0, 0x80])
 
+async function fileBytes(file: File) {
+  return new Uint8Array(await new Promise<ArrayBuffer>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(reader.error)
+    reader.onload = () => resolve(reader.result as ArrayBuffer)
+    reader.readAsArrayBuffer(file)
+  }))
+}
+
 async function japanesePackage() {
   const vocabulary = new Notetype({
     id: 1_700_000_000_001,
@@ -169,6 +178,55 @@ describe('Anki package import', () => {
     await expect(collection.reviewEntries.count()).resolves.toBe(1)
   })
 
+  test('applies newer source scheduling without overwriting a newer local review', async () => {
+    collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
+    const file = await japanesePackage()
+    await (await prepareAnkiImport(file, collection, { SQL, now: new Date('2026-10-01T12:00:00.000Z') })).commit()
+    const source = AnkiCollection.open(await fileBytes(file), SQL)
+    const sourceCard = source.data.cards.find((card) => card.reps === 5)
+    if (!sourceCard) throw new Error('fixture card missing')
+    sourceCard.mod = 1_799_000_000
+    sourceCard.due = 40
+    sourceCard.ivl = 20
+    sourceCard.data = '{"s":20,"d":3}'
+    const updated = new File([(await source.toUint8Array(SQL)).slice().buffer as ArrayBuffer], 'updated.apkg')
+
+    await (await prepareAnkiImport(updated, collection, { SQL, now: new Date('2027-01-01T12:00:00.000Z') })).commit()
+    const importedCard = (await collection.cards.toArray()).find((card) => card.reps === 5)
+    expect(importedCard).toMatchObject({ stability: 20, difficulty: 3, scheduledDays: 20, sourceModifiedAt: new Date(sourceCard.mod * 1000).toISOString() })
+
+    await collection.answer(importedCard!.id, 3, new Date('2030-01-01T12:00:00.000Z'))
+    const afterLocalReview = await collection.cards.get(importedCard!.id)
+    sourceCard.mod = 1_830_000_000
+    sourceCard.due = 60
+    const staleSchedule = new File([(await source.toUint8Array(SQL)).slice().buffer as ArrayBuffer], 'stale-schedule.apkg')
+    await (await prepareAnkiImport(staleSchedule, collection, { SQL, now: new Date('2030-01-02T12:00:00.000Z') })).commit()
+    await expect(collection.cards.get(importedCard!.id)).resolves.toEqual(afterLocalReview)
+  })
+
+  test('restores a filtered card to its original deck and original due day', async () => {
+    collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
+    const file = await japanesePackage()
+    const source = AnkiCollection.open(await fileBytes(file), SQL)
+    const sourceCard = source.data.cards.find((card) => card.reps === 5)
+    const homeDeck = source.data.decks.find((deck) => deck.id === sourceCard?.did)
+    if (!sourceCard || !homeDeck) throw new Error('fixture card or deck missing')
+    const filteredDeckId = 1_700_000_000_099
+    source.data.decks.push({ ...homeDeck, id: filteredDeckId, name: 'Filtered' })
+    sourceCard.odid = homeDeck.id
+    sourceCard.odue = 7
+    sourceCard.did = filteredDeckId
+    sourceCard.due = 1_800_000_000
+    const filtered = new File([(await source.toUint8Array(SQL)).slice().buffer as ArrayBuffer], 'filtered.apkg')
+
+    await (await prepareAnkiImport(filtered, collection, { SQL, now: new Date('2026-10-01T12:00:00.000Z') })).commit()
+    const imported = (await collection.cards.toArray()).find((card) => card.reps === 5)
+    expect(imported).toMatchObject({
+      deckId: `anki-deck:${homeDeck.id}`,
+      due: new Date(source.data.col.crt * 1000 + 7 * 86_400_000).toISOString(),
+    })
+  })
+
   test('maps the supported native rectangular image-occlusion subset', async () => {
     collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
     const prepared = await prepareAnkiImport(await imageOcclusionPackage(), collection, { SQL, now: new Date('2026-10-01T12:00:00.000Z') })
@@ -214,4 +272,5 @@ describe('Anki package import', () => {
     await expect(collection.decks.count()).resolves.toBe(0)
     await expect(collection.notes.count()).resolves.toBe(0)
   })
+
 })

@@ -32,6 +32,7 @@ interface ImportWrites {
   cards: Array<{ value: CardRecord; action: 'create' | 'update' }>
   reviews: ReviewEntry[]
   references: Array<{ value: NoteMediaReference; action: 'create' | 'update' }>
+  deletedReferences: NoteMediaReference[]
   blobs: StoredMedia[]
 }
 
@@ -198,9 +199,10 @@ function cardState(type: number): State {
 }
 
 function cardDue(card: CardRow, data: CollectionData, now: Date) {
+  const due = card.odid && card.odue ? card.odue : card.due
   if (card.type === 0) return now.toISOString()
-  if ((card.queue === 1 || card.queue === 4) && card.due > 1_000_000_000) return isoFromSeconds(card.due, now)
-  return new Date(data.col.crt * 1000 + Math.max(0, card.due) * day).toISOString()
+  if (!card.odid && (card.queue === 1 || card.queue === 4) && due > 1_000_000_000) return isoFromSeconds(due, now)
+  return new Date(data.col.crt * 1000 + Math.max(0, due) * day).toISOString()
 }
 
 function memoryState(card: CardRow) {
@@ -290,6 +292,7 @@ export class PreparedAnkiImport {
       if (this.writes.cards.length) await collection.cards.bulkPut(this.writes.cards.map(({ value }) => value))
       if (this.writes.reviews.length) await collection.reviewEntries.bulkAdd(this.writes.reviews)
       if (this.writes.references.length) await collection.noteMedia.bulkPut(this.writes.references.map(({ value }) => value))
+      if (this.writes.deletedReferences.length) await collection.noteMedia.bulkDelete(this.writes.deletedReferences.map(({ id }) => id))
       if (this.writes.blobs.length) await collection.mediaBlobs.bulkPut(this.writes.blobs)
       const operations: SyncOperation[] = [
         ...this.writes.decks.map(({ value, action }) => operation('deck', value.id, action, value, this.importedAt)),
@@ -298,6 +301,7 @@ export class PreparedAnkiImport {
         ...this.writes.cards.map(({ value, action }) => operation('card', value.id, action, value, this.importedAt)),
         ...this.writes.reviews.map((value) => operation('review', value.id, 'create', value, this.importedAt)),
         ...this.writes.references.map(({ value, action }) => operation('noteMedia', value.id, action, value, this.importedAt)),
+        ...this.writes.deletedReferences.map((value) => ({ opId: crypto.randomUUID(), entityType: 'noteMedia' as const, entityId: value.id, action: 'delete' as const, payload: { id: value.id }, occurredAt: this.importedAt })),
       ]
       if (operations.length) await collection.outbox.bulkAdd(operations)
     })
@@ -307,6 +311,8 @@ export class PreparedAnkiImport {
 
 export async function prepareAnkiImport(file: File, collection: Collection, options: PrepareAnkiImportOptions = {}): Promise<PreparedAnkiImport> {
   if (!/\.(apkg|colpkg)$/i.test(file.name)) throw new Error('Choose an Anki .apkg or .colpkg package')
+  if (!file.size) throw new Error('The selected Anki package is empty')
+  if (file.size > 512 * 1024 * 1024) throw new Error('The selected Anki package is larger than the 512 MB import limit')
   const now = options.now ?? new Date()
   const importedAt = now.toISOString()
   const SQL = options.SQL ?? await browserSql()
@@ -365,6 +371,14 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
       continue
     }
     const rawFields = row.flds.split(fieldSeparator)
+    if (rawFields.length !== sourceType.fields.length) {
+      issues.push({ severity: 'error', code: 'malformed-field-count', subject: row.guid, detail: `Note has ${rawFields.length} fields but ${sourceType.name} requires ${sourceType.fields.length}.` })
+      continue
+    }
+    rawFields.forEach((value, index) => {
+      const unsupportedHtml = value.replace(/<img\b[^>]*>/gi, '').replace(/<br\s*\/?>/gi, '').match(/<[^>]+>/)
+      if (unsupportedHtml) issues.push({ severity: 'warning', code: 'field-html-normalized', subject: `${row.guid} · ${sourceType.fields[index].name}`, detail: `Field HTML ${unsupportedHtml[0]} was converted to plain text because imported field markup is outside the supported template subset.` })
+    })
     const noteId = stableId('note', row.guid)
     let noteTypeId = sourceType.localId
     let fields = Object.fromEntries(sourceType.fields.map((field, index) => [field.id, plainField(rawFields[index] ?? '')]))
@@ -376,6 +390,7 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
         const media = sourceMedia.get(parsed.imageName)
         const mime = media && mimeType(media.name)
         if (!media || !mime || !mime.startsWith('image/')) throw new Error(`Image occlusion source “${parsed.imageName}” is missing or unsupported`)
+        validateMedia(new File([ownedBuffer(media.data)], media.name, { type: mime }))
         const dimensions = imageDimensions(media.data)
         if (!dimensions) throw new Error(`Image dimensions for “${parsed.imageName}” could not be read`)
         const digest = await digestMedia(new Blob([ownedBuffer(media.data)], { type: mime }))
@@ -474,6 +489,7 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
         lapses: Math.max(0, sourceCard.lapses),
         state: cardState(sourceCard.type),
         lastReview: lastReviewMs ? new Date(lastReviewMs).toISOString() : null,
+        sourceModifiedAt: isoFromSeconds(sourceCard.mod, now),
       })
       if (sourceCard.queue < -1) issues.push({ severity: 'warning', code: 'buried-as-suspended', subject: String(sourceCard.id), detail: 'Buried card imported as suspended because temporary bury state is not represented locally.' })
       if (sourceCard.reps > 0 && memory.stability === undefined) issues.push({ severity: 'warning', code: 'scheduler-fallback', subject: String(sourceCard.id), detail: 'No FSRS memory state was present; the Anki interval was retained as fallback stability.' })
@@ -515,7 +531,7 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
   const referencedNames = new Set(references.map((reference) => reference.displayName))
   for (const media of data.media) if (!referencedNames.has(media.name)) issues.push({ severity: 'warning', code: 'media-unreferenced', subject: media.name, detail: 'Unreferenced or template-static media is reported but not attached to a note.' })
 
-  const writes: ImportWrites = { decks: [], noteTypes: [], notes: [], cards: [], reviews: [], references: [], blobs: [] }
+  const writes: ImportWrites = { decks: [], noteTypes: [], notes: [], cards: [], reviews: [], references: [], deletedReferences: [], blobs: [] }
   const snapshots: Snapshot[] = []
   const duplicates: AnkiDuplicateSummary = { create: 0, update: 0, keepLocal: 0, unchanged: 0 }
   async function decide<T extends { id: string; updatedAt?: string }>(table: 'decks' | 'noteTypes' | 'notes' | 'noteMedia', value: T) {
@@ -533,16 +549,35 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
     const action = await decide('noteTypes', value)
     if (action === 'create' || action === 'update') writes.noteTypes.push({ value, action })
   }
+  const updatedNoteIds = new Set<string>()
   for (const value of notes) {
     const action = await decide('notes', value)
     duplicates[action] += 1
-    if (action === 'create' || action === 'update') writes.notes.push({ value, action })
+    if (action === 'create' || action === 'update') {
+      writes.notes.push({ value, action })
+      if (action === 'update') updatedNoteIds.add(value.id)
+    }
   }
   for (const value of cards) {
     const existing = await collection.cards.get(value.id)
     snapshots.push({ table: 'cards', id: value.id, value: fingerprint(existing) })
     if (!existing) writes.cards.push({ value, action: 'create' })
-    else if ((!existing.lastReview && value.lastReview) || (existing.lastReview && value.lastReview && value.lastReview > existing.lastReview)) writes.cards.push({ value, action: 'update' })
+    else {
+      const incomingModified = Date.parse(value.sourceModifiedAt ?? '')
+      const previousSourceModified = Date.parse(existing.sourceModifiedAt ?? '')
+      const localReview = Date.parse(existing.lastReview ?? '')
+      const sourceIsNewer = Number.isFinite(incomingModified) && (!Number.isFinite(previousSourceModified) || incomingModified > previousSourceModified)
+      const localScheduleIsNotNewer = !Number.isFinite(localReview) || localReview <= incomingModified
+      if ((sourceIsNewer && localScheduleIsNotNewer) || (!existing.lastReview && value.lastReview)) writes.cards.push({ value, action: 'update' })
+    }
+  }
+  const incomingCardIds = new Set(cards.map(({ id }) => id))
+  for (const noteId of updatedNoteIds) {
+    for (const existing of await collection.cards.where('noteId').equals(noteId).toArray()) {
+      if (incomingCardIds.has(existing.id) || existing.suspended) continue
+      snapshots.push({ table: 'cards', id: existing.id, value: fingerprint(existing) })
+      writes.cards.push({ value: { ...existing, suspended: true }, action: 'update' })
+    }
   }
   for (const value of reviews) {
     const existing = await collection.reviewEntries.get(value.id)
@@ -552,6 +587,15 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
   for (const value of references) {
     const action = await decide('noteMedia', value)
     if (action === 'create' || action === 'update') writes.references.push({ value, action })
+  }
+  const incomingReferenceIds = new Set(references.map(({ id }) => id))
+  for (const noteId of updatedNoteIds) {
+    for (const existing of await collection.noteMedia.where('noteId').equals(noteId).toArray()) {
+      const importedReference = existing.id.startsWith(`${noteId}:media:`) || existing.id === `${noteId}:image-occlusion-source`
+      if (!importedReference || incomingReferenceIds.has(existing.id)) continue
+      snapshots.push({ table: 'noteMedia', id: existing.id, value: fingerprint(existing) })
+      writes.deletedReferences.push(existing)
+    }
   }
   for (const value of blobs.values()) {
     const existing = await collection.mediaBlobs.get(value.digest)

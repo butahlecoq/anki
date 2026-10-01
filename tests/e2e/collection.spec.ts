@@ -10,6 +10,7 @@ import { Deck as AnkiDeck, Note as AnkiNote, Notetype as AnkiNotetype, Package a
 const REVIEW_TIME = new Date('2026-09-30T12:00:00.000Z')
 const execFile = promisify(execFileCallback)
 const WEB_URL = `http://127.0.0.1:${process.env.KIROKU_WEB_PORT ?? '4173'}`
+const SYNC_URL = `http://127.0.0.1:${process.env.KIROKU_SYNC_PORT ?? '4174'}`
 
 async function importFixture() {
   const SQL = await initSqlJs({ locateFile: () => './node_modules/sql.js/dist/sql-wasm.wasm' })
@@ -47,7 +48,7 @@ async function pairingCode() {
 
 async function pair(page: import('@playwright/test').Page) {
   await page.getByRole('button', { name: 'Connect a PC' }).click()
-  await page.getByLabel('PC service address').fill('http://127.0.0.1:4174')
+  await page.getByLabel('PC service address').fill(SYNC_URL)
   await page.getByLabel('One-time pairing code').fill(await pairingCode())
   await page.getByRole('button', { name: 'Connect device' }).click()
   await expect(page.getByText('PC connected. Your collections are ready to sync.')).toBeVisible()
@@ -97,6 +98,41 @@ test('learner previews and imports an Anki package before studying its media off
   await expect(offlineImage).toBeVisible()
   await expect.poll(() => offlineImage.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true)
   await expect(page.getByText('Offline shell active')).toBeVisible()
+})
+
+test('a clean phone syncs imported package media and keeps it offline', async ({ browser, page: pc }) => {
+  const phoneContext = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
+  try {
+    const phone = await phoneContext.newPage()
+    await phone.clock.setFixedTime(REVIEW_TIME)
+    await phone.goto(`${WEB_URL}/`)
+
+    await pc.getByRole('button', { name: 'Import Anki package' }).click()
+    const dialog = pc.getByRole('dialog', { name: 'Import Anki package' })
+    await dialog.getByLabel('Anki package', { exact: true }).setInputFiles({ name: 'japanese.apkg', mimeType: 'application/octet-stream', buffer: await importFixture() })
+    await pc.getByRole('button', { name: 'Import package' }).click()
+    await pair(pc)
+    await pair(phone)
+    await pc.getByRole('button', { name: 'Sync now' }).click()
+    await expect(pc.getByText(/2 uploaded and 0 downloaded/)).toBeVisible()
+    await phone.getByRole('button', { name: 'Sync now' }).click()
+    await phone.getByRole('button', { name: 'Open Imported::Japanese' }).click()
+    await phone.getByRole('button', { name: 'Study now' }).click()
+
+    const image = phone.getByRole('img', { name: 'cat.png' })
+    await expect(image).toBeVisible()
+    await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true)
+    await expect(phone.locator('audio')).toHaveCount(1)
+    await phone.evaluate(async () => { await navigator.serviceWorker.ready })
+    await phoneContext.setOffline(true)
+    await phone.reload({ waitUntil: 'domcontentloaded' }).catch(() => undefined)
+    const offlineImage = phone.getByRole('img', { name: 'cat.png' })
+    await expect(offlineImage).toBeVisible()
+    await expect.poll(() => offlineImage.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true)
+    await expect(phone.getByText('Offline shell active')).toBeVisible()
+  } finally {
+    await phoneContext.close()
+  }
 })
 
 test('learner manages a note type and previews a second card in isolation', async ({ page }) => {
