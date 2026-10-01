@@ -404,6 +404,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   const [reviewsRecorded, setReviewsRecorded] = useState(0)
   const [isAnswering, setIsAnswering] = useState(false)
   const [typedDraft, setTypedDraft] = useState<{ cardId?: string; value: string }>({ value: '' })
+  const typedResultRef = useRef<HTMLDivElement>(null)
   const cardId = queue?.[0]
   const typedInput = typedDraft.cardId === cardId ? typedDraft.value : ''
   const card = useLiveQuery(async () => cardId ? await collection.cards.get(cardId) ?? null : undefined, [cardId])
@@ -416,6 +417,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     ? tryRenderNoteTemplate(template.front, noteType, note.fields, undefined, card.clozeOrdinal, 'front') : undefined
   const backResult = frontResult?.ok && template && noteType && note && card
     ? tryRenderNoteTemplate(template.back, noteType, note.fields, frontResult.value.html, card.clozeOrdinal, 'back') : undefined
+  const typedAnswer = frontResult?.ok ? frontResult.value.typedAnswer : undefined
   const renderError = frontResult && !frontResult.ok ? frontResult.error : backResult && !backResult.ok ? backResult.error : undefined
   const unavailable = card === null || note === null || noteType === null ||
     Boolean(card?.suspended) || (Boolean(noteType && card) && !template) ||
@@ -424,6 +426,10 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   useEffect(() => {
     collection.dueCards(deckId, new Date()).then((cards) => setQueue(cards.map((card) => card.id)))
   }, [deckId])
+
+  useEffect(() => {
+    if (showAnswer && typedAnswer !== undefined) typedResultRef.current?.focus()
+  }, [cardId, showAnswer, typedAnswer])
 
   useEffect(() => {
     if (cardId && unavailable && (card === null || note === null || noteType === null ||
@@ -475,7 +481,6 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   </section>
 
   const fields = Object.fromEntries(noteType.fields.map((field) => [field.name, note.fields[field.id] ?? '']))
-  const typedAnswer = frontResult?.ok ? frontResult.value.typedAnswer : undefined
   const answerDiff = showAnswer && typedAnswer !== undefined ? compareTypedAnswer(typedAnswer, typedInput) : []
 
   return (
@@ -489,7 +494,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
         {typedAnswer !== undefined && !showAnswer && <label className="typed-answer">Type your answer
           <input autoComplete="off" value={typedInput} onChange={(event) => setTypedDraft({ cardId, value: event.target.value })} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); setShowAnswer(true) } }} />
         </label>}
-        {typedAnswer !== undefined && showAnswer && <div className="typed-answer-result" aria-label="Typed answer comparison">
+        {typedAnswer !== undefined && showAnswer && <div ref={typedResultRef} className="typed-answer-result" role="status" aria-live="polite" aria-label="Typed answer comparison" tabIndex={-1}>
           <span className="section-code">YOUR ANSWER</span>
           <div className="answer-diff">{answerDiff.map((part, index) => <span key={index} className={`answer-${part.kind}`} aria-label={`${part.kind === 'good' ? 'Correct' : part.kind === 'bad' ? 'Incorrect' : 'Missing'}: ${part.text}`}>{part.text}</span>)}</div>
           <p>Expected: <strong>{typedAnswer}</strong></p>

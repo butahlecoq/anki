@@ -187,6 +187,18 @@ describe('local collection', () => {
     expect(collection.cardGenerationStatus(type, note.fields).skipped).toEqual([{ templateId: type.templates[1].id, reason: 'Front has no visible field content' }])
   })
 
+  test('creates a card when a typed answer is the only front prompt', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Typing')
+    const type = await collection.createNoteType({ name: 'Typed', fields: [{ name: 'Word' }], templates: [
+      { name: 'Type word', front: '{{type:Word}}', back: '{{Word}}', css: '' },
+    ] })
+    const note = await collection.createNote(deck.id, type.id, { [type.fields[0].id]: '猫' })
+    expect(collection.cardGenerationStatus(type, note.fields).eligible).toHaveLength(1)
+    await expect(collection.cards.where('noteId').equals(note.id).count()).resolves.toBe(1)
+    await expect(collection.dueCards(deck.id)).resolves.toHaveLength(1)
+  })
+
   test('suspends an ineligible generated card and restores its schedule when content returns', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const deck = await collection.createDeck('Vocabulary')

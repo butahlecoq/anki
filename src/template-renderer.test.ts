@@ -20,10 +20,17 @@ describe('renderTemplate', () => {
     expect(renderTemplate('{{kana:Reading}}', fields).html).toBe('よの なか &lt;img&gt;[x]')
     expect(renderTemplate('{{kanji:Reading}}', fields).html).toBe('世の 中 &lt;img&gt;[x]')
     expect(renderTemplate('{{text:Reading}}', fields).html).toBe('世[よ]の 中[なか] &lt;img&gt;[x]')
+    const adjacent = { Reading: '私[わたし]は猫[ねこ]と食べる[たべる]' }
+    expect(renderTemplate('{{furigana:Reading}}', adjacent).html)
+      .toBe('<ruby>私<rt>わたし</rt></ruby>は<ruby>猫<rt>ねこ</rt></ruby>と<ruby>食べる<rt>たべる</rt></ruby>')
+    expect(renderTemplate('{{kana:Reading}}', adjacent).html).toBe('わたしはねことたべる')
+    expect(renderTemplate('{{kanji:Reading}}', adjacent).html).toBe('私は猫と食べる')
   })
 
   test('provides typed-answer metadata without rendering an input in the sandbox', () => {
     expect(renderTemplate('Say {{type:Word}}', { Word: '猫' })).toMatchObject({ html: 'Say ', typedAnswer: '猫' })
+    expect(renderTemplate('{{type:Word}}', { Word: '猫' })).toEqual({ html: '', isEmpty: false, typedAnswer: '猫' })
+    expect(renderTemplate('{{type:Word}}', { Word: ' ' }).isEmpty).toBe(true)
     expect(renderTemplate('{{type:cloze:Text}}', { Text: '{{c1::猫::animal}}' }, undefined, { kind: 'cloze', ordinal: 1, side: 'front' }))
       .toMatchObject({ typedAnswer: '猫' })
   })
@@ -50,6 +57,8 @@ describe('renderTemplate', () => {
     expect(renderTemplate('{{#c1}}first{{/c1}}{{^c2}} not second{{/c2}}{{cloze:Text}}', fields, undefined, { kind: 'cloze', ordinal: 1 }).html)
       .toBe('first not second<span class="cloze">[…]</span>')
     expect(() => clozeOrdinals('{{c1::outer {{c2::inner}}}}')).toThrow(/Malformed cloze deletion/)
+    expect(() => clozeOrdinals('{{c1::foo::hint {{c2::bar}}}}')).toThrow(/Malformed cloze deletion/)
+    expect(() => clozeOrdinals('{{c1::foo::hint {{nested}}}}')).toThrow(/Malformed cloze deletion/)
   })
 
   test('renders cloze answers on the back when FrontSide is supplied', () => {

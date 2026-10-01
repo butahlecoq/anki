@@ -27,7 +27,7 @@ function parseCloze(value: string): Array<string | ClozePart> {
     const ordinal = Number(match[1])
     if (!Number.isSafeInteger(ordinal) || ordinal < 1) throw new Error(`Cloze ordinal must be a positive integer near character ${match.index + 1}`)
     const [answer, ...hintParts] = match[2].split('::')
-    if (!answer || answer.includes('{{') || hintParts.length > 1) throw new Error(`Malformed cloze deletion near character ${match.index + 1}`)
+    if (!answer || answer.includes('{{') || hintParts.length > 1 || hintParts[0]?.includes('{{')) throw new Error(`Malformed cloze deletion near character ${match.index + 1}`)
     parts.push({ ordinals: [ordinal], answer, ...(hintParts.length ? { hint: hintParts[0] } : {}) })
     cursor = match.index + match[0].length
   }
@@ -56,7 +56,7 @@ function renderCloze(value: string, ordinal: number, side: 'front' | 'back'): st
 }
 
 function renderReading(value: string, filter: 'furigana' | 'kana' | 'kanji'): string {
-  const annotation = /([^\s[\]<>]+)\[([^[\]<>]+)\]/g
+  const annotation = /(\p{Script=Han}+(?:[\p{Script=Hiragana}\p{Script=Katakana}]+)?)\[([^[\]<>]+)\]/gu
   let html = ''
   let cursor = 0
   for (const match of value.matchAll(annotation)) {
@@ -144,6 +144,7 @@ export function renderTemplate(template: string, fields: Record<string, string>,
       if (filter === 'type' || filter === 'type-cloze') {
         if (typedAnswer !== undefined) throw new Error('Only one typed answer is supported per card')
         typedAnswer = filter === 'type-cloze' ? parseCloze(value).filter((part): part is ClozePart => typeof part !== 'string' && part.ordinals.includes(ordinal ?? 0)).map((part) => part.answer).join(', ') : value
+        if (typedAnswer.trim()) visibleField = true
       } else {
         if (value.trim() && name !== 'FrontSide') visibleField = true
         html += name === 'FrontSide' ? value : filter === 'cloze'
