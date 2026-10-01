@@ -28,6 +28,14 @@ describe('renderTemplate', () => {
       .toMatchObject({ typedAnswer: '猫' })
   })
 
+  test('keeps an exact legacy field name with a colon as a field, not a filter', () => {
+    expect(() => validateTemplate('{{type:Word}}', ['type:Word', 'Word'], 'front')).not.toThrow()
+    expect(renderTemplate('{{type:Word}}', { 'type:Word': 'legacy value', Word: 'typed value' }))
+      .toEqual({ html: 'legacy value', isEmpty: false })
+    expect(renderTemplate('{{reverse:Word}}', { 'reverse:Word': '<b>literal</b>' }))
+      .toEqual({ html: '&lt;b&gt;literal&lt;/b&gt;', isEmpty: false })
+  })
+
   test('rejects unsupported filters and malformed clozes through a safe result', () => {
     expect(() => validateTemplate('{{reverse:Word}}', ['Word'], 'front')).toThrow(/Unsupported template filter: reverse/)
     expect(() => validateTemplate('{{type:nc:Word}}', ['Word'], 'front')).toThrow(/Unsupported template filter: type:nc/)

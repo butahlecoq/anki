@@ -71,8 +71,9 @@ function renderReading(value: string, filter: 'furigana' | 'kana' | 'kanji'): st
 
 type Replacement = { field: string; filter?: 'text' | 'furigana' | 'kana' | 'kanji' | 'cloze' | 'type' | 'type-cloze' }
 
-function replacement(raw: string): Replacement {
+function replacement(raw: string, known: ReadonlySet<string>): Replacement {
   const name = raw.trim()
+  if (known.has(name)) return { field: name }
   const parts = name.split(':')
   if (parts.length === 1) return { field: name }
   const [filter, second, third] = parts
@@ -90,7 +91,7 @@ export function validateTemplate(template: string, fieldNames: readonly string[]
     if (/{{|}}/.test(template.slice(cursor, match.index))) throw new Error('Unmatched template delimiter')
     const [, marker, rawName] = match
     cursor = match.index + match[0].length
-    const parsed = replacement(rawName)
+    const parsed = replacement(rawName, known)
     const name = parsed.field
     if (marker === '/') {
       if (section !== name) throw new Error(`Unmatched template conditional: ${name}`)
@@ -117,6 +118,7 @@ export function validateTemplate(template: string, fieldNames: readonly string[]
 /** Replace fields without evaluating template text or field contents as code. */
 export function renderTemplate(template: string, fields: Record<string, string>, front?: string, options: RenderOptions = {}): RenderedTemplate {
   const side = options.side ?? (front === undefined ? 'front' : 'back')
+  const known = new Set(Object.keys(fields))
   let html = ''
   let cursor = 0
   let section: { name: string; enabled: boolean } | undefined
@@ -125,7 +127,7 @@ export function renderTemplate(template: string, fields: Record<string, string>,
   for (const match of template.matchAll(token)) {
     const position = match.index
     const [source, marker, rawName] = match
-    const { field: name, filter } = replacement(rawName)
+    const { field: name, filter } = replacement(rawName, known)
     if (!section || section.enabled) html += template.slice(cursor, position)
     cursor = position + source.length
     const ordinal = options.ordinal ?? (filter === 'cloze' || filter === 'type-cloze' ? clozeOrdinals(fields[name] ?? '')[0] : undefined)

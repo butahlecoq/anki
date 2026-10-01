@@ -24,6 +24,22 @@ describe('local collection', () => {
     await expect(collection.cards.get('old-card')).resolves.toMatchObject({ id: 'old-card', reps: 2, stability: 4 })
   })
 
+  test('renders an upgraded v6 template whose field name contains a colon', async () => {
+    const databaseName = `kiroku-test-${crypto.randomUUID()}`
+    const old = new Dexie(databaseName)
+    old.version(6).stores({ decks: 'id, name, createdAt', notes: 'id, deckId, typeId, updatedAt', cards: 'id, deckId, noteId, templateId, due, state', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId', deletedEntities: 'key, entityType, entityId, occurredAt', noteMedia: 'id, noteId, digest, side, kind, updatedAt', mediaBlobs: 'digest, verifiedAt', noteTypes: 'id, name, updatedAt' })
+    await old.table('noteTypes').add({ id: 'legacy-type', name: 'Legacy', fields: [{ id: 'legacy-field', name: 'type:Word' }], templates: [{ id: 'legacy-template', name: 'Card', front: '{{type:Word}}', back: '{{type:Word}}', css: '' }], protected: false, createdAt: '2026-01-01', updatedAt: '2026-01-01' })
+    await old.table('notes').add({ id: 'legacy-note', deckId: 'deck-1', type: 'custom', typeId: 'legacy-type', fields: { 'legacy-field': '猫' }, createdAt: '2026-01-01', updatedAt: '2026-01-01' })
+    old.close()
+    collection = createCollection(databaseName)
+    const type = await collection.noteTypes.get('legacy-type')
+    const note = await collection.notes.get('legacy-note')
+    expect(type && note && collection.cardGenerationStatus(type, note.fields).eligible).toHaveLength(1)
+    expect(type && note && collection.tryCardGenerationStatus(type, note.fields)).toMatchObject({ ok: true })
+    const renamed = await collection.updateNoteType('legacy-type', { fields: [{ id: 'legacy-field', name: 'Prompt' }] })
+    expect(renamed.templates[0]).toMatchObject({ front: '{{Prompt}}', back: '{{Prompt}}' })
+  })
+
   test('creates one cloze card per ordinal and preserves its schedule across deletion and restoration', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const deck = await collection.createDeck('Sentences')
@@ -62,6 +78,8 @@ describe('local collection', () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const draft = { name: 'Cloze', kind: 'cloze' as const, fields: [{ name: 'Text' }], templates: [{ name: 'Deletion', front: '{{cloze:Text}}', back: '{{cloze:Text}}', css: '' }] }
     await expect(collection.createNoteType({ ...draft, templates: [{ ...draft.templates[0], back: '{{Text}}' }] })).rejects.toThrow(/Cloze front and back/)
+    await expect(collection.createNoteType({ ...draft, fields: [{ name: 'Text' }, { name: 'cloze:Text' }] })).rejects.toThrow(/cloze filter/i)
+    await expect(collection.createNoteType({ ...draft, fields: [{ name: 'Text' }, { name: 'c1' }] })).rejects.toThrow(/reserved/i)
     const type = await collection.createNoteType(draft)
     const renamed = await collection.updateNoteType(type.id, { fields: [{ ...type.fields[0], name: 'Sentence' }] })
     expect(renamed.templates[0]).toMatchObject({ front: '{{cloze:Sentence}}', back: '{{cloze:Sentence}}' })
@@ -91,6 +109,30 @@ describe('local collection', () => {
       await remote.applyRemoteChanges(operations, operations.length)
       expect(await remote.cards.where('noteId').equals(note.id).toArray()).toEqual(await collection.cards.where('noteId').equals(note.id).toArray())
       await expect(remote.receivedOperations.count()).resolves.toBe(operations.length)
+    } finally {
+      await remote.delete()
+    }
+  })
+
+  test('keeps a live cloze card active after a mixed inbound note and stale suspension batch', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const remote = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    try {
+      const deck = await collection.createDeck('Sentences')
+      const type = await collection.createNoteType({ name: 'Cloze', kind: 'cloze', fields: [{ name: 'Text' }], templates: [{ name: 'Deletion', front: '{{cloze:Text}}', back: '{{cloze:Text}}', css: '' }] })
+      const field = type.fields[0].id
+      const note = await collection.createNote(deck.id, type.id, { [field]: '{{c1::猫}} {{c2::犬}}' })
+      const initial = await collection.pendingOperations()
+      await remote.applyRemoteChanges(initial, initial.length)
+      await collection.acknowledgeOperations(initial.map((operation) => operation.opId))
+      await collection.updateNote(note.id, { [field]: '{{c1::猫}} 犬' }, new Date('2026-10-02T00:00:00Z'))
+      const removal = await collection.pendingOperations()
+      await remote.updateNote(note.id, { [field]: '{{c1::猫}} {{c2::犬}}！' }, new Date('2026-10-03T00:00:00Z'))
+      const retained = await remote.pendingOperations()
+      await remote.applyRemoteChanges([...removal, ...retained], initial.length + removal.length + retained.length)
+      await expect(remote.notes.get(note.id)).resolves.toMatchObject({ fields: { [field]: '{{c1::猫}} {{c2::犬}}！' } })
+      await expect(remote.cards.get(`${note.id}:${type.templates[0].id}:c2`)).resolves.toMatchObject({ suspended: false })
+      await expect(remote.pendingOperations()).resolves.toHaveLength(retained.length)
     } finally {
       await remote.delete()
     }
