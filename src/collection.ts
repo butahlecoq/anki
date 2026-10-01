@@ -1542,7 +1542,10 @@ export class Collection extends Dexie {
       const siblings = await this.cards.where('noteId').equals(card.noteId).toArray()
       for (const sibling of siblings) {
         if (sibling.id === card.id || isBuried(sibling, now)) continue
-        const bury = (sibling.state === State.New && group.buryNewSiblings) || (sibling.state === State.Review && group.buryReviewSiblings)
+        // Learning and relearning cards carry scheduled material from prior study, so
+        // they share the review-sibling policy. This includes interday learning steps.
+        const bury = (sibling.state === State.New && group.buryNewSiblings)
+          || ((sibling.state === State.Review || isLearningCard(sibling)) && group.buryReviewSiblings)
         if (!bury) continue
         const revised = withPolicyDefaults({ ...sibling, buriedUntil })
         await this.cards.put(revised)

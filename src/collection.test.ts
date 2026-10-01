@@ -211,6 +211,45 @@ describe('local collection', () => {
     await expect(collection.notes.get(tagOnlyNote.id)).resolves.toMatchObject({ tags: ['needs-attention'] })
   })
 
+  test('treats due learning and relearning siblings as review siblings for burial', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const group = await collection.createDeckOptionGroup('Bury learning siblings')
+    await collection.updateDeckOptionGroup(group.id, {
+      ...group,
+      buryNewSiblings: false,
+      buryReviewSiblings: true,
+    })
+    const deck = await collection.createDeck('Policies', { optionGroupId: group.id })
+    const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
+    const reviewed = (await collection.cards.where('noteId').equals(note.id).first())!
+    const now = new Date('2026-10-01T12:00:00.000Z')
+    const intraday = {
+      ...directCard('intraday-learning-sibling', deck.id, note.id, State.Learning, new Date(now.getTime() - 60_000).toISOString()),
+      manualSuspended: false,
+      templateSuspended: false,
+      buriedUntil: null,
+      scheduledDays: 0,
+    }
+    const interday = {
+      ...directCard('interday-relearning-sibling', deck.id, note.id, State.Relearning, new Date(now.getTime() - 60_000).toISOString()),
+      manualSuspended: false,
+      templateSuspended: false,
+      buriedUntil: null,
+      scheduledDays: 1,
+    }
+    await collection.cards.bulkAdd([intraday, interday])
+    await collection.cards.update(reviewed.id, { state: State.Review, due: now.toISOString(), stability: 2, difficulty: 5, reps: 3 })
+
+    await collection.answer(reviewed.id, Rating.Good, now)
+
+    const nextBoundary = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString()
+    await expect(collection.cards.get(intraday.id)).resolves.toMatchObject({ buriedUntil: nextBoundary })
+    await expect(collection.cards.get(interday.id)).resolves.toMatchObject({ buriedUntil: nextBoundary })
+    const due = await collection.dueCards(deck.id, now)
+    expect(due).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: intraday.id })]))
+    expect(due).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: interday.id })]))
+  })
+
   test('keeps interval previews and persisted states aligned for every rating', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const deck = await collection.createDeck('Ratings')
