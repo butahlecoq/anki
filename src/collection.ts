@@ -620,7 +620,7 @@ export class Collection extends Dexie {
   private cardIsEligible(noteType: NoteType, note: Note, card: CardRecord): boolean {
     try {
       return this.cardGenerationStatus(noteType, note.fields, note.imageOcclusion).eligible.some((template) =>
-        template.id === card.templateId && template.clozeOrdinal === card.clozeOrdinal && template.occlusionId === card.occlusionId &&
+        template.id === card.templateId && template.clozeOrdinal === card.clozeOrdinal && template.occlusionId === card.occlusionId && template.occlusionOrdinal === card.occlusionOrdinal &&
         (noteType.kind !== 'cloze' || card.id === `${note.id}:${template.id}:c${template.clozeOrdinal}`) &&
         (noteType.kind !== 'image-occlusion' || card.id === `${note.id}:${template.id}:m${template.occlusionId}`))
     } catch {
@@ -953,6 +953,14 @@ export class Collection extends Dexie {
       // Resolve type and note changes before their cards, even when equal timestamps arrive in index order.
       for (const change of [...changes].sort((left, right) => inboundDependencyOrder[left.entityType] - inboundDependencyOrder[right.entityType])) {
         if (await this.receivedOperations.get(change.opId)) continue
+        if (change.entityType === 'noteMedia') {
+          const previous = await this.noteMedia.get(change.entityId)
+          if (previous) affectedNoteIds.add(previous.noteId)
+        }
+        if (change.entityType === 'noteType' && [BASIC_NOTE_TYPE_ID, IMAGE_OCCLUSION_NOTE_TYPE_ID].includes(change.entityId)) {
+          await this.receivedOperations.add({ opId: change.opId })
+          continue
+        }
         if (change.action !== 'delete') {
           const related = relatedEntityIds(change)
           const deleted = await Promise.all([
@@ -970,6 +978,18 @@ export class Collection extends Dexie {
               if (!incoming.imageOcclusion) throw new Error('Synced image occlusion metadata is missing')
               validateImageOcclusion(incoming.imageOcclusion)
               if (!incoming.tags || !Array.isArray(incoming.tags)) throw new Error('Synced image occlusion tags are invalid')
+              const previous = await this.notes.get(incoming.id)
+              const previousCards = await this.cards.where('noteId').equals(incoming.id).toArray()
+              const priorOrdinals = new Map<string, number>([
+                ...(previous?.imageOcclusion?.masks ?? []).map((mask) => [mask.id, mask.ordinal] as const),
+                ...previousCards.filter((card) => card.occlusionId && card.occlusionOrdinal).map((card) => [card.occlusionId!, card.occlusionOrdinal!] as const),
+              ])
+              const nextOrdinal = previous?.imageOcclusion?.nextOrdinal ?? 1
+              if (incoming.imageOcclusion.nextOrdinal < nextOrdinal) throw new Error('Synced image occlusion mask ordinal cannot decrease')
+              for (const mask of incoming.imageOcclusion.masks) {
+                const prior = priorOrdinals.get(mask.id)
+                if ((prior !== undefined && prior !== mask.ordinal) || (prior === undefined && mask.ordinal < nextOrdinal)) throw new Error('Synced image occlusion mask ordinal cannot change or be reused')
+              }
             }
             if (await this.deletedEntities.get(tombstoneKey('noteType', incoming.typeId))) {
               await this.receivedOperations.add({ opId: change.opId })
@@ -981,6 +1001,15 @@ export class Collection extends Dexie {
             const note = await this.notes.get(incoming.noteId)
             const noteType = note && await this.noteTypes.get(note.typeId)
             const deletedType = note && !noteType && await this.deletedEntities.get(tombstoneKey('noteType', note.typeId))
+            if (note && noteType?.kind === 'image-occlusion') {
+              const existing = await this.cards.get(incoming.id)
+              const mask = note.imageOcclusion?.masks.find((item) => item.id === incoming.occlusionId)
+              const expectedOrdinal = existing?.occlusionOrdinal ?? mask?.ordinal
+              if (!incoming.occlusionId || incoming.id !== `${note.id}:${IMAGE_OCCLUSION_TEMPLATE_ID}:m${incoming.occlusionId}` || incoming.templateId !== IMAGE_OCCLUSION_TEMPLATE_ID || expectedOrdinal !== incoming.occlusionOrdinal) {
+                await this.receivedOperations.add({ opId: change.opId })
+                continue
+              }
+            }
             if (note && (deletedType || (noteType && !this.cardIsEligible(noteType, note, incoming))) && !incoming.suspended) {
               await this.receivedOperations.add({ opId: change.opId })
               continue
@@ -1010,7 +1039,7 @@ export class Collection extends Dexie {
           const note = existingCard && await this.notes.get(existingCard.noteId)
           const noteType = note && await this.noteTypes.get(note.typeId)
           const deletedType = note && !noteType && await this.deletedEntities.get(tombstoneKey('noteType', note.typeId))
-          if (existingCard && note && (deletedType || (noteType && !noteType.templates.some((template) => template.id === existingCard.templateId)))) {
+          if (existingCard && note && (deletedType || (noteType && (this.cardIsEligible(noteType, note, existingCard) || !noteType.templates.some((template) => template.id === existingCard.templateId))))) {
             await this.receivedOperations.add({ opId: change.opId })
             continue
           }
@@ -1052,6 +1081,10 @@ export class Collection extends Dexie {
         else if (change.entityType === 'review') await this.reviewEntries.put(change.payload as ReviewEntry)
         await this.receivedOperations.add({ opId: change.opId })
         if (change.entityType === 'note') affectedNoteIds.add(change.entityId)
+        if (change.entityType === 'noteMedia') {
+          const reference = change.payload as Partial<NoteMediaReference> | undefined
+          if (reference?.noteId) affectedNoteIds.add(reference.noteId)
+        }
         if (change.entityType === 'card') {
           const noteId = (change.payload as Partial<CardRecord> | undefined)?.noteId
           if (noteId) affectedNoteIds.add(noteId)
@@ -1065,6 +1098,10 @@ export class Collection extends Dexie {
         const note = await this.notes.get(noteId)
         if (!note) continue
         const noteType = await this.noteTypes.get(note.typeId)
+        if (noteType?.kind === 'image-occlusion') {
+          const source = note.imageOcclusion && await this.noteMedia.get(note.imageOcclusion.sourceMediaId)
+          if (!source || source.noteId !== note.id || source.kind !== 'image' || !['image/png', 'image/jpeg', 'image/webp'].includes(source.mimeType) || source.side !== 'front' || !/^[a-f0-9]{64}$/.test(source.digest)) throw new Error('Image occlusion source image reference is invalid')
+        }
         const generation = noteType && this.tryCardGenerationStatus(noteType, note.fields, note.imageOcclusion)
         const eligible = new Set(generation?.ok ? generation.value.eligible.map((template) => cardKey({ templateId: template.id, clozeOrdinal: template.clozeOrdinal, occlusionId: template.occlusionId })) : [])
         for (const card of await this.cards.where('noteId').equals(noteId).toArray()) {

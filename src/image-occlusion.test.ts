@@ -122,6 +122,95 @@ test('syncs image occlusion metadata and ignores stale updates to removed mask c
   }
 })
 
+test('ignores a remote deletion of an active reviewed mask card', async () => {
+  collection = createCollection(`kiroku-io-${crypto.randomUUID()}`)
+  const deck = await collection.createDeck('Anatomy')
+  const note = await collection.createImageOcclusionNote(deck.id, { image: image(), imageWidth: 800, imageHeight: 600, header: '', backExtra: '', tags: [], masks: [mask('alpha', 0.1)] })
+  const cardId = `${note.id}:${IMAGE_OCCLUSION_TEMPLATE_ID}:malpha`
+  await collection.answer(cardId, Rating.Good, new Date('2026-10-01T12:00:00Z'))
+  await collection.applyRemoteChanges([{ opId: 'delete-active-mask-card', entityType: 'card', entityId: cardId, action: 'delete', occurredAt: '2026-10-02', payload: { id: cardId, noteId: note.id } }], 1)
+  await expect(collection.cards.get(cardId)).resolves.toMatchObject({ reps: 1 })
+  await expect(collection.reviewEntries.where('cardId').equals(cardId).count()).resolves.toBe(1)
+  await expect(collection.deletedEntities.get(`card:${cardId}`)).resolves.toBeUndefined()
+  await expect(collection.receivedOperations.get('delete-active-mask-card')).resolves.toBeDefined()
+})
+
+test('ignores an inbound card update that changes a mask ordinal even if suspended', async () => {
+  collection = createCollection(`kiroku-io-${crypto.randomUUID()}`)
+  const deck = await collection.createDeck('Anatomy')
+  const note = await collection.createImageOcclusionNote(deck.id, { image: image(), imageWidth: 800, imageHeight: 600, header: '', backExtra: '', tags: [], masks: [mask('alpha', 0.1)] })
+  const cardId = `${note.id}:${IMAGE_OCCLUSION_TEMPLATE_ID}:malpha`
+  const card = (await collection.cards.get(cardId))!
+  await collection.applyRemoteChanges([{ opId: 'mutated-mask-card', entityType: 'card', entityId: cardId, action: 'update', occurredAt: '2026-10-02', payload: { ...card, occlusionOrdinal: 99, suspended: true } }], 1)
+  await expect(collection.cards.get(cardId)).resolves.toMatchObject({ occlusionOrdinal: 1 })
+})
+
+test('rejects remote source deletion and cross-note source links without advancing the cursor', async () => {
+  collection = createCollection(`kiroku-io-${crypto.randomUUID()}`)
+  const deck = await collection.createDeck('Anatomy')
+  const first = await collection.createImageOcclusionNote(deck.id, { image: image(), imageWidth: 800, imageHeight: 600, header: '', backExtra: '', tags: [], masks: [mask('alpha', 0.1)] })
+  const second = await collection.createImageOcclusionNote(deck.id, { image: image(), imageWidth: 800, imageHeight: 600, header: '', backExtra: '', tags: [], masks: [mask('beta', 0.6)] })
+  const sourceId = first.imageOcclusion!.sourceMediaId
+  await expect(collection.applyRemoteChanges([{ opId: 'delete-active-source', entityType: 'noteMedia', entityId: sourceId, action: 'delete', occurredAt: '2026-10-02', payload: { id: sourceId, noteId: first.id } }], 1)).rejects.toThrow(/source image/i)
+  await expect(collection.noteMedia.get(sourceId)).resolves.toBeDefined()
+  await expect(collection.receivedOperations.get('delete-active-source')).resolves.toBeUndefined()
+  const crosslinked = { ...first, imageOcclusion: { ...first.imageOcclusion!, sourceMediaId: second.imageOcclusion!.sourceMediaId } }
+  await expect(collection.applyRemoteChanges([{ opId: 'crosslinked-source', entityType: 'note', entityId: first.id, action: 'update', occurredAt: '2026-10-02', payload: crosslinked }], 1)).rejects.toThrow(/source image/i)
+  await expect(collection.notes.get(first.id)).resolves.toMatchObject({ imageOcclusion: { sourceMediaId: sourceId } })
+  await expect(collection.receivedOperations.get('crosslinked-source')).resolves.toBeUndefined()
+  const missing = { ...first, imageOcclusion: { ...first.imageOcclusion!, sourceMediaId: 'missing-image-reference' } }
+  await expect(collection.applyRemoteChanges([{ opId: 'missing-source', entityType: 'note', entityId: first.id, action: 'update', occurredAt: '2026-10-02', payload: missing }], 1)).rejects.toThrow(/source image/i)
+  const source = (await collection.noteMedia.get(sourceId))!
+  await expect(collection.applyRemoteChanges([{ opId: 'moved-source', entityType: 'noteMedia', entityId: sourceId, action: 'update', occurredAt: '2026-10-02', payload: { ...source, noteId: second.id } }], 1)).rejects.toThrow(/source image/i)
+  await expect(collection.noteMedia.get(sourceId)).resolves.toMatchObject({ noteId: first.id })
+})
+
+test('accepts a reordered source reference and note batch, then permits their joint deletion', async () => {
+  collection = createCollection(`kiroku-io-${crypto.randomUUID()}`)
+  const remote = createCollection(`kiroku-io-${crypto.randomUUID()}`)
+  try {
+    const deck = await collection.createDeck('Anatomy')
+    const note = await collection.createImageOcclusionNote(deck.id, { image: image(), imageWidth: 800, imageHeight: 600, header: '', backExtra: '', tags: [], masks: [mask('alpha', 0.1)] })
+    const initial = await collection.pendingOperations()
+    const reversed = [...initial].reverse()
+    await remote.applyRemoteChanges(reversed, reversed.length)
+    await expect(remote.noteMedia.get(note.imageOcclusion!.sourceMediaId)).resolves.toMatchObject({ noteId: note.id, kind: 'image' })
+    await remote.applyRemoteChanges([
+      { opId: 'delete-source-with-note', entityType: 'noteMedia', entityId: note.imageOcclusion!.sourceMediaId, action: 'delete', occurredAt: '2026-10-03', payload: { id: note.imageOcclusion!.sourceMediaId, noteId: note.id } },
+      { opId: 'delete-note-with-source', entityType: 'note', entityId: note.id, action: 'delete', occurredAt: '2026-10-03', payload: { id: note.id } },
+    ], reversed.length + 2)
+    await expect(remote.notes.get(note.id)).resolves.toBeUndefined()
+    await expect(remote.noteMedia.get(note.imageOcclusion!.sourceMediaId)).resolves.toBeUndefined()
+  } finally {
+    await remote.delete()
+  }
+})
+
+test('rejects remote mask ordinal mutation or reuse after removal', async () => {
+  collection = createCollection(`kiroku-io-${crypto.randomUUID()}`)
+  const deck = await collection.createDeck('Anatomy')
+  const note = await collection.createImageOcclusionNote(deck.id, { image: image(), imageWidth: 800, imageHeight: 600, header: '', backExtra: '', tags: [], masks: [mask('alpha', 0.1), mask('beta', 0.6)] })
+  const reordered = { ...note, imageOcclusion: { ...note.imageOcclusion!, masks: [{ ...note.imageOcclusion!.masks[0], ordinal: 2 }, { ...note.imageOcclusion!.masks[1], ordinal: 1 }] } }
+  await expect(collection.applyRemoteChanges([{ opId: 'mutated-ordinal', entityType: 'note', entityId: note.id, action: 'update', occurredAt: '2026-10-02', payload: reordered }], 1)).rejects.toThrow(/ordinal/i)
+  await collection.updateImageOcclusionNote(note.id, { masks: [mask('beta', 0.6)] })
+  const current = (await collection.notes.get(note.id))!
+  const reused = { ...current, imageOcclusion: { ...current.imageOcclusion!, masks: [...current.imageOcclusion!.masks, { ...mask('gamma', 0.1), ordinal: 1 }] } }
+  await expect(collection.applyRemoteChanges([{ opId: 'reused-ordinal', entityType: 'note', entityId: note.id, action: 'update', occurredAt: '2026-10-03', payload: reused }], 2)).rejects.toThrow(/ordinal/i)
+  await expect(collection.notes.get(note.id)).resolves.toMatchObject({ imageOcclusion: { masks: [{ id: 'beta', ordinal: 2 }] } })
+  await expect(collection.receivedOperations.get('reused-ordinal')).resolves.toBeUndefined()
+})
+
+test('ignores remote edits and deletion of the protected image occlusion note type', async () => {
+  collection = createCollection(`kiroku-io-${crypto.randomUUID()}`)
+  const original = (await collection.noteTypes.get(IMAGE_OCCLUSION_NOTE_TYPE_ID))!
+  await collection.applyRemoteChanges([
+    { opId: 'edit-protected-io-type', entityType: 'noteType', entityId: original.id, action: 'update', occurredAt: '2026-10-02', payload: { ...original, kind: 'standard', protected: false } },
+    { opId: 'delete-protected-io-type', entityType: 'noteType', entityId: original.id, action: 'delete', occurredAt: '2026-10-03', payload: { id: original.id } },
+  ], 2)
+  await expect(collection.noteTypes.get(original.id)).resolves.toEqual(original)
+  await expect(collection.deletedEntities.get(`noteType:${original.id}`)).resolves.toBeUndefined()
+})
+
 test('rejects a synced source reference that is not an image', async () => {
   collection = createCollection(`kiroku-io-${crypto.randomUUID()}`)
   const deck = await collection.createDeck('Anatomy')
