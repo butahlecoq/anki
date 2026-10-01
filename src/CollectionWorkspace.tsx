@@ -781,19 +781,39 @@ function ReviewTemplatePreview({ template, fields, kind, ordinal, side, media, t
 }
 
 function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void }) {
-  const [queue, setQueue] = useState<string[] | null>(null)
-  const [showAnswer, setShowAnswer] = useState(false)
+  const [skippedCardIds, setSkippedCardIds] = useState<ReadonlySet<string>>(() => new Set())
+  const [shownAnswerCardId, setShownAnswerCardId] = useState<string | null>(null)
   const [reviewsRecorded, setReviewsRecorded] = useState(0)
   const [isAnswering, setIsAnswering] = useState(false)
   const [actionError, setActionError] = useState('')
   const [typedDraft, setTypedDraft] = useState<{ cardId?: string; value: string }>({ value: '' })
   const typedResultRef = useRef<HTMLDivElement>(null)
-  const cardId = queue?.[0]
-  const dueQueue = useLiveQuery(() => collection.dueCards(deckId, new Date()), [deckId])
-  async function refreshQueue() {
-    const dueCards = await collection.dueCards(deckId, new Date())
-    setQueue(dueCards.map((dueCard) => dueCard.id))
-  }
+  const dueQueue = useLiveQuery(async () => {
+    const scheduled = await collection.dueCards(deckId, new Date())
+    if (!scheduled.length) return []
+    const [storedCards, noteTypes] = await Promise.all([
+      collection.cards.bulkGet(scheduled.map((card) => card.id)),
+      collection.noteTypes.toArray(),
+    ])
+    const cards = storedCards.filter((card): card is CardRecord => Boolean(card))
+    if (!cards.length) return []
+    const notes = await collection.notes.bulkGet(cards.map((card) => card.noteId))
+    const notesById = new Map(notes.filter((note): note is Note => Boolean(note)).map((note) => [note.id, note]))
+    const noteTypesById = new Map(noteTypes.map((noteType) => [noteType.id, noteType]))
+    return cards.filter((candidate) => {
+      if (candidate.suspended || candidate.manualSuspended || candidate.templateSuspended) return false
+      const note = notesById.get(candidate.noteId)
+      const noteType = note && noteTypesById.get(note.typeId)
+      const template = noteType?.templates.find((item) => item.id === candidate.templateId)
+      if (!note || !noteType || !template) return false
+      if (noteType.kind === 'image-occlusion') return true
+      const front = tryRenderNoteTemplate(template.front, noteType, note.fields, undefined, candidate.clozeOrdinal, 'front')
+      return !front.ok || !front.value.isEmpty
+    })
+  }, [deckId])
+  const queue = dueQueue?.filter((candidate) => !skippedCardIds.has(candidate.id))
+  const cardId = queue?.[0]?.id
+  const showAnswer = shownAnswerCardId === cardId
   const typedInput = typedDraft.cardId === cardId ? typedDraft.value : ''
   const card = useLiveQuery(async () => cardId ? await collection.cards.get(cardId) ?? null : undefined, [cardId])
   const note = useLiveQuery(async () => card ? await collection.notes.get(card.noteId) ?? null : undefined, [card?.noteId])
@@ -814,33 +834,8 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     Boolean(frontResult?.ok && frontResult.value.isEmpty && !imageOcclusion)
 
   useEffect(() => {
-    if (!dueQueue) return
-    setQueue(dueQueue.map((dueCard) => dueCard.id))
-  }, [dueQueue])
-
-  useEffect(() => {
     if (showAnswer && typedAnswer !== undefined) typedResultRef.current?.focus()
   }, [cardId, showAnswer, typedAnswer])
-
-  useEffect(() => {
-    if (cardId && unavailable && (card === null || note === null || noteType === null ||
-      (card !== undefined && note !== undefined && noteType !== undefined))) {
-      void collection.dueCards(deckId, new Date()).then((cards) => {
-        const dueIds = new Set(cards.map((dueCard) => dueCard.id))
-        setShowAnswer(false)
-        setQueue((current) => current?.filter((queuedId) => queuedId !== cardId && dueIds.has(queuedId)) ?? [])
-      })
-    }
-  }, [deckId, cardId, card, note, noteType, unavailable])
-
-  useEffect(() => {
-    if (cardId && card?.buriedUntil) {
-      void collection.dueCards(deckId, new Date()).then((cards) => {
-        setShowAnswer(false)
-        setQueue(cards.map((dueCard) => dueCard.id))
-      })
-    }
-  }, [deckId, cardId, card?.buriedUntil])
 
   async function answer(rating: Grade) {
     if (!cardId || isAnswering) return
@@ -849,8 +844,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     try {
       await collection.answer(cardId, rating, new Date())
       setReviewsRecorded((count) => count + 1)
-      setShowAnswer(false)
-      await refreshQueue()
+      setShownAnswerCardId(null)
     } catch (reason) {
       setActionError(reason instanceof Error && reason.message ? reason.message : 'Unable to update card')
     } finally {
@@ -864,8 +858,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     setActionError('')
     try {
       await action(cardId)
-      setShowAnswer(false)
-      await refreshQueue()
+      setShownAnswerCardId(null)
     } catch (reason) {
       setActionError(reason instanceof Error && reason.message ? reason.message : 'Unable to update card')
     } finally {
@@ -873,7 +866,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     }
   }
 
-  if (queue === null || (cardId && (card === undefined || note === undefined || noteType === undefined || unavailable))) return <div className="loading-state" role="status">Preparing review…</div>
+  if (queue === undefined || (cardId && (card === undefined || note === undefined || noteType === undefined || unavailable))) return <div className="loading-state" role="status">Preparing review…</div>
 
   if (!cardId || !card || !note || !noteType || !template) {
     return (
@@ -888,8 +881,9 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   }
 
   function skipCard() {
-    setShowAnswer(false)
-    setQueue((current) => current?.slice(1) ?? [])
+    if (!cardId) return
+    setShownAnswerCardId(null)
+    setSkippedCardIds((current) => new Set(current).add(cardId))
   }
 
   const reviewActions = <div className="review-session-actions"><button className="text-button" type="button" disabled={isAnswering} onClick={() => void updateCurrentCard((id) => collection.suspendCard(id))}>Suspend card</button><button className="text-button" type="button" disabled={isAnswering} onClick={() => void updateCurrentCard((id) => collection.buryCard(id))}>Bury card</button><button className="text-button" type="button" onClick={onBack}>End session</button></div>
@@ -917,7 +911,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
         {noteType.kind !== 'image-occlusion' && media.filter((reference) => !reference.inline && reference.side === 'front' && (!reference.templateId || reference.templateId === card.templateId)).map((reference) => <MediaRenderer key={reference.id} reference={reference} automatic />)}
         {noteType.kind !== 'image-occlusion' && showAnswer && media.filter((reference) => !reference.inline && reference.side === 'back' && (!reference.templateId || reference.templateId === card.templateId)).map((reference) => <MediaRenderer key={reference.id} reference={reference} automatic />)}
         {typedAnswer !== undefined && !showAnswer && <label className="typed-answer">Type your answer
-          <input autoComplete="off" value={typedInput} onChange={(event) => setTypedDraft({ cardId, value: event.target.value })} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); setShowAnswer(true) } }} />
+          <input autoComplete="off" value={typedInput} onChange={(event) => setTypedDraft({ cardId, value: event.target.value })} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); setShownAnswerCardId(cardId) } }} />
         </label>}
         {typedAnswer !== undefined && showAnswer && <div ref={typedResultRef} className="typed-answer-result" role="status" aria-live="polite" aria-label="Typed answer comparison" tabIndex={-1}>
           <span className="section-code">YOUR ANSWER</span>
@@ -926,7 +920,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
         </div>}
       </article>
       {!showAnswer ? (
-        <button className="primary-action reveal-action" type="button" onClick={() => setShowAnswer(true)}>Show answer</button>
+        <button className="primary-action reveal-action" type="button" onClick={() => setShownAnswerCardId(cardId)}>Show answer</button>
       ) : (
         <div className="rating-grid" aria-label="Rate answer">
           {choices.map((choice) => (
