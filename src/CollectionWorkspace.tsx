@@ -574,6 +574,7 @@ function CardManagementDialog({ note, onClose }: { note: Note; onClose: () => vo
       {cards.map((card, index) => {
         const due = dueByCard[card.id] ?? localDateTimeValue(card.due)
         const busy = busyCardId === card.id
+        const cardName = `card ${index + 1}, template ${card.templateId}`
         return <article className="card-management-row" key={card.id}>
           <div><span className="section-code">CARD // {String(index + 1).padStart(2, '0')}</span><p aria-live="polite">{cardStatus(card)}</p></div>
           <div className="card-management-actions">
@@ -584,8 +585,8 @@ function CardManagementDialog({ note, onClose }: { note: Note; onClose: () => vo
               ? <button className="text-button" type="button" disabled={busy} onClick={() => void perform(card.id, () => collection.unburyCard(card.id))}>Unbury card</button>
               : <button className="text-button" type="button" disabled={busy} onClick={() => void perform(card.id, () => collection.buryCard(card.id))}>Bury card</button>}
           </div>
-          <label>Reschedule due<input aria-label="Reschedule due" type="datetime-local" value={due} onChange={(event) => setDueByCard((current) => ({ ...current, [card.id]: event.target.value }))} /></label>
-          <button className="text-button" type="button" disabled={busy || !due} onClick={() => void perform(card.id, () => collection.rescheduleCard(card.id, new Date(due)))}>Reschedule card</button>
+          <label>Reschedule due<input aria-label={`Reschedule due for ${cardName}`} type="datetime-local" value={due} onChange={(event) => setDueByCard((current) => ({ ...current, [card.id]: event.target.value }))} /></label>
+          <button aria-label={`Reschedule ${cardName}`} className="text-button" type="button" disabled={busy || !due} onClick={() => void perform(card.id, () => collection.rescheduleCard(card.id, new Date(due)))}>Reschedule card</button>
         </article>
       })}
     </div>
@@ -661,9 +662,11 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   const [showAnswer, setShowAnswer] = useState(false)
   const [reviewsRecorded, setReviewsRecorded] = useState(0)
   const [isAnswering, setIsAnswering] = useState(false)
+  const [actionError, setActionError] = useState('')
   const [typedDraft, setTypedDraft] = useState<{ cardId?: string; value: string }>({ value: '' })
   const typedResultRef = useRef<HTMLDivElement>(null)
   const cardId = queue?.[0]
+  const deckCards = useLiveQuery(() => collection.cards.where('deckId').equals(deckId).toArray(), [deckId])
   async function refreshQueue() {
     const dueCards = await collection.dueCards(deckId, new Date())
     setQueue(dueCards.map((dueCard) => dueCard.id))
@@ -688,8 +691,9 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     Boolean(frontResult?.ok && frontResult.value.isEmpty && !imageOcclusion)
 
   useEffect(() => {
+    if (!deckCards) return
     void collection.dueCards(deckId, new Date()).then((cards) => setQueue(cards.map((dueCard) => dueCard.id)))
-  }, [deckId])
+  }, [deckCards, deckId])
 
   useEffect(() => {
     if (showAnswer && typedAnswer !== undefined) typedResultRef.current?.focus()
@@ -718,11 +722,14 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   async function answer(rating: Grade) {
     if (!cardId || isAnswering) return
     setIsAnswering(true)
+    setActionError('')
     try {
       await collection.answer(cardId, rating, new Date())
       setReviewsRecorded((count) => count + 1)
       setShowAnswer(false)
       await refreshQueue()
+    } catch (reason) {
+      setActionError(reason instanceof Error && reason.message ? reason.message : 'Unable to update card')
     } finally {
       setIsAnswering(false)
     }
@@ -731,10 +738,13 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   async function updateCurrentCard(action: (id: string) => Promise<void>) {
     if (!cardId || isAnswering) return
     setIsAnswering(true)
+    setActionError('')
     try {
       await action(cardId)
       setShowAnswer(false)
       await refreshQueue()
+    } catch (reason) {
+      setActionError(reason instanceof Error && reason.message ? reason.message : 'Unable to update card')
     } finally {
       setIsAnswering(false)
     }
@@ -763,6 +773,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
 
   if (renderError) return <section className="review-session">
     <div className="review-progress"><span>REVIEW // {String(reviewsRecorded + 1).padStart(2, '0')}</span>{reviewActions}</div>
+    {actionError && <p className="form-error" role="alert">{actionError}</p>}
     <article className="review-card"><p className="form-error" role="alert">Unable to render card: {renderError}</p></article>
     <button className="primary-action" type="button" onClick={skipCard}>Skip card</button>
   </section>
@@ -773,6 +784,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   return (
     <section className="review-session">
       <div className="review-progress"><span>REVIEW // {String(reviewsRecorded + 1).padStart(2, '0')}</span>{reviewActions}</div>
+      {actionError && <p className="form-error" role="alert">{actionError}</p>}
       <article className="review-card">
         <span className="card-side">{showAnswer ? 'ANSWER' : 'QUESTION'}</span>
         {imageOcclusion
