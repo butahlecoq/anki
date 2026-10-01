@@ -1,7 +1,7 @@
 import type { SqlJsStatic } from 'sql.js'
 import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url'
 import type { CardRow, Collection as AnkiCollection, CollectionData, RevlogRow } from 'ankipack'
-import { State, type CardRecord, type Collection, type Deck, type Note, type NoteMediaReference, type NoteType, type ReviewEntry, type SyncOperation } from './collection'
+import { DEFAULT_DECK_OPTION_GROUP_ID, State, type CardRecord, type Collection, type Deck, type Note, type NoteMediaReference, type NoteType, type ReviewEntry, type SyncOperation } from './collection'
 import { parseAnkiImageOcclusion, type AnkiImageOcclusionFields } from './image-occlusion-interchange'
 import { digestMedia, validateMedia, type MediaKind, type MediaSide } from './media'
 import { validateTemplate } from './template-renderer'
@@ -449,16 +449,39 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
     sourceCardsByNote.set(card.nid, cards)
   }
   const usedDeckIds = new Set(data.cards.map((card) => card.odid || card.did))
-  const decks = data.decks.filter((deck) => usedDeckIds.has(deck.id)).map((deck): Deck => ({
-    id: stableId('deck', deck.id),
-    name: deck.name.replaceAll(fieldSeparator, '::'),
-    createdAt: isoFromSeconds(deck.mtimeSecs, now),
-    updatedAt: isoFromSeconds(deck.mtimeSecs, now),
-  }))
-  for (const deck of decks.filter((candidate) => candidate.name.includes('::'))) {
-    issues.push({ severity: 'info', code: 'deck-hierarchy', subject: deck.name, detail: `Preserved nested deck path ${deck.name}.` })
+  const sourceDeckById = new Map(data.decks.map((deck) => [deck.id, deck]))
+  const sourceDeckByName = new Map(data.decks.map((deck) => [deck.name.replaceAll(fieldSeparator, '::'), deck]))
+  const deckRecords = new Map<string, Deck>()
+  const deckBySource = new Map<number, string>()
+  for (const sourceDeckId of usedDeckIds) {
+    const sourceDeck = sourceDeckById.get(sourceDeckId)
+    if (!sourceDeck) continue
+    const fullName = sourceDeck.name.replaceAll(fieldSeparator, '::')
+    const segments = fullName.split('::')
+    if (segments.some((segment) => !segment.trim())) {
+      issues.push({ severity: 'error', code: 'deck-hierarchy-malformed', subject: fullName, detail: 'Deck hierarchy contains an empty name segment.' })
+      continue
+    }
+    let parentId: string | null = null
+    for (let index = 0; index < segments.length; index += 1) {
+      const path = segments.slice(0, index + 1).join('::')
+      const matched = sourceDeckByName.get(path)
+      const id = matched ? stableId('deck', matched.id) : `anki-deck-path:${encodeURIComponent(path)}`
+      const timestamps = matched ?? sourceDeck
+      if (!deckRecords.has(id)) deckRecords.set(id, {
+        id,
+        name: segments[index],
+        parentId,
+        optionGroupId: DEFAULT_DECK_OPTION_GROUP_ID,
+        createdAt: isoFromSeconds(timestamps.mtimeSecs, now),
+        updatedAt: isoFromSeconds(timestamps.mtimeSecs, now),
+      })
+      parentId = id
+    }
+    deckBySource.set(sourceDeckId, parentId!)
+    if (segments.length > 1) issues.push({ severity: 'info', code: 'deck-hierarchy', subject: fullName, detail: `Preserved nested deck path ${fullName}.` })
   }
-  const deckBySource = new Map(data.decks.map((deck) => [deck.id, stableId('deck', deck.id)]))
+  const decks = [...deckRecords.values()]
   const sourceMedia = new Map(data.media.map((media) => [media.name, media]))
   const noteTypes: NoteType[] = [...types.values()].map((type) => ({ id: type.localId, name: type.name, kind: type.kind, fields: type.fields, templates: type.templates, protected: false, createdAt: type.createdAt, updatedAt: type.updatedAt }))
   const notes: Note[] = []

@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto'
 import initSqlJs, { type SqlJsStatic } from 'sql.js'
 import { Collection as AnkiCollection, Deck, Note as AnkiNote, Notetype, Package } from 'ankipack'
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest'
-import { createCollection, State, type Collection } from './collection'
+import { DEFAULT_DECK_OPTION_GROUP_ID, createCollection, State, type Collection } from './collection'
 import { prepareAnkiImport } from './anki-import'
 
 let SQL: SqlJsStatic
@@ -169,7 +169,7 @@ describe('Anki package import', () => {
     collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
     const prepared = await prepareAnkiImport(await japanesePackage(), collection, { SQL, now: new Date('2026-10-01T12:00:00.000Z') })
 
-    expect(prepared.summary).toMatchObject({ decks: 1, noteTypes: 2, notes: 2, cards: 4, reviews: 1, media: 2 })
+    expect(prepared.summary).toMatchObject({ decks: 2, noteTypes: 2, notes: 2, cards: 4, reviews: 1, media: 2 })
     expect(prepared.duplicates).toEqual({ create: 2, update: 0, keepLocal: 0, unchanged: 0 })
     expect(prepared.issues.filter((issue) => issue.severity === 'error')).toEqual([])
     expect(prepared.issues).toEqual(expect.arrayContaining([
@@ -180,7 +180,10 @@ describe('Anki package import', () => {
     await prepared.commit()
 
     const decks = await collection.decks.toArray()
-    expect(decks).toEqual([expect.objectContaining({ name: 'Japanese::Core' })])
+    expect(decks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'Japanese', parentId: null, optionGroupId: DEFAULT_DECK_OPTION_GROUP_ID }),
+      expect.objectContaining({ name: 'Core', parentId: expect.any(String), optionGroupId: DEFAULT_DECK_OPTION_GROUP_ID }),
+    ]))
     const types = (await collection.noteTypes.toArray()).filter((type) => !type.protected)
     expect(types).toHaveLength(2)
     expect(types.find((type) => type.name === 'Japanese vocabulary')).toMatchObject({
@@ -343,7 +346,7 @@ describe('Anki package import', () => {
   test('rejects a stale preview without partially writing the package', async () => {
     collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
     const prepared = await prepareAnkiImport(await japanesePackage(), collection, { SQL, now: new Date('2026-10-01T12:00:00.000Z') })
-    await collection.decks.put({ id: 'anki-deck:1700000000010', name: 'Concurrent deck', createdAt: '2026-10-01T12:00:00.000Z', updatedAt: '2026-10-01T12:00:00.000Z' })
+    await collection.decks.put({ id: 'anki-deck:1700000000010', name: 'Concurrent deck', parentId: null, optionGroupId: DEFAULT_DECK_OPTION_GROUP_ID, createdAt: '2026-10-01T12:00:00.000Z', updatedAt: '2026-10-01T12:00:00.000Z' })
 
     await expect(prepared.commit()).rejects.toThrow(/preview again/i)
     await expect(collection.decks.count()).resolves.toBe(1)

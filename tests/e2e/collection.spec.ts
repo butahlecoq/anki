@@ -91,7 +91,7 @@ test('learner previews and imports an Anki package before studying its media off
   await page.getByRole('button', { name: 'Import Anki package' }).click()
   const dialog = page.getByRole('dialog', { name: 'Import Anki package' })
   await dialog.getByLabel('Anki package', { exact: true }).setInputFiles({ name: 'japanese.apkg', mimeType: 'application/octet-stream', buffer: await importFixture() })
-  await expect(dialog.getByText('1 deck')).toBeVisible()
+  await expect(dialog.getByText('2 decks')).toBeVisible()
   await expect(dialog.getByText('1 note type')).toBeVisible()
   await expect(dialog.getByText('1 note', { exact: true })).toBeVisible()
   await expect(dialog.getByText('1 card')).toBeVisible()
@@ -100,7 +100,7 @@ test('learner previews and imports an Anki package before studying its media off
   await expect(dialog.getByText(/Preserved nested deck path Imported::Japanese/)).toBeVisible()
   await page.getByRole('button', { name: 'Import package' }).click()
 
-  await page.getByRole('button', { name: 'Open Imported::Japanese' }).click()
+  await page.getByRole('button', { name: 'Open Japanese' }).click()
   await expect(page.getByText('猫', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Study now' }).click()
   const review = page.frameLocator('iframe[title="Review card"]')
@@ -140,7 +140,7 @@ test('a clean phone syncs imported package media and keeps it offline', async ({
     await pc.getByRole('button', { name: 'Sync now' }).click()
     await expect(pc.getByText(/2 uploaded and \d+ downloaded/)).toBeVisible()
     await phone.getByRole('button', { name: 'Sync now' }).click()
-    await phone.getByRole('button', { name: 'Open Imported::Japanese' }).click()
+    await phone.getByRole('button', { name: 'Open Japanese' }).click()
     await phone.getByRole('button', { name: 'Study now' }).click()
 
     const review = phone.frameLocator('iframe[title="Review card"]')
