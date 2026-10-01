@@ -180,7 +180,13 @@ describe('Anki package import', () => {
     countView.setUint16(hugeCount.length - 22 + 8, ANKI_ARCHIVE_LIMITS.entries + 1, true)
     countView.setUint16(hugeCount.length - 22 + 10, ANKI_ARCHIVE_LIMITS.entries + 1, true)
     const hugeWindow = zipSync({ 'collection.anki21b': Uint8Array.from([0x28, 0xb5, 0x2f, 0xfd, 0, 0x88, 1, 0, 0]) })
-    const fixtures = [hugeEntry, hugeCount, hugeWindow, zipSync({ '../media': new Uint8Array() }), Uint8Array.from([1, 2, 3])]
+    // No frame declares its output size. A few kilobytes of RLE frames emit
+    // more than 64 MiB, exercising the real streamed cap rather than metadata.
+    const frame = Uint8Array.from([0x28, 0xb5, 0x2f, 0xfd, 0, 0x38, 3, 0, 0x10, 65])
+    const frames = new Uint8Array(frame.length * (ANKI_ARCHIVE_LIMITS.entryBytes / 131_072 + 1))
+    for (let offset = 0; offset < frames.length; offset += frame.length) frames.set(frame, offset)
+    const actualBomb = zipSync({ 'collection.anki21b': frames })
+    const fixtures = [hugeEntry, hugeCount, hugeWindow, actualBomb, zipSync({ '../media': new Uint8Array() }), Uint8Array.from([1, 2, 3])]
     for (const bytes of fixtures) {
       const file = new File([bytes.slice().buffer], `hostile.${extension}`)
       await expect(prepareAnkiImport(file, collection, { SQL })).rejects.toThrow(/Unable to read/i)
