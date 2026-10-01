@@ -17,10 +17,10 @@
 
 ### Task 1: Model, migration, queue policy, and sync
 
-- [ ] Add v11 migration and validated reusable policy settings.
-- [ ] Make queue eligibility and ordering handle manual/template suspension, burial, and interday learning.
-- [ ] Add manual card actions, sibling burying, leech tag/action, and durable sync operations.
-- [ ] Test all ratings, local boundaries, queue lifecycle, migration, reload, and two-client convergence.
+- [x] Add v12 migration and validated reusable policy settings.
+- [x] Make queue eligibility and ordering handle manual/template suspension, burial, and interday learning.
+- [x] Add manual card actions, sibling burying, leech tag/action, and durable sync operations.
+- [x] Test all ratings, local boundaries, queue lifecycle, migration, reload, and two-client convergence.
 
 ### Task 2: Reviewer and options UI
 
