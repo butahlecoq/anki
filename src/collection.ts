@@ -281,6 +281,7 @@ export interface SyncSettings { endpoint: string; token: string; cursor: number 
 interface DeletionTombstone { key: string; entityType: SyncOperation['entityType']; entityId: string; occurredAt: string }
 export interface NoteMediaReference { id: string; noteId: string; digest: string; kind: MediaKind; mimeType: string; displayName: string; side: MediaSide; templateId?: string; inline?: boolean; playback: AudioPlayback; createdAt: string; updatedAt: string }
 export interface MediaBlob { digest: string; blob: Blob; byteLength: number; mimeType: string; verifiedAt: string }
+export interface MediaBytes extends Omit<MediaBlob, 'blob'> { bytes: ArrayBuffer }
 interface StoredMediaBlob extends Omit<MediaBlob, 'blob'> { blob: Blob | ArrayBuffer }
 export interface NoteMediaAttachment { file: File; side: MediaSide; playback?: AudioPlayback }
 
@@ -1493,6 +1494,15 @@ export class Collection extends Dexie {
     if (!stored) return undefined
     if (stored.blob instanceof Blob) return stored as MediaBlob
     return { ...stored, blob: new Blob([stored.blob], { type: stored.mimeType }) }
+  }
+
+  async verifiedMediaBytes(digest: string): Promise<MediaBytes | undefined> {
+    const stored = await this.mediaBlobs.get(digest)
+    if (!stored) return undefined
+    // Current writes persist byte buffers; no blob/resource read is required
+    // when the reviewer starts after the browser goes offline.
+    const bytes = stored.blob instanceof Blob ? await mediaBytes(stored.blob) : stored.blob
+    return { digest: stored.digest, bytes, byteLength: stored.byteLength, mimeType: stored.mimeType, verifiedAt: stored.verifiedAt }
   }
 
   async storeDownloadedMedia(digest: string, blob: Blob, now = new Date()) {

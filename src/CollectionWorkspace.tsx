@@ -20,6 +20,7 @@ import { MediaRenderer } from './MediaRenderer'
 import { ImageOcclusionEditor, ImageOcclusionReview } from './ImageOcclusion'
 import { NoteTypeManager } from './NoteTypeManager'
 import { TemplatePreview } from './TemplatePreview'
+import { useReviewMedia } from './use-review-media'
 import { validateMedia } from './media'
 import { pairCollection, syncCollection } from './sync-client'
 import { clozeOrdinals } from './template-renderer'
@@ -761,29 +762,8 @@ function ReviewTemplatePreview({ template, fields, kind, ordinal, side, media, t
   media: NoteMediaReference[]
   templateOrdinal?: number
 }) {
-  const [sources, setSources] = useState<Record<string, { kind: 'image' | 'audio'; url: string; automatic?: boolean }>>({})
-  useEffect(() => {
-    let active = true
-    const urls: string[] = []
-    void Promise.all(media.map(async (reference) => {
-      const stored = await collection.verifiedMediaBlob(reference.digest)
-      if (!stored) return undefined
-      const url = reference.kind === 'audio' ? await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader()
-        reader.onerror = () => reject(reader.error ?? new Error('Unable to prepare audio'))
-        reader.onload = () => resolve(String(reader.result))
-        reader.readAsDataURL(stored.blob)
-      }) : URL.createObjectURL(stored.blob)
-      if (reference.kind === 'image') urls.push(url)
-      return [reference.displayName, { kind: reference.kind, url, automatic: reference.playback === 'automatic' }] as const
-    })).then((entries) => {
-      if (active) setSources(Object.fromEntries(entries.filter((entry) => entry !== undefined)))
-    })
-    return () => {
-      active = false
-      for (const url of urls) URL.revokeObjectURL(url)
-    }
-  }, [media])
+  const { sources, error } = useReviewMedia(media)
+  if (error) return <p role="alert">{error}</p>
   return <TemplatePreview title="Review card" front={template.front} back={template.back} css={template.css} fields={fields} kind={kind} ordinal={ordinal} templateOrdinal={templateOrdinal} side={side} media={sources} />
 }
 

@@ -60,6 +60,8 @@ New reviews measure active time while the card is visible, excluding background 
 
 Basic notes accept PNG, JPEG, and WebP images up to 10 MB, plus MP3, Ogg, and WAV audio up to 20 MB. Choose whether an attachment belongs on the front or back; audio can play automatically or through its built-in controls. Imported media is attached to the template side that references it. Kiroku verifies a SHA-256 digest before storing an attachment, stores identical bytes once per collection, and transfers the blob separately from card changes. A successful sync leaves verified media in the browser database, so reviewed cards keep displaying and playing after an offline restart.
 
+Template images and audio are prepared as local data URLs so answer reveals can render new media without a network request. Preparation reads one attachment at a time, reuses duplicate content and question/answer sources, and releases them when the card closes. Unique inline media for one active card is limited to 64 MiB, in addition to the per-file limits; a visible error asks you to remove attachments or split the note if it exceeds that budget. There is no collection-wide data URL cache. Installed-iPhone cold reopening and audible playback still need physical confirmation before release.
+
 ### Image Occlusion
 
 The built-in **Image Occlusion** note accepts a PNG, JPEG, or WebP source image. Draw rectangular masks over the image; their coordinates are normalized to the source dimensions, so the rectangles scale with the image. Each mask creates one card. On the front, every mask is covered. Showing the answer reveals only that card's active mask while the other masks stay covered.
