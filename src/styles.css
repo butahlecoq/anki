@@ -184,6 +184,24 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--acid); outline-
 .media-attachment select { padding: 4px; border: 1px solid var(--line-strong); background: #101317; color: var(--text); font: inherit; }
 .media-attachment .text-button { margin-left: auto; }
 .media-pending { color: var(--faint); font-size: 10px; }
+.dialog.occlusion-dialog { width: min(900px, 100%); }
+.occlusion-size-probe { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
+.occlusion-canvas-wrap { display: grid; gap: 14px; }
+.occlusion-canvas { display: block; width: 100%; max-height: min(54vh, 540px); border: 1px solid var(--line-strong); background: #090b0d; touch-action: none; cursor: crosshair; }
+.occlusion-mask { fill: rgba(14, 19, 24, .93); stroke: #c3ff5a; stroke-width: 3; }
+.occlusion-revealed-mask { fill: transparent; stroke: #c3ff5a; stroke-width: 5; }
+.occlusion-selection { fill: transparent; stroke: transparent; stroke-width: 6; cursor: move; }
+.occlusion-selection.selected { stroke: #ffbd5a; }
+.occlusion-resize { fill: #ffbd5a; stroke: #0b0d10; stroke-width: 3; cursor: nwse-resize; }
+.occlusion-mask-controls { display: grid; gap: 10px; }
+.occlusion-mask-controls fieldset { margin: 0; padding: 12px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) auto; gap: 9px; align-items: end; border: 1px solid var(--line); }
+.occlusion-mask-controls legend { padding: 0 5px; color: var(--muted); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+.occlusion-mask-controls label { display: grid; gap: 5px; color: var(--faint); font-size: 8px; letter-spacing: .05em; text-transform: uppercase; }
+.occlusion-mask-controls input { min-width: 0; min-height: 42px; padding: 0 8px; border: 1px solid var(--line-strong); background: #0c0f12; color: var(--text); font: inherit; }
+.occlusion-review { width: min(640px, 100%); display: grid; gap: 16px; text-align: left; }
+.occlusion-review-canvas { cursor: default; }
+.occlusion-header, .occlusion-back-extra { margin: 0; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.6; }
+.occlusion-back-extra { padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); }
 .type-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .type-list { padding: 28px 0 40px; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
 .type-tile { padding: 24px; border: 1px solid var(--line); background: var(--panel); }
@@ -289,6 +307,10 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--acid); outline-
   .dialog-backdrop { padding: 12px; align-items: end; }
   .dialog { max-height: 92vh; overflow-y: auto; padding: 23px 19px calc(23px + env(safe-area-inset-bottom)); }
   .dialog.type-dialog { max-height: 92vh; }
+  .dialog.occlusion-dialog { width: 100%; }
+  .occlusion-canvas { max-height: 42vh; }
+  .occlusion-mask-controls fieldset { grid-template-columns: 1fr 1fr; }
+  .occlusion-mask-controls .text-button { grid-column: 1 / -1; justify-content: center; min-height: 44px; }
   .editor-row { grid-template-columns: 1fr; }
   .review-card { min-height: 350px; margin-top: 26px; padding: 27px 18px; }
   .rating-grid { grid-template-columns: 1fr 1fr; }

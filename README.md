@@ -52,6 +52,14 @@ Enter the service’s `https://` address and the one-time code in **Connect a PC
 
 Basic notes accept PNG, JPEG, and WebP images up to 10 MB, plus MP3, Ogg, and WAV audio up to 20 MB. Choose whether an attachment belongs on the front or back; audio can play automatically or through its built-in controls. Kiroku verifies a SHA-256 digest before storing an attachment, stores identical bytes once per collection, and transfers the blob separately from card changes. A successful sync leaves verified media in the browser database, so reviewed cards keep displaying and playing after an offline restart.
 
+### Image Occlusion
+
+The built-in **Image Occlusion** note accepts a PNG, JPEG, or WebP source image. Draw rectangular masks over the image; their coordinates are normalized to the source dimensions, so the rectangles scale with the image. Each mask creates one card. On the front, every mask is covered. Showing the answer reveals only that card's active mask while the other masks stay covered.
+
+Use **Header** for prompt context, **Back Extra** for answer-side context, and comma-separated tags to organize the note. Each saved mask has a stable ID and never-reused ordinal: moving or resizing it retains its card and review history, while deleting it suspends that card. Source images sync as verified media and the supported persistent browser-profile test covers opening an image-occlusion card after a cold offline restart.
+
+The native interchange fixture covers the rectangular subset only. Ellipses, polygons, groups, and hide-all behavior are unsupported. Anki package import and export are tracked separately in [Issue #15](https://github.com/butahlecoq/anki/issues/15) and [Issue #16](https://github.com/butahlecoq/anki/issues/16).
+
 ## Note types and card templates
 
 Open **Note types** to create a reusable set of fields and card templates. A **Standard** type creates one card per template whose front uses a nonblank field or typed-answer prompt. A **Cloze deletions** type creates one card per distinct deletion number in its cloze field. The note editor shows the card count and why a card is skipped. If a card becomes ineligible, it is suspended from review; restoring its content restores the same card and review history.

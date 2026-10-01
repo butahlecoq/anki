@@ -617,4 +617,14 @@ describe('local collection', () => {
     await expect(collection.storeDownloadedMedia('a'.repeat(64), new Blob(['wrong'], { type: 'image/png' }))).rejects.toThrow('content digest')
     await expect(collection.mediaBlobs.count()).resolves.toBe(0)
   })
+
+  test('reconstructs byte-backed media records for browsers that cannot persist Blobs', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const bytes = new Uint8Array([137, 80, 78, 71]).buffer
+    await collection.mediaBlobs.put({ digest: 'b'.repeat(64), blob: bytes, byteLength: 4, mimeType: 'image/png', verifiedAt: '2026-10-01' })
+    const media = await collection.verifiedMediaBlob('b'.repeat(64))
+    expect(media?.blob).toBeInstanceOf(Blob)
+    expect(media?.blob.type).toBe('image/png')
+    expect(media?.blob.size).toBe(4)
+  })
 })

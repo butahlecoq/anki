@@ -32,6 +32,15 @@ async function pair(page: import('@playwright/test').Page) {
   await expect(page.getByText('PC connected. Your collections are ready to sync.')).toBeVisible()
 }
 
+async function drawOcclusionMask(canvas: import('@playwright/test').Locator, pointerId: number, from: { x: number; y: number }, to: { x: number; y: number }) {
+  const box = await canvas.boundingBox()
+  if (!box) throw new Error('Image occlusion canvas was not measurable')
+  const coordinates = (point: { x: number; y: number }) => ({ clientX: box.x + box.width * point.x, clientY: box.y + box.height * point.y })
+  await canvas.dispatchEvent('pointerdown', { pointerId, pointerType: 'touch', ...coordinates(from) })
+  await canvas.dispatchEvent('pointermove', { pointerId, pointerType: 'touch', ...coordinates(to) })
+  await canvas.dispatchEvent('pointerup', { pointerId, pointerType: 'touch', ...coordinates(to) })
+}
+
 test.beforeEach(async ({ page }) => {
   await page.clock.setFixedTime(REVIEW_TIME)
   await page.goto('/')
@@ -84,6 +93,31 @@ test('learner manages a note type and previews a second card in isolation', asyn
   await expect(preview.getByText('ねこ')).toBeVisible()
   await page.getByLabel('Template 2 front').fill('{{Reading}}')
   await page.getByRole('button', { name: 'Save changes' }).click()
+})
+
+test('learner draws an image occlusion and reveals only its active mask in review', async ({ page }) => {
+  await createDeck(page, 'Image occlusion deck')
+  await page.getByRole('button', { name: 'Open Image occlusion deck' }).click()
+  await page.getByRole('button', { name: 'Add note' }).click()
+  await page.getByRole('combobox', { name: 'Note type' }).selectOption('image-occlusion')
+  await page.getByLabel('Source image').setInputFiles({ name: 'diagram.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL4+QAAAABJRU5ErkJggg==', 'base64') })
+  const canvas = page.getByLabel('Draw image occlusion masks')
+  await expect(canvas).toBeVisible()
+  await drawOcclusionMask(canvas, 1, { x: .1, y: .1 }, { x: .4, y: .4 })
+  await drawOcclusionMask(canvas, 2, { x: .6, y: .6 }, { x: .9, y: .9 })
+  await expect(page.getByRole('button', { name: 'Remove mask 2' })).toBeVisible()
+  await page.getByLabel('Header').fill('Skull bones')
+  await page.getByLabel('Back Extra').fill('Identify the highlighted bone.')
+  await page.getByLabel('Tags').fill('anatomy, skull')
+  await page.getByRole('button', { name: 'Save note' }).click()
+  await page.getByRole('button', { name: 'Study now' }).click()
+  await expect(page.getByLabel('Image occlusion card')).toBeVisible()
+  await expect(page.locator('.occlusion-mask')).toHaveCount(2)
+  await expect(page.getByText('Skull bones')).toBeVisible()
+  await page.getByRole('button', { name: 'Show answer' }).click()
+  await expect(page.locator('.occlusion-revealed-mask')).toHaveCount(1)
+  await expect(page.locator('.occlusion-mask')).toHaveCount(1)
+  await expect(page.getByText('Identify the highlighted bone.')).toBeVisible()
 })
 
 test('review uses each generated template, isolates its CSS, and skips an empty template', async ({ page }) => {
@@ -485,6 +519,66 @@ test('a phone keeps verified synced media after a cold offline reload', async ({
   }
 })
 
+test('a phone reopens a synced image occlusion source offline', async ({ browserName, browser, page: pc }, testInfo) => {
+  test.skip(browserName === 'webkit', 'The WebKit runner discards IndexedDB when a persistent profile is reopened.')
+  const profile = await mkdtemp(join(tmpdir(), 'kiroku-occlusion-profile-'))
+  const deckName = `Occlusion sync ${testInfo.project.name} ${Date.now()}`
+  let phoneContext: import('@playwright/test').BrowserContext | undefined
+  let reopenedContext: import('@playwright/test').BrowserContext | undefined
+  try {
+    phoneContext = await browser.browserType().launchPersistentContext(profile, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
+    const phone = phoneContext.pages()[0] ?? await phoneContext.newPage()
+    await phone.clock.setFixedTime(REVIEW_TIME)
+    await phone.goto('http://127.0.0.1:4173/')
+
+    await createDeck(pc, deckName)
+    await pc.getByRole('button', { name: `Open ${deckName}` }).click()
+    await pc.getByRole('button', { name: 'Add note' }).click()
+    await pc.getByRole('combobox', { name: 'Note type' }).selectOption('image-occlusion')
+    await pc.getByLabel('Source image').setInputFiles({ name: 'synced-diagram.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL4+QAAAABJRU5ErkJggg==', 'base64') })
+    const editorCanvas = pc.getByLabel('Draw image occlusion masks')
+    await expect(editorCanvas).toBeVisible()
+    await drawOcclusionMask(editorCanvas, 1, { x: .1, y: .1 }, { x: .4, y: .4 })
+    await drawOcclusionMask(editorCanvas, 2, { x: .6, y: .6 }, { x: .9, y: .9 })
+    await pc.getByRole('button', { name: 'Save note' }).click()
+    const deckId = await pc.evaluate(() => window.location.hash.split('/')[1])
+
+    await pair(pc)
+    await pair(phone)
+    await pc.getByRole('button', { name: 'Sync now' }).click()
+    await expect(pc.getByRole('region', { name: 'PC sync' }).getByText(/Sync complete\./)).toBeVisible()
+    await phone.getByRole('button', { name: 'Sync now' }).click()
+    await phone.getByRole('button', { name: `Open ${deckName}` }).click()
+    await phone.getByRole('button', { name: 'Study now' }).click()
+    await expect(phone.getByLabel('Image occlusion card')).toBeVisible()
+    await expect(phone.locator('.occlusion-review-canvas image')).toHaveAttribute('href', /blob:/)
+    await expect(phone.locator('.occlusion-mask')).toHaveCount(2)
+    await phone.getByRole('button', { name: 'Show answer' }).click()
+    await expect(phone.locator('.occlusion-revealed-mask')).toHaveCount(1)
+    await expect(phone.locator('.occlusion-mask')).toHaveCount(1)
+    await phone.evaluate(async () => { await navigator.serviceWorker.ready })
+
+    await phoneContext.close()
+    phoneContext = undefined
+    reopenedContext = await browser.browserType().launchPersistentContext(profile, { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
+    await reopenedContext.setOffline(true)
+    const reopened = reopenedContext.pages()[0] ?? await reopenedContext.newPage()
+    await reopened.clock.setFixedTime(REVIEW_TIME)
+    await reopened.goto(`http://127.0.0.1:4173/#deck/${deckId}`, { waitUntil: 'domcontentloaded' })
+    await reopened.getByRole('button', { name: 'Study now' }).click()
+    await expect(reopened.getByLabel('Image occlusion card')).toBeVisible()
+    await expect(reopened.locator('.occlusion-review-canvas image')).toHaveAttribute('href', /blob:/)
+    await expect(reopened.locator('.occlusion-mask')).toHaveCount(2)
+    await reopened.getByRole('button', { name: 'Show answer' }).click()
+    await expect(reopened.locator('.occlusion-revealed-mask')).toHaveCount(1)
+    await expect(reopened.locator('.occlusion-mask')).toHaveCount(1)
+  } finally {
+    await phoneContext?.close()
+    await reopenedContext?.close()
+    await rm(profile, { recursive: true, force: true }).catch(() => undefined)
+  }
+})
+
 test('cloze editor previews ordinals and reviewer shows furigana and typed differences', async ({ page }) => {
   await page.getByRole('link', { name: 'Note types' }).click()
   await page.getByRole('button', { name: 'Create note type' }).click()
@@ -625,7 +719,7 @@ test('two clients sync cloze ordinals and review history', async ({ browser, pag
     await pc.getByRole('button', { name: 'Sync now' }).click()
     await phone.getByRole('button', { name: 'Sync now' }).click()
     await phone.getByRole('button', { name: `Open ${deckName}` }).click()
-    await expect(phone.getByText('NEW 2')).toBeVisible()
+    await expect(phone.getByRole('button', { name: 'Study now' })).toBeEnabled()
     await phone.getByRole('button', { name: 'Study now' }).click()
     await expect(phone.frameLocator('iframe[title="Review card"]').getByText('[…]と犬')).toBeVisible()
     await phone.getByRole('button', { name: 'Show answer' }).click()
