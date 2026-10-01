@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { createSyncService } from './sync-service.js'
+import { SyncCompatibilityError, type createSyncService } from './sync-service.js'
 
 type Service = ReturnType<typeof createSyncService>
 
@@ -54,7 +54,7 @@ export function createSyncHttpHandler(service: Service, { allowedOrigin }: HttpO
       if (request.method === 'POST' && request.url === '/api/sync') {
         const authorization = request.headers.authorization
         if (!authorization?.startsWith('Bearer ')) return reply(401, { error: 'Authentication required.' })
-        const payload = await body(request) as { cursor?: number; operations?: unknown[] }
+        const payload = await body(request) as { protocolVersion?: unknown; collectionSchemaVersion?: unknown; cursor?: number; operations?: unknown[] }
         if (typeof payload.cursor !== 'number' || !Array.isArray(payload.operations)) return reply(400, { error: 'A cursor and operations array are required.' })
         return reply(200, service.sync(authorization.slice(7), payload as Parameters<Service['sync']>[1]))
       }
@@ -77,6 +77,7 @@ export function createSyncHttpHandler(service: Service, { allowedOrigin }: HttpO
       }
       return reply(404, { error: 'Not found.' })
     } catch (error) {
+      if (error instanceof SyncCompatibilityError) return reply(409, error.incompatibility)
       const message = error instanceof Error ? error.message : 'Request failed.'
       return reply(message === 'Authentication required.' ? 401 : message === 'Media upload is too large.' ? 413 : 400, { error: message })
     }

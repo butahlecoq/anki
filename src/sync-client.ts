@@ -1,10 +1,13 @@
 import type { Collection, SyncOperation, SyncSettings } from './collection'
+import { CLIENT_COLLECTION_SCHEMA_VERSION, SYNC_PROTOCOL_VERSION, type IncompatibleSync, type SyncHealth } from '../sync-capabilities.js'
 
 type Fetcher = typeof fetch
 type Change = { cursor: number; opId: string; entityType: string; entityId: string; action: string; occurredAt: string; payload: unknown }
 export type MediaSyncProgress = { uploaded: number; downloaded: number; pending: number; uploadError?: 'authentication-required' | 'unreachable'; downloadError?: 'authentication-required' | 'unreachable' }
 type Complete = { state: 'complete'; accepted: number; cursor: number; changes: Change[]; media?: MediaSyncProgress }
-type SyncResult = Complete | { state: 'authentication-required' } | { state: 'unreachable' }
+type UpgradeRequired = { state: 'upgrade-required'; target: 'this-device' | 'pc-service'; message: string; requiredSchemaVersion?: number }
+type SyncResult = Complete | UpgradeRequired | { state: 'authentication-required' } | { state: 'unreachable' }
+type PreflightResult = { state: 'ready' } | Exclude<SyncResult, Complete>
 export type PairingResult = { state: 'paired' } | { state: 'pairing-error' } | { state: 'unreachable' }
 
 class MediaTransferError extends Error {
@@ -36,6 +39,36 @@ function isSafeServiceEndpoint(endpoint: string) {
   }
 }
 
+function upgradeRequired(incompatibility: Partial<IncompatibleSync>, fallback: string): UpgradeRequired {
+  const target = incompatibility.code === 'client-upgrade-required' ? 'this-device' : 'pc-service'
+  return {
+    state: 'upgrade-required',
+    target,
+    message: typeof incompatibility.message === 'string' ? incompatibility.message : fallback,
+    ...(typeof incompatibility.requiredSchemaVersion === 'number' ? { requiredSchemaVersion: incompatibility.requiredSchemaVersion } : {}),
+  }
+}
+
+export async function preflightSync(settings: SyncSettings, fetcher: Fetcher = fetch): Promise<PreflightResult> {
+  if (!isSafeServiceEndpoint(settings.endpoint)) return { state: 'unreachable' }
+  try {
+    const response = await fetcher(`${settings.endpoint.replace(/\/$/, '')}/api/health`)
+    if (!response.ok) return { state: 'unreachable' }
+    const health = await response.json() as Partial<SyncHealth>
+    if (health.protocolVersion !== SYNC_PROTOCOL_VERSION) return upgradeRequired({ code: 'server-upgrade-required' }, 'This PC sync service does not support the current sync protocol. Update the PC service, then try again.')
+    if (typeof health.maximumCollectionSchemaVersion !== 'number' || health.maximumCollectionSchemaVersion < CLIENT_COLLECTION_SCHEMA_VERSION) {
+      return upgradeRequired({ code: 'server-upgrade-required' }, `This PC sync service does not support collection schema ${CLIENT_COLLECTION_SCHEMA_VERSION}. Update the PC service, then try again.`)
+    }
+    if (typeof health.collectionSchemaVersion !== 'number') return upgradeRequired({ code: 'server-upgrade-required' }, 'This PC sync service did not report its collection schema. Update the PC service, then try again.')
+    if (health.collectionSchemaVersion > CLIENT_COLLECTION_SCHEMA_VERSION) {
+      return upgradeRequired({ code: 'client-upgrade-required', requiredSchemaVersion: health.collectionSchemaVersion }, `This collection requires schema ${health.collectionSchemaVersion}. Update Kiroku on this device, then try again.`)
+    }
+    return { state: 'ready' }
+  } catch {
+    return { state: 'unreachable' }
+  }
+}
+
 export async function pairCollection(collection: Collection, endpoint: string, code: string, fetcher: Fetcher = fetch): Promise<PairingResult> {
   const serviceEndpoint = endpoint.trim().replace(/\/$/, '')
   if (!isSafeServiceEndpoint(serviceEndpoint)) return { state: 'pairing-error' }
@@ -61,9 +94,14 @@ export async function foregroundSync(settings: SyncSettings, operations: Partial
     const response = await fetcher(`${settings.endpoint.replace(/\/$/, '')}/api/sync`, {
       method: 'POST',
       headers: { authorization: `Bearer ${settings.token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ cursor: settings.cursor, operations }),
+      body: JSON.stringify({ protocolVersion: SYNC_PROTOCOL_VERSION, collectionSchemaVersion: CLIENT_COLLECTION_SCHEMA_VERSION, cursor: settings.cursor, operations }),
     })
     if (response.status === 401) return { state: 'authentication-required' }
+    if (response.status === 409) {
+      let incompatibility: Partial<IncompatibleSync> = {}
+      try { incompatibility = await response.json() as Partial<IncompatibleSync> } catch { /* Keep upgrade guidance useful for a malformed response. */ }
+      return upgradeRequired(incompatibility, 'This collection cannot sync until Kiroku is updated.')
+    }
     if (!response.ok) return { state: 'unreachable' }
     const payload = await response.json() as Omit<Complete, 'state'>
     return { state: 'complete', ...payload }
@@ -75,6 +113,8 @@ export async function foregroundSync(settings: SyncSettings, operations: Partial
 export async function syncCollection(collection: Collection, fetcher: Fetcher = fetch): Promise<SyncResult> {
   const settings = await collection.syncSettings()
   if (!settings) return { state: 'authentication-required' }
+  const preflight = await preflightSync(settings, fetcher)
+  if (preflight.state !== 'ready') return preflight
   let uploaded = 0
   let downloaded = 0
   let uploadError: MediaSyncProgress['uploadError']

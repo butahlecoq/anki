@@ -5,11 +5,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
 import { createServer } from 'node:http'
+import { DatabaseSync } from 'node:sqlite'
 import { createPairingCode, startSyncServer } from './index.js'
 import { createSyncService } from './sync-service.js'
 import { createSyncHttpHandler } from './sync-http.js'
 
 let runtimeDirectory: string | undefined
+const serviceHealth = (collectionSchemaVersion = 1) => ({ ready: true, schemaVersion: 1, protocolVersion: 2, collectionSchemaVersion, maximumCollectionSchemaVersion: 12, store: 'sqlite' as const })
 
 afterEach(async () => {
   if (runtimeDirectory) await rm(runtimeDirectory, { recursive: true, force: true })
@@ -20,7 +22,7 @@ test('reports a ready durable store and accepts a pairing code only once', async
   runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
   const service = createSyncService({ databasePath: join(runtimeDirectory, 'collection.sqlite') })
 
-  assert.deepEqual(service.health(), { ready: true, schemaVersion: 1, store: 'sqlite' })
+  assert.deepEqual(service.health(), serviceHealth())
 
   const pairingCode = service.createPairingCode(new Date('2026-10-01T12:00:00.000Z'))
   const paired = service.pair({ code: pairingCode, deviceId: 'phone-1' }, new Date('2026-10-01T12:01:00.000Z'))
@@ -37,6 +39,8 @@ test('accepts a review mutation once when the request is delivered twice', async
   const code = service.createPairingCode(new Date('2026-10-01T12:00:00.000Z'))
   const { token } = service.pair({ code, deviceId: 'phone-1' }, new Date('2026-10-01T12:01:00.000Z'))
   const request = {
+    protocolVersion: 2,
+    collectionSchemaVersion: 10,
     cursor: 0,
     operations: [{ opId: 'review-1', entityType: 'review', entityId: 'review-1', action: 'create', occurredAt: '2026-10-01T12:02:00.000Z', payload: { cardId: 'card-1', rating: 'good' } }],
   }
@@ -44,9 +48,57 @@ test('accepts a review mutation once when the request is delivered twice', async
   assert.equal(service.sync(token, request).accepted, 1)
   assert.equal(service.sync(token, request).accepted, 0)
   assert.equal(service.reviewCount(), 1)
-  const pulled = service.sync(token, { cursor: 0, operations: [] })
+  const pulled = service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 10, cursor: 0, operations: [] })
   assert.equal(pulled.changes.length, 1)
   assert.equal(pulled.cursor, 1)
+  service.close()
+})
+
+test('persists a collection schema watermark and rejects an incompatible client before accepting mutations', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
+  const databasePath = join(runtimeDirectory, 'collection.sqlite')
+  const service = createSyncService({ databasePath })
+  const code = service.createPairingCode(new Date('2026-10-01T12:00:00.000Z'))
+  const { token } = service.pair({ code, deviceId: 'phone-1' }, new Date('2026-10-01T12:01:00.000Z'))
+
+  assert.equal(service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 10, cursor: 0, operations: [] }).accepted, 0)
+  assert.throws(() => service.sync(token, {
+    protocolVersion: 2,
+    collectionSchemaVersion: 6,
+    cursor: 0,
+    operations: [{ opId: 'lost-change', entityType: 'note', entityId: 'note-1', action: 'update', occurredAt: '2026-10-01T12:02:00.000Z', payload: { id: 'note-1' } }],
+  }), /update kiroku on this device/i)
+  assert.equal(service.changeCount(), 0)
+  assert.equal(service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 12, cursor: 0, operations: [] }).accepted, 0)
+  assert.equal(service.health().collectionSchemaVersion, 12)
+  assert.throws(() => service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 13, cursor: 0, operations: [] }), /supports collection schemas through 12/i)
+  assert.equal(service.changeCount(), 0)
+  service.close()
+
+  const reopened = createSyncService({ databasePath })
+  assert.equal(reopened.health().collectionSchemaVersion, 12)
+  reopened.close()
+})
+
+test('infers a schema watermark from a legacy change log and refuses a malformed higher-schema batch without mutation', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
+  const databasePath = join(runtimeDirectory, 'collection.sqlite')
+  const legacy = new DatabaseSync(databasePath)
+  legacy.exec(`CREATE TABLE changes (cursor INTEGER PRIMARY KEY AUTOINCREMENT, op_id TEXT UNIQUE NOT NULL, device_id TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, action TEXT NOT NULL, occurred_at TEXT NOT NULL, payload TEXT NOT NULL);`)
+  legacy.prepare('INSERT INTO changes (op_id, device_id, entity_type, entity_id, action, occurred_at, payload) VALUES (?, ?, ?, ?, ?, ?, ?)').run('nested-deck', 'old-device', 'deck', 'deck-1', 'update', '2026-10-01T12:00:00.000Z', JSON.stringify({ id: 'deck-1', parentId: 'parent', optionGroupId: 'default' }))
+  legacy.close()
+
+  const service = createSyncService({ databasePath })
+  assert.equal(service.health().collectionSchemaVersion, 9)
+  const code = service.createPairingCode()
+  const { token } = service.pair({ code, deviceId: 'phone-1' })
+  assert.throws(() => service.sync(token, {
+    protocolVersion: 2,
+    collectionSchemaVersion: 10,
+    cursor: 0,
+    operations: [{ opId: 'policy-card', entityType: 'card', entityId: 'card-1', action: 'update', occurredAt: '2026-10-01T12:01:00.000Z', payload: { id: 'card-1', manualSuspended: true } }],
+  }), /declares schema 10/i)
+  assert.equal(service.changeCount(), 1)
   service.close()
 })
 
@@ -77,7 +129,7 @@ test('serves health, pairing, and authenticated sync over HTTP', async () => {
   const origin = `http://127.0.0.1:${address.port}`
 
   const health = await fetch(`${origin}/api/health`)
-  assert.deepEqual(await health.json(), { ready: true, schemaVersion: 1, store: 'sqlite' })
+  assert.deepEqual(await health.json(), serviceHealth())
 
   const preflight = await fetch(`${origin}/api/sync`, { method: 'OPTIONS', headers: { origin: 'http://127.0.0.1:4173' } })
   assert.equal(preflight.status, 204)
@@ -92,8 +144,16 @@ test('serves health, pairing, and authenticated sync over HTTP', async () => {
   const credential = await paired.json() as { token: string }
   const denied = await fetch(`${origin}/api/sync`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cursor: 0, operations: [] }) })
   assert.equal(denied.status, 401)
-  const synced = await fetch(`${origin}/api/sync`, { method: 'POST', headers: { authorization: `Bearer ${credential.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ cursor: 0, operations: [] }) })
-  assert.deepEqual(await synced.json(), { accepted: 0, cursor: 0, changes: [] })
+  const legacyProtocol = await fetch(`${origin}/api/sync`, { method: 'POST', headers: { authorization: `Bearer ${credential.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ cursor: 0, operations: [{ opId: 'legacy-write', entityType: 'note', entityId: 'note-1', action: 'update', occurredAt: '2026-10-01T12:00:00.000Z', payload: { id: 'note-1' } }] }) })
+  assert.equal(legacyProtocol.status, 409)
+  assert.deepEqual(await legacyProtocol.json(), { code: 'protocol-upgrade-required', message: 'This PC sync service and this device use incompatible sync protocols. Update both, then try again.', protocolVersion: 2 })
+  assert.equal(service.changeCount(), 0)
+  const synced = await fetch(`${origin}/api/sync`, { method: 'POST', headers: { authorization: `Bearer ${credential.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, collectionSchemaVersion: 10, cursor: 0, operations: [] }) })
+  assert.deepEqual(await synced.json(), { protocolVersion: 2, collectionSchemaVersion: 10, accepted: 0, cursor: 0, changes: [] })
+  const rejected = await fetch(`${origin}/api/sync`, { method: 'POST', headers: { authorization: `Bearer ${credential.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, collectionSchemaVersion: 6, cursor: 0, operations: [{ opId: 'stale-write', entityType: 'note', entityId: 'note-1', action: 'update', occurredAt: '2026-10-01T12:00:00.000Z', payload: { id: 'note-1' } }] }) })
+  assert.equal(rejected.status, 409)
+  assert.deepEqual(await rejected.json(), { code: 'client-upgrade-required', message: 'This collection requires schema 10; this device declares schema 6. Update Kiroku on this device, then try again.', protocolVersion: 2, requiredSchemaVersion: 10 })
+  assert.equal(service.changeCount(), 0)
   const mediaBytes = new Uint8Array([137, 80, 78, 71])
   const mediaDigest = createHash('sha256').update(mediaBytes).digest('hex')
   const uploaded = await fetch(`${origin}/api/media/${mediaDigest}`, { method: 'PUT', headers: { authorization: `Bearer ${credential.token}`, 'content-type': 'image/png' }, body: mediaBytes })
@@ -114,7 +174,7 @@ test('starts a loopback service with a durable runtime directory', async () => {
 
   const health = await fetch(`http://127.0.0.1:${running.port}/api/health`)
   assert.equal(health.status, 200)
-  assert.deepEqual(await health.json(), { ready: true, schemaVersion: 1, store: 'sqlite' })
+  assert.deepEqual(await health.json(), serviceHealth())
   await running.close()
 })
 

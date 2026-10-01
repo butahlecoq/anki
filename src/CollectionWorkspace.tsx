@@ -264,6 +264,11 @@ function SyncControls() {
       else setMessage(`Sync complete. ${result.accepted} local change${result.accepted === 1 ? '' : 's'} sent; ${media?.uploaded ?? 0} uploaded and ${media?.downloaded ?? 0} downloaded.`)
     }
     else if (result.state === 'authentication-required') setMessage('This device needs to be paired again before it can sync.')
+    else if (result.state === 'upgrade-required') {
+      setMessage(result.target === 'this-device'
+        ? 'This device needs a Kiroku update before it can sync this collection. Update the app, then try again. Your local changes remain on this device.'
+        : 'Your PC sync service needs an update before this collection can sync. Update the PC service, then try again. Your local changes remain on this device.')
+    }
     else setMessage('Your PC service could not be reached. Your changes remain on this device and will retry next time.')
   }
 

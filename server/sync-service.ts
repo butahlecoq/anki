@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { SERVER_MAX_COLLECTION_SCHEMA_VERSION, SYNC_PROTOCOL_VERSION, type IncompatibleSync, type SyncCapabilities, type SyncHealth } from '../sync-capabilities.js'
 
 type ServiceOptions = { databasePath: string; mediaDirectory?: string }
 type PairRequest = { code: string; deviceId: string }
@@ -13,7 +14,45 @@ type SyncOperation = {
   occurredAt: string
   payload: unknown
 }
-type SyncRequest = { cursor: number; operations: SyncOperation[] }
+type SyncRequest = SyncCapabilities & { cursor: number; operations: SyncOperation[] }
+
+type PersistedChange = { entity_type: string; action: string; payload: string }
+
+const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+
+/**
+ * Historical protocol-v1 rows have no declared schema. Infer the minimum
+ * collection format needed to preserve their payload so a service upgrade
+ * cannot reopen a mixed-version sync hole.
+ */
+function schemaRequiredByOperation(operation: Pick<SyncOperation, 'entityType' | 'action' | 'payload'>): number {
+  let required = 1
+  if (operation.entityType === 'noteMedia') required = 5
+  if (operation.entityType === 'noteType') required = 6
+  if (operation.entityType === 'deckOptionGroup') required = 9
+  const payload = isRecord(operation.payload) ? operation.payload : {}
+  if (operation.entityType === 'note' && typeof payload.typeId === 'string') required = Math.max(required, 6)
+  if (operation.entityType === 'card' && typeof payload.templateId === 'string') required = Math.max(required, 6)
+  if (operation.entityType === 'noteType' && payload.kind === 'cloze') required = Math.max(required, 7)
+  if (operation.entityType === 'card' && Number.isSafeInteger(payload.clozeOrdinal)) required = Math.max(required, 7)
+  if (operation.entityType === 'note' && (Array.isArray(payload.tags) || 'imageOcclusion' in payload)) required = Math.max(required, 8)
+  if (operation.entityType === 'noteType' && payload.kind === 'image-occlusion') required = Math.max(required, 8)
+  if (operation.entityType === 'card' && ('occlusionId' in payload || 'occlusionOrdinal' in payload)) required = Math.max(required, 8)
+  if (operation.entityType === 'deck' && ('parentId' in payload || 'optionGroupId' in payload)) required = Math.max(required, 9)
+  if (operation.entityType === 'card' && ('manualSuspended' in payload || 'templateSuspended' in payload || 'buriedUntil' in payload)) required = Math.max(required, 11)
+  if (operation.entityType === 'deckOptionGroup' && ['buryNewSiblings', 'buryReviewSiblings', 'leechThreshold', 'leechAction', 'leechTag'].some((field) => field in payload)) required = Math.max(required, 11)
+  return required
+}
+
+export class SyncCompatibilityError extends Error {
+  constructor(readonly incompatibility: IncompatibleSync) {
+    super(incompatibility.message)
+  }
+}
+
+function compatibilityError(code: IncompatibleSync['code'], message: string, details: Omit<IncompatibleSync, 'code' | 'message' | 'protocolVersion'> = {}) {
+  return new SyncCompatibilityError({ code, message, protocolVersion: SYNC_PROTOCOL_VERSION, ...details })
+}
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const token = () => randomBytes(32).toString('hex')
@@ -30,11 +69,47 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
     CREATE TABLE IF NOT EXISTS tokens (hash TEXT PRIMARY KEY, device_id TEXT NOT NULL, FOREIGN KEY(device_id) REFERENCES devices(id));
     CREATE TABLE IF NOT EXISTS changes (cursor INTEGER PRIMARY KEY AUTOINCREMENT, op_id TEXT UNIQUE NOT NULL, device_id TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, action TEXT NOT NULL, occurred_at TEXT NOT NULL, payload TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS media_blobs (digest TEXT PRIMARY KEY, byte_length INTEGER NOT NULL, mime_type TEXT NOT NULL, created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS collection_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
   `)
+  const storedWatermark = database.prepare("SELECT value FROM collection_metadata WHERE key = 'collection_schema_version'").get() as { value: string } | undefined
+  const persistedWatermark = storedWatermark && Number.parseInt(storedWatermark.value, 10)
+  const inferredWatermark = (database.prepare('SELECT entity_type, action, payload FROM changes').all() as PersistedChange[]).reduce((maximum, change) => {
+    try {
+      return Math.max(maximum, schemaRequiredByOperation({ entityType: change.entity_type, action: change.action, payload: JSON.parse(change.payload) }))
+    } catch {
+      // Corrupt historic payloads still require the newest service/client pair.
+      return SERVER_MAX_COLLECTION_SCHEMA_VERSION
+    }
+  }, 1)
+  let collectionSchemaVersion = Math.max(1, typeof persistedWatermark === 'number' && Number.isSafeInteger(persistedWatermark) ? persistedWatermark : 1, inferredWatermark)
+  if (!storedWatermark || collectionSchemaVersion !== persistedWatermark) database.prepare("INSERT INTO collection_metadata (key, value) VALUES ('collection_schema_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(collectionSchemaVersion))
+
+  const assertCapabilities = (request: SyncRequest) => {
+    if (request.protocolVersion !== SYNC_PROTOCOL_VERSION) {
+      throw compatibilityError('protocol-upgrade-required', 'This PC sync service and this device use incompatible sync protocols. Update both, then try again.')
+    }
+    if (!Number.isSafeInteger(request.collectionSchemaVersion) || request.collectionSchemaVersion < 1) {
+      throw compatibilityError('client-upgrade-required', 'This device did not declare a supported collection schema. Update Kiroku on this device, then try again.', { requiredSchemaVersion: collectionSchemaVersion })
+    }
+    if (request.collectionSchemaVersion > SERVER_MAX_COLLECTION_SCHEMA_VERSION) {
+      throw compatibilityError('server-upgrade-required', `This PC sync service supports collection schemas through ${SERVER_MAX_COLLECTION_SCHEMA_VERSION}. Update the PC service, then try again.`, { maximumSchemaVersion: SERVER_MAX_COLLECTION_SCHEMA_VERSION })
+    }
+    if (request.collectionSchemaVersion < collectionSchemaVersion) {
+      throw compatibilityError('client-upgrade-required', `This collection requires schema ${collectionSchemaVersion}; this device declares schema ${request.collectionSchemaVersion}. Update Kiroku on this device, then try again.`, { requiredSchemaVersion: collectionSchemaVersion })
+    }
+    const requestedSchema = request.operations.reduce((maximum, operation) => Math.max(maximum, schemaRequiredByOperation(operation)), 1)
+    if (requestedSchema > SERVER_MAX_COLLECTION_SCHEMA_VERSION) {
+      throw compatibilityError('server-upgrade-required', `This change requires collection schema ${requestedSchema}, but this PC sync service supports schemas through ${SERVER_MAX_COLLECTION_SCHEMA_VERSION}. Update the PC service, then try again.`, { requiredSchemaVersion: requestedSchema, maximumSchemaVersion: SERVER_MAX_COLLECTION_SCHEMA_VERSION })
+    }
+    if (requestedSchema > request.collectionSchemaVersion) {
+      throw compatibilityError('client-upgrade-required', `This request contains schema ${requestedSchema} data but declares schema ${request.collectionSchemaVersion}. Update Kiroku on this device, then try again.`, { requiredSchemaVersion: requestedSchema })
+    }
+    return Math.max(collectionSchemaVersion, request.collectionSchemaVersion, requestedSchema)
+  }
 
   const service = {
     health() {
-      return { ready: true, schemaVersion: 1, store: 'sqlite' as const }
+      return { ready: true, schemaVersion: 1, protocolVersion: SYNC_PROTOCOL_VERSION, collectionSchemaVersion, maximumCollectionSchemaVersion: SERVER_MAX_COLLECTION_SCHEMA_VERSION, store: 'sqlite' as const } satisfies SyncHealth & { schemaVersion: number }
     },
 
     createPairingCode(now = new Date()) {
@@ -63,6 +138,9 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
     sync(accessToken: string, request: SyncRequest) {
       const device = database.prepare('SELECT devices.id FROM tokens JOIN devices ON devices.id = tokens.device_id WHERE tokens.hash = ? AND devices.revoked_at IS NULL').get(hash(accessToken)) as { id: string } | undefined
       if (!device) throw new Error('Authentication required.')
+      // Validate before opening the write transaction. A rejected batch has no
+      // change rows, cursor movement, or watermark side effect.
+      const nextWatermark = assertCapabilities(request)
       let accepted = 0
       database.exec('BEGIN IMMEDIATE')
       try {
@@ -70,6 +148,10 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
         for (const operation of request.operations) {
           const result = insert.run(operation.opId, device.id, operation.entityType, operation.entityId, operation.action, operation.occurredAt, JSON.stringify(operation.payload))
           accepted += Number(result.changes)
+        }
+        if (nextWatermark > collectionSchemaVersion) {
+          database.prepare("INSERT INTO collection_metadata (key, value) VALUES ('collection_schema_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(nextWatermark))
+          collectionSchemaVersion = nextWatermark
         }
         database.exec('COMMIT')
       } catch (error) {
@@ -79,6 +161,8 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
       const changes = database.prepare('SELECT cursor, op_id, device_id, entity_type, entity_id, action, occurred_at, payload FROM changes WHERE cursor > ? ORDER BY cursor').all(request.cursor) as Array<{ cursor: number; op_id: string; device_id: string; entity_type: string; entity_id: string; action: string; occurred_at: string; payload: string }>
       const cursor = changes.at(-1)?.cursor ?? request.cursor
       return {
+        protocolVersion: SYNC_PROTOCOL_VERSION,
+        collectionSchemaVersion,
         accepted,
         cursor,
         changes: changes.map((change) => ({
@@ -96,6 +180,10 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
 
     reviewCount() {
       return Number((database.prepare("SELECT COUNT(*) AS count FROM changes WHERE entity_type = 'review'").get() as { count: number }).count)
+    },
+
+    changeCount() {
+      return Number((database.prepare('SELECT COUNT(*) AS count FROM changes').get() as { count: number }).count)
     },
 
     async putMedia(accessToken: string, digest: string, mimeType: string, bytes: Uint8Array) {
