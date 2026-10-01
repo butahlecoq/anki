@@ -41,6 +41,7 @@ function schemaRequiredByOperation(operation: Pick<SyncOperation, 'entityType' |
   if (operation.entityType === 'deck' && ('parentId' in payload || 'optionGroupId' in payload)) required = Math.max(required, 9)
   if (operation.entityType === 'card' && ('manualSuspended' in payload || 'templateSuspended' in payload || 'buriedUntil' in payload)) required = Math.max(required, 11)
   if (operation.entityType === 'deckOptionGroup' && ['buryNewSiblings', 'buryReviewSiblings', 'leechThreshold', 'leechAction', 'leechTag'].some((field) => field in payload)) required = Math.max(required, 11)
+  if (operation.entityType === 'deckOptionGroup' && 'interdayLearningOrder' in payload) required = Math.max(required, 12)
   return required
 }
 
@@ -84,18 +85,24 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
   let collectionSchemaVersion = Math.max(1, typeof persistedWatermark === 'number' && Number.isSafeInteger(persistedWatermark) ? persistedWatermark : 1, inferredWatermark)
   if (!storedWatermark || collectionSchemaVersion !== persistedWatermark) database.prepare("INSERT INTO collection_metadata (key, value) VALUES ('collection_schema_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(collectionSchemaVersion))
 
-  const assertCapabilities = (request: SyncRequest) => {
+  const persistedCollectionSchemaVersion = () => {
+    const metadata = database.prepare("SELECT value FROM collection_metadata WHERE key = 'collection_schema_version'").get() as { value: string } | undefined
+    const value = metadata && Number.parseInt(metadata.value, 10)
+    return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 ? value : 1
+  }
+
+  const assertCapabilities = (request: SyncRequest, currentCollectionSchemaVersion: number) => {
     if (request.protocolVersion !== SYNC_PROTOCOL_VERSION) {
       throw compatibilityError('protocol-upgrade-required', 'This PC sync service and this device use incompatible sync protocols. Update both, then try again.')
     }
     if (!Number.isSafeInteger(request.collectionSchemaVersion) || request.collectionSchemaVersion < 1) {
-      throw compatibilityError('client-upgrade-required', 'This device did not declare a supported collection schema. Update Kiroku on this device, then try again.', { requiredSchemaVersion: collectionSchemaVersion })
+      throw compatibilityError('client-upgrade-required', 'This device did not declare a supported collection schema. Update Kiroku on this device, then try again.', { requiredSchemaVersion: currentCollectionSchemaVersion })
     }
     if (request.collectionSchemaVersion > SERVER_MAX_COLLECTION_SCHEMA_VERSION) {
       throw compatibilityError('server-upgrade-required', `This PC sync service supports collection schemas through ${SERVER_MAX_COLLECTION_SCHEMA_VERSION}. Update the PC service, then try again.`, { maximumSchemaVersion: SERVER_MAX_COLLECTION_SCHEMA_VERSION })
     }
-    if (request.collectionSchemaVersion < collectionSchemaVersion) {
-      throw compatibilityError('client-upgrade-required', `This collection requires schema ${collectionSchemaVersion}; this device declares schema ${request.collectionSchemaVersion}. Update Kiroku on this device, then try again.`, { requiredSchemaVersion: collectionSchemaVersion })
+    if (request.collectionSchemaVersion < currentCollectionSchemaVersion) {
+      throw compatibilityError('client-upgrade-required', `This collection requires schema ${currentCollectionSchemaVersion}; this device declares schema ${request.collectionSchemaVersion}. Update Kiroku on this device, then try again.`, { requiredSchemaVersion: currentCollectionSchemaVersion })
     }
     const requestedSchema = request.operations.reduce((maximum, operation) => Math.max(maximum, schemaRequiredByOperation(operation)), 1)
     if (requestedSchema > SERVER_MAX_COLLECTION_SCHEMA_VERSION) {
@@ -104,7 +111,7 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
     if (requestedSchema > request.collectionSchemaVersion) {
       throw compatibilityError('client-upgrade-required', `This request contains schema ${requestedSchema} data but declares schema ${request.collectionSchemaVersion}. Update Kiroku on this device, then try again.`, { requiredSchemaVersion: requestedSchema })
     }
-    return Math.max(collectionSchemaVersion, request.collectionSchemaVersion, requestedSchema)
+    return Math.max(currentCollectionSchemaVersion, request.collectionSchemaVersion, requestedSchema)
   }
 
   const service = {
@@ -138,22 +145,24 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
     sync(accessToken: string, request: SyncRequest) {
       const device = database.prepare('SELECT devices.id FROM tokens JOIN devices ON devices.id = tokens.device_id WHERE tokens.hash = ? AND devices.revoked_at IS NULL').get(hash(accessToken)) as { id: string } | undefined
       if (!device) throw new Error('Authentication required.')
-      // Validate before opening the write transaction. A rejected batch has no
-      // change rows, cursor movement, or watermark side effect.
-      const nextWatermark = assertCapabilities(request)
       let accepted = 0
       database.exec('BEGIN IMMEDIATE')
       try {
+        // BEGIN IMMEDIATE serializes the watermark check with insertion. A
+        // second service cannot ratchet the collection between this read and
+        // the first accepted operation.
+        const currentWatermark = persistedCollectionSchemaVersion()
+        const nextWatermark = assertCapabilities(request, currentWatermark)
         const insert = database.prepare('INSERT OR IGNORE INTO changes (op_id, device_id, entity_type, entity_id, action, occurred_at, payload) VALUES (?, ?, ?, ?, ?, ?, ?)')
         for (const operation of request.operations) {
           const result = insert.run(operation.opId, device.id, operation.entityType, operation.entityId, operation.action, operation.occurredAt, JSON.stringify(operation.payload))
           accepted += Number(result.changes)
         }
-        if (nextWatermark > collectionSchemaVersion) {
+        if (nextWatermark > currentWatermark) {
           database.prepare("INSERT INTO collection_metadata (key, value) VALUES ('collection_schema_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(nextWatermark))
-          collectionSchemaVersion = nextWatermark
         }
         database.exec('COMMIT')
+        collectionSchemaVersion = Math.max(collectionSchemaVersion, nextWatermark)
       } catch (error) {
         database.exec('ROLLBACK')
         throw error

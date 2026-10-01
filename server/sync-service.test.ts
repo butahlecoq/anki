@@ -80,6 +80,28 @@ test('persists a collection schema watermark and rejects an incompatible client 
   reopened.close()
 })
 
+test('re-reads the durable watermark under the write lock before accepting a stale request', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
+  const databasePath = join(runtimeDirectory, 'collection.sqlite')
+  const staleService = createSyncService({ databasePath })
+  const code = staleService.createPairingCode()
+  const { token } = staleService.pair({ code, deviceId: 'phone-1' })
+  // This second service simulates another sync process ratcheting the shared
+  // collection after staleService has already read its initial watermark.
+  const newerService = createSyncService({ databasePath })
+  assert.equal(newerService.sync(token, { protocolVersion: 2, collectionSchemaVersion: 12, cursor: 0, operations: [] }).accepted, 0)
+
+  assert.throws(() => staleService.sync(token, {
+    protocolVersion: 2,
+    collectionSchemaVersion: 10,
+    cursor: 0,
+    operations: [{ opId: 'stale-write', entityType: 'note', entityId: 'note-1', action: 'update', occurredAt: '2026-10-01T12:00:00.000Z', payload: { id: 'note-1' } }],
+  }), /requires schema 12/i)
+  assert.equal(staleService.changeCount(), 0)
+  newerService.close()
+  staleService.close()
+})
+
 test('infers a schema watermark from a legacy change log and refuses a malformed higher-schema batch without mutation', async () => {
   runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
   const databasePath = join(runtimeDirectory, 'collection.sqlite')
@@ -99,6 +121,19 @@ test('infers a schema watermark from a legacy change log and refuses a malformed
     operations: [{ opId: 'policy-card', entityType: 'card', entityId: 'card-1', action: 'update', occurredAt: '2026-10-01T12:01:00.000Z', payload: { id: 'card-1', manualSuspended: true } }],
   }), /declares schema 10/i)
   assert.equal(service.changeCount(), 1)
+  service.close()
+})
+
+test('infers v12 interday learning ordering from a legacy deck-option change log', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
+  const databasePath = join(runtimeDirectory, 'collection.sqlite')
+  const legacy = new DatabaseSync(databasePath)
+  legacy.exec(`CREATE TABLE changes (cursor INTEGER PRIMARY KEY AUTOINCREMENT, op_id TEXT UNIQUE NOT NULL, device_id TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, action TEXT NOT NULL, occurred_at TEXT NOT NULL, payload TEXT NOT NULL);`)
+  legacy.prepare('INSERT INTO changes (op_id, device_id, entity_type, entity_id, action, occurred_at, payload) VALUES (?, ?, ?, ?, ?, ?, ?)').run('interday-order', 'old-device', 'deckOptionGroup', 'group-1', 'update', '2026-10-01T12:00:00.000Z', JSON.stringify({ id: 'group-1', interdayLearningOrder: 'due' }))
+  legacy.close()
+
+  const service = createSyncService({ databasePath })
+  assert.equal(service.health().collectionSchemaVersion, 12)
   service.close()
 })
 
