@@ -11,6 +11,91 @@ afterEach(async () => {
 })
 
 describe('local collection', () => {
+  test('upgrades v6 note types to standard without changing card scheduling data', async () => {
+    const databaseName = `kiroku-test-${crypto.randomUUID()}`
+    const old = new Dexie(databaseName)
+    old.version(6).stores({ decks: 'id, name, createdAt', notes: 'id, deckId, typeId, updatedAt', cards: 'id, deckId, noteId, templateId, due, state', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId', deletedEntities: 'key, entityType, entityId, occurredAt', noteMedia: 'id, noteId, digest, side, kind, updatedAt', mediaBlobs: 'digest, verifiedAt', noteTypes: 'id, name, updatedAt' })
+    await old.table('noteTypes').add({ id: 'old-type', name: 'Old', fields: [{ id: 'text', name: 'Text' }], templates: [{ id: 'old-template', name: 'Card', front: '{{Text}}', back: '{{Text}}', css: '' }], protected: false, createdAt: '2026-01-01', updatedAt: '2026-01-01' })
+    await old.table('cards').add({ id: 'old-card', deckId: 'deck-1', noteId: 'note-1', templateId: 'old-template', due: '2026-01-02', stability: 4, difficulty: 5, elapsedDays: 1, scheduledDays: 2, learningSteps: 0, reps: 2, lapses: 0, state: 2, lastReview: '2026-01-01' })
+    old.close()
+    collection = createCollection(databaseName)
+    await expect(collection.noteTypes.get('old-type')).resolves.toMatchObject({ kind: 'standard' })
+    await expect(collection.noteTypes.get(BASIC_NOTE_TYPE_ID)).resolves.toMatchObject({ kind: 'standard' })
+    await expect(collection.cards.get('old-card')).resolves.toMatchObject({ id: 'old-card', reps: 2, stability: 4 })
+  })
+
+  test('creates one cloze card per ordinal and preserves its schedule across deletion and restoration', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Sentences')
+    const type = await collection.createNoteType({ name: 'Cloze', kind: 'cloze', fields: [{ name: 'Text' }], templates: [{ name: 'Deletion', front: '{{cloze:Text}}', back: '{{cloze:Text}}', css: '' }] })
+    const field = type.fields[0].id
+    const note = await collection.createNote(deck.id, type.id, { [field]: '{{c1::東京}}と{{c3::大阪}}、{{c1::日本}}' })
+    const firstId = `${note.id}:${type.templates[0].id}:c1`
+    const thirdId = `${note.id}:${type.templates[0].id}:c3`
+    expect((await collection.cards.where('noteId').equals(note.id).toArray()).map((card) => card.id).sort()).toEqual([firstId, thirdId].sort())
+    await collection.answer(thirdId, Rating.Good, new Date('2026-10-01T12:00:00Z'))
+    await collection.updateNote(note.id, { [field]: '{{c1::東京}}と大阪' })
+    await expect(collection.cards.get(thirdId)).resolves.toMatchObject({ suspended: true, reps: 1, clozeOrdinal: 3 })
+    await collection.updateNote(note.id, { [field]: '{{c3::京都}}と{{c1::東京}}' })
+    await expect(collection.cards.get(thirdId)).resolves.toMatchObject({ suspended: false, reps: 1, clozeOrdinal: 3 })
+    await expect(collection.cards.get(firstId)).resolves.toMatchObject({ reps: 0 })
+    expect((await collection.cards.get(firstId))?.suspended).toBeFalsy()
+    await expect(collection.cards.where('noteId').equals(note.id).count()).resolves.toBe(2)
+  })
+
+  test('ignores inbound card updates and reviews for removed cloze ordinals', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Sentences')
+    const type = await collection.createNoteType({ name: 'Cloze', kind: 'cloze', fields: [{ name: 'Text' }], templates: [{ name: 'Deletion', front: '{{cloze:Text}}', back: '{{cloze:Text}}', css: '' }] })
+    const field = type.fields[0].id
+    const note = await collection.createNote(deck.id, type.id, { [field]: '{{c1::東京}} {{c2::大阪}}' })
+    const secondId = `${note.id}:${type.templates[0].id}:c2`
+    const stale = await collection.cards.get(secondId)
+    await collection.updateNote(note.id, { [field]: '{{c1::東京}} 大阪' })
+    await collection.applyRemoteChanges([{ opId: 'stale-cloze-card', entityType: 'card', entityId: secondId, action: 'update', occurredAt: '2026-10-02', payload: stale }], 1)
+    await expect(collection.cards.get(secondId)).resolves.toMatchObject({ suspended: true })
+    await collection.applyRemoteChanges([{ opId: 'stale-cloze-review', entityType: 'review', entityId: 'review-1', action: 'create', occurredAt: '2026-10-02', payload: { id: 'review-1', cardId: secondId, deckId: deck.id } }], 2)
+    await expect(collection.reviewEntries.get('review-1')).resolves.toBeUndefined()
+  })
+
+  test('rejects malformed cloze type definitions and preserves filtered references on field rename', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const draft = { name: 'Cloze', kind: 'cloze' as const, fields: [{ name: 'Text' }], templates: [{ name: 'Deletion', front: '{{cloze:Text}}', back: '{{cloze:Text}}', css: '' }] }
+    await expect(collection.createNoteType({ ...draft, templates: [{ ...draft.templates[0], back: '{{Text}}' }] })).rejects.toThrow(/Cloze front and back/)
+    const type = await collection.createNoteType(draft)
+    const renamed = await collection.updateNoteType(type.id, { fields: [{ ...type.fields[0], name: 'Sentence' }] })
+    expect(renamed.templates[0]).toMatchObject({ front: '{{cloze:Sentence}}', back: '{{cloze:Sentence}}' })
+  })
+
+  test('returns a generation error for malformed cloze text without partially saving an edit', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Sentences')
+    const type = await collection.createNoteType({ name: 'Cloze', kind: 'cloze', fields: [{ name: 'Text' }], templates: [{ name: 'Deletion', front: '{{cloze:Text}}', back: '{{cloze:Text}}', css: '' }] })
+    const field = type.fields[0].id
+    const note = await collection.createNote(deck.id, type.id, { [field]: '{{c1::猫}}' })
+    expect(collection.tryCardGenerationStatus(type, { [field]: '{{c2::unclosed' })).toMatchObject({ ok: false, error: expect.stringMatching(/Unclosed cloze deletion/) })
+    await expect(collection.updateNote(note.id, { [field]: '{{c2::unclosed' })).rejects.toThrow(/Unclosed cloze deletion/)
+    await expect(collection.notes.get(note.id)).resolves.toMatchObject({ fields: { [field]: '{{c1::猫}}' } })
+    await expect(collection.cards.where('noteId').equals(note.id).count()).resolves.toBe(1)
+  })
+
+  test('replays cloze type, note, and generated cards on another collection', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const remote = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    try {
+      const deck = await collection.createDeck('Sentences')
+      const type = await collection.createNoteType({ name: 'Cloze', kind: 'cloze', fields: [{ name: 'Text' }], templates: [{ name: 'Deletion', front: '{{cloze:Text}}', back: '{{cloze:Text}}', css: '' }] })
+      const note = await collection.createNote(deck.id, type.id, { [type.fields[0].id]: '{{c1::猫}} {{c2::犬}}' })
+      const operations = await collection.pendingOperations()
+      await remote.applyRemoteChanges(operations, operations.length)
+      await remote.applyRemoteChanges(operations, operations.length)
+      expect(await remote.cards.where('noteId').equals(note.id).toArray()).toEqual(await collection.cards.where('noteId').equals(note.id).toArray())
+      await expect(remote.receivedOperations.count()).resolves.toBe(operations.length)
+    } finally {
+      await remote.delete()
+    }
+  })
+
   test('upgrades v5 Basic data without changing note, card, or review identities', async () => {
     const databaseName = `kiroku-test-${crypto.randomUUID()}`
     const old = new Dexie(databaseName)
