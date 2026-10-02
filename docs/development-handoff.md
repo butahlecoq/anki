@@ -8,11 +8,11 @@ Fetch before relying on checks. Run `git status --short --branch` in each path. 
 
 | Path | Branch | Head | State |
 |---|---|---|---|
-| `C:/work/anki` | `main` | `47f2d99` | clean; documentation CI `37018413446` running; this follow-up pending |
+| `C:/work/anki` | `main` | `47f2d99` | clean; documentation CI `37018413446` passed; follow-up pending |
 | `C:/work/anki-17` | `feat/17-text-csv` | `7c00ccb` | clean; draft PR #72; exact-head CI `37010267515` passed |
 | `C:/work/anki-18` | `feat/18-safe-concurrency` | `01a65c4` | clean; draft PR #73; exact-head CI `37019083852` running |
-| `C:/work/anki-23` | `feat/23-jetbrains-omarchy-ux` | `b4a6415` | clean; draft PR #74; exact-head CI `37017542638` passed |
-| `C:/work/anki-56` | `feat/56-ankiweb-account` | `d14f610` | clean; draft PR #75; exact-head CI `37018717852` running |
+| `C:/work/anki-23` | `feat/23-jetbrains-omarchy-ux` | `b4a6415` | clean; PR #74 marked ready; exact-head CI `37017542638` passed |
+| `C:/work/anki-56` | `feat/56-ankiweb-account` | `d14f610` | clean; draft PR #75; exact-head CI `37018717852` passed |
 
 Do not merge the draft PRs. No worktree has been removed.
 
@@ -20,9 +20,9 @@ Do not merge the draft PRs. No worktree has been removed.
 
 - #17 / PR #72: exact-head CI `37010267515` passed at `7c00ccb`. The semantic CSV metadata assertion fixed an earlier quoting-assumption failure. PR remains draft pending final review and issue acceptance.
 - #18 / PR #73: `37016885671` failed at the statistics history button. Its failure snapshot shows that the Card progress dialog had already opened and contained both Good and Easy reviews; Playwright kept trying to click the button after the dialog covered it. `01a65c4` uses the button's keyboard activation path. Local typecheck/lint passed (existing `ImageOcclusion.tsx` warning); exact-head CI `37019083852` is running. Windows Playwright launch still fails with `spawn UNKNOWN`.
-- #23 / PR #74: #23 includes inherited text colors, mobile contrast fixes, a WebKit theme-paint audit, and hides the keyboard shortcut legend on coarse-pointer phones. `b4a6415` corrects the test comment after CI showed that iPhone WebKit reports a coarse pointer, and asserts visibility on fine pointers. Exact-head CI `37017542638` passed. This is not physical iPhone evidence; PR remains draft, with dialog keyboard behavior and visual regression tracked in #76/#77.
-- #56 / PR #75: `91f2c5c` adds a durable native projection manifest tied to the exact SQLite snapshot and checkpoint revision, including native note/card/review/deck/model/template IDs and original per-card deck bindings. `d14f610` rejects ambiguous card/field ordinal mappings and empty GUIDs before future writeback. Focused tests (9), typecheck and lint passed locally; previous head `91f2c5c` passed 268 client tests, build, and exact-head CI `37016646020`. Latest exact-head CI `37018717852` is running. Account login, native writeback/merge/recovery, gateway deployment, and installed-iPhone sync with PC off remain incomplete.
-- Main documentation CI `37015081542` failed on `ad9a483` in iPhone WebKit: the offline hint journey timed out, and the child-deck study-limit journey timed out waiting for an Easy rating button (then passed on retry). Typecheck, lint, unit/server tests, and build passed before the browser stage. `47f2d99` documentation CI `37018413446` is running. Investigate the hint failure and rating state before making a main-green claim. Do not treat documentation CI as feature acceptance.
+- #23 / PR #74: #23 includes inherited text colors, mobile contrast fixes, a WebKit theme-paint audit, and hides the keyboard shortcut legend on coarse-pointer phones. `b4a6415` corrects the test comment after CI showed that iPhone WebKit reports a coarse pointer, and asserts visibility on fine pointers. Exact-head CI `37017542638` passed; the PR is now marked ready. This is not physical iPhone evidence; dialog keyboard behavior and visual regression are tracked in #76/#77.
+- #56 / PR #75: `91f2c5c` adds a durable native projection manifest tied to the exact SQLite snapshot and checkpoint revision, including native note/card/review/deck/model/template IDs and original per-card deck bindings. `d14f610` rejects ambiguous card/field ordinal mappings and empty GUIDs before future writeback. Focused tests (9), typecheck, lint, and exact-head CI `37018717852` passed. Account login, native writeback/merge/recovery, gateway deployment, and installed-iPhone sync with PC off remain incomplete.
+- Main documentation CI `37015081542` failed on `ad9a483` in iPhone WebKit: the offline hint journey timed out, and the child-deck study-limit journey timed out waiting for an Easy rating button (then passed on retry). Typecheck, lint, unit/server tests, and build passed before the browser stage. `47f2d99` documentation CI `37018413446` passed. Investigate the hint failure and rating state before making a main-green claim. Do not treat documentation CI as feature acceptance.
 - #67's private aggregate package preview remains machine-local. Check only `runtime/local-package-preview-summary.json` on the machine that owns private Japanese examples. Never commit packages, credentials, note text, or per-note diagnostics.
 
 ## #56 account work and next steps
@@ -34,7 +34,7 @@ PR #75 now includes:
 3. `91f2c5c`: a persisted base manifest tied to the exact native snapshot and checkpoint revision, with native IDs, note type ordinals, and original per-card deck bindings. Replacing the checkpoint invalidates the manifest. This map is not yet wired to app edits or native writeback.
 4. `d14f610`: validation prevents duplicate native card/field ordinals and empty note GUIDs from creating an ambiguous future writeback mapping.
 
-Validation on `91f2c5c`: typecheck, 268 client tests, lint (existing `ImageOcclusion.tsx` warning), production build, and exact-head CI `37016646020` passed. On `d14f610`, typecheck, lint and 9 focused projection/state tests passed; exact-head CI is pending. No real account credentials or writes were used.
+Validation on `91f2c5c`: typecheck, 268 client tests, lint (existing `ImageOcclusion.tsx` warning), production build, and exact-head CI `37016646020` passed. On `d14f610`, typecheck, lint, 9 focused projection/state tests, and exact-head CI `37018717852` passed. No real account credentials or writes were used.
 
 This is only a projection input and storage boundary. It is not wired to visible account UI or sync. Key remaining design/implementation work:
 
