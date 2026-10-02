@@ -24,7 +24,11 @@ async function expectDecoded(images: Locator, count: number) {
   await expect(images).toHaveCount(count)
   for (const image of await images.all()) {
     await expect(image).toHaveAttribute('src', /^data:image\/png;base64,/)
-    await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true)
+    await expect(async () => {
+      // Answer changes navigate srcdoc. Reacquire the image in the resulting document
+      // if WebKit destroys the old execution context while the assertion samples it.
+      expect(await image.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true)
+    }).toPass({ timeout: 5_000 })
   }
 }
 
@@ -56,4 +60,69 @@ test('new Japanese cards and answer images decode throughout a warm offline revi
   await page.getByRole('button', { name: /^Good ·/ }).click()
   await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
   await expect(page.getByText('2 reviews recorded')).toBeVisible()
+})
+
+const uploadedImage = { name: 'uploaded.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL4+QAAAABJRU5ErkJggg==', 'base64') }
+
+async function createImageDeck(page: import('@playwright/test').Page) {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'New deck' }).click()
+  await page.getByLabel('Deck name').fill('Offline uploaded images')
+  await page.getByRole('button', { name: 'Create deck', exact: true }).click()
+  await page.getByRole('button', { name: 'Open Offline uploaded images' }).click()
+  await page.getByRole('button', { name: 'Add note' }).click()
+}
+
+test('uploaded front and back attachments decode when review starts offline', async ({ page, context }) => {
+  await createImageDeck(page)
+  await page.getByLabel('Front', { exact: true }).fill('猫')
+  await page.getByLabel('Back', { exact: true }).fill('cat')
+  await page.getByLabel('Images and audio').setInputFiles([uploadedImage, { ...uploadedImage, name: 'back.png' }])
+  await page.getByLabel('Show on').nth(1).selectOption('back')
+  await page.getByRole('button', { name: 'Save note' }).click()
+  await page.evaluate(async () => { await navigator.serviceWorker.ready })
+  await context.setOffline(true)
+  await page.getByRole('button', { name: 'Study now' }).click()
+  await expectDecoded(page.locator('.review-card .card-image'), 1)
+  await page.getByRole('button', { name: 'Show answer' }).click()
+  await expectDecoded(page.locator('.review-card .card-image'), 2)
+  await page.getByRole('button', { name: /^Good ·/ }).click()
+  await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
+})
+
+test('occlusion source decodes when the first masked card is rendered offline', async ({ page, context }) => {
+  await createImageDeck(page)
+  await page.getByRole('combobox', { name: 'Note type' }).selectOption('image-occlusion')
+  await page.getByLabel('Source image').setInputFiles(uploadedImage)
+  const canvas = page.getByLabel('Draw image occlusion masks')
+  await expect(canvas).toBeVisible()
+  const box = await canvas.boundingBox()
+  if (!box) throw new Error('Occlusion canvas is not measurable')
+  await canvas.dispatchEvent('pointerdown', { pointerId: 1, pointerType: 'touch', clientX: box.x + box.width * .1, clientY: box.y + box.height * .1 })
+  await canvas.dispatchEvent('pointermove', { pointerId: 1, pointerType: 'touch', clientX: box.x + box.width * .6, clientY: box.y + box.height * .6 })
+  await canvas.dispatchEvent('pointerup', { pointerId: 1, pointerType: 'touch', clientX: box.x + box.width * .6, clientY: box.y + box.height * .6 })
+  await page.getByRole('button', { name: 'Save note' }).click()
+  await page.evaluate(async () => { await navigator.serviceWorker.ready })
+  await context.setOffline(true)
+  await page.getByRole('button', { name: 'Study now' }).click()
+  const image = page.locator('.occlusion-review-canvas image')
+  await expect(image).toHaveAttribute('href', /^data:image\/png;base64,/)
+  // SVG image visibility alone does not prove its source decoded.
+  await expect.poll(() => image.evaluate(async (element) => {
+    const probe = new Image()
+    probe.style.display = 'none'
+    document.body.append(probe)
+    probe.src = element.getAttribute('href') ?? ''
+    try {
+      // Windows WebKit can reject decode() after successfully loading pixels.
+      // The same complete/naturalWidth gate used for visible img elements proves decoding.
+      await probe.decode().catch(() => undefined)
+      return probe.complete && probe.naturalWidth > 0
+    } finally { probe.remove() }
+  })).toBe(true)
+  await expect(page.locator('.occlusion-mask')).toHaveCount(1)
+  await page.getByRole('button', { name: 'Show answer' }).click()
+  await expect(page.locator('.occlusion-revealed-mask')).toHaveCount(1)
+  await page.getByRole('button', { name: /^Good ·/ }).click()
+  await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
 })

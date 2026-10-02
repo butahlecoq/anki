@@ -258,15 +258,7 @@ export function ImageOcclusionEditor({ deckId, note, onClose }: { deckId: string
   </div>
 }
 
-export function ImageOcclusionReview({ note, card, showAnswer }: { note: Note; card: CardRecord; showAnswer: boolean }) {
-  const source = useLiveQuery(async () => {
-    const sourceMediaId = note.imageOcclusion?.sourceMediaId
-    if (!sourceMediaId) return undefined
-    const reference = await collection.noteMedia.get(sourceMediaId)
-    if (!reference || reference.kind !== 'image') return undefined
-    return { reference, blob: await collection.verifiedMediaBlob(reference.digest) }
-  }, [note.id, note.imageOcclusion?.sourceMediaId])
-  const imageUrl = useObjectUrl(source?.blob?.blob)
+export function ImageOcclusionReview({ note, card, showAnswer, imageUrl }: { note: Note; card: CardRecord; showAnswer: boolean; imageUrl?: string }) {
   const masks = useMemo<OcclusionMask[]>(() => note.imageOcclusion?.masks ?? [], [note.imageOcclusion])
   if (!note.imageOcclusion) return <p className="form-error" role="alert">Image occlusion metadata is missing.</p>
   if (!imageUrl) return <p className="media-pending" role="status">The source image will be available after its media sync finishes.</p>

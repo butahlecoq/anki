@@ -86,6 +86,42 @@ test('question and answer reuse sources, while a new card prepares only its own 
   expect(screen.queryByRole('img')).not.toBeInTheDocument()
 })
 
+test('a failed attachment reports an error without blocking the card body', async () => {
+  // A media failure must stay non-fatal: the reviewer reports it and keeps the
+  // card answerable, so one corrupt attachment cannot wedge a session.
+  vi.spyOn(reviewMedia, 'prepareReviewMedia').mockRejectedValue(new Error('This card exceeds the 64 MiB review media limit. Remove attachments or split the note into smaller notes.'))
+  render(<Preview media={[reference('one', '猫.png')]} />)
+  await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Remove attachments or split the note'))
+  // The question body is still rendered, so the learner can reveal and rate.
+  expect(screen.getByText('Question')).toBeVisible()
+})
+
+test('pending state is reported while attachments load and clears once sources exist', async () => {
+  vi.spyOn(collection, 'verifiedMediaBytes').mockImplementation(async (digest) => stored(digest))
+  const pendingStates: boolean[] = []
+  function PendingProbe({ media }: { media: NoteMediaReference[] }) {
+    const { sources, pending } = useReviewMedia(media, 'card-1')
+    pendingStates.push(pending)
+    return <span>{Object.keys(sources).length === 0 ? 'preparing' : 'ready'}</span>
+  }
+  render(<PendingProbe media={[reference('one', '猫.png')]} />)
+  await waitFor(() => expect(screen.getByText('ready')).toBeVisible())
+  // Pending must be true before sources arrive and false afterwards.
+  expect(pendingStates[0]).toBe(true)
+  expect(pendingStates.at(-1)).toBe(false)
+})
+
+test('a card with no attachments is never pending', () => {
+  const states: boolean[] = []
+  function EmptyProbe() {
+    const { pending } = useReviewMedia([], 'card-1')
+    states.push(pending)
+    return null
+  }
+  render(<EmptyProbe />)
+  expect(states.every((value) => value === false)).toBe(true)
+})
+
 test('unmount aborts an in-flight media read and cannot populate the following card', async () => {
   let resolveRead: ((value: MediaBytes) => void) | undefined
   vi.spyOn(collection, 'verifiedMediaBytes').mockImplementation(() => new Promise((resolve) => { resolveRead = resolve }))
@@ -96,4 +132,19 @@ test('unmount aborts an in-flight media read and cannot populate the following c
   resolveRead!(stored('one'))
   await new Promise((resolve) => setTimeout(resolve, 0))
   expect(encode).not.toHaveBeenCalled()
+})
+
+test('a changed owner clears previous sources even while its replacement read hangs', async () => {
+  const load = vi.spyOn(collection, 'verifiedMediaBytes').mockImplementation(async (digest) => stored(digest))
+  function OwnerProbe({ owner }: { owner: string }) {
+    const { sources, pending } = useReviewMedia([reference('one', '猫.png')], owner)
+    return <span>{pending ? 'preparing replacement' : sources['猫.png']?.url}</span>
+  }
+  const { rerender } = render(<OwnerProbe owner="first-card" />)
+  await waitFor(() => expect(screen.getByText('data:image/png;base64,AQID')).toBeVisible())
+  load.mockImplementation(() => new Promise(() => {}))
+  rerender(<OwnerProbe owner="second-card" />)
+  await waitFor(() => expect(load).toHaveBeenCalledTimes(2))
+  expect(screen.getByText('preparing replacement')).toBeVisible()
+  expect(screen.queryByText('data:image/png;base64,AQID')).not.toBeInTheDocument()
 })

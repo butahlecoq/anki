@@ -753,20 +753,6 @@ function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () =>
   )
 }
 
-function ReviewTemplatePreview({ template, fields, kind, ordinal, side, media, templateOrdinal }: {
-  template: { front: string; back: string; css: string }
-  fields: Record<string, string>
-  kind: 'standard' | 'cloze'
-  ordinal?: number
-  side: 'front' | 'back'
-  media: NoteMediaReference[]
-  templateOrdinal?: number
-}) {
-  const { sources, error } = useReviewMedia(media)
-  if (error) return <p role="alert">{error}</p>
-  return <TemplatePreview title="Review card" front={template.front} back={template.back} css={template.css} fields={fields} kind={kind} ordinal={ordinal} templateOrdinal={templateOrdinal} side={side} media={sources} />
-}
-
 function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void }) {
   const [skippedCardIds, setSkippedCardIds] = useState<ReadonlySet<string>>(() => new Set())
   const [shownAnswerCardId, setShownAnswerCardId] = useState<string | null>(null)
@@ -790,7 +776,10 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   const card = useLiveQuery(async () => cardId ? await collection.cards.get(cardId) ?? null : undefined, [cardId])
   const note = useLiveQuery(async () => card ? await collection.notes.get(card.noteId) ?? null : undefined, [card?.noteId])
   const noteType = useLiveQuery(async () => note ? await collection.noteTypes.get(note.typeId) ?? null : undefined, [note?.typeId])
-  const media = useLiveQuery(() => card ? collection.mediaForNote(card.noteId) : [], [card?.noteId], [])
+  const mediaQuery = useLiveQuery(() => card ? collection.mediaForNote(card.noteId) : [], [card?.noteId])
+  // A live query returns a new array identity on ordinary reviewer renders. Stable
+  // identities keep the review timer effect and prepared media sources from restarting.
+  const media = useMemo(() => mediaQuery ?? [], [mediaQuery])
   const reviewCount = useLiveQuery(() => card ? collection.reviewEntries.where('cardId').equals(card.id).count() : 0, [card?.id], 0)
   const recentReview = useLiveQuery(() => collection.latestReviewUndo(), [])
   const recentDeletion = useLiveQuery(() => collection.latestNoteDeletionUndo(), [])
@@ -804,6 +793,17 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   const typedAnswer = frontResult?.ok ? frontResult.value.typedAnswer : undefined
   const renderError = frontResult && !frontResult.ok ? frontResult.error : backResult && !backResult.ok ? backResult.error : undefined
   const imageOcclusion = noteType?.kind === 'image-occlusion'
+  // Only prepare media once the live query has actually resolved for the active card,
+  // so a pending read cannot be mistaken for a card that has no attachments. Prepared
+  // sources are keyed by this list inside the hook, so no extra memoization is needed.
+  const activeCard = card?.id === cardId ? card : undefined
+  const activeMedia = activeCard
+    ? media.filter((reference) => (!reference.templateId || reference.templateId === activeCard.templateId))
+    : []
+  const preparedMedia = useReviewMedia(activeMedia, cardId)
+  // A media failure is reported but never blocks the card: a single corrupt or
+  // unsupported attachment must not make the card permanently unanswerable.
+  const mediaBlocked = !mediaQuery || preparedMedia.pending
   const unavailable = card === null || note === null || noteType === null ||
     Boolean(card?.suspended || card?.manualSuspended || card?.templateSuspended) ||
     (Boolean(noteType && card) && !template) ||
@@ -817,7 +817,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   useEffect(() => {
     if (activeTime.current.cardId !== cardId) activeTime.current = { cardId, elapsed: 0, started: null }
     const timer = activeTime.current
-    const blocked = editingNote || movingNote || editingTags || deletingNote || showCardInfo || unavailable || !note
+    const blocked = editingNote || movingNote || editingTags || deletingNote || showCardInfo || unavailable || !note || mediaBlocked
     const update = () => {
       if (timer.started !== null) timer.elapsed += performance.now() - timer.started
       timer.started = !blocked && document.visibilityState === 'visible' ? performance.now() : null
@@ -829,10 +829,10 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
       if (timer.started !== null) timer.elapsed += performance.now() - timer.started
       timer.started = null
     }
-  }, [cardId, editingNote, movingNote, editingTags, deletingNote, showCardInfo, unavailable, note])
+  }, [cardId, editingNote, movingNote, editingTags, deletingNote, showCardInfo, unavailable, note, mediaBlocked])
 
   const answer = useCallback(async (rating: Grade) => {
-    if (!cardId || isAnswering) return
+    if (!cardId || isAnswering || mediaBlocked) return
     setIsAnswering(true)
     setActionError('')
     try {
@@ -844,7 +844,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     } finally {
       setIsAnswering(false)
     }
-  }, [cardId, isAnswering])
+  }, [cardId, isAnswering, mediaBlocked])
 
   const updateCurrentCard = useCallback(async (action: (id: string) => Promise<void>) => {
     if (!cardId || isAnswering) return
@@ -943,6 +943,9 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
       if (key === 'x' && recentDeletion) { event.preventDefault(); void undoDeletion(); return }
       if (!cardId) return
       if ((key === ' ' || key === 'spacebar') && !showAnswer && !buttonFocused) {
+        // Media that is still loading, or that failed to prepare, must not be
+        // revealed early: the question would render without its own content.
+        if (mediaBlocked) return
         event.preventDefault()
         setShownAnswerCardId(cardId)
       } else if (showAnswer && /^[1-4]$/.test(key)) {
@@ -961,7 +964,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [cardId, card?.flag, note, isAnswering, editingNote, movingNote, editingTags, deletingNote, showCardInfo, showAnswer, choices, media, answer, replayAudio, updateCurrentCard, recentReview, undoReview, recentCardAction, undoCardAction, recentDeletion, undoDeletion])
+  }, [cardId, card?.flag, note, isAnswering, editingNote, movingNote, editingTags, deletingNote, showCardInfo, showAnswer, choices, media, answer, replayAudio, updateCurrentCard, recentReview, undoReview, recentCardAction, undoCardAction, recentDeletion, undoDeletion, mediaBlocked])
 
   if (queue === undefined || (cardId && (card === undefined || note === undefined || noteType === undefined || unavailable))) return <div className="loading-state" role="status">Preparing review…</div>
 
@@ -1032,7 +1035,6 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
 
   const fields = Object.fromEntries(noteType.fields.map((field) => [field.name, note.fields[field.id] ?? '']))
   const answerDiff = showAnswer && typedAnswer !== undefined ? compareTypedAnswer(typedAnswer, typedInput) : []
-  const templateMedia = media.filter((reference) => reference.inline && (!reference.templateId || reference.templateId === card.templateId))
 
   return (
     <>
@@ -1043,13 +1045,14 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
       {audioMessage && <p className="review-feedback" role="status">{audioMessage}</p>}
       <article className="review-card" ref={reviewCardRef}>
         <span className="card-side">{showAnswer ? 'ANSWER' : 'QUESTION'}</span>
-        {imageOcclusion
-          ? <ImageOcclusionReview note={note} card={card} showAnswer={showAnswer} />
-          : <ReviewTemplatePreview key={card.id} template={template} fields={fields} kind={noteType.kind} ordinal={card.clozeOrdinal} templateOrdinal={Math.max(1, noteType.templates.findIndex((candidate) => candidate.id === template.id) + 1)} side={showAnswer ? 'back' : 'front'} media={templateMedia} />}
-        {noteType.kind !== 'image-occlusion' && media.filter((reference) => !reference.inline && reference.side === 'front' && (!reference.templateId || reference.templateId === card.templateId)).map((reference) => <MediaRenderer key={reference.id} reference={reference} automatic />)}
-        {noteType.kind !== 'image-occlusion' && showAnswer && media.filter((reference) => !reference.inline && reference.side === 'back' && (!reference.templateId || reference.templateId === card.templateId)).map((reference) => <MediaRenderer key={reference.id} reference={reference} automatic />)}
+        {mediaBlocked ? <p role="status">Preparing card media…</p> : imageOcclusion
+          ? <ImageOcclusionReview note={note} card={card} showAnswer={showAnswer} imageUrl={preparedMedia.sources[media.find((reference) => reference.id === note.imageOcclusion?.sourceMediaId)?.displayName ?? '']?.url} />
+          : <TemplatePreview title="Review card" key={card.id} front={template.front} back={template.back} css={template.css} fields={fields} kind={noteType.kind} ordinal={card.clozeOrdinal} templateOrdinal={Math.max(1, noteType.templates.findIndex((candidate) => candidate.id === template.id) + 1)} side={showAnswer ? 'back' : 'front'} media={preparedMedia.sources} />}
+        {preparedMedia.error && <p className="form-error" role="alert">Some attachments could not be shown: {preparedMedia.error}</p>}
+        {!mediaBlocked && noteType.kind !== 'image-occlusion' && media.filter((reference) => !reference.inline && reference.side === 'front' && (!reference.templateId || reference.templateId === card.templateId)).map((reference) => <MediaRenderer key={reference.id} reference={reference} url={preparedMedia.sources[reference.displayName]?.url} automatic />)}
+        {!mediaBlocked && noteType.kind !== 'image-occlusion' && showAnswer && media.filter((reference) => !reference.inline && reference.side === 'back' && (!reference.templateId || reference.templateId === card.templateId)).map((reference) => <MediaRenderer key={reference.id} reference={reference} url={preparedMedia.sources[reference.displayName]?.url} automatic />)}
         {typedAnswer !== undefined && !showAnswer && <label className="typed-answer">Type your answer
-          <input autoComplete="off" value={typedInput} onChange={(event) => setTypedDraft({ cardId, value: event.target.value })} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); setShownAnswerCardId(cardId) } }} />
+          <input autoComplete="off" value={typedInput} onChange={(event) => setTypedDraft({ cardId, value: event.target.value })} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); if (!mediaBlocked) setShownAnswerCardId(cardId) } }} />
         </label>}
         {typedAnswer !== undefined && showAnswer && <div ref={typedResultRef} className="typed-answer-result" role="status" aria-live="polite" aria-label="Typed answer comparison" tabIndex={-1}>
           <span className="section-code">YOUR ANSWER</span>
@@ -1058,11 +1061,11 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
         </div>}
       </article>
       {!showAnswer ? (
-        <button className="primary-action reveal-action" type="button" onClick={() => setShownAnswerCardId(cardId)}>Show answer</button>
+        <button className="primary-action reveal-action" type="button" disabled={isAnswering || mediaBlocked} onClick={() => setShownAnswerCardId(cardId)}>Show answer</button>
       ) : (
         <div className="rating-grid" aria-label="Rate answer">
           {choices.map((choice) => (
-            <button aria-label={`${choice.label} · ${choice.interval}`} className={`rating rating-${Rating[choice.rating].toLowerCase()}`} type="button" disabled={isAnswering} key={choice.rating} onClick={() => void answer(choice.rating)}>
+            <button aria-label={`${choice.label} · ${choice.interval}`} className={`rating rating-${Rating[choice.rating].toLowerCase()}`} type="button" disabled={isAnswering || mediaBlocked} key={choice.rating} onClick={() => void answer(choice.rating)}>
               <strong>{choice.label}</strong><span aria-hidden="true">·</span><small>{choice.interval}</small>
             </button>
           ))}
