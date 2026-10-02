@@ -2303,7 +2303,7 @@ export class Collection extends Dexie {
           ...commands.map((command) => ({ at: command.occurredAt, id: command.opId, review: undefined as ReviewEntry | undefined, command })),
         ].sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id))
         for (const event of events) {
-          if (event.review) schedule = schedulerFor(event.review.scheduling!.options).next(schedule, new Date(event.at), event.review.rating as Grade).card
+          if (event.review) schedule = schedulerFor(event.review.scheduling!.options, cardId).next(schedule, new Date(event.at), event.review.rating as Grade).card
           else if (event.command) {
             const commanded = event.command.payload as CardRecord
             schedule = { ...schedule, due: new Date(commanded.due), state: commanded.state }

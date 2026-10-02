@@ -1464,6 +1464,21 @@ describe('local collection', () => {
     await expect(collection.reviewEntries.count()).resolves.toBe(1)
   })
 
+  test('replays a synced review with the same card-seeded schedule', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Remote')
+    const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
+    const card = (await collection.cards.where('noteId').equals(note.id).first())!
+    const reviewedAt = new Date('2026-10-01T12:00:00.000Z')
+
+    await collection.answer(card.id, Rating.Good, reviewedAt, undefined, { allowEarly: true, reschedule: true })
+    const expected = await collection.cards.get(card.id)
+    const review = (await collection.captureSyncOperations()).find((operation) => operation.entityType === 'review')!
+    await collection.applyRemoteChanges([review], 1)
+
+    await expect(collection.cards.get(card.id)).resolves.toEqual(expected)
+  })
+
   test('applies remote deck, note, and card entities only once', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const deck = { id: 'remote-deck', name: 'Remote Japanese', createdAt: '2026-10-01T12:00:00.000Z', updatedAt: '2026-10-01T12:00:00.000Z' }
