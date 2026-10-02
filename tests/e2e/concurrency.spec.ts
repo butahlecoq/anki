@@ -1,14 +1,56 @@
 import { expect, test, type Page } from '@playwright/test'
-import { execFile as execFileCallback } from 'node:child_process'
+import { execFile as execFileCallback, spawn } from 'node:child_process'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createServer } from 'node:net'
 import { promisify } from 'node:util'
 
 const execFile = promisify(execFileCallback)
 const webURL = `http://127.0.0.1:${process.env.KIROKU_WEB_PORT ?? '4173'}`
-const syncURL = `http://127.0.0.1:${process.env.KIROKU_SYNC_PORT ?? '4174'}`
+async function isolatedSyncService() {
+  const runtime = mkdtempSync(join(tmpdir(), 'kiroku-concurrency-e2e-'))
+  const reservation = createServer()
+  await new Promise<void>((resolve, reject) => reservation.listen(0, '127.0.0.1', resolve).once('error', reject))
+  const address = reservation.address()
+  if (!address || typeof address === 'string') throw new Error('Unable to reserve an isolated sync port')
+  const port = address.port
+  await new Promise<void>((resolve, reject) => reservation.close((error) => error ? reject(error) : resolve()))
+  const url = `http://127.0.0.1:${port}`
+  const service = spawn(process.execPath, ['dist-server/server/index.js'], {
+    env: { ...process.env, PORT: String(port), KIROKU_RUNTIME_DIRECTORY: runtime, KIROKU_ALLOWED_ORIGIN: webURL },
+    stdio: 'ignore', windowsHide: true,
+  })
+  try {
+    let ready = false
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (service.exitCode !== null) throw new Error('The isolated sync service exited before becoming ready')
+      try {
+        const response = await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(500) })
+        if (response.ok) { ready = true; break }
+      } catch { await new Promise((resolve) => setTimeout(resolve, 50)) }
+    }
+    if (!ready) throw new Error('The isolated sync service did not become ready')
+  } catch (error) {
+    service.kill()
+    rmSync(runtime, { recursive: true, force: true })
+    throw error
+  }
+  return {
+    url,
+    runtime,
+    async close() {
+      if (service.exitCode === null) {
+        const exited = new Promise<void>((resolve) => service.once('exit', () => resolve()))
+        service.kill()
+        await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 2000))])
+      }
+      rmSync(runtime, { recursive: true, force: true })
+    },
+  }
+}
 
-async function pair(page: Page) {
-  const runtime = test.info().config.metadata.syncRuntimeDirectory
-  if (typeof runtime !== 'string' || !runtime) throw new Error('Missing test sync runtime')
+async function pair(page: Page, syncURL: string, runtime: string) {
   const { stdout } = await execFile(process.execPath, ['dist-server/server/index.js', '--pairing-code'], { env: { ...process.env, KIROKU_RUNTIME_DIRECTORY: runtime } })
   await page.getByRole('button', { name: 'Connect a PC', exact: true }).click()
   await page.getByLabel('PC service address').fill(syncURL)
@@ -24,9 +66,10 @@ async function sync(page: Page) {
 
 async function edit(page: Page, front: string, back: string) {
   await page.getByRole('button', { name: 'Edit note', exact: true }).click()
-  await page.getByLabel('Front', { exact: true }).fill(front)
-  await page.getByLabel('Back', { exact: true }).fill(back)
-  await page.getByRole('button', { name: 'Save changes', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Edit Basic note', exact: true })
+  await dialog.getByRole('textbox').nth(0).fill(front)
+  await dialog.getByRole('textbox').nth(1).fill(back)
+  await dialog.getByRole('button', { name: 'Save changes', exact: true }).click()
   await expect(page.locator('.note-row strong')).toHaveText(front)
 }
 
@@ -34,6 +77,7 @@ test('independent offline clients merge fields, retain conflicts through reload,
   test.setTimeout(120_000)
   const phoneContext = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
   const phone = await phoneContext.newPage()
+  const syncService = await isolatedSyncService()
   const deckName = `Concurrent Japanese ${test.info().project.name} ${Date.now()}`
   const errors: string[] = []
   for (const page of [pc, phone]) page.on('pageerror', (error) => errors.push(error.message))
@@ -49,7 +93,7 @@ test('independent offline clients merge fields, retain conflicts through reload,
     await pc.getByLabel('Front', { exact: true }).fill('猫')
     await pc.getByLabel('Back', { exact: true }).fill('cat')
     await pc.getByRole('button', { name: 'Save note', exact: true }).click()
-    await pair(pc); await pair(phone)
+    await pair(pc, syncService.url, syncService.runtime); await pair(phone, syncService.url, syncService.runtime)
     await sync(pc); await sync(phone)
     await phone.getByRole('button', { name: `Open ${deckName}`, exact: true }).click()
     await context.setOffline(true); await phoneContext.setOffline(true)
@@ -115,7 +159,7 @@ test('independent offline clients merge fields, retain conflicts through reload,
     }
     expect(errors).toEqual([])
   } finally {
-    await context.setOffline(false)
-    await phoneContext.close()
+    await Promise.allSettled([context.setOffline(false), phoneContext.close()])
+    await syncService.close()
   }
 })
