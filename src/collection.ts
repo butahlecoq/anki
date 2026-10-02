@@ -1353,6 +1353,7 @@ export class Collection extends Dexie {
       if (undo.media.length) await this.noteMedia.bulkAdd(undo.media)
       await this.deletedEntities.bulkDelete(keys)
       await this.outbox.delete(undo.operationId)
+      await this.syncRevisions.delete(undo.operationId)
       await this.settings.delete('noteDeletionUndo')
       return undo.note.id
     })
@@ -1888,7 +1889,6 @@ export class Collection extends Dexie {
       if (JSON.stringify(await this.cards.get(undo.after.id)) !== JSON.stringify(undo.after)) throw new Error('The card changed since this action; undo is unavailable')
       await this.cards.put(undo.before)
       await this.outbox.delete(undo.operationId)
-      await this.syncRevisions.delete(undo.operationId)
       await this.syncRevisions.delete(undo.operationId)
       await this.settings.delete('cardMaintenanceUndo')
       return undo.before.id

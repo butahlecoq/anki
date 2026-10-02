@@ -16,7 +16,7 @@ async function clients() {
   await b.applyRemoteChanges(structuredClone(operations), operations.length)
   await a.acknowledgeOperations(operations.map((operation) => operation.opId))
   const card = (await a.cards.where('noteId').equals(note.id).first())!
-  return { a, b, deck, note, card }
+  return { a, b, deck, note, card, seed: operations }
 }
 
 async function exchange(a: Collection, b: Collection, reverse = false) {
@@ -83,3 +83,51 @@ test('a deletion remains effective when an offline client uploads a stale edit',
   expect(await b.cards.get(card.id)).toBeUndefined()
   expect((await b.syncConflicts.toArray()).some((conflict) => conflict.deleted)).toBe(true)
 })
+
+test('undoing an unpublished deletion removes its causal revision before later synchronization', async () => {
+  const { a, b, note } = await clients()
+  await a.deleteNote(note.id, new Date('2026-10-02T12:00:00Z'))
+  await a.undoLastNoteDeletion()
+  await b.updateBasicNote(note.id, { front: 'ねこ', back: 'cat' }, new Date('2026-10-02T12:01:00Z'))
+  await exchange(a, b)
+  expect(await a.notes.get(note.id)).toEqual(await b.notes.get(note.id))
+  expect(await a.notes.get(note.id)).toMatchObject({ fields: { front: 'ねこ' } })
+  expect(await a.syncConflicts.count()).toBe(0)
+})
+
+for (const reverse of [false, true]) {
+  test(`deck deletion suppresses offline edits and reviews in ${reverse ? 'reverse' : 'forward'} delivery order`, async () => {
+    const { a, b, deck, note, card } = await clients()
+    await a.deleteDeck(deck.id, { mode: 'delete-subtree' }, new Date('2026-10-02T12:00:00Z'))
+    await b.updateBasicNote(note.id, { front: 'ねこ', back: 'cat' }, new Date('2026-10-02T12:01:00Z'))
+    await b.answer(card.id, Rating.Easy, new Date('2026-10-02T12:02:00Z'))
+    const changes = await exchange(a, b, reverse)
+    for (const client of [a, b]) {
+      await client.applyRemoteChanges(structuredClone(changes), changes.length)
+      expect(await client.decks.get(deck.id)).toBeUndefined()
+      expect(await client.notes.get(note.id)).toBeUndefined()
+      expect(await client.cards.get(card.id)).toBeUndefined()
+      expect(await client.reviewEntries.count()).toBe(0)
+    }
+  })
+
+  test(`manual rescheduling and a concurrent review replay like chronological single-client actions (${reverse})`, async () => {
+    const { a, b, card, seed } = await clients()
+    const oracle = createCollection(`concurrent-oracle-${crypto.randomUUID()}`); collections.push(oracle)
+    await oracle.applyRemoteChanges(structuredClone(seed), seed.length)
+    const first = new Date('2026-10-01T12:00:01Z')
+    await a.answer(card.id, Rating.Easy, first)
+    await oracle.answer(card.id, Rating.Easy, first)
+    await exchange(a, b)
+    const commandAt = new Date('2026-10-02T12:00:10Z'), due = new Date('2026-10-05T12:00:00Z')
+    await a.rescheduleCard(card.id, due, commandAt)
+    await oracle.rescheduleCard(card.id, due, commandAt)
+    const reviewedAt = new Date('2026-10-02T12:00:20Z')
+    await b.answer(card.id, Rating.Good, reviewedAt, undefined, { allowEarly: true, reschedule: true })
+    await oracle.answer(card.id, Rating.Good, reviewedAt, undefined, { allowEarly: true, reschedule: true })
+    await exchange(a, b, reverse)
+    expect(await a.cards.get(card.id)).toEqual(await b.cards.get(card.id))
+    expect(await a.cards.get(card.id)).toEqual(await oracle.cards.get(card.id))
+    expect(await a.syncConflicts.count()).toBe(0)
+  })
+}
