@@ -219,7 +219,7 @@ export async function previewTextImport(db: Collection, document: CsvDocument, o
 export async function applyTextImport(db: Collection, preview: TextPreview, partial: boolean) {
   if (!partial && preview.rows.some((row) => row.action === 'error')) throw new Error('Fix invalid rows or explicitly choose partial import.')
   const result = { added: 0, updated: 0, ignored: preview.rows.filter((row) => row.action === 'ignore').length, errors: preview.rows.filter((row) => row.action === 'error').length }
-  await db.transaction('rw', [db.notes, db.decks, db.noteTypes, db.cards, db.outbox, db.deletedEntities, db.deckOptionGroups], async () => {
+  await db.transaction('rw', [db.notes, db.decks, db.noteTypes, db.cards, db.outbox, db.deletedEntities, db.deckOptionGroups, db.syncRevisions], async () => {
     const state = await snapshot(db)
     if (state.revision !== preview.revision) throw new Error('Collection changed after preview. Preview again before importing.')
     const paths = pathsForDecks(state.decks)
