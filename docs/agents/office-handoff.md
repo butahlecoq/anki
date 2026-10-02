@@ -48,8 +48,8 @@ Check their current GitHub state rather than reconstructing stale worktrees.
 - Concurrency four causal merge tests and four independently mutated collection
   tests passed. Existing focused collection/sync tests passed 92 tests, server
   suite passed 19 tests, typecheck/lint passed. Local full check session `59708`
-  on ports 4367/4368 was still running browser cases at checkpoint and had Windows
-  WebKit failures. The final deletion-choice guard was added after that run began;
+  on ports 4367/4368 finished with exit 1: 64 browser passes, 9 explicit skips,
+  7 Windows WebKit failures. The final deletion-choice guard was added after that run began;
   a fresh exact-head gate is required.
 - Installed physical iPhone/Safari cold offline behavior, actual account workflow,
   independent gateway deployment and real PC-off release evidence remain unproven.
