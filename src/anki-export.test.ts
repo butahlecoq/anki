@@ -107,6 +107,9 @@ test('rectangular image occlusion restores its masks and image hash', async () =
   const note = await source.createImageOcclusionNote(deck.id, { image: new File([png], 'diagram.png', { type: 'image/png' }), imageWidth: 1, imageHeight: 1, header: '骨', backExtra: 'bone', tags: ['diagram'], masks: [{ x: .1, y: .2, width: .3, height: .2 }] })
   const output = await exportAnkiPackage(source, { ...all, SQL })
   await nativeFixture(output.bytes, 'native-occlusion')
+  const native = AnkiCollection.open(output.bytes, SQL)
+  expect(native.data.templates[0].config.length).toBeGreaterThan(0)
+  expect(new TextDecoder().decode(native.data.templates[0].config)).toContain('anki.imageOcclusion.setup()')
   const target = database()
   const preview = await prepareAnkiImport(new File([output.bytes.slice().buffer], 'backup.apkg'), target, { SQL })
   expect(preview.issues.filter((issue) => issue.severity === 'error')).toEqual([])
@@ -115,6 +118,7 @@ test('rectangular image occlusion restores its masks and image hash', async () =
   expect(restored.imageOcclusion?.masks[0]).toMatchObject({ x: .1, y: .2, width: .3, height: .2 })
   expect(restored.fields).toEqual(note.fields)
   expect((await target.mediaBlobs.toArray())[0].digest).toBe((await source.mediaBlobs.toArray())[0].digest)
+  expect((await target.noteTypes.toArray()).every((type) => type.templates.every((template) => !template.front.includes('<script') && !template.back.includes('<script')))).toBe(true)
 })
 
 test('a first Good learning answer remains a native intraday learning review', async () => {

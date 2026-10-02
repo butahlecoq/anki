@@ -143,6 +143,15 @@ function decodeTypes(data: CollectionData, fallback: Date, issues: AnkiImportIss
         return { id: `anki-template:${row.id}:${template.ord}`, name: template.name, front: protobufText(decoded, 1), back: protobufText(decoded, 2), css: protobufText(config, 3) }
       })
       const kind = protobufNumber(config, 1) === 1 ? 'cloze' as const : 'standard' as const
+      const nativeOcclusion = protobufNumber(config, 9) === 6
+      if (nativeOcclusion) {
+        if (kind !== 'cloze' || fields.map((field) => field.name).join('|') !== 'Occlusion|Image|Header|Back Extra|Comments') throw new Error('Unsupported native image occlusion field layout')
+        // Native templates call Anki's own runtime. The app reconstructs its
+        // supported geometric renderer from fields and never executes imported
+        // template scripts. Do not persist those scripts as editable templates.
+        for (const template of templates) { template.front = '{{cloze:Occlusion}}'; template.back = '{{cloze:Occlusion}}'; template.css = '' }
+        issues.push({ severity: 'info', code: 'native-occlusion-renderer', subject: row.name, detail: 'Supported native image occlusion fields use the app’s geometric renderer. Native template scripts and styles are not executed or retained.' })
+      }
       if (!fields.length || !templates.length) throw new Error('note type has no fields or templates')
       if (kind === 'cloze' && templates.length !== 1) throw new Error('cloze note type does not have exactly one template')
       for (const template of templates) {

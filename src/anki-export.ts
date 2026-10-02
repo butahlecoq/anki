@@ -22,6 +22,10 @@ function sourceId(value: string, prefix: string) {
 }
 function escape(value: string) { return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;') }
 function guid(value: string) { return value.startsWith('anki-note:') ? value.slice(10) : value }
+// Independently written template invoking the official image occlusion runtime.
+// A plain cloze template only hides the shape description, leaving the image
+// exposed; native mask rendering needs these runtime container identities.
+const nativeOcclusionBody = '{{Header}}<div hidden>{{cloze:Occlusion}}</div><div id="image-occlusion-container">{{Image}}<canvas id="image-occlusion-canvas"></canvas></div><p id="kiroku-occlusion-error"></p><script>try { anki.imageOcclusion.setup(); } catch (error) { document.getElementById("kiroku-occlusion-error").textContent = "Image occlusion requires a supported Anki version."; }</script>'
 
 export async function exportAnkiPackage(collection: Collection, options: AnkiExportOptions) {
   const { Collection: AnkiCollection, Deck: AnkiDeck, Note: AnkiNote, Notetype, Package } = await import('ankipack')
@@ -67,7 +71,7 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
     const occlusion = local.kind === 'image-occlusion'
     exportedTypes.set(local.id, new Notetype({ id: sourceId(local.id, 'anki-note-type:'), name: local.name, type: local.kind === 'standard' ? 'normal' : 'cloze', css: local.templates[0]?.css ?? '',
       fields: occlusion ? ['Occlusion', 'Image', 'Header', 'Back Extra', 'Comments'].map((name) => ({ name })) : local.fields.map((field) => ({ name: field.name })),
-      templates: occlusion ? [{ name: 'Hide one, reveal one', questionFormat: '{{cloze:Occlusion}}<br>{{Image}}<br>{{Header}}', answerFormat: '{{cloze:Occlusion}}<br>{{Image}}<hr>{{Back Extra}}' }] : local.templates.map((template) => ({ name: template.name, questionFormat: template.front, answerFormat: template.back })),
+      templates: occlusion ? [{ name: 'Hide one, reveal one', questionFormat: nativeOcclusionBody, answerFormat: `${nativeOcclusionBody}<hr>{{Back Extra}}` }] : local.templates.map((template) => ({ name: template.name, questionFormat: template.front, answerFormat: template.back })),
     }))
   }
   const exportedDecks = new Map<string, NativeDeck>()
@@ -109,6 +113,11 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
   }
   for (const [name, bytes] of media) packageFile.addMedia(name, bytes)
   const data = await packageFile.toCollection()
+  for (const row of data.notetypes) if (snapshot.types.find((type) => sourceId(type.id, 'anki-note-type:') === row.id)?.kind === 'image-occlusion') {
+    // Native Notetype.Config original_stock_kind is protobuf field 9, enum 6.
+    // The final occurrence overrides an existing default emitted by ankipack.
+    row.config = new Uint8Array([...row.config, 0x48, 0x06])
+  }
   data.col.crt = Math.floor(Date.now() / day) * 86_400
   // An empty schedVer identifies the historical three-button scheduler and
   // makes native Anki upgrade Good learning answers to Easy during import.

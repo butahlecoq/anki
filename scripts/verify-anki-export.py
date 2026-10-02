@@ -48,6 +48,18 @@ def verify(package: Path) -> dict:
                             assert math.isclose(native_memory[key], memory[key], rel_tol=1e-6, abs_tol=0.00051), (key, native_memory[key], memory[key])
                 assert card.question(), 'Native Anki could not render a question'
                 assert card.answer(), 'Native Anki could not render an answer'
+                model = col.models.get(card.note().mid)
+                if model.get('originalStockKind') == 6:
+                    # Import success alone does not establish occlusion: a
+                    # plain cloze template leaves the image uncovered.
+                    question, answer = card.question(), card.answer()
+                    for rendered in [question, answer]:
+                        assert 'id="image-occlusion-container"' in rendered
+                        assert 'id="image-occlusion-canvas"' in rendered
+                        assert 'anki.imageOcclusion.setup()' in rendered
+                        assert 'data-shape="rect"' in rendered
+                    assert 'class="cloze"' in question
+                    assert 'class="cloze-highlight"' in answer
             actual_reviews = col.db.all('select id,cid,ease,ivl,lastIvl,factor,time,type from revlog order by id')
             expected_reviews = [[r[k] for k in ['id', 'cid', 'ease', 'ivl', 'lastIvl', 'factor', 'time', 'type']] for r in sorted(expected['reviews'], key=lambda r: r['id'])]
             assert actual_reviews == expected_reviews, (actual_reviews, expected_reviews)
