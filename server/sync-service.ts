@@ -13,10 +13,12 @@ type SyncOperation = {
   action: string
   occurredAt: string
   payload: unknown
+  parents?: string[]
+  reviewId?: string
 }
 type SyncRequest = SyncCapabilities & { cursor: number; operations: SyncOperation[] }
 
-type PersistedChange = { entity_type: string; action: string; payload: string }
+type PersistedChange = { entity_type: string; action: string; payload: string; parents: string | null; review_id: string | null }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 
@@ -25,12 +27,13 @@ const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(v
  * collection format needed to preserve their payload so a service upgrade
  * cannot reopen a mixed-version sync hole.
  */
-function schemaRequiredByOperation(operation: Pick<SyncOperation, 'entityType' | 'action' | 'payload'>): number {
-  let required = 1
-  if (operation.entityType === 'noteMedia') required = 5
-  if (operation.entityType === 'noteType') required = 6
-  if (operation.entityType === 'deckOptionGroup') required = 9
+function schemaRequiredByOperation(operation: Pick<SyncOperation, 'entityType' | 'action' | 'payload' | 'parents' | 'reviewId'>): number {
+  let required = operation.parents !== undefined || operation.reviewId !== undefined ? 15 : 1
+  if (operation.entityType === 'noteMedia') required = Math.max(required, 5)
+  if (operation.entityType === 'noteType') required = Math.max(required, 6)
+  if (operation.entityType === 'deckOptionGroup') required = Math.max(required, 9)
   const payload = isRecord(operation.payload) ? operation.payload : {}
+  if (operation.entityType === 'review' && 'scheduling' in payload) required = Math.max(required, 15)
   if (operation.entityType === 'review' && 'rescheduled' in payload) required = Math.max(required, 14)
   if (operation.entityType === 'note' && typeof payload.typeId === 'string') required = Math.max(required, 6)
   if (operation.entityType === 'card' && typeof payload.templateId === 'string') required = Math.max(required, 6)
@@ -51,6 +54,44 @@ function schemaRequiredByOperation(operation: Pick<SyncOperation, 'entityType' |
 export class SyncCompatibilityError extends Error {
   constructor(readonly incompatibility: IncompatibleSync) {
     super(incompatibility.message)
+  }
+}
+
+/** Check causal edges before storing any row so a malformed batch cannot poison future syncs. */
+function validateRevisionParents(operations: SyncOperation[], database: DatabaseSync) {
+  const batch = new Map<string, SyncOperation>()
+  for (const operation of operations) {
+    const prior = batch.get(operation.opId)
+    if (prior && (prior.entityType !== operation.entityType || prior.entityId !== operation.entityId || JSON.stringify(prior.parents ?? []) !== JSON.stringify(operation.parents ?? []))) throw new Error('Sync operation identity was reused with different revision parents')
+    batch.set(operation.opId, operation)
+  }
+  const graph = new Map<string, string[]>()
+  for (const operation of batch.values()) {
+    const parents = operation.parents ?? []
+    if (!Array.isArray(parents) || parents.some((parent) => typeof parent !== 'string' || !parent || parent === operation.opId) || new Set(parents).size !== parents.length) throw new Error('Invalid sync revision parents')
+    for (const parentId of parents) {
+      const inBatch = batch.get(parentId)
+      const stored = inBatch ? undefined : database.prepare('SELECT entity_type, entity_id FROM changes WHERE op_id = ?').get(parentId) as { entity_type: string; entity_id: string } | undefined
+      if (inBatch ? inBatch.entityType !== operation.entityType || inBatch.entityId !== operation.entityId : !stored || stored.entity_type !== operation.entityType || stored.entity_id !== operation.entityId) throw new Error('Sync revision parent is missing or belongs to another record')
+    }
+    graph.set(operation.opId, parents.filter((parentId) => batch.has(parentId)))
+  }
+  const complete = new Set<string>()
+  const visiting = new Set<string>()
+  for (const start of graph.keys()) {
+    if (complete.has(start)) continue
+    const stack: { id: string; next: number }[] = [{ id: start, next: 0 }]
+    visiting.add(start)
+    while (stack.length) {
+      const frame = stack.at(-1)!
+      const parents = graph.get(frame.id) ?? []
+      if (frame.next === parents.length) {
+        stack.pop(); visiting.delete(frame.id); complete.add(frame.id); continue
+      }
+      const parent = parents[frame.next++]
+      if (visiting.has(parent)) throw new Error('Cyclic sync revision history')
+      if (!complete.has(parent)) { visiting.add(parent); stack.push({ id: parent, next: 0 }) }
+    }
   }
 }
 
@@ -75,11 +116,18 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
     CREATE TABLE IF NOT EXISTS media_blobs (digest TEXT PRIMARY KEY, byte_length INTEGER NOT NULL, mime_type TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS collection_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
   `)
+  const changeColumns = database.prepare('PRAGMA table_info(changes)').all() as Array<{ name: string }>
+  if (!changeColumns.some((column) => column.name === 'parents')) database.exec('ALTER TABLE changes ADD COLUMN parents TEXT')
+  if (!changeColumns.some((column) => column.name === 'review_id')) database.exec('ALTER TABLE changes ADD COLUMN review_id TEXT')
   const storedWatermark = database.prepare("SELECT value FROM collection_metadata WHERE key = 'collection_schema_version'").get() as { value: string } | undefined
   const persistedWatermark = storedWatermark && Number.parseInt(storedWatermark.value, 10)
-  const inferredWatermark = (database.prepare('SELECT entity_type, action, payload FROM changes').all() as PersistedChange[]).reduce((maximum, change) => {
+  const inferredWatermark = (database.prepare('SELECT entity_type, action, payload, parents, review_id FROM changes').all() as PersistedChange[]).reduce((maximum, change) => {
     try {
-      return Math.max(maximum, schemaRequiredByOperation({ entityType: change.entity_type, action: change.action, payload: JSON.parse(change.payload) }))
+      return Math.max(maximum, schemaRequiredByOperation({
+        entityType: change.entity_type, action: change.action, payload: JSON.parse(change.payload),
+        ...(change.parents !== null ? { parents: JSON.parse(change.parents) as string[] } : {}),
+        ...(change.review_id !== null ? { reviewId: change.review_id } : {}),
+      }))
     } catch {
       // Corrupt historic payloads still require the newest service/client pair.
       return SERVER_MAX_COLLECTION_SCHEMA_VERSION
@@ -156,9 +204,12 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
         // the first accepted operation.
         const currentWatermark = persistedCollectionSchemaVersion()
         const nextWatermark = assertCapabilities(request, currentWatermark)
-        const insert = database.prepare('INSERT OR IGNORE INTO changes (op_id, device_id, entity_type, entity_id, action, occurred_at, payload) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        validateRevisionParents(request.operations, database)
+        const insert = database.prepare('INSERT OR IGNORE INTO changes (op_id, device_id, entity_type, entity_id, action, occurred_at, payload, parents, review_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
         for (const operation of request.operations) {
-          const result = insert.run(operation.opId, device.id, operation.entityType, operation.entityId, operation.action, operation.occurredAt, JSON.stringify(operation.payload))
+          const previous = database.prepare('SELECT entity_type, entity_id, action, occurred_at, payload, parents, review_id FROM changes WHERE op_id = ?').get(operation.opId) as { entity_type: string; entity_id: string; action: string; occurred_at: string; payload: string; parents: string | null; review_id: string | null } | undefined
+          if (previous && (previous.entity_type !== operation.entityType || previous.entity_id !== operation.entityId || previous.action !== operation.action || previous.occurred_at !== operation.occurredAt || previous.payload !== JSON.stringify(operation.payload) || previous.parents !== (operation.parents ? JSON.stringify(operation.parents) : null) || previous.review_id !== (operation.reviewId ?? null))) throw new Error('Sync operation identity was reused with different content')
+          const result = insert.run(operation.opId, device.id, operation.entityType, operation.entityId, operation.action, operation.occurredAt, JSON.stringify(operation.payload), operation.parents ? JSON.stringify(operation.parents) : null, operation.reviewId ?? null)
           accepted += Number(result.changes)
         }
         if (nextWatermark > currentWatermark) {
@@ -170,7 +221,7 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
         database.exec('ROLLBACK')
         throw error
       }
-      const changes = database.prepare('SELECT cursor, op_id, device_id, entity_type, entity_id, action, occurred_at, payload FROM changes WHERE cursor > ? ORDER BY cursor').all(request.cursor) as Array<{ cursor: number; op_id: string; device_id: string; entity_type: string; entity_id: string; action: string; occurred_at: string; payload: string }>
+      const changes = database.prepare('SELECT cursor, op_id, device_id, entity_type, entity_id, action, occurred_at, payload, parents, review_id FROM changes WHERE cursor > ? ORDER BY cursor').all(request.cursor) as Array<{ cursor: number; op_id: string; device_id: string; entity_type: string; entity_id: string; action: string; occurred_at: string; payload: string; parents: string | null; review_id: string | null }>
       const cursor = changes.at(-1)?.cursor ?? request.cursor
       return {
         protocolVersion: SYNC_PROTOCOL_VERSION,
@@ -186,6 +237,8 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
           action: change.action,
           occurredAt: change.occurred_at,
           payload: JSON.parse(change.payload) as unknown,
+          ...(change.parents !== null ? { parents: JSON.parse(change.parents) as string[] } : {}),
+          ...(change.review_id !== null ? { reviewId: change.review_id } : {}),
         })),
       }
     },

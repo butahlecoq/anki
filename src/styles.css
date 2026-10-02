@@ -674,3 +674,4 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .external-card-links p { color: var(--text-muted); font-size: 11px; line-height: 1.8; }
 .external-card-links > div { display: flex; gap: 8px; flex-wrap: wrap; }
 .external-card-links button { max-width: 100%; min-height: 44px; overflow-wrap: anywhere; }
+.sync-conflict-version dd { margin-inline-start: 0; white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -49,7 +49,8 @@ test('Japanese native package preserves field meaning, tags, decks, templates, s
   expect(restoredType?.templates.map(({ front, back }) => ({ front, back }))).toEqual([{ front: '{{front}}', back: '{{FrontSide}}<hr>{{back}}' }])
   expect((await target.cards.toArray())[0]).toMatchObject({ noteId: restored.id, due: '2026-10-05T11:23:45.000Z', stability: 4.25, difficulty: 6.2, elapsedDays: 2, scheduledDays: 4, reps: 3, lapses: 1, flag: 4 })
   expect((await target.reviewEntries.toArray())[0]).toMatchObject({ rating: Rating.Easy, reviewedAt: '2026-10-01T12:00:00.000Z' })
-  const expectedReview = Object.fromEntries(Object.entries((await source.reviewEntries.toArray())[0]).filter(([key]) => !['id', 'cardId', 'deckId'].includes(key)))
+  // Causal replay policy is local sync metadata; Anki revlog preserves review facts.
+  const expectedReview = Object.fromEntries(Object.entries((await source.reviewEntries.toArray())[0]).filter(([key]) => !['id', 'cardId', 'deckId', 'scheduling'].includes(key)))
   expect((await target.reviewEntries.toArray())[0]).toMatchObject(expectedReview)
   expect((await target.mediaBlobs.toArray()).map((blob) => blob.digest)).toEqual((await source.mediaBlobs.toArray()).map((blob) => blob.digest))
   expect((await target.noteMedia.toArray())[0]).toMatchObject({ displayName: 'cat.png', side: 'front', inline: false, playback: 'manual' })
