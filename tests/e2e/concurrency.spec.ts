@@ -80,6 +80,8 @@ test('independent offline clients merge fields, retain conflicts through reload,
   const syncService = await isolatedSyncService()
   const deckName = `Concurrent Japanese ${test.info().project.name} ${Date.now()}`
   const errors: string[] = []
+  await pc.emulateMedia({ reducedMotion: 'reduce' })
+  await phone.emulateMedia({ reducedMotion: 'reduce' })
   for (const page of [pc, phone]) page.on('pageerror', (error) => errors.push(error.message))
   try {
     await pc.clock.setFixedTime(new Date('2026-10-02T12:00:00Z'))
