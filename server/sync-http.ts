@@ -3,7 +3,8 @@ import { SyncCompatibilityError, type createSyncService } from './sync-service.j
 
 type Service = ReturnType<typeof createSyncService>
 
-type HttpOptions = { allowedOrigin?: string }
+const DEFAULT_JSON_BODY_LIMIT_BYTES = 32 * 1024 * 1024
+type HttpOptions = { allowedOrigin?: string; jsonBodyLimitBytes?: number }
 
 const corsHeaders = (origin: string | undefined, allowedOrigin: string | undefined): Record<string, string> => origin && allowedOrigin === origin ? {
   'access-control-allow-origin': allowedOrigin,
@@ -17,10 +18,18 @@ const send = (response: ServerResponse, status: number, body: unknown, headers: 
   response.end(JSON.stringify(body))
 }
 
-const body = async (request: IncomingMessage) => {
-  let text = ''
-  for await (const chunk of request) text += chunk
-  return JSON.parse(text || '{}') as unknown
+const body = async (request: IncomingMessage, maximumBytes: number) => {
+  const declaredLength = Number(request.headers['content-length'] ?? 0)
+  if (declaredLength > maximumBytes) throw new Error('JSON request body is too large.')
+  const chunks: Buffer[] = []
+  let length = 0
+  for await (const chunk of request) {
+    const buffer = Buffer.from(chunk)
+    length += buffer.byteLength
+    if (length > maximumBytes) throw new Error('JSON request body is too large.')
+    chunks.push(buffer)
+  }
+  return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') as unknown
 }
 
 const bytes = async (request: IncomingMessage, maximum = 20 * 1024 * 1024) => {
@@ -35,7 +44,7 @@ const bytes = async (request: IncomingMessage, maximum = 20 * 1024 * 1024) => {
   return new Uint8Array(Buffer.concat(chunks))
 }
 
-export function createSyncHttpHandler(service: Service, { allowedOrigin }: HttpOptions = {}) {
+export function createSyncHttpHandler(service: Service, { allowedOrigin, jsonBodyLimitBytes = DEFAULT_JSON_BODY_LIMIT_BYTES }: HttpOptions = {}) {
   return async (request: IncomingMessage, response: ServerResponse) => {
     const headers = corsHeaders(request.headers.origin, allowedOrigin)
     const reply = (status: number, responseBody: unknown) => send(response, status, responseBody, headers)
@@ -47,14 +56,14 @@ export function createSyncHttpHandler(service: Service, { allowedOrigin }: HttpO
       }
       if (request.method === 'GET' && request.url === '/api/health') return reply(200, service.health())
       if (request.method === 'POST' && request.url === '/api/pair') {
-        const payload = await body(request) as { code?: string; deviceId?: string }
+        const payload = await body(request, jsonBodyLimitBytes) as { code?: string; deviceId?: string }
         if (!payload.code || !payload.deviceId) return reply(400, { error: 'Pairing code and device ID are required.' })
         return reply(201, service.pair({ code: payload.code, deviceId: payload.deviceId }))
       }
       if (request.method === 'POST' && request.url === '/api/sync') {
         const authorization = request.headers.authorization
         if (!authorization?.startsWith('Bearer ')) return reply(401, { error: 'Authentication required.' })
-        const payload = await body(request) as { protocolVersion?: unknown; collectionSchemaVersion?: unknown; cursor?: number; operations?: unknown[] }
+        const payload = await body(request, jsonBodyLimitBytes) as { protocolVersion?: unknown; collectionSchemaVersion?: unknown; cursor?: number; operations?: unknown[] }
         if (typeof payload.cursor !== 'number' || !Array.isArray(payload.operations)) return reply(400, { error: 'A cursor and operations array are required.' })
         return reply(200, service.sync(authorization.slice(7), payload as Parameters<Service['sync']>[1]))
       }
@@ -79,7 +88,7 @@ export function createSyncHttpHandler(service: Service, { allowedOrigin }: HttpO
     } catch (error) {
       if (error instanceof SyncCompatibilityError) return reply(409, error.incompatibility)
       const message = error instanceof Error ? error.message : 'Request failed.'
-      return reply(message === 'Authentication required.' ? 401 : message === 'Media upload is too large.' ? 413 : 400, { error: message })
+      return reply(message === 'Authentication required.' ? 401 : message === 'Media upload is too large.' || message === 'JSON request body is too large.' ? 413 : 400, { error: message })
     }
   }
 }
