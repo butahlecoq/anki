@@ -45,7 +45,8 @@ test('custom practice works offline and returns unchanged home cards after rebui
     return boxes
   })
   expect(overflow).toEqual([])
-  await page.screenshot({ path: test.info().outputPath('custom-study.png'), fullPage: true })
+  await page.getByRole('heading', { name: 'Create a custom session', exact: true }).scrollIntoViewIfNeeded()
+  await page.screenshot({ path: test.info().outputPath('custom-study.png') })
   await page.getByRole('button', { name: 'Delete 猫 practice', exact: true }).click()
   await page.getByRole('button', { name: 'Confirm delete', exact: true }).click()
   await page.getByRole('link', { name: 'Decks', exact: true }).click()
