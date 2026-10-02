@@ -11,7 +11,7 @@ import { createSyncService } from './sync-service.js'
 import { createSyncHttpHandler } from './sync-http.js'
 
 let runtimeDirectory: string | undefined
-const serviceHealth = (collectionSchemaVersion = 1) => ({ ready: true, schemaVersion: 1, protocolVersion: 2, collectionSchemaVersion, maximumCollectionSchemaVersion: 13, store: 'sqlite' as const })
+const serviceHealth = (collectionSchemaVersion = 1) => ({ ready: true, schemaVersion: 1, protocolVersion: 2, collectionSchemaVersion, maximumCollectionSchemaVersion: 14, store: 'sqlite' as const })
 
 afterEach(async () => {
   if (runtimeDirectory) await rm(runtimeDirectory, { recursive: true, force: true })
@@ -71,7 +71,7 @@ test('persists a collection schema watermark and rejects an incompatible client 
   assert.equal(service.changeCount(), 0)
   assert.equal(service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 12, cursor: 0, operations: [] }).accepted, 0)
   assert.equal(service.health().collectionSchemaVersion, 12)
-  assert.throws(() => service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 14, cursor: 0, operations: [] }), /supports collection schemas through 13/i)
+  assert.throws(() => service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 15, cursor: 0, operations: [] }), /supports collection schemas through 14/i)
   assert.equal(service.changeCount(), 0)
   service.close()
 
@@ -260,4 +260,16 @@ test('issues a one-time pairing code against the running service store', async (
 
   assert.equal(paired.status, 201)
   await running.close()
+})
+
+test('requires schema 14 for practice reviews and prevents older clients acknowledging them', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
+  const service = createSyncService({ databasePath: join(runtimeDirectory, 'collection.sqlite') })
+  const { token } = service.pair({ code: service.createPairingCode(), deviceId: 'practice-phone' })
+  const operation = { opId: 'practice-review', entityType: 'review', entityId: 'review-practice', action: 'create', occurredAt: '2026-10-02T12:00:00.000Z', payload: { id: 'review-practice', rescheduled: false } }
+  assert.throws(() => service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 13, cursor: 0, operations: [operation] }), /declares schema 13/i)
+  assert.equal(service.changeCount(), 0)
+  assert.equal(service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 14, cursor: 0, operations: [operation] }).accepted, 1)
+  assert.throws(() => service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 13, cursor: 0, operations: [] }), /schema/i)
+  service.close()
 })

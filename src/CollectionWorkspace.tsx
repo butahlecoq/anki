@@ -29,18 +29,26 @@ import { prepareAnkiImport, type PreparedAnkiImport } from './anki-import'
 import { CardHistory, Statistics, TodayWorkload } from './Statistics'
 import { CollectionBrowser } from './CollectionBrowser'
 import { ExportDialog } from './ExportDialog'
+import { CustomStudy } from './CustomStudy'
+import { answerCustomStudy, customStudyQueue, practiceChoices, undoCustomStudy } from './custom-study'
+import { customStudySessions } from './custom-study-state'
 
 type Route =
   | { view: 'decks' }
   | { view: 'note-types' }
   | { view: 'statistics' }
   | { view: 'browse' }
+  | { view: 'study' }
+  | { view: 'custom-review'; sessionId: string }
   | { view: 'deck'; deckId: string }
   | { view: 'review'; deckId: string }
 
 function routeFromHash(): Route {
   if (window.location.hash === '#note-types') return { view: 'note-types' }
   if (window.location.hash === '#statistics') return { view: 'statistics' }
+  const custom = window.location.hash.match(/^#custom-review\/([^/]+)$/)
+  if (custom) return { view: 'custom-review', sessionId: decodeURIComponent(custom[1]) }
+  if (window.location.hash === '#study') return { view: 'study' }
   if (window.location.hash === '#browse') return { view: 'browse' }
   const match = window.location.hash.match(/^#(deck|review)\/([^/]+)$/)
   if (!match) return { view: 'decks' }
@@ -57,7 +65,7 @@ function useRoute() {
   }, [])
 
   const navigate = (next: Route) => {
-    const hash = 'deckId' in next ? `#${next.view}/${encodeURIComponent(next.deckId)}` : `#${next.view}`
+    const hash = 'sessionId' in next ? `#custom-review/${encodeURIComponent(next.sessionId)}` : 'deckId' in next ? `#${next.view}/${encodeURIComponent(next.deckId)}` : `#${next.view}`
     if (window.location.hash === hash) setRoute(next)
     else window.location.hash = hash
   }
@@ -452,7 +460,7 @@ function DeckList({ decks, onNewDeck, onImport, onOpen }: { decks: DeckSummary[]
           <article className="deck-tile" role="treeitem" aria-level={depth} style={{ '--deck-depth': depth - 1 } as CSSProperties} key={deck.id}>
             <span className="deck-index">DECK // {String(deck.noteCount).padStart(2, '0')} NOTES</span>
             <h2>{deck.name}</h2>
-            <CountStrip counts={deck.counts} reviews={deck.reviewCount} />
+            <CountStrip counts={deck.counts} reviews={deck.reviewCount} />{deck.temporaryCount > 0 && <p className="temporary-membership">{deck.temporaryCount} home cards temporarily reserved for custom study</p>}
             <button className="tile-action" type="button" aria-label={`Open ${deck.name}`} onClick={() => onOpen(deck.id)}>Open deck <span>→</span></button>
           </article>
         ))}
@@ -718,7 +726,7 @@ function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () =>
         <button className="text-button back-button" type="button" onClick={onBack}>← All decks</button>
         <span className="section-code">DECK // LOCAL</span>
         <h1>{deck.name}</h1>
-        <CountStrip counts={summary.counts} reviews={summary.reviewCount} />
+        <CountStrip counts={summary.counts} reviews={summary.reviewCount} /><p className="temporary-membership">{summary.temporaryCount} home cards reserved for custom study. Home totals include them; today’s normal queue excludes them.</p>
         <div className="deck-actions">
           <button className="primary-action" type="button" onClick={() => setNoteDialog({})}>Add note</button>
           <button className="primary-action study-action" type="button" disabled={!hasDueCards} onClick={onStudy}>Study now</button>
@@ -754,7 +762,7 @@ function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () =>
   )
 }
 
-function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void }) {
+function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: string; sessionId?: string; onBack: () => void }) {
   const [skippedCardIds, setSkippedCardIds] = useState<ReadonlySet<string>>(() => new Set())
   const [shownAnswerCardId, setShownAnswerCardId] = useState<string | null>(null)
   const [reviewsRecorded, setReviewsRecorded] = useState(0)
@@ -769,7 +777,8 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   const [audioMessage, setAudioMessage] = useState('')
   const typedResultRef = useRef<HTMLDivElement>(null)
   const reviewCardRef = useRef<HTMLElement>(null)
-  const dueQueue = useLiveQuery(() => collection.reviewQueue(deckId, new Date()), [deckId])
+  const customSession = useLiveQuery(async () => sessionId ? (await customStudySessions(collection)).find((session) => session.id === sessionId) : undefined, [sessionId])
+  const dueQueue = useLiveQuery(() => sessionId ? customStudyQueue(collection, sessionId, new Date()) : collection.reviewQueue(deckId, new Date()), [deckId, sessionId])
   const queue = dueQueue?.filter((candidate) => !skippedCardIds.has(candidate.id))
   const cardId = queue?.[0]?.id
   const showAnswer = shownAnswerCardId === cardId
@@ -782,10 +791,10 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   // identities keep the review timer effect and prepared media sources from restarting.
   const media = useMemo(() => mediaQuery ?? [], [mediaQuery])
   const reviewCount = useLiveQuery(() => card ? collection.reviewEntries.where('cardId').equals(card.id).count() : 0, [card?.id], 0)
-  const recentReview = useLiveQuery(() => collection.latestReviewUndo(), [])
+  const recentReview = useLiveQuery(async () => { const undo = await collection.latestReviewUndo(); return sessionId && undo?.customSession?.after.id !== sessionId ? null : undo }, [sessionId])
   const recentDeletion = useLiveQuery(() => collection.latestNoteDeletionUndo(), [])
   const recentCardAction = useLiveQuery(() => collection.latestCardMaintenanceUndo(), [])
-  const choices = useLiveQuery(() => card ? collection.reviewChoices(card.id, new Date()) : [], [card?.id], [])
+  const choices = useLiveQuery(() => card ? sessionId && customSession?.reschedule === false ? practiceChoices : collection.reviewChoices(card.id, new Date(), Boolean(sessionId)) : [], [card?.id, sessionId, customSession?.reschedule], [])
   const template = noteType?.templates.find((candidate) => candidate.id === card?.templateId)
   const frontResult = template && noteType && note && card
     ? tryRenderNoteTemplate(template.front, noteType, note.fields, undefined, card.clozeOrdinal, 'front') : undefined
@@ -837,7 +846,9 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     setIsAnswering(true)
     setActionError('')
     try {
-      await collection.answer(cardId, rating, new Date(), activeTime.current.elapsed + (activeTime.current.started === null ? 0 : performance.now() - activeTime.current.started))
+      const duration = activeTime.current.elapsed + (activeTime.current.started === null ? 0 : performance.now() - activeTime.current.started)
+      if (sessionId) await answerCustomStudy(collection, sessionId, cardId, rating, new Date(), duration)
+      else await collection.answer(cardId, rating, new Date(), duration)
       setReviewsRecorded((count) => count + 1)
       setShownAnswerCardId(null)
     } catch (reason) {
@@ -845,7 +856,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     } finally {
       setIsAnswering(false)
     }
-  }, [cardId, isAnswering, mediaBlocked])
+  }, [cardId, isAnswering, mediaBlocked, sessionId])
 
   const updateCurrentCard = useCallback(async (action: (id: string) => Promise<void>) => {
     if (!cardId || isAnswering) return
@@ -881,7 +892,8 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     setIsAnswering(true)
     setActionError('')
     try {
-      await collection.undoLastReview()
+      if (sessionId) await undoCustomStudy(collection, sessionId)
+      else await collection.undoLastReview()
       setReviewsRecorded((count) => Math.max(0, count - 1))
       setShownAnswerCardId(null)
     } catch (reason) {
@@ -889,7 +901,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
     } finally {
       setIsAnswering(false)
     }
-  }, [isAnswering])
+  }, [isAnswering, sessionId])
 
   const deleteCurrentNote = useCallback(async () => {
     if (!note || isAnswering) return
@@ -980,7 +992,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
         {recentDeletion && <button className="text-button" type="button" disabled={isAnswering} onClick={() => void undoDeletion()}>Undo note deletion</button>}
         {recentCardAction && <button className="text-button" type="button" disabled={isAnswering} onClick={() => void undoCardAction()}>Undo card action</button>}
         {actionError && <p className="form-error" role="alert">{actionError}</p>}
-        <button className="primary-action" type="button" onClick={onBack}>Back to deck</button>
+        <button className="primary-action" type="button" onClick={onBack}>{sessionId ? 'Back to custom study' : 'Back to deck'}</button>
       </section>
     )
   }
@@ -1028,6 +1040,7 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   </>
 
   if (renderError) return <><section className="review-session">
+    {sessionId && <p className="custom-review-mode">{customSession?.name ?? 'Custom session'} · {customSession?.reschedule ? 'Ratings reschedule the home card' : 'Practice: original schedule stays unchanged'}. Each rated card returns to its home deck.</p>}
     <div className="review-progress"><span>REVIEW // {String(reviewsRecorded + 1).padStart(2, '0')}</span>{reviewActions}</div>
     {actionError && <p className="form-error" role="alert">{actionError}</p>}
     <article className="review-card"><p className="form-error" role="alert">Unable to render card: {renderError}</p></article>
@@ -1040,7 +1053,8 @@ function ReviewSession({ deckId, onBack }: { deckId: string; onBack: () => void 
   return (
     <>
     <section className="review-session">
-      <div className="review-progress"><span>REVIEW // {String(reviewsRecorded + 1).padStart(2, '0')}</span>{reviewActions}</div>
+      {sessionId && <p className="custom-review-mode">{customSession?.name ?? 'Custom session'} · {customSession?.reschedule ? 'Ratings reschedule the home card' : 'Practice: original schedule stays unchanged'}. Each rated card returns to its home deck.</p>}
+    <div className="review-progress"><span>REVIEW // {String(reviewsRecorded + 1).padStart(2, '0')}</span>{reviewActions}</div>
       <p className="review-shortcuts">Space reveal · 1–4 rate · E edit · M move · T tags · K mark · I info · F flag · R replay · S suspend · B bury · D delete · U undo review · V undo card action · X undo deletion. Undo is available until the next sync attempt or affected edit.</p>
       {actionError && <p className="form-error" role="alert">{actionError}</p>}
       {audioMessage && <p className="review-feedback" role="status">{audioMessage}</p>}
@@ -1110,6 +1124,8 @@ export function CollectionWorkspace() {
   const content = useMemo(() => {
     if (route.view === 'review') return <ReviewSession deckId={route.deckId} onBack={() => navigate({ view: 'deck', deckId: route.deckId })} />
     if (route.view === 'deck') return <DeckDetail deckId={route.deckId} onBack={() => navigate({ view: 'decks' })} onStudy={() => navigate({ view: 'review', deckId: route.deckId })} />
+    if (route.view === 'custom-review') return <ReviewSession sessionId={route.sessionId} onBack={() => navigate({ view: 'study' })} />
+    if (route.view === 'study') return <CustomStudy onStudy={(sessionId) => navigate({ view: 'custom-review', sessionId })} />
     if (route.view === 'statistics') return <Statistics />
     if (route.view === 'note-types') return <NoteTypeManager onNewDeck={() => { navigate({ view: 'decks' }); setNewDeck(true) }} />
     if (route.view === 'browse') return <CollectionBrowser />
@@ -1128,3 +1144,5 @@ export function CollectionWorkspace() {
     </>
   )
 }
+
+

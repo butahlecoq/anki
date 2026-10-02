@@ -31,6 +31,7 @@ function schemaRequiredByOperation(operation: Pick<SyncOperation, 'entityType' |
   if (operation.entityType === 'noteType') required = 6
   if (operation.entityType === 'deckOptionGroup') required = 9
   const payload = isRecord(operation.payload) ? operation.payload : {}
+  if (operation.entityType === 'review' && 'rescheduled' in payload) required = Math.max(required, 14)
   if (operation.entityType === 'note' && typeof payload.typeId === 'string') required = Math.max(required, 6)
   if (operation.entityType === 'card' && typeof payload.templateId === 'string') required = Math.max(required, 6)
   if (operation.entityType === 'noteType' && payload.kind === 'cloze') required = Math.max(required, 7)

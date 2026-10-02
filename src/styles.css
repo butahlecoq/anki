@@ -478,3 +478,18 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--acid); outline-
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+.custom-study-create, .custom-session-list { margin-top: 2rem; }
+.custom-study-create form { display: grid; gap: 1rem; max-width: 48rem; }
+.custom-study-create label { display: grid; gap: .4rem; }
+.custom-study-help, .temporary-membership { color: var(--text-muted, #777); font-size: .85rem; }
+.temporary-membership { display: block; }
+.custom-session { padding: 1.5rem 0; border-bottom: 1px solid var(--line, #ddd); }
+.custom-session-actions { display: flex; gap: .75rem; flex-wrap: wrap; }
+.custom-study-preview { padding: 1rem; border: 1px solid var(--line, #ddd); }
+.custom-review-mode { padding: 1rem; background: var(--surface, #f3f2ed); }
+.custom-study, .custom-study-create form, .custom-study-create label, .custom-session { min-width: 0; max-width: 100%; }
+.custom-study { overflow-wrap: anywhere; }
+.custom-study-create input, .custom-study-create select { width: 100%; min-width: 0; min-height: 44px; padding: 12px; color: var(--text); border: 1px solid var(--line); background: var(--panel); font: inherit; }
+.custom-study-help, .temporary-membership { color: var(--muted); line-height: 1.8; }
+.custom-review-mode { background: var(--panel); }
+@media (max-width: 680px) { .custom-study-create input, .custom-study-create select { font-size: 16px; } }
