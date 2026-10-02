@@ -220,13 +220,22 @@ export async function nativeAnkiProjectionManifest(SQL: SqlJsStatic, snapshot: U
   const notetypes = unique(data.notetypes, (row) => row.id)
   const guids = new Set<string>()
   for (const note of notes.values()) {
-    if (guids.has(note.guid) || !notetypes.has(note.mid)) throw invalid()
+    if (!note.guid || guids.has(note.guid) || !notetypes.has(note.mid)) throw invalid()
     guids.add(note.guid)
   }
+  const cardOrdinals = new Set<string>()
   for (const card of cards.values()) {
     if (!notes.has(card.nid) || !decks.has(card.did) || (card.odid > 0 && !decks.has(card.odid))) throw invalid()
+    const identity = `${card.nid}:${card.ord}`
+    if (card.ord < 0 || cardOrdinals.has(identity)) throw invalid()
+    cardOrdinals.add(identity)
   }
   for (const review of reviews.values()) if (!cards.has(review.cid)) throw invalid()
+  for (const notetype of notetypes.values()) {
+    for (const values of [data.fields.filter((field) => field.ntid === notetype.id).map((field) => field.ord), data.templates.filter((template) => template.ntid === notetype.id).map((template) => template.ord)]) {
+      if (values.some((ordinal) => ordinal < 0) || new Set(values).size !== values.length) throw invalid()
+    }
+  }
   return {
     version: 1,
     snapshotHash: await nativeSnapshotHash(snapshot),

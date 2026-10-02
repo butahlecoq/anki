@@ -92,6 +92,26 @@ it('builds a snapshot-bound base map with native identities and both deck bindin
   expect(manifest.notetypes).toEqual([{ id: 100, fieldOrdinals: [0, 1], templateOrdinals: [0, 1] }])
 })
 
+it('rejects ambiguous native card identities before they can be used for writeback', async () => {
+  const { SQL, snapshot } = await nativeFixture()
+  const db = new SQL.Database(snapshot)
+  db.run('UPDATE cards SET ord = 0 WHERE id = ?', [secondCardId])
+  const ambiguous = db.export()
+  db.close()
+  await expect(nativeAnkiProjectionManifest(SQL, ambiguous)).rejects.toThrow('cannot be projected safely')
+})
+
+it('rejects duplicate native field ordinals that would alias app fields', async () => {
+  const { SQL, snapshot } = await nativeFixture()
+  const db = new SQL.Database(snapshot)
+  const models = JSON.parse(String(db.exec('SELECT models FROM col')[0].values[0][0]))
+  models['100'].flds[1].ord = 0
+  db.run('UPDATE col SET models = ?', [JSON.stringify(models)])
+  const ambiguous = db.export()
+  db.close()
+  await expect(nativeAnkiProjectionManifest(SQL, ambiguous)).rejects.toThrow('cannot be projected safely')
+})
+
 it('refuses an unsupported native schema before producing an app projection', async () => {
   const { SQL, snapshot } = await nativeFixture(12)
   expect(() => nativeAnkiProjectionData(SQL, snapshot)).toThrow('unsupported Anki collection schema')
