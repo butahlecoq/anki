@@ -52,10 +52,13 @@ afterEach(async () => {
 it('projects schema-11 note, card, deck, and review identities without rewriting native rows', async () => {
   const { SQL, snapshot } = await nativeFixture()
   const before = Array.from(snapshot)
-  const data = nativeAnkiProjectionData(SQL, snapshot)
+  const mediaBytes = new Uint8Array([0, 1, 2, 255])
+  const data = nativeAnkiProjectionData(SQL, snapshot, [{ name: '猫.png', data: mediaBytes }])
   expect(data.notes[0]).toMatchObject({ id: noteId, guid: originalNote.guid, flds: originalNote.flds, data: originalNote.data })
   expect(data.cards.map((card) => [card.id, card.did, card.ord])).toEqual([[firstCardId, 10, 0], [secondCardId, 11, 1]])
   expect(data.revlog[0].id).toBe(reviewId)
+  expect(data.media[0].data).toBe(mediaBytes)
+  expect(Array.from(mediaBytes)).toEqual([0, 1, 2, 255])
   expect(Array.from(snapshot)).toEqual(before)
 
   collection = new Collection(`native-projection-${crypto.randomUUID()}`)

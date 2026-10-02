@@ -162,7 +162,9 @@ export function nativeAnkiProjectionData(SQL: SqlJsStatic, snapshot: Uint8Array,
       const [reviewId, cid, reviewUsn, ease, ivl, lastIvl, factor, time, type] = row
       return { id: integer(reviewId), cid: integer(cid), usn: integer(reviewUsn), ease: integer(ease), ivl: integer(ivl), lastIvl: integer(lastIvl), factor: integer(factor), time: integer(time), type: integer(type) }
     })
-    const nativeMedia = media.map(({ name, data }) => ({ name, data: data.slice() }))
+    // The durable media store is the owner. The projection and importer only
+    // read these bytes; avoid doubling the entire account's media footprint.
+    const nativeMedia = media.map(({ name, data }) => ({ name, data }))
     return {
       col: {
         id: integer(id), crt: integer(crt), mod: integer(mod), scm: integer(scm), ver: 11,
