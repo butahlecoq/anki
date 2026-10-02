@@ -1,4 +1,4 @@
-# Native Anki synchronization engine (in progress)
+# Native Anki synchronization engine
 
 Issue #61 implements the native boundary for #56. This engine is not yet wired
 to the app and does not establish finished AnkiWeb synchronization.
@@ -9,6 +9,12 @@ to the app and does not establish finished AnkiWeb synchronization.
 private process memory. A supplied transport can use the private gateway from
 #59; the independent oracle uses only localhost and generated credentials.
 Requests use the official multipart protocol. Responses are capped at 64 MiB.
+Transport callbacks receive a fourth `{ signal }` argument and must forward it
+to `fetch`. Client and state operations accept optional `{ signal, timeoutMs }`;
+each request defaults to a five-minute deadline and cannot exceed it. Deadline
+racing covers response headers and streamed body reads, including transports
+that ignore cancellation. Distinct `cancelled` and `timeout` errors retain the
+recovery boundary; cancellation never proves that the server did not commit.
 
 Native SQLite schema 11 snapshots retain original identities and opaque native
 columns. The official server supports a protocol 10 full download from a modern
@@ -29,7 +35,28 @@ database without credential fields. Failed sessions preserve the checkpoint and
 a recovery marker. Successful sync commits a new checkpoint atomically.
 Web Locks serialize sessions across pages. Recovery retries stable native
 identities after an interrupted page or lost finish response; unresolved
-conflicts block retry. State replacement checks the expected revision.
+conflicts block retry. State replacement checks the expected revision and
+atomically retains the previous checkpoint in the separate `backups` table.
+Backups are not automatically pruned; a storage/quota failure aborts replacement.
+
+`state.previewFullSync(client, SQL)` binds local SHA-256 and revision to current
+remote mod/schema/USN. Pass that preview with an explicit `direction` to
+`state.fullSynchronize()` to upload or download. Upload retains local, prepared
+upload and remote snapshots durably before its destructive request. It verifies
+the expected remote revision immediately before upload and verifies uploaded
+native content by downloading it again. The native protocol has no atomic
+compare-and-swap upload endpoint; callers should avoid simultaneous full-sync
+decisions from multiple clients.
+
+An interrupted full upload keeps its prepared backup and original checkpoint.
+`state.recoverFullSync()` verifies remote content and commits a checkpoint only
+if it matches; it never automatically sends another destructive upload. A stale
+decision or unmatched upload requires a fresh preview and explicit direction.
+Interrupted downloads likewise require a new direction decision before local
+replacement. `state.restoreBackup(id, expectedRevision)` restores retained local
+bytes while retaining the displaced checkpoint and makes no account write.
+Low-level client upload/download primitives do not replace these state-backed
+user workflow boundaries.
 
 Incoming fields and note-type sort-field changes rebuild native `sfld` and
 first-field SHA-1 checksum caches, including decoded entities and preserved
@@ -77,6 +104,17 @@ port, creates temporary Japanese collections and fake accounts, and checks:
 - Divergent media retaining both versions, explicit local resolution and
   convergence observed by the official headless client.
 - A lost media upload response, durable reopen and pending-file recovery.
+- Note type, deck, option-group and opaque collection configuration changes
+  received by the official client.
+- Full upload/download verified by native content and official headless reads,
+  with local/remote/prepared snapshots retained before upload.
+- Backup storage failure preventing upload, stale preview rejection and local
+  backup restoration without account writes.
+- Lost full-upload response recovery across reopen without a repeated upload.
+- Cancellation during an official incremental session, bounded stalled headers
+  and stalled body reads, with recoverable checkpoint preservation.
+- Divergent dirty cards and dirty-deck/account-deletion conflicts retaining
+  concrete native versions instead of silently overwriting or resurrecting.
 
 Temporary oracle collections are removed when its server exits. It does not read
 `.env`, connect to the real account or deploy a gateway. The three storage tests
@@ -84,13 +122,15 @@ cover checkpoint preservation/recovery across reopen, durable conflict versions
 and concurrent session/replacement rejection. These storage tests do not prove
 protocol interoperability; the separate official oracle supplies that evidence.
 
-## Remaining work before #61 can close
+## Boundaries and remaining account workflow
 
-- Full upload, explicit preview/backup boundaries and broader native formats.
-- Transport cancellation/deadline contract and richer protocol validation.
-- Additional independent conflict/interruption/batch/configuration fixtures.
-- Complete recovery/resolution API, including retaining backups before replacing
-  a native checkpoint. The UI must not expose replacement without that workflow.
+The engine supports the verified current protocol 10/schema 11 interchange
+boundary. Other SQLite versions and upstream stop/upgrade responses fail safely
+with the native checkpoint retained. Collection responses/uploads use the
+64 MiB gateway boundary; individual media files are limited to 63 MiB. No file
+is silently omitted to fit these limits. Future protocol/format expansion and
+granular field-level native conflict editing are separate enhancements; native
+conflicts currently require an explicit backed-up full-direction decision.
 
 #56 additionally needs native projection into editable app entities, visible
 account controls, deployed independent gateway and installed-iPhone evidence

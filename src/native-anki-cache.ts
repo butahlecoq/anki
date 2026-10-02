@@ -1,5 +1,5 @@
 import type { Database } from 'sql.js'
-import { decodeHTMLStrict } from 'entities'
+import { nativeHtmlEntities } from './native-html-entities.js'
 
 /** Native note caches are derived from fields, never authoritative content. */
 export function nativeFieldText(field: string): string {
@@ -10,9 +10,15 @@ export function nativeFieldText(field: string): string {
     }).replace(/<[^>]*>/g, '')
   // Native entity decoding preserves the original text when an entity is
   // invalid. Do not silently normalize such field contents differently.
-  const entity = /&(?:#[0-9]+|#x[0-9a-f]+|[a-z][a-z0-9]*);/gi
-  if (stripped.replace(entity, '').includes('&') || [...stripped.matchAll(entity)].some(([token]) => decodeHTMLStrict(token) === token)) return stripped
-  return decodeHTMLStrict(stripped).replaceAll('\u00a0', ' ')
+  const entity = /&([^;\s&]+);/g
+  let valid = !stripped.replace(entity, '').includes('&')
+  const decoded = stripped.replace(entity, (_token, name: string) => {
+    const code = name.startsWith('#x') ? (/^#x[0-9a-f]+$/i.test(name) ? Number.parseInt(name.slice(2), 16) : NaN)
+      : name.startsWith('#') ? (/^#[0-9]+$/.test(name) ? Number(name.slice(1)) : NaN) : Object.hasOwn(nativeHtmlEntities, name) ? nativeHtmlEntities[name] : NaN
+    if (!Number.isInteger(code) || code < 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) { valid = false; return _token }
+    return String.fromCodePoint(code)
+  })
+  return valid ? decoded.replaceAll('\u00a0', ' ') : stripped
 }
 
 export async function rebuildNativeNoteCaches(db: Database) {

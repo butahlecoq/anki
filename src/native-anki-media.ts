@@ -1,7 +1,7 @@
 import { Dexie, type Table } from 'dexie'
 import { strToU8, unzipSync, zipSync } from 'fflate'
 import { validateAnkiArchive } from './anki-archive.js'
-import { NativeAnkiClient, NativeSyncError } from './native-anki-sync.js'
+import { NativeAnkiClient, NativeSyncError, type NativeRequestOptions } from './native-anki-sync.js'
 
 const maxBytes = 63 * 1024 * 1024
 const targetBytes = 2.5 * 1024 * 1024
@@ -45,7 +45,7 @@ export class NativeAnkiMedia extends Dexie {
       await this.files.put(file)
     })
   }
-  async synchronize(client: NativeAnkiClient, recover = false) {
+  async synchronize(client: NativeAnkiClient, recover = false, options: NativeRequestOptions = {}) {
     if (typeof navigator === 'undefined' || !navigator.locks) throw new NativeSyncError('upgrade', 'Native media sync requires exclusive browser storage operations.')
     return navigator.locks.request(`${this.name}:sync`, { mode: 'exclusive', ifAvailable: true }, async (lock) => {
       if (!lock) throw new NativeSyncError('transfer', 'Another page is synchronizing native media.')
@@ -55,17 +55,17 @@ export class NativeAnkiMedia extends Dexie {
         await this.attempts.put({ id: 'active', startedAt: Date.now(), status: 'running' })
       })
       try {
-        await client.metadata()
-        const begin = await client.mediaRequest('begin', { v: 'kiroku,0.1,web' })
+        await client.metadata(options)
+        const begin = await client.mediaRequest('begin', { v: 'kiroku,0.1,web' }, options)
         if (!begin || typeof begin !== 'object' || !('usn' in begin)) throw invalid()
         const serverUsn = revision(begin.usn)
         if (serverUsn < await this.cursor()) throw new NativeSyncError('conflict', 'The account media revision moved backwards. Preserve this media database before rebuilding synchronization.')
-        await this.receive(client)
-        await this.send(client)
+        await this.receive(client, options)
+        await this.send(client, options)
         // Fetch changes racing our uploads before comparing global file counts.
-        await this.receive(client)
+        await this.receive(client, options)
         const count = await this.files.filter((file) => file.bytes !== null).count()
-        if (await client.mediaRequest('mediaSanity', { local: count }) !== 'OK') throw new NativeSyncError('transfer', 'Account media changed during synchronization. Retry without clearing verified local files.')
+        if (await client.mediaRequest('mediaSanity', { local: count }, options) !== 'OK') throw new NativeSyncError('transfer', 'Account media changed during synchronization. Retry without clearing verified local files.')
         await this.attempts.delete('active')
         return { outcome: 'synced' as const, cursor: await this.cursor(), files: count }
       } catch (error) {
@@ -84,10 +84,10 @@ export class NativeAnkiMedia extends Dexie {
       await this.conflicts.update(name, { resolved: true })
     })
   }
-  private async receive(client: NativeAnkiClient) {
+  private async receive(client: NativeAnkiClient, options: NativeRequestOptions) {
     for (let batch = 0; batch < 4000; batch++) {
       const current = await this.cursor()
-      const changes = await client.mediaRequest('mediaChanges', { lastUsn: current })
+      const changes = await client.mediaRequest('mediaChanges', { lastUsn: current }, options)
       if (!Array.isArray(changes) || changes.length > 1000) throw invalid()
       if (!changes.length) return
       let last = current
@@ -102,7 +102,7 @@ export class NativeAnkiMedia extends Dexie {
         // Native Anki keeps a pending local addition when the remote deleted
         // the same name. It will be uploaded below using the stable filename.
         else if (!(local?.pending && local.bytes && (!sha1 || local.overrideRemoteSha1 === sha1))) {
-          const remote = sha1 ? await this.download(client, name, sha1) : await record(name, null, false)
+          const remote = sha1 ? await this.download(client, name, sha1, options) : await record(name, null, false)
           if (local?.pending && local.bytes && remote.bytes) {
             await this.conflicts.put({ name, local, remote, resolved: false })
             throw new NativeSyncError('conflict', 'Both local and account media versions were retained. Resolve the file before recovering synchronization.')
@@ -117,8 +117,8 @@ export class NativeAnkiMedia extends Dexie {
     }
     throw new NativeSyncError('transfer', 'Native media synchronization exceeded its bounded change batches.')
   }
-  private async download(client: NativeAnkiClient, name: string, sha1: string): Promise<MediaFile> {
-    const zip = await client.mediaRequest('downloadFiles', { files: [name] })
+  private async download(client: NativeAnkiClient, name: string, sha1: string, options: NativeRequestOptions): Promise<MediaFile> {
+    const zip = await client.mediaRequest('downloadFiles', { files: [name] }, options)
     if (!(zip instanceof Uint8Array)) throw invalid()
     validateAnkiArchive(zip, { compressedBytes: 64 * 1024 * 1024, expandedBytes: 64 * 1024 * 1024, entryBytes: maxBytes, entries: 2 })
     const entries = unzipSync(zip)
@@ -132,7 +132,7 @@ export class NativeAnkiMedia extends Dexie {
     if (file.sha1 !== sha1) throw new NativeSyncError('transfer', 'Account media content changed or was damaged in transit. Its cursor was not committed.')
     return file
   }
-  private async send(client: NativeAnkiClient) {
+  private async send(client: NativeAnkiClient, options: NativeRequestOptions) {
     for (let batch = 0; batch < 4000; batch++) {
       const names = await this.files.filter((file) => file.pending).limit(25).primaryKeys()
       if (!names.length) return
@@ -153,7 +153,7 @@ export class NativeAnkiMedia extends Dexie {
       entries._meta = strToU8(JSON.stringify(manifest))
       const zip = zipSync(entries, { level: 0 })
       if (zip.length > 64 * 1024 * 1024) throw invalid()
-      const reply = await client.mediaRequest('uploadChanges', zip)
+      const reply = await client.mediaRequest('uploadChanges', zip, options)
       if (!Array.isArray(reply) || reply.length !== 2) throw invalid()
       const processed = revision(reply[0]), usn = revision(reply[1])
       if (!processed || processed > selected.length) throw invalid()
