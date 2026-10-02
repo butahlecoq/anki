@@ -152,7 +152,7 @@ test('independent offline clients merge fields, retain conflicts through reload,
       await page.getByLabel('Statistics deck', { exact: true }).selectOption({ label: `${deckName} (with children)` })
       await page.getByLabel('Period', { exact: true }).selectOption('all')
       await expect(page.getByText('ANSWERS', { exact: true }).locator('..').locator('strong')).toHaveText('2')
-      await page.getByRole('button', { name: 'ネコ home · basic', exact: true }).click()
+      await page.getByRole('button', { name: /^ネコ home ·/ }).click()
       const history = page.getByRole('region', { name: 'Card review history' })
       await expect(history.getByRole('listitem')).toHaveCount(2)
       await expect(history).toContainText('Good'); await expect(history).toContainText('Easy')
