@@ -27,7 +27,7 @@ test('learner can open the production study workspace', async ({ page }, testInf
   await expect(page.getByRole('navigation', { name: navigationLabel })).toBeVisible()
   await expect(page.getByRole('link', { name: 'Decks' })).toBeVisible()
   await expect(page.getByRole('link', { name: 'Study' })).toBeVisible()
-  await expect(page.getByRole('link', { name: /Study/ })).toHaveAttribute('aria-disabled', 'true')
+  await expect(page.getByRole('link', { name: /Study/ })).not.toHaveAttribute('aria-disabled')
 
   const viewportWidth = page.viewportSize()?.width
   if (!viewportWidth) throw new Error('Browser viewport is unavailable')
