@@ -80,7 +80,7 @@ export function TemplatePreview({ front, back, css, fields, side, title = 'Card 
       }
       const scale = Math.min(1, width / naturalWidth)
       body.style.width = `${naturalWidth}px`
-      const height = Math.max(body.scrollHeight, body.getBoundingClientRect().height)
+      const height = Math.max(body.scrollHeight, body.getBoundingClientRect().height, body.offsetHeight)
       const renderedTop = body.getBoundingClientRect().top
       body.style.transform = `scale(${scale})`
       document.documentElement.style.overflow = 'hidden'
