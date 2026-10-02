@@ -58,6 +58,11 @@ export function TemplatePreview({ front, back, css, fields, side, title = 'Card 
       if (!body || !document || !frame.contentWindow) return
       const width = frame.clientWidth
       if (!width) return
+      frame.style.padding = '0'
+      frame.style.border = '0'
+      frame.style.boxSizing = 'border-box'
+      frame.style.display = 'block'
+      frame.style.verticalAlign = 'top'
       // Measure in the original coordinate space before applying a transform.
       body.style.transform = 'none'
       body.style.transformOrigin = 'top left'
