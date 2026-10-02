@@ -77,8 +77,14 @@ live in a separate Dexie database without credential fields. Interrupted
 uploads remain pending and recover by stable filename/hash comparison. Explicit
 local/remote conflict resolution preserves the alternate version. Web Locks
 serialize media sessions; edits are rejected during an active recovery marker.
-The account UI must select an account-specific storage namespace before using
-these state stores; it is not implemented by this protocol boundary.
+Issue #56 now has `src/native-anki-account.ts`, which derives distinct stable
+IndexedDB names for the collection checkpoint and media stores from a
+normalized AnkiWeb username using a domain-separated SHA-256 digest. The raw
+username, password, and session key are not persisted. Closing the stores on
+logout retains account data; deleting it must be a separate explicit action.
+This namespace is a separation mechanism, not encryption or an authentication
+boundary. The visible login/logout workflow and native-to-app projection remain
+unimplemented.
 
 ## Reproducible evidence
 
