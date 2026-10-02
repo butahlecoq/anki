@@ -137,11 +137,47 @@ describe('Anki archive preflight', () => {
     }]))).rejects.toThrow(/deflated entry.*declared limit/i)
   })
 
+  test('rejects unused stored and deflated members with mismatched expanded sizes in every layout', async () => {
+    const layouts = [
+      { name: 'legacy', collection: { name: 'collection.anki2', data: Uint8Array.of(1) } },
+      { name: 'current', collection: { name: 'collection.anki21b', data: rawZstd(0) } },
+    ]
+
+    for (const layout of layouts) {
+      await expect(preflightAnkiArchive(zip([
+        layout.collection,
+        { name: 'unused-stored', data: Uint8Array.of(1), declaredUncompressedSize: 2 },
+      ]))).rejects.toThrow(/stored entry.*declared size/i)
+
+      await expect(preflightAnkiArchive(zip([
+        layout.collection,
+        { name: 'unused-deflated', method: 8, data: deflateSync(Uint8Array.of(1, 2)), declaredUncompressedSize: 1 },
+      ]))).rejects.toThrow(/deflated entry.*declared limit/i)
+    }
+  })
+
   test('rejects an unsafe archive before package parsing or collection/outbox mutation', async () => {
     const collection = createCollection(`kiroku-archive-preflight-${crypto.randomUUID()}`)
     try {
       const file = new File([zip([{ name: '../collection.anki2' }])], 'unsafe.apkg', { type: 'application/octet-stream' })
       await expect(prepareAnkiImport(file, collection, { SQL: {} as never })).rejects.toThrow(/unsafe path/i)
+      await expect(collection.decks.count()).resolves.toBe(0)
+      await expect(collection.notes.count()).resolves.toBe(0)
+      await expect(collection.cards.count()).resolves.toBe(0)
+      await expect(collection.outbox.count()).resolves.toBe(0)
+    } finally {
+      await collection.delete()
+    }
+  })
+
+  test('rejects an unused mismatched member before package parsing or collection/outbox mutation', async () => {
+    const collection = createCollection(`kiroku-archive-preflight-${crypto.randomUUID()}`)
+    try {
+      const file = new File([zip([
+        { name: 'collection.anki2', data: Uint8Array.of(1) },
+        { name: 'unused-deflated', method: 8, data: deflateSync(Uint8Array.of(1, 2)), declaredUncompressedSize: 1 },
+      ])], 'mismatched.apkg', { type: 'application/octet-stream' })
+      await expect(prepareAnkiImport(file, collection, { SQL: {} as never })).rejects.toThrow(/deflated entry.*declared limit/i)
       await expect(collection.decks.count()).resolves.toBe(0)
       await expect(collection.notes.count()).resolves.toBe(0)
       await expect(collection.cards.count()).resolves.toBe(0)

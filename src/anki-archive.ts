@@ -145,7 +145,10 @@ function parseZipArchive(bytes: Uint8Array): ZipEntry[] {
 
 async function decodedZipEntry(bytes: Uint8Array, entry: ZipEntry) {
   const compressed = bytes.slice(entry.dataOffset, entry.dataOffset + entry.compressedSize)
-  if (entry.method === 0) return compressed
+  if (entry.method === 0) {
+    if (compressed.byteLength !== entry.compressedSize || entry.compressedSize !== entry.uncompressedSize) fail(`stored entry ${JSON.stringify(entry.name)} does not match its declared size`)
+    return compressed
+  }
   if (typeof DecompressionStream !== 'function' || typeof ReadableStream !== 'function') fail(`cannot safely inspect deflated entry ${JSON.stringify(entry.name)} in this browser`)
   let sourceOffset = 0
   const stream = new ReadableStream<BufferSource>({
@@ -271,20 +274,31 @@ function currentLayoutZstdEntry(name: string) {
 }
 
 /**
- * Validates ZIP metadata before ankipack or SQL is loaded. Current Anki layout
- * zstd entries are inflated only to their already bounded ZIP size. Their frame
- * content size and window are checked before package parsing; raw blocks are
- * cross-checked against their declared output, while the package reader checks
+ * Validates every ZIP member before ankipack or SQL is loaded. Stored members
+ * must match their physical and declared size; deflated members are streamed to
+ * their exact declared output. Current Anki layout zstd entries are then checked
+ * for bounded frame content and windows before package parsing. Raw blocks are
+ * cross-checked against declared output, while the package reader checks
  * compressed and run-length block validity.
  */
 export async function preflightAnkiArchive(bytes: Uint8Array): Promise<void> {
   if (bytes.byteLength > ANKI_ARCHIVE_LIMITS.maxCompressedBytes) fail(`archive exceeds the ${ANKI_ARCHIVE_LIMITS.maxCompressedBytes / 1024 / 1024} MB compressed limit`)
   const entries = parseZipArchive(bytes)
   const currentLayout = entries.some((entry) => entry.name === 'collection.anki21b')
+  const decodedZstdEntries = new Map<string, Uint8Array>()
+  let expandedBytes = 0
+  for (const entry of entries) {
+    const decoded = await decodedZipEntry(bytes, entry)
+    if (decoded.byteLength !== entry.uncompressedSize) fail(`entry ${JSON.stringify(entry.name)} does not match its declared size`)
+    expandedBytes += decoded.byteLength
+    if (expandedBytes > ANKI_ARCHIVE_LIMITS.maxAggregateBytes) fail('aggregate limit exceeded by expanded ZIP entries')
+    if (currentLayout && currentLayoutZstdEntry(entry.name)) decodedZstdEntries.set(entry.name, decoded)
+  }
   let zstdBytes = 0
   for (const entry of entries) {
     if (!currentLayout || !currentLayoutZstdEntry(entry.name)) continue
-    const decoded = await decodedZipEntry(bytes, entry)
+    const decoded = decodedZstdEntries.get(entry.name)
+    if (!decoded) fail(`zstd entry ${JSON.stringify(entry.name)} is missing from archive preflight`)
     zstdBytes += validateZstdFrames(decoded, entry.name)
     if (zstdBytes > ANKI_ARCHIVE_LIMITS.maxZstdAggregateBytes) fail('aggregate limit exceeded by decoded zstd entries')
   }
