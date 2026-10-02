@@ -202,7 +202,6 @@ test('rejects cyclic, dangling, and cross-entity revision parents without storin
     assert.equal(service.health().collectionSchemaVersion, 1)
   } finally { service.close() }
 })
-
 for (const metadataColumn of ['parents', 'review_id']) {
   for (const watermark of [null, '14']) {
     test(`infers causal schema 15 from persisted ${metadataColumn} with ${watermark ?? 'missing'} watermark`, async () => {
