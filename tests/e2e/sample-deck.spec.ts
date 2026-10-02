@@ -9,10 +9,10 @@ test('load, review, and remove the Japanese sample deck without changing other d
   }
   await expect(page.getByRole('button', { name: 'Load sample deck' })).toBeVisible()
   await page.getByRole('button', { name: 'Load sample deck' }).click()
-  if (browserName === 'chromium') await page.context().setOffline(true)
 
   const sampleTile = page.getByRole('treeitem').filter({ hasText: 'Sample — Japanese Starter' })
   await expect(sampleTile).toContainText('SAMPLE DECK')
+  if (browserName === 'chromium') await page.context().setOffline(true)
   await sampleTile.getByRole('button', { name: 'Open Sample — Japanese Starter' }).click()
   await expect(page.getByText('A small sample collection for trying Japanese review.')).toBeVisible()
   if (browserName === 'webkit') await page.context().setOffline(true)
