@@ -8,7 +8,7 @@ Fetch before relying on checks. Run `git status --short --branch` in each path. 
 
 | Path | Branch | Head | State |
 |---|---|---|---|
-| `C:/work/anki` | `main` | `b3e56f7` | clean; this file records the latest handoff; check docs CI for this head |
+| `C:/work/anki` | `main` | `4941eb8` | clean; this file records the latest handoff; check docs CI for this head |
 | `C:/work/anki-17` | `feat/17-text-csv` | `7c00ccb` | clean; draft PR #72; exact-head CI `37010267515` passed |
 | `C:/work/anki-18` | `feat/18-safe-concurrency` | `01a65c4` | clean; draft PR #73; exact-head CI `37019083852` passed |
 | no local worktree | `feat/23-jetbrains-omarchy-ux` | `b4a6415` remote branch | PR #74 was marked ready; exact-head CI `37017542638` passed; local directory absent at final check |
@@ -54,7 +54,7 @@ Known projection limits to audit before expanding it: currently it accepts only 
 
 ## At-home start
 
-1. Continue in these existing paths; no additional worktrees were created. `git fetch origin`, check each listed branch/status, inspect PR review state, and check CI for #56 `e52b9b0` and main docs commit `b3e56f7`. `gh` was unavailable during this checkpoint, so live PR/review/CI status could not be queried. The latest saved branch heads are #17 `7c00ccb`, #18 `01a65c4`, #23 `b4a6415`, and #56 `e52b9b0`.
+1. Continue in these existing paths; no additional worktrees were created. `git fetch origin`, check each listed branch/status, inspect PR review state, and check CI for #56 `e52b9b0` and main docs commit `4941eb8`. `gh` was unavailable during this checkpoint, so live PR/review/CI status could not be queried. The latest saved branch heads are #17 `7c00ccb`, #18 `01a65c4`, #23 `b4a6415`, and #56 `e52b9b0`.
 2. Start in `C:/work/anki-56`; read issue #56 comments, `docs/ankiweb-account-sync.md`, `docs/native-anki-engine.md`, and this handoff.
 3. The two-client journey and statistics history passed at #18 `37019083852`; proceed to the remaining deletion/media race review and independent PR review.
 4. Review #23 `37017542638` and its attached rendered contrast screenshots. Physical iPhone acceptance is still separate.
