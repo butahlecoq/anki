@@ -35,6 +35,7 @@ import { customStudySessions } from './custom-study-state'
 import { isShortcutBlocked } from './keyboard-shortcuts'
 import { TextCollectionDialog } from './TextCollectionDialog'
 import { SyncConflicts } from './SyncConflicts'
+import { loadSampleDeck, removeSampleDeck, SAMPLE_DECK_NAME } from './sample-deck'
 
 type Route =
   | { view: 'decks' }
@@ -409,6 +410,15 @@ function ImportDialog({ onClose }: { onClose: () => void }) {
 }
 
 function EmptyCollection({ onNewDeck, onImport }: { onNewDeck: () => void; onImport: () => void }) {
+  const [loadingSample, setLoadingSample] = useState(false)
+  const [sampleError, setSampleError] = useState('')
+  async function loadSample() {
+    setLoadingSample(true)
+    setSampleError('')
+    try { await loadSampleDeck() }
+    catch (reason) { setSampleError(reason instanceof Error ? reason.message : 'Unable to load the sample deck.') }
+    finally { setLoadingSample(false) }
+  }
   return (
     <>
       <section className="hero">
@@ -431,7 +441,8 @@ function EmptyCollection({ onNewDeck, onImport }: { onNewDeck: () => void; onImp
           <div className="empty-card">
             <span className="empty-glyph" lang="ja">一</span>
             <div><h3>Your collection is clear.</h3><p>Create a focused deck, add a Japanese card, and begin your first offline review.</p></div>
-            <div className="empty-actions"><button className="primary-action" type="button" onClick={onNewDeck}>New deck</button><button className="text-button" type="button" onClick={onImport}>Import Anki package</button></div>
+            <div className="empty-actions"><button className="primary-action" type="button" onClick={onNewDeck}>New deck</button><button className="primary-action" type="button" disabled={loadingSample} onClick={() => void loadSample()}>{loadingSample ? 'Loading sample…' : 'Load sample deck'}</button><button className="text-button" type="button" onClick={onImport}>Import Anki package</button></div>
+            {sampleError && <p className="form-error" role="alert">{sampleError}</p>}
             <small>Your decks and reviews stay in this browser.</small>
           </div>
         </article>
@@ -461,7 +472,7 @@ function DeckList({ decks, onNewDeck, onImport, onOpen }: { decks: DeckSummary[]
       <section className="deck-grid deck-tree" role="tree" aria-label="Deck hierarchy">
         {ordered.map(({ deck, depth }) => (
           <article className="deck-tile" role="treeitem" aria-level={depth} style={{ '--deck-depth': depth - 1 } as CSSProperties} key={deck.id}>
-            <span className="deck-index">DECK // {String(deck.noteCount).padStart(2, '0')} NOTES</span>
+            <span className="deck-index">{deck.name === SAMPLE_DECK_NAME ? 'SAMPLE DECK' : 'DECK'} // {String(deck.noteCount).padStart(2, '0')} NOTES</span>
             <h2>{deck.name}</h2>
             <CountStrip counts={deck.counts} reviews={deck.reviewCount} />{deck.temporaryCount > 0 && <p className="temporary-membership">{deck.temporaryCount} home cards temporarily reserved for custom study</p>}
             <button className="tile-action" type="button" aria-label={`Open ${deck.name}`} onClick={() => onOpen(deck.id)}>Open deck <span>→</span></button>
@@ -533,7 +544,8 @@ function DeleteDeckDialog({ deck, onClose, onDeleted }: { deck: Deck; onClose: (
   async function submit(event: FormEvent) {
     event.preventDefault()
     try {
-      if (mode === 'relocate') await collection.deleteDeck(deck.id, { mode, destinationDeckId: destinationId })
+      if (deck.name === SAMPLE_DECK_NAME) await removeSampleDeck(deck.id)
+      else if (mode === 'relocate') await collection.deleteDeck(deck.id, { mode, destinationDeckId: destinationId })
       else await collection.deleteDeck(deck.id, { mode })
       onDeleted()
     } catch (reason) {
@@ -542,14 +554,14 @@ function DeleteDeckDialog({ deck, onClose, onDeleted }: { deck: Deck; onClose: (
   }
 
   return <div className="dialog-backdrop"><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="delete-deck-title">
-    <span className="section-code">DECK // DELETE</span><h2 id="delete-deck-title">Delete deck</h2>
-    <form onSubmit={submit}><fieldset className="delete-mode"><legend>How should this deck be removed?</legend><label className="choice"><input name="delete-mode" type="radio" checked={mode === 'relocate'} onChange={() => setMode('relocate')} />Relocate contents and child decks</label>
+    <span className="section-code">{deck.name === SAMPLE_DECK_NAME ? 'SAMPLE // REMOVE' : 'DECK // DELETE'}</span><h2 id="delete-deck-title">{deck.name === SAMPLE_DECK_NAME ? 'Remove sample deck?' : 'Delete deck'}</h2>
+    <form onSubmit={submit}>{deck.name === SAMPLE_DECK_NAME ? <p>This removes the sample deck, its notes, cards, review history, and attachments. Your other decks stay as they are.</p> : <fieldset className="delete-mode"><legend>How should this deck be removed?</legend><label className="choice"><input name="delete-mode" type="radio" checked={mode === 'relocate'} onChange={() => setMode('relocate')} />Relocate contents and child decks</label>
       <p className="options-note">Moves this deck’s notes and direct child decks to the destination, then deletes only this deck.</p>
       {mode === 'relocate' && <label>Destination deck<select value={destinationId} onChange={(event) => setDestinationId(event.target.value)} required><option value="" disabled>Choose a destination</option>{decks.filter((candidate) => !blocked.has(candidate.id)).map((candidate) => <option value={candidate.id} key={candidate.id}>{candidate.name}</option>)}</select></label>}
       <label className="choice"><input name="delete-mode" type="radio" checked={mode === 'delete-subtree'} onChange={() => setMode('delete-subtree')} />Delete this deck and its subtree</label>
-      <p className="options-note">Permanently deletes this deck, child decks, notes, cards, and their review entries.</p></fieldset>
+      <p className="options-note">Permanently deletes this deck, child decks, notes, cards, and their review entries.</p></fieldset>}
       {error && <p className="form-error" role="alert">{error}</p>}
-      <div className="dialog-actions"><button className="text-button" type="button" onClick={onClose}>Cancel</button><button className="primary-action" type="submit">{mode === 'relocate' ? 'Relocate and delete deck' : 'Delete deck subtree'}</button></div>
+      <div className="dialog-actions"><button className="text-button" type="button" onClick={onClose}>Cancel</button><button className="primary-action" type="submit">{deck.name === SAMPLE_DECK_NAME ? 'Remove sample deck' : mode === 'relocate' ? 'Relocate and delete deck' : 'Delete deck subtree'}</button></div>
     </form>
   </section></div>
 }
@@ -727,9 +739,9 @@ function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () =>
     <>
       <section className="deck-detail-header">
         <button className="text-button back-button" type="button" onClick={onBack}>← All decks</button>
-        <span className="section-code">DECK // LOCAL</span>
+        <span className="section-code">{deck.name === SAMPLE_DECK_NAME ? 'SAMPLE // STARTER DECK' : 'DECK // LOCAL'}</span>
         <h1>{deck.name}</h1>
-        <CountStrip counts={summary.counts} reviews={summary.reviewCount} /><p className="temporary-membership">{summary.temporaryCount} home cards reserved for custom study. Home totals include them; today’s normal queue excludes them.</p>
+        <CountStrip counts={summary.counts} reviews={summary.reviewCount} />{deck.name === SAMPLE_DECK_NAME ? <p className="temporary-membership">A small sample collection for trying Japanese review. Remove it any time from this page.</p> : <p className="temporary-membership">{summary.temporaryCount} home cards reserved for custom study. Home totals include them; today’s normal queue excludes them.</p>}
         <div className="deck-actions">
           <button className="primary-action" type="button" onClick={() => setNoteDialog({})}>Add note</button>
           <button className="primary-action study-action" type="button" disabled={!hasDueCards} onClick={onStudy}>Study now</button>
@@ -737,7 +749,7 @@ function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () =>
           <button className="text-button" type="button" onClick={() => setMoveDialog(true)}>Move deck</button>
           <button className="text-button" type="button" onClick={() => setOptionsDialog(true)}>Scheduling options</button>
           <button className="text-button" type="button" onClick={() => setDeckDialog(true)}>Rename deck</button>
-          <button className="text-button danger" type="button" onClick={() => setDeleteDialog(true)}>Delete deck</button>
+          <button className="text-button danger" type="button" onClick={() => setDeleteDialog(true)}>{deck.name === SAMPLE_DECK_NAME ? 'Remove sample deck' : 'Delete deck'}</button>
         </div>
       </section>
       <section className="note-list" aria-label="Notes">
