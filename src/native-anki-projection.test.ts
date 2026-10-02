@@ -4,6 +4,7 @@ import initSqlJs from 'sql.js'
 import { Collection } from './collection'
 import { prepareAnkiDataImport } from './anki-import'
 import { nativeAnkiProjectionData, nativeAnkiProjectionEntityMap, nativeAnkiProjectionManifest } from './native-anki-projection'
+import { prepareNativeAnkiWriteback } from './native-anki-writeback'
 
 const noteId = 1_700_000_000_100
 const firstCardId = 1_700_000_000_101
@@ -142,4 +143,53 @@ it('rejects duplicate native field ordinals that would alias app fields', async 
 it('refuses an unsupported native schema before producing an app projection', async () => {
   const { SQL, snapshot } = await nativeFixture(12)
   expect(() => nativeAnkiProjectionData(SQL, snapshot)).toThrow('unsupported Anki collection schema')
+})
+
+it('writes only plain native note fields and tags while preserving native identities and opaque data', async () => {
+  const { SQL, snapshot } = await nativeFixture()
+  const original = Array.from(snapshot)
+  const manifest = await nativeAnkiProjectionManifest(SQL, snapshot)
+  collection = new Collection(`native-writeback-${crypto.randomUUID()}`)
+  const prepared = await prepareAnkiDataImport(nativeAnkiProjectionData(SQL, snapshot), collection, { SQL, now: new Date('2026-10-02T12:00:00Z') })
+  await prepared.commit()
+
+  const unchanged = await prepareNativeAnkiWriteback(SQL, snapshot, manifest, collection, { now: new Date('2026-10-02T12:00:00Z') })
+  expect(unchanged).toMatchObject({ status: 'unchanged', changes: [], blocked: [] })
+
+  const noteIdLocal = `anki-note:${originalNote.guid}`
+  const note = await collection.notes.get(noteIdLocal)
+  await collection.notes.put({ ...note!, fields: { ...note!.fields, 'anki-field:100:0': '猫 & <ねこ>\nNeko' }, tags: ['jlpt::n4', 'reviewed'], updatedAt: '2026-10-02T13:00:00.000Z' })
+  const beforeApp = await collection.notes.toArray()
+  const plan = await prepareNativeAnkiWriteback(SQL, snapshot, manifest, collection, { now: new Date('2026-10-02T13:00:00Z') })
+  expect(plan.status).toBe('ready')
+  if (plan.status !== 'ready') throw new Error('Expected supported field and tag changes to prepare')
+  expect(plan.changes).toEqual([{ noteId, fields: [0], tags: true }])
+  expect(Array.from(snapshot)).toEqual(original)
+  expect(await collection.notes.toArray()).toEqual(beforeApp)
+
+  const db = new SQL.Database(plan.snapshot)
+  const nativeNote = db.exec('SELECT id,guid,mid,usn,tags,flds,sfld,data FROM notes WHERE id = ?', [noteId])[0].values
+  const cardsAfter = db.exec('SELECT * FROM cards ORDER BY id')[0].values
+  const reviewsAfter = db.exec('SELECT * FROM revlog ORDER BY id')[0].values
+  db.close()
+  const sourceDb = new SQL.Database(snapshot)
+  expect(nativeNote).toEqual([[noteId, originalNote.guid, 100, -1, ' jlpt::n4 reviewed ', '猫 &amp; &lt;ねこ&gt;<br>Neko\u001fcat', '猫 & <ねこ>Neko', originalNote.data]])
+  expect(cardsAfter).toEqual(sourceDb.exec('SELECT * FROM cards ORDER BY id')[0].values)
+  expect(reviewsAfter).toEqual(sourceDb.exec('SELECT * FROM revlog ORDER BY id')[0].values)
+  sourceDb.close()
+})
+
+it('blocks native writeback when scheduling or review history changes', async () => {
+  const { SQL, snapshot } = await nativeFixture()
+  const manifest = await nativeAnkiProjectionManifest(SQL, snapshot)
+  collection = new Collection(`native-writeback-block-${crypto.randomUUID()}`)
+  const prepared = await prepareAnkiDataImport(nativeAnkiProjectionData(SQL, snapshot), collection, { SQL, now: new Date('2026-10-02T12:00:00Z') })
+  await prepared.commit()
+  const card = (await collection.cards.toArray()).find(({ ankiId }) => ankiId === firstCardId)!
+  await collection.cards.put({ ...card, reps: card.reps + 1 })
+  const result = await prepareNativeAnkiWriteback(SQL, snapshot, manifest, collection, { now: new Date('2026-10-02T12:00:00Z') })
+  expect(result.status).toBe('blocked')
+  if (result.status !== 'blocked') throw new Error('Expected schedule changes to block writeback')
+  expect(result.blocked.join('\n')).toContain(`Card ${firstCardId} has a scheduling`)
+  expect('snapshot' in result).toBe(false)
 })
