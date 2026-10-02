@@ -33,6 +33,7 @@ import { CustomStudy } from './CustomStudy'
 import { answerCustomStudy, customStudyQueue, practiceChoices, undoCustomStudy } from './custom-study'
 import { customStudySessions } from './custom-study-state'
 import { isShortcutBlocked } from './keyboard-shortcuts'
+import { TextCollectionDialog } from './TextCollectionDialog'
 
 type Route =
   | { view: 'decks' }
@@ -1148,6 +1149,7 @@ export function CollectionWorkspace() {
   const [newDeck, setNewDeck] = useState(false)
   const [importing, setImporting] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [textTransfer, setTextTransfer] = useState(false)
 
   // The deck panel advertises N beside its heading, so the key has to work.
   useEffect(() => {
@@ -1177,10 +1179,12 @@ export function CollectionWorkspace() {
     <>
       <SyncControls />
       <button className="text-button" onClick={() => setExporting(true)}>Export Anki package</button>
+      <button className="text-button" onClick={() => setTextTransfer(true)}>Import / export text</button>
       {content}
       {newDeck && <DeckDialog onClose={() => setNewDeck(false)} />}
       {importing && <ImportDialog onClose={() => setImporting(false)} />}
       {exporting && <ExportDialog onClose={() => setExporting(false)} />}
+      {textTransfer && <TextCollectionDialog onClose={() => setTextTransfer(false)} />}
     </>
   )
 }
