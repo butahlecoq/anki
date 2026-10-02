@@ -1,21 +1,30 @@
 import type { CardRecord, ReviewEntry } from './collection'
-import type { CardRow } from 'ankipack'
+import type { CardRow, RevlogRow } from 'ankipack'
 
 export function nativeScheduleFingerprint(card: CardRow) {
   const { type, queue, due, ivl, factor, reps, lapses, left } = card
   return JSON.stringify({ type, queue, due, ivl, factor, reps, lapses, left })
 }
+export function nativeReviewFingerprint(review: RevlogRow) {
+  const { ease, ivl, lastIvl, factor, time, type } = review
+  return JSON.stringify({ ease, ivl, lastIvl, factor, time, type })
+}
 
-export function readKirokuReview(data: string, id: number): Partial<ReviewEntry> {
+export function readKirokuReview(data: string, row: RevlogRow): Partial<ReviewEntry> {
   let parsed: { kirokuReviews?: Record<string, Record<string, unknown>> }
   try { parsed = JSON.parse(data || '{}') } catch { return {} }
-  const value = parsed.kirokuReviews?.[id]
+  const value = parsed.kirokuReviews?.[row.id]
   if (!value) return {}
+  if (value.native !== nativeReviewFingerprint(row)) return {}
   const result: Partial<ReviewEntry> = {}
+  if ('rescheduled' in value) {
+    if (typeof value.rescheduled !== 'boolean') throw new Error('Invalid review rescheduling mode')
+    Object.assign(result, { rescheduled: value.rescheduled })
+  }
   for (const key of ['rating', 'state', 'stability', 'difficulty', 'elapsedDays', 'lastElapsedDays', 'scheduledDays', 'learningSteps', 'durationMs'] as const) {
     const field = value[key]
     if (key === 'durationMs' && field === undefined) continue
-    if (typeof field !== 'number' || !Number.isFinite(field) || field < 0 || (key === 'rating' && (field < 1 || field > 4)) || (key === 'state' && field > 3)) throw new Error(`Invalid review ${key}`)
+    if (typeof field !== 'number' || !Number.isFinite(field) || field < 0 || (key === 'rating' && (!Number.isInteger(field) || field < 1 || field > 4)) || (key === 'state' && (!Number.isInteger(field) || field > 3))) throw new Error(`Invalid review ${key}`)
     Object.assign(result, { [key]: field })
   }
   for (const key of ['due', 'reviewedAt'] as const) {
@@ -37,7 +46,7 @@ export function readKirokuSchedule(card: CardRow): Partial<CardRecord> {
   const result: Partial<CardRecord> = {}
   for (const key of ['stability', 'difficulty', 'elapsedDays', 'scheduledDays', 'learningSteps', 'reps', 'lapses', 'state'] as const) {
     const field = (value as Record<string, unknown>)[key]
-    if (typeof field !== 'number' || !Number.isFinite(field) || field < 0 || (key === 'state' && field > 3)) throw new Error(`Invalid scheduling ${key}`)
+    if (typeof field !== 'number' || !Number.isFinite(field) || field < 0 || (key === 'state' && (!Number.isInteger(field) || field > 3))) throw new Error(`Invalid scheduling ${key}`)
     result[key] = field
   }
   for (const key of ['due', 'lastReview', 'buriedUntil'] as const) {

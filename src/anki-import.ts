@@ -614,7 +614,7 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
         for (const hint of metadata.kirokuMedia as unknown[]) {
           if (!hint || typeof hint !== 'object') throw new Error('Invalid exported media placement')
           const value = hint as Record<string, unknown>
-          if (typeof value.name !== 'string' || typeof value.displayName !== 'string' || !value.displayName || /[<>[\]\r\n]/.test(value.displayName) || !['front', 'back'].includes(String(value.side)) || typeof value.inline !== 'boolean' || !['manual', 'automatic'].includes(String(value.playback)) || !(value.templateOrd === null || (typeof value.templateOrd === 'number' && Number.isInteger(value.templateOrd) && value.templateOrd >= 0 && value.templateOrd < sourceType.templates.length))) throw new Error('Invalid exported media placement')
+          if (typeof value.name !== 'string' || typeof value.displayName !== 'string' || !value.displayName || (value.inline && /[<>[\]\r\n]/.test(value.displayName)) || !['front', 'back'].includes(String(value.side)) || typeof value.inline !== 'boolean' || !['manual', 'automatic'].includes(String(value.playback)) || !(value.templateOrd === null || (typeof value.templateOrd === 'number' && Number.isInteger(value.templateOrd) && value.templateOrd >= 0 && value.templateOrd < sourceType.templates.length))) throw new Error('Invalid exported media placement')
           for (const reference of references.filter((reference) => reference.noteId === noteId && reference.displayName === value.name && reference.side === value.side && (value.templateOrd === null || reference.templateId === sourceType.templates[value.templateOrd as number]?.id))) {
             reference.displayName = value.displayName
             reference.inline = value.inline
@@ -700,7 +700,7 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
     const elapsedDays = previous ? Math.max(0, Math.floor((row.id - previous.reviewedAt) / day)) : 0
     const scheduledDays = intervalDays(row.lastIvl)
     let exportedReview: Partial<ReviewEntry> = {}
-    try { exportedReview = readKirokuReview(data.cards.find((card) => card.id === row.cid)?.data ?? '', row.id) } catch (reason) {
+    try { exportedReview = readKirokuReview(data.cards.find((card) => card.id === row.cid)?.data ?? '', row) } catch (reason) {
       issues.push({ severity: 'error', code: 'invalid-export-review', subject: String(row.id), detail: reason instanceof Error ? reason.message : 'Invalid exported review' })
     }
     reviews.push({
@@ -718,6 +718,7 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
       learningSteps: 0,
       reviewedAt,
       ...(Number.isFinite(row.time) && row.time >= 0 ? { durationMs: row.time } : {}),
+      ...(row.type === 3 ? { rescheduled: false } : {}),
       ...exportedReview,
     })
     previousReviewByCard.set(row.cid, { reviewedAt: row.id, elapsedDays })

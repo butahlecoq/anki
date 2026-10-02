@@ -66,7 +66,7 @@ The built-in **Image Occlusion** note accepts a PNG, JPEG, or WebP source image.
 
 Use **Header** for prompt context, **Back Extra** for answer-side context, and comma-separated tags to organize the note. Each saved mask has a stable ID and never-reused ordinal: moving or resizing it retains its card and review history, while deleting it suspends that card. Source images sync as verified media and the supported persistent browser-profile test covers opening an image-occlusion card after a cold offline restart.
 
-The native interchange fixture and package importer cover the rectangular hide-one subset only. Ellipses, polygons, groups, and hide-all behavior are unsupported. Anki package export is tracked separately in [Issue #16](https://github.com/butahlecoq/anki/issues/16).
+The native interchange fixture and package importer cover the rectangular hide-one subset only. Ellipses, polygons, groups, and hide-all behavior are unsupported. Anki package export preserves this supported subset and reports unsupported shapes before download.
 
 ## Import Anki packages
 
@@ -87,6 +87,8 @@ Packages contain native schema 18 note types, templates, fields, tags, deck rela
 Native Anki receives its supported scheduling representation. Kiroku also stores validated supplementary scheduling, review-memory, and attachment-placement data in native opaque data columns for a precise clean Kiroku round trip. A later native scheduling edit takes precedence over stale supplementary values. Export reports missing/damaged media, unsupported relationships, retired fields, differing CSS between templates, and archive-limit violations before success. Image occlusion export requires its image. This portable package is not an account login, sync-service configuration, or settings backup.
 
 See [Anki’s packaged-deck documentation](https://docs.ankiweb.net/exporting.html#packaged-decks) for how `.apkg` imports add content to an existing Anki collection.
+
+For an independent interoperability check, set `$env:KIROKU_NATIVE_EXPORT_FIXTURE='1'`, run `npx vitest run src/anki-export.test.ts`, then run `python scripts/verify-anki-export.py runtime/export-interop` from an isolated Python environment containing official Anki. This optional verification uses temporary clean native collections and synthetic ignored fixtures; Python/Anki is not an export runtime dependency. Anki 26.9.3 checks cover Japanese text, note GUIDs, card ordinals, field names, deck meanings, flags, native FSRS values within Anki’s three-decimal normalization, review rows including first-learning Good ratings, rendered cards, and media SHA-256 hashes.
 
 ## Note types and card templates
 

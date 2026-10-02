@@ -4,7 +4,7 @@ import type { Deck as NativeDeck, Notetype as NativeNotetype } from 'ankipack'
 import { State, type Collection, type CardRecord } from './collection'
 import { serializeAnkiImageOcclusion } from './image-occlusion-interchange'
 import { validateAnkiArchive } from './anki-archive'
-import { nativeScheduleFingerprint } from './anki-scheduling-metadata'
+import { nativeScheduleFingerprint, nativeReviewFingerprint } from './anki-scheduling-metadata'
 import { validateMediaBytes } from './anki-import'
 
 export interface AnkiExportOptions { deckId?: string; scheduling: boolean; history: boolean; media: boolean; SQL?: SqlJsStatic }
@@ -81,13 +81,15 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
     const type = exportedTypes.get(note.typeId)
     if (!localType || !type) throw new Error('A note type is missing.')
     if (note.retiredFields && Object.keys(note.retiredFields).length) throw new Error(`Note ${note.id} contains retired fields. Restore or remove them before exporting.`)
-    let fields = localType.fields.map((field) => escape(note.fields[field.id] ?? '').replace(/\[\[kiroku-media:([^\]]+)\]\]/g, (_token, displayName: string) => {
+    let fields = localType.fields.map((field) => (note.fields[field.id] ?? '').split(/(\[\[kiroku-media:[^\]]+\]\])/g).map((part) => {
+      const token = part.match(/^\[\[kiroku-media:([^\]]+)\]\]$/)
+      if (!token) return escape(part)
       if (!options.media) return ''
-      const reference = references.find((reference) => reference.noteId === note.id && reference.displayName === displayName)
-      if (!reference) throw new Error(`Missing media reference: ${displayName}`)
+      const reference = references.find((reference) => reference.noteId === note.id && reference.displayName === token[1])
+      if (!reference) throw new Error(`Missing media reference: ${token[1]}`)
       const name = names.get(reference.id)!
       return reference.kind === 'image' ? `<img src="${name}">` : `[sound:${name}]`
-    }))
+    }).join(''))
     if (note.imageOcclusion) {
       if (!options.media) throw new Error('Image occlusion requires its image. Enable media inclusion.')
       const imageName = names.get(note.imageOcclusion.sourceMediaId)
@@ -108,6 +110,10 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
   for (const [name, bytes] of media) packageFile.addMedia(name, bytes)
   const data = await packageFile.toCollection()
   data.col.crt = Math.floor(Date.now() / day) * 86_400
+  // An empty schedVer identifies the historical three-button scheduler and
+  // makes native Anki upgrade Good learning answers to Easy during import.
+  data.col.conf = JSON.stringify({ schedVer: 2 })
+  data.config.push({ key: 'schedVer', usn: -1, mtimeSecs: Math.floor(Date.now() / 1000), val: new TextEncoder().encode('2') })
   const localByGuid = new Map(notes.map((note) => [guid(note.id), note]))
   for (const row of data.notes) {
     const note = localByGuid.get(row.guid)!
@@ -137,7 +143,7 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
     if (options.scheduling) {
       row.type = card.state === State.New ? 0 : card.state === State.Learning ? 1 : card.state === State.Review ? 2 : 3
       row.queue = card.manualSuspended || card.templateSuspended || card.suspended ? -1 : row.type === 3 ? 1 : row.type
-      row.due = row.type === 0 ? row.due : row.queue === 1 ? Math.floor(Date.parse(card.due) / 1000) : Math.floor((Date.parse(card.due) - data.col.crt * 1000) / day)
+      row.due = row.type === 0 ? row.due : row.type === 1 || row.type === 3 ? Math.floor(Date.parse(card.due) / 1000) : Math.floor((Date.parse(card.due) - data.col.crt * 1000) / day)
       row.ivl = card.scheduledDays; row.reps = card.reps; row.lapses = card.lapses; row.left = card.learningSteps; row.factor = Math.round(card.difficulty * 100)
       const { due, stability, difficulty, elapsedDays, scheduledDays, learningSteps, reps, lapses, state, lastReview, manualSuspended, templateSuspended, buriedUntil } = card
       row.data = JSON.stringify({ s: stability, d: difficulty, kiroku: { version: 1, native: nativeScheduleFingerprint(row), due, stability, difficulty, elapsedDays, scheduledDays, learningSteps, reps, lapses, state, lastReview, manualSuspended, templateSuspended, buriedUntil } })
@@ -163,12 +169,13 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
       const interval = next.scheduledDays || -Math.max(1, Math.round((Date.parse(next.due) - Date.parse(review.reviewedAt)) / 1000))
       const previous = historyEntries[index - 1]
       const lastInterval = review.scheduledDays || (previous ? -Math.max(1, Math.round((Date.parse(review.due) - Date.parse(previous.reviewedAt)) / 1000)) : 0)
-      data.revlog.push({ id, cid, usn: -1, ease: review.rating, ivl: interval, lastIvl: lastInterval, factor: Math.round(review.difficulty * 100), time: review.durationMs ?? 0, type: review.state === State.New || review.state === State.Learning ? 0 : review.state === State.Relearning ? 2 : 1 })
+      const practice = 'rescheduled' in review && review.rescheduled === false
+      data.revlog.push({ id, cid, usn: -1, ease: review.rating, ivl: practice ? 0 : interval, lastIvl: lastInterval, factor: Math.round(review.difficulty * 100), time: review.durationMs ?? 0, type: practice ? 3 : review.state === State.New || review.state === State.Learning ? 0 : review.state === State.Relearning ? 2 : 1 })
       const row = data.cards.find((row) => row.id === cid)!
       const metadata = JSON.parse(row.data || '{}') as Record<string, unknown>
       const history = (metadata.kirokuReviews ?? {}) as Record<string, unknown>
       const { rating, state, due, stability, difficulty, elapsedDays, lastElapsedDays, scheduledDays, learningSteps, reviewedAt, durationMs } = review
-      history[id] = { rating, state, due, stability, difficulty, elapsedDays, lastElapsedDays, scheduledDays, learningSteps, reviewedAt, durationMs }
+      history[id] = { native: nativeReviewFingerprint(data.revlog.at(-1)!), rating, state, due, stability, difficulty, elapsedDays, lastElapsedDays, scheduledDays, learningSteps, reviewedAt, durationMs, ...(practice ? { rescheduled: false } : {}) }
       row.data = JSON.stringify({ ...metadata, kirokuReviews: history })
       }
     }
