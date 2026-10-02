@@ -1,4 +1,5 @@
 import type { Database, SqlJsStatic, SqlValue } from 'sql.js'
+import { rebuildNativeNoteCaches } from './native-anki-cache.js'
 
 /** Transport receives a relative official protocol route; account secrets are
  * inside the wire body, never diagnostics or the durable collection snapshot. */
@@ -110,8 +111,8 @@ function insertChunk(db: Database, chunk: Chunk, usn: number) {
       }
       const values = [...row]; values[usnIndex] = usn
       // Protocol note rows omit derived search caches. Preserve a cache only
-      // when its original fields are unchanged. Rebuilding caches for changed
-      // fields remains required before this engine can back the account UI.
+      // when its original fields are unchanged. Changed fields and note-type
+      // sort configuration are rebuilt before returning the finished copy.
       if (table === 'notes' && existing && existing[6] === row[6]) { values[7] = existing[7]; values[8] = existing[8] }
       db.run(`INSERT OR REPLACE INTO ${table}(${columns[table].join(',')}) VALUES(${values.map(() => '?').join(',')})`, values)
     }
@@ -137,7 +138,9 @@ export class NativeAnkiClient {
   }
   private async request(route: string, data: unknown, session?: string): Promise<Uint8Array> {
     const form = new FormData()
-    form.append('data', JSON.stringify(data)); form.append('c', '0')
+    if (data instanceof Uint8Array) form.append('data', new Blob([data.slice().buffer]), 'data')
+    else form.append('data', JSON.stringify(data))
+    form.append('c', '0')
     if (this.#key) form.append('k', this.#key)
     if (session) form.append('s', session)
     const response = await this.transport(route, form, this.#hostNumber)
@@ -173,6 +176,15 @@ export class NativeAnkiClient {
     if (!meta.cont) throw new NativeSyncError('upgrade', 'AnkiWeb requested that synchronization stop. Update the app before retrying; local work is preserved.')
     return meta
   }
+  /** Authenticated media operations keep the session/account key private. */
+  async mediaRequest(method: 'begin' | 'mediaChanges' | 'downloadFiles' | 'uploadChanges' | 'mediaSanity', data: unknown): Promise<unknown | Uint8Array> {
+    const bytes = await this.request(`msync/${method}`, data)
+    if (method === 'downloadFiles') return bytes
+    let value: unknown
+    try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) } catch { throw protocolError() }
+    if (!isObject(value) || value.err || !('data' in value)) throw protocolError()
+    return value.data
+  }
   async downloadCollection(SQL: SqlJsStatic): Promise<Uint8Array> {
     const meta = await this.metadata()
     const bytes = await this.request('sync/download', {})
@@ -185,6 +197,7 @@ export class NativeAnkiClient {
       // the delivered snapshot against metadata obtained after that operation.
       if (scalar(db, 'SELECT scm FROM col') !== meta.scm || after.scm !== meta.scm || scalar(db, 'SELECT mod FROM col') !== after.mod || scalar(db, 'SELECT usn FROM col') !== after.usn) throw new NativeSyncError('transfer', 'The account changed during download. Retry before replacing local data.')
       db.run('UPDATE col SET ls=?', [after.mod])
+      await rebuildNativeNoteCaches(db)
       return db.export()
     } finally { db.close() }
   }
@@ -226,6 +239,7 @@ export class NativeAnkiClient {
       const sanity = await this.json('sync/sanityCheck2', { client: sanityCounts(db) }, session)
       if (!isObject(sanity) || sanity.status !== 'ok') throw protocolError()
       const mod = integer(await this.json('sync/finish', {}, session)); session = undefined
+      await rebuildNativeNoteCaches(db)
       for (const table of ['cards', 'notes', 'revlog', 'graves']) db.run(`UPDATE ${table} SET usn=? WHERE usn=-1`, [remote.usn])
       for (const column of objectColumns) { const values = jsonColumn(db, column); for (const value of Object.values(values)) if (isObject(value) && value.usn === -1) value.usn = remote.usn; setJson(db, column, values) }
       const allTags = jsonColumn(db, 'tags'); for (const [tag, usn] of Object.entries(allTags)) if (usn === -1) allTags[tag] = remote.usn; setJson(db, 'tags', allTags)
