@@ -6,7 +6,7 @@ const input = '_note_id,_deck,_note_type,_tags,Field: front,Field: back\r\ncat,æ
 async function paste(page: Page, text: string) {
   await page.getByRole('button', { name: 'Import / export text', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Import and export text' })
-  await dialog.getByLabel('Text source', { exact: true }).selectOption('paste')
+  await dialog.getByRole('combobox', { name: 'Text source', exact: true }).selectOption('paste')
   await dialog.getByLabel('Paste CSV or tab-separated text').fill(text)
   await dialog.getByRole('button', { name: 'Read columns', exact: true }).click()
   await dialog.getByLabel('Create missing mapped deck paths').check()
