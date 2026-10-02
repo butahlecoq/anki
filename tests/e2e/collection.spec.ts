@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { navigateOfflineDocument, openOfflineProfileDocument, WEBKIT_COLD_OFFLINE_LIMITATION } from './offline-navigation'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -51,7 +52,7 @@ test(`statistics follow an offline Japanese review, heatmap selection, and undo$
       await page.evaluate(() => { Reflect.set(window, 'kirokuStatisticsReloadMarker', true) })
       page = await context.newPage()
       await page.clock.setFixedTime(REVIEW_TIME)
-      await page.goto(statisticsURL, { waitUntil: 'domcontentloaded' })
+      await openOfflineProfileDocument(page, statisticsURL)
       await expect(page.getByRole('heading', { name: 'Every answer adds up' })).toBeVisible()
       await expect.poll(() => page.evaluate(() => Reflect.has(window, 'kirokuStatisticsReloadMarker'))).toBe(false)
       await previousPage.close()
@@ -172,84 +173,92 @@ test('unsafe archive previews keep existing Japanese material intact', async ({ 
   await expect(page.getByText('NEW 1', { exact: true })).toBeVisible()
 })
 
-test('learner previews and imports an Anki package before studying its media offline', async ({ page, browserName }) => {
-  await page.getByRole('button', { name: 'Import Anki package' }).click()
-  const dialog = page.getByRole('dialog', { name: 'Import Anki package' })
-  await dialog.getByLabel('Anki package', { exact: true }).setInputFiles({ name: 'japanese.apkg', mimeType: 'application/octet-stream', buffer: await importFixture() })
-  await expect(dialog.getByText('2 decks')).toBeVisible()
-  await expect(dialog.getByText('1 note type')).toBeVisible()
-  await expect(dialog.getByText('1 note', { exact: true })).toBeVisible()
-  await expect(dialog.getByText('1 card')).toBeVisible()
-  await expect(dialog.getByText('2 media files')).toBeVisible()
-  await expect(dialog.getByText(/Stable Anki note identities/)).toBeVisible()
-  await expect(dialog.getByText(/Preserved nested deck path Imported::Japanese/)).toBeVisible()
-  await page.getByRole('button', { name: 'Import package' }).click()
-
-  await page.getByRole('button', { name: 'Open Japanese' }).click()
-  await expect(page.getByText('猫', { exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Study now' }).click()
-  const review = page.frameLocator('iframe[title="Review card"]')
-  await expect(review.locator('ruby')).toHaveText('猫ねこ')
-  await expect(review.locator('body')).toHaveCSS('color', 'rgb(30, 40, 50)')
-  const image = review.getByRole('img', { name: 'cat.png' })
-  await expect(image).toBeVisible()
-  await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true)
-  const audio = review.locator('audio')
-  await expectAudioReady(audio, browserName)
-  await page.evaluate(async () => { await navigator.serviceWorker.ready })
-  await page.context().setOffline(true)
-  await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => undefined)
-  await expect(page.frameLocator('iframe[title="Review card"]').locator('ruby')).toHaveText('猫ねこ')
-  const offlineReview = page.frameLocator('iframe[title="Review card"]')
-  const offlineImage = offlineReview.getByRole('img', { name: 'cat.png' })
-  await expect(offlineImage).toBeVisible()
-  await expect.poll(() => offlineImage.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true)
-  const offlineAudio = offlineReview.locator('audio')
-  await expectAudioReady(offlineAudio, browserName)
-  await page.getByRole('button', { name: 'Replay audio' }).click()
-  await expect(page.getByText('Audio replayed.', { exact: true })).toBeVisible()
-  await expect(page.getByText('Offline shell active')).toBeVisible()
-})
-
-test('a clean phone syncs imported package media and keeps it offline', async ({ browser, browserName, page: pc }) => {
-  const phoneContext = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
-  try {
-    const phone = await phoneContext.newPage()
-    await phone.clock.setFixedTime(REVIEW_TIME)
-    await phone.goto(`${WEB_URL}/`)
-
-    await pc.getByRole('button', { name: 'Import Anki package' }).click()
-    const dialog = pc.getByRole('dialog', { name: 'Import Anki package' })
+for (const reopen of [false, true]) {
+  test(`learner previews and imports an Anki package before studying its media offline${reopen ? ' in a fresh document' : ' in the current session'}`, async ({ page, browserName }) => {
+    test.skip(reopen && browserName === 'webkit', WEBKIT_COLD_OFFLINE_LIMITATION)
+    await page.getByRole('button', { name: 'Import Anki package' }).click()
+    const dialog = page.getByRole('dialog', { name: 'Import Anki package' })
     await dialog.getByLabel('Anki package', { exact: true }).setInputFiles({ name: 'japanese.apkg', mimeType: 'application/octet-stream', buffer: await importFixture() })
-    await pc.getByRole('button', { name: 'Import package' }).click()
-    await pair(pc)
-    await pair(phone)
-    await pc.getByRole('button', { name: 'Sync now' }).click()
-    await expect(pc.getByText(/2 uploaded and \d+ downloaded/)).toBeVisible()
-    await phone.getByRole('button', { name: 'Sync now' }).click()
-    await phone.getByRole('button', { name: 'Open Japanese' }).click()
-    await phone.getByRole('button', { name: 'Study now' }).click()
+    await expect(dialog.getByText('2 decks')).toBeVisible()
+    await expect(dialog.getByText('1 note type')).toBeVisible()
+    await expect(dialog.getByText('1 note', { exact: true })).toBeVisible()
+    await expect(dialog.getByText('1 card')).toBeVisible()
+    await expect(dialog.getByText('2 media files')).toBeVisible()
+    await expect(dialog.getByText(/Stable Anki note identities/)).toBeVisible()
+    await expect(dialog.getByText(/Preserved nested deck path Imported::Japanese/)).toBeVisible()
+    await page.getByRole('button', { name: 'Import package' }).click()
 
-    const review = phone.frameLocator('iframe[title="Review card"]')
+    await page.getByRole('button', { name: 'Open Japanese' }).click()
+    await expect(page.getByText('猫', { exact: true })).toBeVisible()
+    await page.getByRole('button', { name: 'Study now' }).click()
+    const review = page.frameLocator('iframe[title="Review card"]')
+    await expect(review.locator('ruby')).toHaveText('猫ねこ')
+    await expect(review.locator('body')).toHaveCSS('color', 'rgb(30, 40, 50)')
     const image = review.getByRole('img', { name: 'cat.png' })
     await expect(image).toBeVisible()
     await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true)
     const audio = review.locator('audio')
     await expectAudioReady(audio, browserName)
-    await phone.evaluate(async () => { await navigator.serviceWorker.ready })
-    await phoneContext.setOffline(true)
-    await phone.reload({ waitUntil: 'domcontentloaded' }).catch(() => undefined)
-    const offlineReview = phone.frameLocator('iframe[title="Review card"]')
+    await page.evaluate(async () => { await navigator.serviceWorker.ready })
+    await page.context().setOffline(true)
+    if (reopen) await navigateOfflineDocument(page)
+    else await page.getByRole('button', { name: 'Show answer' }).click()
+    await expect(page.frameLocator('iframe[title="Review card"]').locator('ruby')).toHaveText('猫ねこ')
+    const offlineReview = page.frameLocator('iframe[title="Review card"]')
     const offlineImage = offlineReview.getByRole('img', { name: 'cat.png' })
     await expect(offlineImage).toBeVisible()
     await expect.poll(() => offlineImage.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true)
     const offlineAudio = offlineReview.locator('audio')
     await expectAudioReady(offlineAudio, browserName)
-    await expect(phone.getByText('Offline shell active')).toBeVisible()
-  } finally {
-    await phoneContext.close()
-  }
-})
+    await page.getByRole('button', { name: 'Replay audio' }).click()
+    await expect(page.getByText('Audio replayed.', { exact: true })).toBeVisible()
+    await expect(page.getByText('Offline shell active')).toBeVisible()
+  })
+}
+
+for (const reopen of [false, true]) {
+  test(`a clean phone syncs imported package media and keeps it offline${reopen ? ' in a fresh document' : ' in the current session'}`, async ({ browser, browserName, page: pc }) => {
+    test.skip(reopen && browserName === 'webkit', WEBKIT_COLD_OFFLINE_LIMITATION)
+    const phoneContext = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
+    try {
+      const phone = await phoneContext.newPage()
+      await phone.clock.setFixedTime(REVIEW_TIME)
+      await phone.goto(`${WEB_URL}/`)
+
+      await pc.getByRole('button', { name: 'Import Anki package' }).click()
+      const dialog = pc.getByRole('dialog', { name: 'Import Anki package' })
+      await dialog.getByLabel('Anki package', { exact: true }).setInputFiles({ name: 'japanese.apkg', mimeType: 'application/octet-stream', buffer: await importFixture() })
+      await pc.getByRole('button', { name: 'Import package' }).click()
+      await pair(pc)
+      await pair(phone)
+      await pc.getByRole('button', { name: 'Sync now' }).click()
+      await expect(pc.getByText(/2 uploaded and \d+ downloaded/)).toBeVisible()
+      await phone.getByRole('button', { name: 'Sync now' }).click()
+      await phone.getByRole('button', { name: 'Open Japanese' }).click()
+      await phone.getByRole('button', { name: 'Study now' }).click()
+
+      const review = phone.frameLocator('iframe[title="Review card"]')
+      const image = review.getByRole('img', { name: 'cat.png' })
+      await expect(image).toBeVisible()
+      await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true)
+      const audio = review.locator('audio')
+      await expectAudioReady(audio, browserName)
+      await phone.evaluate(async () => { await navigator.serviceWorker.ready })
+      await phoneContext.setOffline(true)
+      if (reopen) await navigateOfflineDocument(phone)
+      else await phone.getByRole('button', { name: 'Show answer' }).click()
+      const offlineReview = phone.frameLocator('iframe[title="Review card"]')
+      const offlineImage = offlineReview.getByRole('img', { name: 'cat.png' })
+      await expect(offlineImage).toBeVisible()
+      await expect.poll(() => offlineImage.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true)
+      const offlineAudio = offlineReview.locator('audio')
+      await expectAudioReady(offlineAudio, browserName)
+      await expect(phone.getByText('Offline shell active')).toBeVisible()
+    } finally {
+      await phoneContext.close()
+    }
+  })
+}
 
 test('learner manages a note type and previews a second card in isolation', async ({ page }) => {
   await page.getByRole('link', { name: 'Note types' }).click()
@@ -603,62 +612,63 @@ test('empty card warning and type deletion preserve mapped note values', async (
   await expect(retired.getByText(/Retired field · [\da-f-]{36}/)).toBeVisible()
 })
 
-test('learner creates, edits, and reviews a Japanese card offline', async ({ browserName, context, page }) => {
-  await createDeck(page, 'Japanese Core')
+for (const reopen of [false, true]) {
+  test(`learner creates, edits, and reviews a Japanese card offline${reopen ? ' in a fresh document' : ' in the current session'}`, async ({ browserName, context, page }) => {
+    test.skip(reopen && browserName === 'webkit', WEBKIT_COLD_OFFLINE_LIMITATION)
+    await createDeck(page, 'Japanese Core')
 
-  await page.getByRole('button', { name: 'Open Japanese Core' }).click()
-  await page.getByRole('button', { name: 'Add note' }).click()
-  await expect(page.getByRole('dialog', { name: 'Add a Basic note' })).toBeVisible()
-  await page.getByLabel('Front').fill('猫')
-  await page.getByLabel('Back').fill('ねこ · cat')
-  await page.getByRole('button', { name: 'Save note' }).click()
+    await page.getByRole('button', { name: 'Open Japanese Core' }).click()
+    await page.getByRole('button', { name: 'Add note' }).click()
+    await expect(page.getByRole('dialog', { name: 'Add a Basic note' })).toBeVisible()
+    await page.getByLabel('Front').fill('猫')
+    await page.getByLabel('Back').fill('ねこ · cat')
+    await page.getByRole('button', { name: 'Save note' }).click()
 
-  await expect(page.getByText('猫')).toBeVisible()
-  const editNote = page.getByRole('button', { name: 'Edit note' })
-  await editNote.evaluate((button) => button.scrollIntoView({ block: 'center' }))
-  await editNote.click()
-  await page.getByLabel('Back').fill('ねこ · cat · feline')
-  await page.getByRole('button', { name: 'Save changes' }).click()
-  await expect(page.getByText('ねこ · cat · feline')).toBeVisible()
+    await expect(page.getByText('猫')).toBeVisible()
+    const editNote = page.getByRole('button', { name: 'Edit note' })
+    await editNote.evaluate((button) => button.scrollIntoView({ block: 'center' }))
+    await editNote.click()
+    await page.getByLabel('Back').fill('ねこ · cat · feline')
+    await page.getByRole('button', { name: 'Save changes' }).click()
+    await expect(page.getByText('ねこ · cat · feline')).toBeVisible()
 
-  await page.getByRole('button', { name: 'Study now' }).click()
-  const review = page.frameLocator('iframe[title="Review card"]')
-  await expect(review.getByText('猫')).toBeVisible()
-  await page.getByRole('button', { name: 'Show answer' }).click()
-  await expect(review.getByText('ねこ · cat · feline')).toBeVisible()
-  await expect(page.getByRole('button', { name: /^Again · / })).toBeVisible()
-  await expect(page.getByRole('button', { name: /^Hard · / })).toBeVisible()
-  await expect(page.getByRole('button', { name: /^Good · / })).toBeVisible()
-  await expect(page.getByRole('button', { name: /^Easy · / })).toBeVisible()
-  await page.getByRole('button', { name: /^Good · / }).click()
+    await page.evaluate(async () => { await navigator.serviceWorker.ready })
+    await context.setOffline(true)
+    await page.getByRole('button', { name: 'Study now' }).click()
+    const review = page.frameLocator('iframe[title="Review card"]')
+    await expect(review.getByText('猫')).toBeVisible()
+    await page.getByRole('button', { name: 'Show answer' }).click()
+    await expect(review.getByText('ねこ · cat · feline')).toBeVisible()
+    await expect(page.getByRole('button', { name: /^Again · / })).toBeVisible()
+    await expect(page.getByRole('button', { name: /^Hard · / })).toBeVisible()
+    await expect(page.getByRole('button', { name: /^Good · / })).toBeVisible()
+    await expect(page.getByRole('button', { name: /^Easy · / })).toBeVisible()
+    await page.getByRole('button', { name: /^Good · / }).click()
 
-  await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
-  await expect(page.getByText('1 review recorded')).toBeVisible()
-  await page.getByRole('button', { name: 'Back to deck' }).click()
-  await expect(page.getByText('NEW 0')).toBeVisible()
-  await expect(page.getByText('LEARNING 1')).toBeVisible()
-  await expect(page.getByText('REVIEWS 1')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
+    await expect(page.getByText('1 review recorded')).toBeVisible()
+    await page.getByRole('button', { name: 'Back to deck' }).click()
+    await expect(page.getByText('NEW 0')).toBeVisible()
+    await expect(page.getByText('LEARNING 1')).toBeVisible()
+    await expect(page.getByText('REVIEWS 1')).toBeVisible()
 
-  await page.evaluate(async () => {
-    if (!('serviceWorker' in navigator)) throw new Error('Service workers are unavailable')
-    await navigator.serviceWorker.ready
+    await page.evaluate(async () => {
+      if (!('serviceWorker' in navigator)) throw new Error('Service workers are unavailable')
+      await navigator.serviceWorker.ready
+    })
+    await context.setOffline(true)
+    if (reopen) await navigateOfflineDocument(page)
+
+    await expect(page.getByRole('heading', { name: 'Japanese Core' })).toBeVisible()
+    await expect(page.getByText('NEW 0')).toBeVisible()
+    await expect(page.getByText('LEARNING 1')).toBeVisible()
+    await expect(page.getByText('REVIEWS 1')).toBeVisible()
+    await expect(page.getByText('Offline shell active')).toBeVisible()
   })
-  await context.setOffline(true)
-  try {
-    await page.reload({ waitUntil: 'domcontentloaded' })
-  } catch (error) {
-    if (browserName !== 'webkit' || !(error instanceof Error) || !error.message.includes('internal error')) throw error
-  }
-
-  await expect(page.getByRole('heading', { name: 'Japanese Core' })).toBeVisible()
-  await expect(page.getByText('NEW 0')).toBeVisible()
-  await expect(page.getByText('LEARNING 1')).toBeVisible()
-  await expect(page.getByText('REVIEWS 1')).toBeVisible()
-  await expect(page.getByText('Offline shell active')).toBeVisible()
-})
+}
 
 test('persistent profile reopens offline and continues a remaining Japanese review', async ({ browserName, browser }) => {
-  test.skip(browserName === 'webkit', 'The WebKit runner discards IndexedDB when a persistent profile is reopened.')
+  test.skip(browserName === 'webkit', WEBKIT_COLD_OFFLINE_LIMITATION)
   const profile = await mkdtemp(join(tmpdir(), 'kiroku-profile-'))
   let firstContext: import('@playwright/test').BrowserContext | undefined
   let reopenedContext: import('@playwright/test').BrowserContext | undefined
@@ -696,11 +706,7 @@ test('persistent profile reopens offline and continues a remaining Japanese revi
 
     const reopenedPage = reopenedContext.pages()[0] ?? await reopenedContext.newPage()
     await reopenedPage.clock.setFixedTime(REVIEW_TIME)
-    try {
-      await reopenedPage.goto(`${WEB_URL}/#deck/${deckId}`, { waitUntil: 'domcontentloaded' })
-    } catch (error) {
-      if (browserName !== 'webkit' || !(error instanceof Error) || !error.message.includes('internal error')) throw error
-    }
+    await openOfflineProfileDocument(reopenedPage, `${WEB_URL}/#deck/${deckId}`)
 
     await expect(reopenedPage.getByRole('heading', { name: 'Offline Japanese' })).toBeVisible()
     await expect(reopenedPage.getByText('NEW 1')).toBeVisible()
@@ -772,8 +778,8 @@ test('PC and phone contexts exchange a collection and an FSRS review through the
   }
 })
 
-test('a phone keeps verified synced media after a cold offline reload', async ({ browserName, browser, page: pc }, testInfo) => {
-  test.skip(browserName === 'webkit', 'The WebKit runner discards IndexedDB when a persistent profile is reopened.')
+test('a phone keeps verified synced media after a cold offline profile restart', async ({ browserName, browser, page: pc }, testInfo) => {
+  test.skip(browserName === 'webkit', WEBKIT_COLD_OFFLINE_LIMITATION)
   const profile = await mkdtemp(join(tmpdir(), 'kiroku-media-profile-'))
   const deckName = `Media Japanese ${testInfo.project.name} ${Date.now()}`
   let phoneContext: import('@playwright/test').BrowserContext | undefined
@@ -820,7 +826,7 @@ test('a phone keeps verified synced media after a cold offline reload', async ({
     await reopenedContext.setOffline(true)
     const reopened = reopenedContext.pages()[0] ?? await reopenedContext.newPage()
     await reopened.clock.setFixedTime(REVIEW_TIME)
-    await reopened.goto(`${WEB_URL}/#deck/${deckId}`, { waitUntil: 'domcontentloaded' })
+    await openOfflineProfileDocument(reopened, `${WEB_URL}/#deck/${deckId}`)
     await reopened.getByRole('button', { name: 'Study now' }).click()
     const offlineImage = reopened.getByRole('img', { name: 'cat.png' })
     await expect(offlineImage).toBeVisible()
@@ -837,7 +843,7 @@ test('a phone keeps verified synced media after a cold offline reload', async ({
 })
 
 test('a phone reopens a synced image occlusion source offline', async ({ browserName, browser, page: pc }, testInfo) => {
-  test.skip(browserName === 'webkit', 'The WebKit runner discards IndexedDB when a persistent profile is reopened.')
+  test.skip(browserName === 'webkit', WEBKIT_COLD_OFFLINE_LIMITATION)
   const profile = await mkdtemp(join(tmpdir(), 'kiroku-occlusion-profile-'))
   const deckName = `Occlusion sync ${testInfo.project.name} ${Date.now()}`
   let phoneContext: import('@playwright/test').BrowserContext | undefined
@@ -881,7 +887,7 @@ test('a phone reopens a synced image occlusion source offline', async ({ browser
     await reopenedContext.setOffline(true)
     const reopened = reopenedContext.pages()[0] ?? await reopenedContext.newPage()
     await reopened.clock.setFixedTime(REVIEW_TIME)
-    await reopened.goto(`${WEB_URL}/#deck/${deckId}`, { waitUntil: 'domcontentloaded' })
+    await openOfflineProfileDocument(reopened, `${WEB_URL}/#deck/${deckId}`)
     await reopened.getByRole('button', { name: 'Study now' }).click()
     await expect(reopened.getByLabel('Image occlusion card')).toBeVisible()
     await expect(reopened.locator('.occlusion-review-canvas image')).toHaveAttribute('href', /^data:image\/png;base64,/)
@@ -968,7 +974,7 @@ test('a typed-only front creates a card and announces the comparison after Enter
 })
 
 test('a cloze review survives a cold offline profile restart', async ({ browserName, browser }) => {
-  test.skip(browserName === 'webkit', 'The WebKit runner discards IndexedDB when a persistent profile is reopened.')
+  test.skip(browserName === 'webkit', WEBKIT_COLD_OFFLINE_LIMITATION)
   const profile = await mkdtemp(join(tmpdir(), 'kiroku-cloze-profile-'))
   let firstContext: import('@playwright/test').BrowserContext | undefined
   let reopenedContext: import('@playwright/test').BrowserContext | undefined
@@ -1001,7 +1007,7 @@ test('a cloze review survives a cold offline profile restart', async ({ browserN
     await reopenedContext.setOffline(true)
     const reopened = reopenedContext.pages()[0] ?? await reopenedContext.newPage()
     await reopened.clock.setFixedTime(REVIEW_TIME)
-    await reopened.goto(`${WEB_URL}/#deck/${deckId}`, { waitUntil: 'domcontentloaded' })
+    await openOfflineProfileDocument(reopened, `${WEB_URL}/#deck/${deckId}`)
     await expect(reopened.getByText('NEW 1')).toBeVisible()
     await expect(reopened.getByText('LEARNING 1')).toBeVisible()
     await reopened.getByRole('button', { name: 'Study now' }).click()

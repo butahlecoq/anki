@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { navigateOfflineDocument, WEBKIT_COLD_OFFLINE_LIMITATION } from './offline-navigation'
 
 test('learner can open the production study workspace', async ({ page }, testInfo) => {
   const pageErrors: Error[] = []
@@ -83,7 +84,9 @@ test('manifest advertises an installable standalone app', async ({ request }) =>
   }
 })
 
-test('installed shell cold-reloads without a network', async ({ browserName, context, page }) => {
+for (const reopen of [false, true]) {
+test(`shell works without a network${reopen ? ' in a fresh document' : ' in the current session'}`, async ({ browserName, context, page }) => {
+  test.skip(reopen && browserName === 'webkit', WEBKIT_COLD_OFFLINE_LIMITATION)
   await page.goto('/')
   await expect(page.getByRole('heading', { name: 'Your Japanese study system' })).toBeVisible()
 
@@ -93,14 +96,10 @@ test('installed shell cold-reloads without a network', async ({ browserName, con
   })
 
   await context.setOffline(true)
-  try {
-    await page.reload({ waitUntil: 'domcontentloaded' })
-  } catch (error) {
-    // Playwright's Windows WebKit port can report an internal navigation error
-    // after a successful service-worker response while the context is offline.
-    if (browserName !== 'webkit' || !(error instanceof Error) || !error.message.includes('internal error')) throw error
-  }
+  if (reopen) await navigateOfflineDocument(page)
 
   await expect(page.getByRole('heading', { name: 'Your Japanese study system' })).toBeVisible()
   await expect(page.getByText('Offline shell active')).toBeVisible()
 })
+
+}
