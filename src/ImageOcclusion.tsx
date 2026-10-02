@@ -170,7 +170,7 @@ export function ImageOcclusionCanvas({
         </g>
       })}
     </svg>
-    {!readOnly && <div className="occlusion-mask-controls" aria-label="Occlusion masks">
+    {!readOnly && <div className="occlusion-mask-controls" role="group" aria-label="Occlusion masks">
       {drafts.map((mask, index) => <fieldset key={mask.localId}>
         <legend>Mask {index + 1}{mask.ordinal ? ` · card ${mask.ordinal}` : ''}</legend>
         <label>Position X<input aria-label={`Mask ${index + 1} x position`} type="number" min="0" max="100" value={Math.round(mask.x * 100)} onChange={(event) => updateMask(mask.localId, { x: numeric(event.target.value, mask.x) })} /></label>

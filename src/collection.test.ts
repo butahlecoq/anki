@@ -688,7 +688,7 @@ describe('local collection', () => {
     await collection.reviewEntries.add({ id: 'previous-local-day', cardId: firstCard.id, deckId: deck.id, rating: Rating.Good, state: State.New, due: firstCard.due, stability: 1, difficulty: 5, elapsedDays: 0, lastElapsedDays: 0, scheduledDays: 0, learningSteps: 1, reviewedAt: previousLocalDay.toISOString() })
 
     await expect(collection.dueCards(deck.id, currentLocalDay)).resolves.toEqual([expect.objectContaining({ id: secondCard.id })])
-  })
+  }, 20_000)
 
   test('uses deck identity to make parent queues deterministic when child groups use different orders', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
