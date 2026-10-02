@@ -8,13 +8,13 @@ Fetch before relying on checks. Run `git status --short --branch` in each path. 
 
 | Path | Branch | Head | State |
 |---|---|---|---|
-| `C:/work/anki` | `main` | `7ea668c` | clean; this file records the latest handoff; check docs CI for this head |
+| `C:/work/anki` | `main` | `b3e56f7` | clean; this file records the latest handoff; check docs CI for this head |
 | `C:/work/anki-17` | `feat/17-text-csv` | `7c00ccb` | clean; draft PR #72; exact-head CI `37010267515` passed |
 | `C:/work/anki-18` | `feat/18-safe-concurrency` | `01a65c4` | clean; draft PR #73; exact-head CI `37019083852` passed |
-| `C:/work/anki-23` | `feat/23-jetbrains-omarchy-ux` | `b4a6415` | clean; PR #74 marked ready; exact-head CI `37017542638` passed |
+| no local worktree | `feat/23-jetbrains-omarchy-ux` | `b4a6415` remote branch | PR #74 was marked ready; exact-head CI `37017542638` passed; local directory absent at final check |
 | `C:/work/anki-56` | `feat/56-ankiweb-account` | `e52b9b0` | clean and pushed; draft PR #75; check CI for this new head |
 
-Do not merge the draft PRs. No worktree has been removed.
+Do not merge draft PRs. This handoff did not remove a worktree.
 
 ## Exact-head CI and review findings
 
@@ -54,7 +54,7 @@ Known projection limits to audit before expanding it: currently it accepts only 
 
 ## At-home start
 
-1. Continue in these existing paths; no additional worktrees were created. `git fetch origin`, check each listed branch/status, inspect PR review state, and check CI for #56 `e52b9b0` and main docs commit `7ea668c`. `gh` was unavailable during this checkpoint, so live PR/review/CI status could not be queried. The latest saved branch heads are #17 `7c00ccb`, #18 `01a65c4`, #23 `b4a6415`, and #56 `e52b9b0`.
+1. Continue in these existing paths; no additional worktrees were created. `git fetch origin`, check each listed branch/status, inspect PR review state, and check CI for #56 `e52b9b0` and main docs commit `b3e56f7`. `gh` was unavailable during this checkpoint, so live PR/review/CI status could not be queried. The latest saved branch heads are #17 `7c00ccb`, #18 `01a65c4`, #23 `b4a6415`, and #56 `e52b9b0`.
 2. Start in `C:/work/anki-56`; read issue #56 comments, `docs/ankiweb-account-sync.md`, `docs/native-anki-engine.md`, and this handoff.
 3. The two-client journey and statistics history passed at #18 `37019083852`; proceed to the remaining deletion/media race review and independent PR review.
 4. Review #23 `37017542638` and its attached rendered contrast screenshots. Physical iPhone acceptance is still separate.
@@ -67,11 +67,14 @@ This file is the current cross-branch pickup point. Branch-local copies of
 `docs/development-handoff.md` and the older #18 `docs/agents/office-handoff.md`
 contain historical inventories and stale main/head IDs; use their feature-specific
 technical notes, but verify every status against current Git before acting. The
-latest check found the main and #17/#18/#23 worktrees clean, and #56 clean after
-`e52b9b0` was pushed. The five Anki folders listed above are the active Git
-worktrees for open PRs; `docs/agents/worktrees.md` says to retain unmerged trees,
-so none were removed. Other directories under `C:/work` are separate project or
-environment folders and were left untouched. No extra worktrees were created or removed. The attempted
+latest check found the main, #17, #18, and #56 worktrees clean, with #56 at
+`e52b9b0`. `C:/work/anki-23` was present earlier in the check but absent from
+the final filesystem/worktree inventory; this handoff did not delete it. Its
+remote branch remains at `b4a6415`, so its work is still published. The four
+registered Anki worktrees are active; `docs/agents/worktrees.md` says to retain
+unmerged trees, so none were removed here. Other directories under `C:/work` are
+separate project or environment folders and were left untouched. No extra
+worktrees were created. The attempted
 live tracker check could not run (`gh` is not installed); GitHub web fetches for
 the private repository returned 404. No issue or PR status change is claimed here.
 
