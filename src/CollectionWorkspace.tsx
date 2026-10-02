@@ -361,7 +361,6 @@ function ImportDialog({ onClose }: { onClose: () => void }) {
     }
   }
 
-  const hasErrors = prepared?.issues.some((issue) => issue.severity === 'error') ?? false
   const count = (value: number, singular: string, plural = `${singular}s`) => `${value} ${value === 1 ? singular : plural}`
   return <div className="dialog-backdrop">
     <section className="dialog import-dialog" role="dialog" aria-modal="true" aria-labelledby="import-dialog-title">
@@ -399,11 +398,11 @@ function ImportDialog({ onClose }: { onClose: () => void }) {
           <ul>{prepared.issues.map((issue, index) => <li className={`import-${issue.severity}`} key={`${issue.code}-${issue.subject}-${index}`}><strong>{issue.subject}</strong><span>{issue.detail}</span></li>)}</ul>
         </section>}
       </>}
-      {hasErrors && <p className="form-error" role="alert">This package has unsupported content. Nothing will be imported until the reported errors are resolved.</p>}
+      {prepared?.plan.blocksImport && <p className="form-error" role="alert">This package has unsupported content. Nothing will be imported until the reported errors are resolved.</p>}
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="dialog-actions">
         <button className="text-button" type="button" disabled={busy} onClick={onClose}>Cancel</button>
-        <button className="primary-action" type="button" disabled={!prepared || busy || hasErrors} onClick={() => void commit()}>{busy && prepared ? 'Importing…' : 'Import package'}</button>
+        <button className="primary-action" type="button" disabled={!prepared || busy || prepared.plan.blocksImport} onClick={() => void commit()}>{busy && prepared ? 'Importing…' : 'Import package'}</button>
       </div>
     </section>
   </div>
