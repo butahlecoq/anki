@@ -3,7 +3,7 @@ import { afterEach, expect, it } from 'vitest'
 import initSqlJs from 'sql.js'
 import { Collection } from './collection'
 import { prepareAnkiDataImport } from './anki-import'
-import { nativeAnkiProjectionData } from './native-anki-projection'
+import { nativeAnkiProjectionData, nativeAnkiProjectionManifest } from './native-anki-projection'
 
 const noteId = 1_700_000_000_100
 const firstCardId = 1_700_000_000_101
@@ -75,6 +75,21 @@ it('projects schema-11 note, card, deck, and review identities without rewriting
   expect(cards.map((card) => card.ankiId)).toEqual([firstCardId, secondCardId])
   expect(cards.map((card) => card.deckId)).not.toEqual([note?.deckId, note?.deckId])
   expect(review).toMatchObject({ id: `anki-review:${reviewId}`, cardId: cards[0].id, rating: 4 })
+})
+
+it('builds a snapshot-bound base map with native identities and both deck bindings', async () => {
+  const { SQL, snapshot } = await nativeFixture()
+  const manifest = await nativeAnkiProjectionManifest(SQL, snapshot)
+  expect(manifest).toMatchObject({ version: 1, collectionId: 1, schema: 11 })
+  expect(manifest.snapshotHash).toMatch(/^[a-f0-9]{64}$/)
+  expect(manifest.notes).toEqual([{ id: noteId, guid: originalNote.guid, notetypeId: 100 }])
+  expect(manifest.cards).toEqual([
+    { id: firstCardId, noteId, ordinal: 0, deckId: 10, originalDeckId: 0 },
+    { id: secondCardId, noteId, ordinal: 1, deckId: 11, originalDeckId: 0 },
+  ])
+  expect(manifest.reviews).toEqual([{ id: reviewId, cardId: firstCardId }])
+  expect(manifest.decks.map(({ id }) => id)).toEqual([1, 10, 11])
+  expect(manifest.notetypes).toEqual([{ id: 100, fieldOrdinals: [0, 1], templateOrdinals: [0, 1] }])
 })
 
 it('refuses an unsupported native schema before producing an app projection', async () => {

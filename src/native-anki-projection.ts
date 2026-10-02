@@ -1,7 +1,22 @@
 import type { CardRow, CollectionData, DeckRow, FieldRow, NoteRow, NotetypeRow, RevlogRow, TemplateRow } from 'ankipack'
 import type { Database as SqlDatabase, SqlJsStatic } from 'sql.js'
+import { nativeSnapshotHash } from './native-anki-sync'
 
 export interface NativeProjectionMedia { name: string; data: Uint8Array }
+
+/** Native identities and relationships needed to apply app-side deltas back
+ * onto the authoritative SQLite base without rebuilding unsupported rows. */
+export interface NativeAnkiProjectionManifest {
+  version: 1
+  snapshotHash: string
+  collectionId: number
+  schema: 11
+  notes: Array<{ id: number; guid: string; notetypeId: number }>
+  cards: Array<{ id: number; noteId: number; ordinal: number; deckId: number; originalDeckId: number }>
+  reviews: Array<{ id: number; cardId: number }>
+  decks: Array<{ id: number }>
+  notetypes: Array<{ id: number; fieldOrdinals: number[]; templateOrdinals: number[] }>
+}
 
 function invalid(): Error {
   return new Error('The saved Anki collection cannot be projected safely. Its native snapshot is unchanged.')
@@ -181,5 +196,50 @@ export function nativeAnkiProjectionData(SQL: SqlJsStatic, snapshot: Uint8Array,
     }
   } finally {
     db.close()
+  }
+}
+
+/** Creates a compact crosswalk tied to one exact native snapshot. The
+ * checkpoint remains the source of truth for opaque/native values; this map
+ * records identities and original per-card deck bindings for safe delta work. */
+export async function nativeAnkiProjectionManifest(SQL: SqlJsStatic, snapshot: Uint8Array): Promise<NativeAnkiProjectionManifest> {
+  const data = nativeAnkiProjectionData(SQL, snapshot)
+  const unique = <T>(values: T[], key: (value: T) => number): Map<number, T> => {
+    const result = new Map<number, T>()
+    for (const value of values) {
+      const id = key(value)
+      if (result.has(id)) throw invalid()
+      result.set(id, value)
+    }
+    return result
+  }
+  const notes = unique(data.notes, (row) => row.id)
+  const cards = unique(data.cards, (row) => row.id)
+  const reviews = unique(data.revlog, (row) => row.id)
+  const decks = unique(data.decks, (row) => row.id)
+  const notetypes = unique(data.notetypes, (row) => row.id)
+  const guids = new Set<string>()
+  for (const note of notes.values()) {
+    if (guids.has(note.guid) || !notetypes.has(note.mid)) throw invalid()
+    guids.add(note.guid)
+  }
+  for (const card of cards.values()) {
+    if (!notes.has(card.nid) || !decks.has(card.did) || (card.odid > 0 && !decks.has(card.odid))) throw invalid()
+  }
+  for (const review of reviews.values()) if (!cards.has(review.cid)) throw invalid()
+  return {
+    version: 1,
+    snapshotHash: await nativeSnapshotHash(snapshot),
+    collectionId: data.col.id,
+    schema: 11,
+    notes: [...notes.values()].map(({ id, guid, mid }) => ({ id, guid, notetypeId: mid })),
+    cards: [...cards.values()].map(({ id, nid, ord, did, odid }) => ({ id, noteId: nid, ordinal: ord, deckId: did, originalDeckId: odid })),
+    reviews: [...reviews.values()].map(({ id, cid }) => ({ id, cardId: cid })),
+    decks: [...decks.keys()].map((id) => ({ id })),
+    notetypes: [...notetypes.values()].map(({ id }) => ({
+      id,
+      fieldOrdinals: data.fields.filter((field) => field.ntid === id).map((field) => field.ord).sort((a, b) => a - b),
+      templateOrdinals: data.templates.filter((template) => template.ntid === id).map((template) => template.ord).sort((a, b) => a - b),
+    })),
   }
 }

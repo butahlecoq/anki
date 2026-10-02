@@ -2,7 +2,8 @@ import 'fake-indexeddb/auto'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import initSqlJs from 'sql.js'
 import { NativeAnkiState } from './native-anki-state'
-import { NativeAnkiClient, NativeSyncConflict } from './native-anki-sync'
+import { NativeAnkiClient, NativeSyncConflict, nativeSnapshotHash } from './native-anki-sync'
+import type { NativeAnkiProjectionManifest } from './native-anki-projection'
 
 let state: NativeAnkiState
 let occupied = false
@@ -18,6 +19,37 @@ beforeEach(async () => {
 })
 afterEach(async () => { await state.delete(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 const client = () => NativeAnkiClient.login(async () => Response.json({ key: 'generated-in-memory-key' }), 'generated-user', 'generated-password')
+
+it('persists a projection map only while its exact native checkpoint remains current', async () => {
+  const snapshot = new Uint8Array([1, 2, 3])
+  const manifest: NativeAnkiProjectionManifest = {
+    version: 1,
+    snapshotHash: await nativeSnapshotHash(snapshot),
+    collectionId: 12,
+    schema: 11,
+    notes: [{ id: 34, guid: 'japanese-guid', notetypeId: 10 }],
+    cards: [{ id: 56, noteId: 34, ordinal: 0, deckId: 78, originalDeckId: 0 }],
+    reviews: [{ id: 90, cardId: 56 }],
+    decks: [{ id: 78 }],
+    notetypes: [{ id: 10, fieldOrdinals: [0, 1], templateOrdinals: [0] }],
+  }
+  await state.saveProjectionManifest(manifest, 1)
+  const firstRead = await state.projectionManifest()
+  expect(firstRead).toEqual(manifest)
+  if (firstRead) firstRead.cards[0].deckId = 999
+  expect(await state.projectionManifest()).toEqual(manifest)
+
+  state.close()
+  await state.open()
+  expect(await state.projectionManifest()).toEqual(manifest)
+
+  await state.replace(new Uint8Array([7, 8, 9]), 1)
+  expect(await state.projectionManifest()).toBeUndefined()
+  await expect(state.saveProjectionManifest(manifest, 1)).rejects.toThrow('another operation')
+  state.close()
+  await state.open()
+  expect(await state.projectionManifest()).toBeUndefined()
+})
 
 it('keeps the durable checkpoint after a lost finish response and commits only the recovered result', async () => {
   const account = await client(), SQL = await initSqlJs()

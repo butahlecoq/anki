@@ -1,6 +1,7 @@
 import { Dexie, type Table } from 'dexie'
 import type { SqlJsStatic } from 'sql.js'
 import { NativeAnkiClient, NativeSyncConflict, NativeSyncError, nativeSnapshotHash, prepareNativeUpload, type NativeFullSyncDecision, type NativeRequestOptions, type NativeSyncMeta } from './native-anki-sync.js'
+import type { NativeAnkiProjectionManifest } from './native-anki-projection.js'
 
 interface Checkpoint {
   id: 'collection'
@@ -27,6 +28,7 @@ interface Conflict {
   local: NativeSyncConflict['local']
   remote: NativeSyncConflict['remote']
 }
+interface ProjectionBase { id: 'base'; revision: number; snapshotHash: string; manifest: NativeAnkiProjectionManifest; savedAt: number }
 
 /** Separate native account state has no credential fields and is never part
  * of application collection exports. A failed session retains its checkpoint,
@@ -36,13 +38,37 @@ export class NativeAnkiState extends Dexie {
   attempts!: Table<Attempt, string>
   conflicts!: Table<Conflict, string>
   backups!: Table<Backup, string>
+  projections!: Table<ProjectionBase, string>
   constructor(name = 'kiroku-native-account') {
     super(name)
     this.version(1).stores({ checkpoints: 'id', attempts: 'id', conflicts: 'id, createdAt' })
     this.version(2).stores({ backups: 'id, createdAt, baseRevision' })
+    this.version(3).stores({ projections: 'id, revision' })
   }
   async checkpoint() { return this.checkpoints.get('collection') }
   async recovery() { return this.attempts.get('active') }
+
+  /** Persists the source-to-projection identity map only for the exact current
+   * native checkpoint. A stale preview cannot attach its mapping to a newer
+   * account snapshot. */
+  async saveProjectionManifest(manifest: NativeAnkiProjectionManifest, expectedRevision: number) {
+    const initial = await this.checkpoint()
+    if (!initial || initial.revision !== expectedRevision || await nativeSnapshotHash(initial.collection) !== manifest.snapshotHash) throw this.concurrentChange()
+    await this.transaction('rw', this.checkpoints, this.projections, async () => {
+      const current = await this.checkpoint()
+      if (!current || current.revision !== expectedRevision) throw this.concurrentChange()
+      await this.projections.put({ id: 'base', revision: expectedRevision, snapshotHash: manifest.snapshotHash, manifest: structuredClone(manifest), savedAt: Date.now() })
+    })
+  }
+
+  /** Returns no mapping when its source checkpoint has since changed. */
+  async projectionManifest(): Promise<NativeAnkiProjectionManifest | undefined> {
+    const [checkpoint, base] = await Promise.all([this.checkpoint(), this.projections.get('base')])
+    if (!checkpoint || !base || checkpoint.revision !== base.revision || await nativeSnapshotHash(checkpoint.collection) !== base.snapshotHash) return undefined
+    const latest = await this.checkpoint()
+    if (!latest || latest.revision !== checkpoint.revision || await nativeSnapshotHash(latest.collection) !== base.snapshotHash) return undefined
+    return structuredClone(base.manifest)
+  }
 
   /** Replacement retains the original checkpoint atomically. The caller must
    * still expose its intended direction before replacing account content. */
