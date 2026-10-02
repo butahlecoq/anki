@@ -6,6 +6,7 @@ import { parseAnkiImageOcclusion, type AnkiImageOcclusionFields } from './image-
 import { digestMedia, validateMedia, type MediaKind, type MediaSide } from './media'
 import { validateTemplate } from './template-renderer'
 import { ANKI_ARCHIVE_LIMITS, validateAnkiArchive } from './anki-archive'
+import { readKirokuSchedule, readKirokuReview } from './anki-scheduling-metadata'
 
 export interface AnkiImportIssue {
   severity: 'info' | 'warning' | 'error'
@@ -142,6 +143,15 @@ function decodeTypes(data: CollectionData, fallback: Date, issues: AnkiImportIss
         return { id: `anki-template:${row.id}:${template.ord}`, name: template.name, front: protobufText(decoded, 1), back: protobufText(decoded, 2), css: protobufText(config, 3) }
       })
       const kind = protobufNumber(config, 1) === 1 ? 'cloze' as const : 'standard' as const
+      const nativeOcclusion = protobufNumber(config, 9) === 6
+      if (nativeOcclusion) {
+        if (kind !== 'cloze' || fields.map((field) => field.name).join('|') !== 'Occlusion|Image|Header|Back Extra|Comments') throw new Error('Unsupported native image occlusion field layout')
+        // Native templates call Anki's own runtime. The app reconstructs its
+        // supported geometric renderer from fields and never executes imported
+        // template scripts. Do not persist those scripts as editable templates.
+        for (const template of templates) { template.front = '{{cloze:Occlusion}}'; template.back = '{{cloze:Occlusion}}'; template.css = '' }
+        issues.push({ severity: 'info', code: 'native-occlusion-renderer', subject: row.name, detail: 'Supported native image occlusion fields use the app’s geometric renderer. Native template scripts and styles are not executed or retained.' })
+      }
       if (!fields.length || !templates.length) throw new Error('note type has no fields or templates')
       if (kind === 'cloze' && templates.length !== 1) throw new Error('cloze note type does not have exactly one template')
       for (const template of templates) {
@@ -172,7 +182,7 @@ function mimeType(name: string): string | undefined {
   return ({ png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', mp3: 'audio/mpeg', ogg: 'audio/ogg', wav: 'audio/wav' } as Record<string, string>)[extension ?? '']
 }
 
-function validateMediaBytes(bytes: Uint8Array, mime: string) {
+export function validateMediaBytes(bytes: Uint8Array, mime: string) {
   const text = (start: number, end: number) => textDecoder.decode(bytes.slice(start, end))
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
   const valid = mime === 'image/png' ? bytes.length >= 45
@@ -491,6 +501,7 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
   const cards: CardRecord[] = []
   const reviews: ReviewEntry[] = []
   const references: NoteMediaReference[] = []
+  const nativeReferencedNames = new Set<string>()
   const blobs = new Map<string, StoredMedia>()
   const sourceCardIds = new Map<number, string>()
   const imageOcclusionTypes = new Set<number>()
@@ -548,7 +559,7 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
         continue
       }
     }
-    const note: Note = { id: noteId, deckId, type: noteTypeId === 'basic' ? 'basic' : 'custom', typeId: noteTypeId, fields, tags: row.tags.trim() ? row.tags.trim().split(/\s+/) : [], ...(imageOcclusion ? { imageOcclusion } : {}), createdAt: noteCreatedAt, updatedAt: noteUpdatedAt }
+    const note: Note = { id: noteId, ankiId: row.id, deckId, type: noteTypeId === 'basic' ? 'basic' : 'custom', typeId: noteTypeId, fields, tags: row.tags.trim() ? row.tags.trim().split(/\s+/) : [], ...(imageOcclusion ? { imageOcclusion } : {}), createdAt: noteCreatedAt, updatedAt: noteUpdatedAt }
     notes.push(note)
 
     if (!imageOcclusion) {
@@ -596,6 +607,36 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
         }
       }
     }
+    for (const reference of references.filter((reference) => reference.noteId === noteId)) nativeReferencedNames.add(reference.displayName)
+    // Native markup remains portable; Kiroku exports also retain attachment
+    // placement/playback so a clean re-import restores the original editor data.
+    try {
+      const metadata: unknown = JSON.parse(row.data || '{}')
+      if (metadata && typeof metadata === 'object' && 'kirokuNoteTimes' in metadata) {
+        const times = metadata.kirokuNoteTimes as Record<string, unknown>
+        if (!times || typeof times.createdAt !== 'string' || typeof times.updatedAt !== 'string' || !Number.isFinite(Date.parse(times.createdAt)) || !Number.isFinite(Date.parse(times.updatedAt))) throw new Error('Invalid exported note timestamps')
+        note.createdAt = new Date(times.createdAt).toISOString()
+        note.updatedAt = new Date(times.updatedAt).toISOString()
+      }
+      if (metadata && typeof metadata === 'object' && 'kirokuMedia' in metadata) {
+        if (!Array.isArray(metadata.kirokuMedia)) throw new Error('Invalid exported media metadata')
+        for (const hint of metadata.kirokuMedia as unknown[]) {
+          if (!hint || typeof hint !== 'object') throw new Error('Invalid exported media placement')
+          const value = hint as Record<string, unknown>
+          if (typeof value.name !== 'string' || typeof value.displayName !== 'string' || !value.displayName || (value.inline && /[<>[\]\r\n]/.test(value.displayName)) || !['front', 'back'].includes(String(value.side)) || typeof value.inline !== 'boolean' || !['manual', 'automatic'].includes(String(value.playback)) || !(value.templateOrd === null || (typeof value.templateOrd === 'number' && Number.isInteger(value.templateOrd) && value.templateOrd >= 0 && value.templateOrd < sourceType.templates.length))) throw new Error('Invalid exported media placement')
+          for (const reference of references.filter((reference) => reference.noteId === noteId && reference.displayName === value.name && reference.side === value.side && (value.templateOrd === null || reference.templateId === sourceType.templates[value.templateOrd as number]?.id))) {
+            reference.displayName = value.displayName
+            reference.inline = value.inline
+            reference.playback = value.playback as 'manual' | 'automatic'
+            if (value.templateOrd === null) delete reference.templateId
+          }
+          for (const key of Object.keys(note.fields)) note.fields[key] = note.fields[key].split(`[[kiroku-media:${value.name}]]`).join(value.inline ? `[[kiroku-media:${value.displayName}]]` : '')
+        }
+      }
+    } catch (reason) {
+      // Opaque native note data is permitted; our explicit metadata is checked.
+      if (row.data.includes('kirokuMedia') || row.data.includes('kirokuNoteTimes')) issues.push({ severity: 'error', code: 'invalid-export-media', subject: row.guid, detail: reason instanceof Error ? reason.message : 'Invalid exported media metadata' })
+    }
 
     const latestReviewByCard = new Map<number, number>()
     for (const review of data.revlog) latestReviewByCard.set(review.cid, Math.max(latestReviewByCard.get(review.cid) ?? 0, review.id))
@@ -621,9 +662,14 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
       const cardId = isOcclusion ? `${noteId}:image-occlusion:m${mask!.id}` : sourceType.kind === 'cloze' ? `${noteId}:${template.id}:c${ordinal}` : `${noteId}:${template.id}`
       sourceCardIds.set(sourceCard.id, cardId)
       const memory = memoryState(sourceCard)
+      let exportedSchedule: Partial<CardRecord> = {}
+      try { exportedSchedule = readKirokuSchedule(sourceCard) } catch (reason) {
+        issues.push({ severity: 'error', code: 'invalid-export-schedule', subject: String(sourceCard.id), detail: reason instanceof Error ? reason.message : 'Invalid exported schedule' })
+      }
       const lastReviewMs = latestReviewByCard.get(sourceCard.id)
       cards.push({
         id: cardId,
+        ankiId: sourceCard.id,
         deckId: deck,
         noteId,
         templateId: template.id,
@@ -641,6 +687,8 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
         state: cardState(sourceCard.type),
         lastReview: lastReviewMs ? new Date(lastReviewMs).toISOString() : null,
         sourceModifiedAt: isoFromSeconds(sourceCard.mod, now),
+        flag: sourceCard.flags & 7,
+        ...exportedSchedule,
       })
       if (sourceCard.queue < -1) issues.push({ severity: 'warning', code: 'buried-as-suspended', subject: String(sourceCard.id), detail: 'Buried card imported as suspended because temporary bury state is not represented locally.' })
       if (sourceCard.reps > 0 && memory.stability === undefined) issues.push({ severity: 'warning', code: 'scheduler-fallback', subject: String(sourceCard.id), detail: 'No FSRS memory state was present; the Anki interval was retained as fallback stability.' })
@@ -660,6 +708,10 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
     const previous = previousReviewByCard.get(row.cid)
     const elapsedDays = previous ? Math.max(0, Math.floor((row.id - previous.reviewedAt) / day)) : 0
     const scheduledDays = intervalDays(row.lastIvl)
+    let exportedReview: Partial<ReviewEntry> = {}
+    try { exportedReview = readKirokuReview(data.cards.find((card) => card.id === row.cid)?.data ?? '', row) } catch (reason) {
+      issues.push({ severity: 'error', code: 'invalid-export-review', subject: String(row.id), detail: reason instanceof Error ? reason.message : 'Invalid exported review' })
+    }
     reviews.push({
       id: stableId('review', row.id),
       cardId,
@@ -675,6 +727,8 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
       learningSteps: 0,
       reviewedAt,
       ...(Number.isFinite(row.time) && row.time >= 0 ? { durationMs: row.time } : {}),
+      ...(row.type === 3 ? { rescheduled: false } : {}),
+      ...exportedReview,
     })
     previousReviewByCard.set(row.cid, { reviewedAt: row.id, elapsedDays })
     if (!previous) issues.push({ severity: 'warning', code: 'first-review-approximation', subject: String(row.id), detail: 'Anki does not retain the original due and FSRS memory state before the first review log; its review time and prior interval are used as the supported approximation.' })
@@ -685,7 +739,7 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
     const index = noteTypes.findIndex((type) => type.id === stableId('note-type', typeId))
     if (index >= 0) noteTypes.splice(index, 1)
   }
-  const referencedNames = new Set(references.map((reference) => reference.displayName))
+  const referencedNames = new Set([...references.map((reference) => reference.displayName), ...nativeReferencedNames])
   for (const media of data.media) if (!referencedNames.has(media.name)) issues.push({ severity: 'warning', code: 'media-unreferenced', subject: media.name, detail: 'Unreferenced or template-static media is reported but not attached to a note.' })
 
   const writes: ImportWrites = { decks: [], noteTypes: [], notes: [], cards: [], reviews: [], references: [], deletedReferences: [], blobs: [] }
@@ -819,3 +873,4 @@ function imageDimensions(bytes: Uint8Array): { width: number; height: number } |
   }
   return undefined
 }
+

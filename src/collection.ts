@@ -154,6 +154,8 @@ export function tryRenderNoteTemplate(template: string, noteType: NoteType, fiel
 
 export interface Note {
   id: string
+  /** Original native Anki numeric identity, retained for package interchange. */
+  ankiId?: number
   deckId: string
   type: 'basic' | 'custom'
   typeId: string
@@ -167,6 +169,8 @@ export interface Note {
 
 export interface CardRecord {
   id: string
+  /** Original native Anki numeric identity, retained for package interchange. */
+  ankiId?: number
   deckId: string
   noteId: string
   templateId: string

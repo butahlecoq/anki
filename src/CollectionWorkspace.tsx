@@ -27,6 +27,7 @@ import { compareTypedAnswer } from './typed-answer'
 import { prepareAnkiImport, type PreparedAnkiImport } from './anki-import'
 import { CardHistory, Statistics, TodayWorkload } from './Statistics'
 import { CollectionBrowser } from './CollectionBrowser'
+import { ExportDialog } from './ExportDialog'
 
 type Route =
   | { view: 'decks' }
@@ -1121,6 +1122,7 @@ export function CollectionWorkspace() {
   const decks = useLiveQuery(() => collection.summaries(), [], [])
   const [newDeck, setNewDeck] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [exporting, setExporting] = useState(false)
 
   const content = useMemo(() => {
     if (route.view === 'review') return <ReviewSession deckId={route.deckId} onBack={() => navigate({ view: 'deck', deckId: route.deckId })} />
@@ -1135,9 +1137,11 @@ export function CollectionWorkspace() {
   return (
     <>
       <SyncControls />
+      <button className="text-button" onClick={() => setExporting(true)}>Export Anki package</button>
       {content}
       {newDeck && <DeckDialog onClose={() => setNewDeck(false)} />}
       {importing && <ImportDialog onClose={() => setImporting(false)} />}
+      {exporting && <ExportDialog onClose={() => setExporting(false)} />}
     </>
   )
 }
