@@ -68,7 +68,7 @@ describe('shortcut guard', () => {
   test('is suppressed for a key held down or combined with a modifier', () => {
     const button = firstElement('<button>New deck</button>')
     expect(isShortcutBlocked(keyEvent({ target: button, repeat: true }))).toBe(true)
-    for (const modifier of ['altKey', 'ctrlKey', 'metaKey'] as const) {
+    for (const modifier of ['altKey', 'ctrlKey', 'metaKey', 'shiftKey'] as const) {
       expect(isShortcutBlocked(keyEvent({ target: button, [modifier]: true })), modifier).toBe(true)
     }
   })
@@ -81,16 +81,16 @@ describe('shortcut guard', () => {
     expect(isShortcutBlocked(keyEvent({ target: trigger }))).toBe(true)
   })
 
-  test('stays live for a press inside the open dialog, which has its own controls', () => {
+  test('is suppressed for a press inside the open dialog too', () => {
     const open = dialog('<div role="dialog"><input type="text" /><button>Cancel</button></div>')
     const cancel = open.querySelector('button') as HTMLElement
-    expect(isShortcutBlocked(keyEvent({ target: cancel }))).toBe(false)
+    expect(isShortcutBlocked(keyEvent({ target: cancel }))).toBe(true)
   })
 
-  test('judges only the dialog on top when two are stacked', () => {
+  test('is suppressed while any dialog in a stack is open', () => {
     const host = mount('<div role="dialog" id="first"><button>One</button></div><div role="dialog" id="second"><button>Two</button></div>')
     const topmost = host.querySelector('#second button') as HTMLElement
-    expect(isShortcutBlocked(keyEvent({ target: topmost }))).toBe(false)
+    expect(isShortcutBlocked(keyEvent({ target: topmost }))).toBe(true)
   })
 
   test('ignores a press whose target is not an element, such as the window itself', () => {

@@ -24,14 +24,14 @@ const TEXT_ENTRY_SELECTOR = 'input, textarea, select, [contenteditable]:not([con
  * dialog is on top covers all of them at once.
  */
 export function isShortcutBlocked(event: KeyboardEvent, root: Document = document): boolean {
-  if (event.repeat || event.altKey || event.ctrlKey || event.metaKey) return true
+  if (event.repeat || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return true
 
   const target = event.target
   const insideTextEntry = target instanceof Element && Boolean(target.closest(TEXT_ENTRY_SELECTOR))
   if (insideTextEntry) return true
 
-  const dialogs = root.querySelectorAll(SHORTCUT_DIALOG_SELECTOR)
-  const topmost = dialogs[dialogs.length - 1]
-  if (!topmost) return false
-  return !(target instanceof Node && topmost.contains(target))
+  // A shortcut listener on window still receives events from the dialog. Let
+  // the dialog own those keys too, so a background action cannot stack a
+  // second modal behind the one the learner is using.
+  return root.querySelector(SHORTCUT_DIALOG_SELECTOR) !== null
 }
