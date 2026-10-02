@@ -11,7 +11,7 @@ Fetch before relying on checks. Run `git status --short --branch` in each path. 
 | `C:/work/anki` | `main` | `64af4a5` | clean before this handoff update |
 | `C:/work/anki-17` | `feat/17-text-csv` | `b423520` | pushed; draft PR #72; exact-head CI running |
 | `C:/work/anki-18` | `feat/18-safe-concurrency` | `bfe1042` | pushed; draft PR #73; exact-head CI running |
-| `C:/work/anki-23` | `feat/23-jetbrains-omarchy-ux` | `f46e07e` | pushed; draft PR #74; exact-head CI passed |
+| `C:/work/anki-23` | `feat/23-jetbrains-omarchy-ux` | `2fb7647` | pushed; draft PR #74; exact-head CI running |
 | `C:/work/anki-56` | `feat/56-ankiweb-account` | `f9ebd29` | pushed; draft PR #75; exact-head CI running |
 
 Do not merge the draft PRs. No worktree has been removed.
@@ -20,7 +20,7 @@ Do not merge the draft PRs. No worktree has been removed.
 
 - #17 / PR #72: old run `37006282653` failed because its browser test queried every `role=status` after import; the preview summary and “Working…” indicator made that locator ambiguous. The test now waits for the exact “Import complete: …” message at `b423520`; new run `37007876080` is running. Inspect its exact-head result and artifacts before making any readiness claim.
 - #18 / PR #73: `bfe1042` isolates the concurrency browser test's sync server and runtime directory after stale conflicts from other tests contaminated the fixture. Run `37006286987` was still running at this checkpoint. The PR comments contain earlier server compatibility, undo/race, and conflict UI handoffs. Check this run and preserve remaining manual scheduling/deletion/media-race and visible journey acceptance gaps.
-- #23 / PR #74: exact-head CI `37006365277` passed on `f46e07e` (full check). Its earlier draft comment records 73 browser passes and 9 skips on a prior head. Review latest artifacts/screenshots and keep physical iPhone acceptance separate; the CI phone-sized WebKit project is not a device.
+- #23 / PR #74: an additional status-bar/theme follow-up was pushed at `2fb7647` after the earlier green head. Exact-head CI `37008036020` is running. Earlier head `f46e07e` passed full check `37006365277`; do not carry that pass forward to the new commit. Review the new artifacts/screenshots and keep physical iPhone acceptance separate; the CI phone-sized WebKit project is not a device.
 - #56 / PR #75: exact-head CI `37007779740` is running on `f9ebd29`. Prior storage-only head `e16febb` passed CI run `37006347943`.
 - Main CI `37004063690` failed at an existing offline hint test on iPhone WebKit after timing out at 30 seconds; 72 passed, 9 skipped. Failure artifact points to `tests/e2e/hint.spec.ts` around the offline answer/review flow. Investigate as a separate main reliability issue; do not attribute it to the #17 or #56 work.
 - #70 / issue #67: previous exact-head CI at `06682d0` passed (`36972904946`), but the private aggregate package preview remains a separate machine-local check. On the machine with private Japanese examples, inspect only `runtime/local-package-preview-summary.json` and confirm no process is still running before deciding to rerun. Never commit packages, credentials, note text, or per-note diagnostics.
@@ -54,3 +54,4 @@ Known projection limits to audit before expanding it: currently it accepts only 
 5. Check #67's private local preview only on the machine that owns those inputs.
 
 The authoritative issue/PR process and five triage labels are in `docs/agents/issue-tracker.md` and `docs/agents/triage-labels.md`. Use one issue worktree per active feature, and remove it only in the same step as merging that issue's PR.
+
