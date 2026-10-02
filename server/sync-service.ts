@@ -18,7 +18,7 @@ type SyncOperation = {
 }
 type SyncRequest = SyncCapabilities & { cursor: number; operations: SyncOperation[] }
 
-type PersistedChange = { entity_type: string; action: string; payload: string }
+type PersistedChange = { entity_type: string; action: string; payload: string; parents: string | null; review_id: string | null }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 
@@ -29,9 +29,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(v
  */
 function schemaRequiredByOperation(operation: Pick<SyncOperation, 'entityType' | 'action' | 'payload' | 'parents' | 'reviewId'>): number {
   let required = operation.parents !== undefined || operation.reviewId !== undefined ? 15 : 1
-  if (operation.entityType === 'noteMedia') required = 5
-  if (operation.entityType === 'noteType') required = 6
-  if (operation.entityType === 'deckOptionGroup') required = 9
+  if (operation.entityType === 'noteMedia') required = Math.max(required, 5)
+  if (operation.entityType === 'noteType') required = Math.max(required, 6)
+  if (operation.entityType === 'deckOptionGroup') required = Math.max(required, 9)
   const payload = isRecord(operation.payload) ? operation.payload : {}
   if (operation.entityType === 'review' && 'scheduling' in payload) required = Math.max(required, 15)
   if (operation.entityType === 'review' && 'rescheduled' in payload) required = Math.max(required, 14)
@@ -83,9 +83,13 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
   if (!changeColumns.some((column) => column.name === 'review_id')) database.exec('ALTER TABLE changes ADD COLUMN review_id TEXT')
   const storedWatermark = database.prepare("SELECT value FROM collection_metadata WHERE key = 'collection_schema_version'").get() as { value: string } | undefined
   const persistedWatermark = storedWatermark && Number.parseInt(storedWatermark.value, 10)
-  const inferredWatermark = (database.prepare('SELECT entity_type, action, payload FROM changes').all() as PersistedChange[]).reduce((maximum, change) => {
+  const inferredWatermark = (database.prepare('SELECT entity_type, action, payload, parents, review_id FROM changes').all() as PersistedChange[]).reduce((maximum, change) => {
     try {
-      return Math.max(maximum, schemaRequiredByOperation({ entityType: change.entity_type, action: change.action, payload: JSON.parse(change.payload) }))
+      return Math.max(maximum, schemaRequiredByOperation({
+        entityType: change.entity_type, action: change.action, payload: JSON.parse(change.payload),
+        ...(change.parents !== null ? { parents: JSON.parse(change.parents) as string[] } : {}),
+        ...(change.review_id !== null ? { reviewId: change.review_id } : {}),
+      }))
     } catch {
       // Corrupt historic payloads still require the newest service/client pair.
       return SERVER_MAX_COLLECTION_SCHEMA_VERSION

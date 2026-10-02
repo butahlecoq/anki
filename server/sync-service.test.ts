@@ -167,6 +167,49 @@ test('reserves durable media metadata by verified digest', async () => {
   service.close()
 })
 
+for (const entityType of ['noteMedia', 'noteType', 'deckOptionGroup']) {
+  for (const metadata of [{ parents: [] as string[] }, { reviewId: 'review-1' }]) {
+    test(`requires schema 15 for ${entityType} with ${Object.keys(metadata)[0]} before accepting any batch row`, async () => {
+      runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
+      const service = createSyncService({ databasePath: join(runtimeDirectory, 'collection.sqlite') })
+      try {
+        const { token } = service.pair({ code: service.createPairingCode(), deviceId: 'phone-1' })
+        const ordinary = { opId: 'ordinary', entityType: 'deck', entityId: 'deck-1', action: 'create', occurredAt: '2026-10-01T12:00:00.000Z', payload: { id: 'deck-1' } }
+        const causal = { ...ordinary, opId: 'causal', entityType, entityId: 'entity-1', payload: { id: 'entity-1' }, ...metadata }
+        assert.throws(() => service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 14, cursor: 0, operations: [ordinary, causal] }), /schema 15.*declares schema 14/i)
+        assert.equal(service.changeCount(), 0)
+        assert.equal(service.health().collectionSchemaVersion, 1)
+        assert.equal(service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 15, cursor: 0, operations: [causal] }).accepted, 1)
+        assert.equal(service.health().collectionSchemaVersion, 15)
+        assert.throws(() => service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 14, cursor: 0, operations: [] }), /requires schema 15/i)
+      } finally { service.close() }
+    })
+  }
+}
+
+for (const metadataColumn of ['parents', 'review_id']) {
+  for (const watermark of [null, '14']) {
+    test(`infers causal schema 15 from persisted ${metadataColumn} with ${watermark ?? 'missing'} watermark`, async () => {
+      runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
+      const databasePath = join(runtimeDirectory, 'collection.sqlite')
+      let service = createSyncService({ databasePath })
+      service.close()
+      const stored = new DatabaseSync(databasePath)
+      stored.prepare(`INSERT INTO changes (op_id, device_id, entity_type, entity_id, action, occurred_at, payload, ${metadataColumn}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run('causal', 'old-device', 'noteMedia', 'entity-1', 'create', '2026-10-01T12:00:00.000Z', '{"id":"entity-1"}', metadataColumn === 'parents' ? '[]' : 'review-1')
+      if (watermark === null) stored.exec('DELETE FROM collection_metadata')
+      else stored.prepare("UPDATE collection_metadata SET value = ? WHERE key = 'collection_schema_version'").run(watermark)
+      stored.close()
+      service = createSyncService({ databasePath })
+      try {
+        assert.equal(service.health().collectionSchemaVersion, 15)
+        const { token } = service.pair({ code: service.createPairingCode(), deviceId: 'phone-1' })
+        assert.throws(() => service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 14, cursor: 0, operations: [] }), /requires schema 15/i)
+        assert.equal(service.changeCount(), 1)
+      } finally { service.close() }
+    })
+  }
+}
+
 test('serves health, pairing, and authenticated sync over HTTP', async () => {
   runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
   const service = createSyncService({ databasePath: join(runtimeDirectory, 'collection.sqlite') })
