@@ -41,6 +41,7 @@ export function App() {
   const onStatistics = hash === '#statistics'
   const onNoteTypes = hash === '#note-types'
   const onBrowse = hash === '#browse'
+  const onStudy = hash === '#study' || hash.startsWith('#custom-review/')
   const connection = online
     ? offlineStatus === 'ready' ? 'Offline shell ready' : offlineStatus === 'checking' ? 'Preparing offline shell' : 'Offline cache unavailable'
     : offlineStatus === 'ready' ? 'Offline shell active' : 'Offline shell unavailable'
@@ -66,9 +67,9 @@ export function App() {
         </a>
         <nav className="primary-nav" aria-label="Primary navigation">
           <span className="nav-label">Workspace</span>
-          <a className={`nav-item${onNoteTypes || onBrowse || onStatistics ? '' : ' active'}`} href="#decks" aria-current={onNoteTypes || onBrowse || onStatistics ? undefined : 'page'}><span>Decks</span></a>
+          <a className={`nav-item${onNoteTypes || onBrowse || onStatistics || onStudy ? '' : ' active'}`} href="#decks" aria-current={onNoteTypes || onBrowse || onStatistics || onStudy ? undefined : 'page'}><span>Decks</span></a>
           <a className={`nav-item${onNoteTypes ? ' active' : ''}`} href="#note-types" aria-current={onNoteTypes ? 'page' : undefined}><span>Note types</span></a>
-          <a className="nav-item planned" href="#study" aria-disabled="true" onClick={(event) => event.preventDefault()}>Study</a>
+          <a className={`nav-item${onStudy ? ' active' : ''}`} href="#study" aria-current={onStudy ? 'page' : undefined}>Study</a>
           <a className={`nav-item${onBrowse ? ' active' : ''}`} href="#browse" aria-current={onBrowse ? 'page' : undefined}>Browse</a>
           <a className={`nav-item${onStatistics ? ' active' : ''}`} href="#statistics" aria-current={onStatistics ? 'page' : undefined}>Statistics</a>
         </nav>
@@ -80,9 +81,9 @@ export function App() {
         <footer className="footer-line"><span>KIROKU / PRIVATE WORKSPACE</span><span>BUILD 0002</span></footer>
       </main>
       <nav className="mobile-nav" aria-label="Mobile navigation">
-        <a className={onNoteTypes || onBrowse || onStatistics ? '' : 'active'} href="#decks" aria-label="Decks"><span>Decks</span></a>
+        <a className={onNoteTypes || onBrowse || onStatistics || onStudy ? '' : 'active'} href="#decks" aria-label="Decks"><span>Decks</span></a>
         <a className={onNoteTypes ? 'active' : ''} href="#note-types" aria-label="Note types"><span>Note types</span></a>
-        <a className="planned" href="#study" aria-label="Study (planned)" aria-disabled="true" onClick={(event) => event.preventDefault()}><span>Study</span></a>
+        <a className={onStudy ? 'active' : ''} href="#study" aria-label="Study"><span>Study</span></a>
         <a className={onBrowse ? 'active' : ''} href="#browse" aria-label="Browse"><span>Browse</span></a>
         <a className={onStatistics ? 'active' : ''} href="#statistics" aria-label="Statistics"><span>Stats</span></a>
       </nav>

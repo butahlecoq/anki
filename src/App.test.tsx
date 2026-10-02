@@ -33,7 +33,7 @@ describe('application shell', () => {
     expect(within(navigation).getByRole('link', { name: 'Decks' })).toHaveAttribute('aria-current', 'page')
     expect(within(navigation).getByRole('link', { name: 'Note types' })).toHaveAttribute('href', '#note-types')
     expect(within(navigation).getByRole('link', { name: 'Study' })).toBeVisible()
-    expect(within(navigation).getByRole('link', { name: 'Study' })).toHaveAttribute('aria-disabled', 'true')
+    expect(within(navigation).getByRole('link', { name: 'Study' })).not.toHaveAttribute('aria-disabled')
     expect(screen.getByRole('status')).toHaveTextContent('Offline cache unavailable')
     expect(screen.getByRole('button', { name: /new deck/i })).toBeEnabled()
     expect(screen.getByRole('button', { name: 'Connect a PC' })).toBeEnabled()

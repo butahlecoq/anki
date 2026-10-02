@@ -1,4 +1,5 @@
 import Dexie, { type EntityTable } from 'dexie'
+import { customStudyKey, customStudyMembership, customStudySessions, type CustomStudySession } from './custom-study-state'
 import {
   Rating,
   State,
@@ -204,6 +205,7 @@ type ReviewUndo = {
   operationIds: string[]
   cards: Array<{ before: CardRecord; after: CardRecord }>
   note?: { before: Note; after: Note }
+  customSession?: { before: CustomStudySession; after: CustomStudySession }
 }
 
 type NoteDeletionUndo = {
@@ -252,6 +254,8 @@ export interface ReviewEntry {
   reviewedAt: string
   /** Active answer time, capped at 60 seconds. Absent from older/imported logs. */
   durationMs?: number
+  /** False for custom-study practice: the scheduling record stays unchanged. */
+  rescheduled?: boolean
 }
 
 export interface DeckCounts {
@@ -264,6 +268,7 @@ export interface DeckSummary extends Deck {
   counts: DeckCounts
   noteCount: number
   reviewCount: number
+  temporaryCount: number
 }
 
 export interface ReviewChoice {
@@ -809,6 +814,7 @@ export class Collection extends Dexie {
     }).upgrade(async (transaction) => {
       await transaction.table('cards').toCollection().modify((card: CardRecord) => { if (card.flag === undefined) card.flag = 0 })
     })
+    this.version(14).stores({})
     this.on('populate', (transaction) => {
       transaction.table('noteTypes').put(basicNoteType)
       transaction.table('noteTypes').put(imageOcclusionNoteType)
@@ -1530,6 +1536,8 @@ export class Collection extends Dexie {
   }
 
   async summaries(): Promise<DeckSummary[]> {
+    return this.transaction('r', [this.settings, this.decks, this.notes, this.cards, this.reviewEntries], async () => {
+    const temporary = await customStudyMembership(this)
     const [decks, notes, cards, reviews] = await Promise.all([
       this.decks.orderBy('createdAt').toArray(),
       this.notes.toArray(),
@@ -1556,12 +1564,15 @@ export class Collection extends Dexie {
         counts: countsFor(cards.filter((card) => ids.has(card.deckId))),
         noteCount: notes.filter((note) => ids.has(note.deckId)).length,
         reviewCount: reviews.filter((review) => ids.has(review.deckId)).length,
+        temporaryCount: cards.filter((card) => ids.has(card.deckId) && temporary.has(card.id)).length,
       }
     }))
+    })
   }
 
   async dueCards(deckId: string, now = new Date()): Promise<CardRecord[]> {
-    return this.transaction('r', [this.decks, this.deckOptionGroups, this.notes, this.cards, this.reviewEntries], async () => {
+    return this.transaction('r', [this.decks, this.deckOptionGroups, this.notes, this.cards, this.reviewEntries, this.settings], async () => {
+      const temporary = await customStudyMembership(this)
       const subtree = await this.deckSubtree(deckId)
       if (!subtree.length) return []
       const deckIds = subtree.map((deck) => deck.id)
@@ -1581,7 +1592,7 @@ export class Collection extends Dexie {
       const reviewedToday = new Map<string, { new: number; review: number }>()
       for (const review of reviewEntries) {
         const timestamp = new Date(review.reviewedAt).getTime()
-        if (!decks.has(review.deckId) || timestamp < start || timestamp >= end) continue
+        if (review.rescheduled === false || !decks.has(review.deckId) || timestamp < start || timestamp >= end) continue
         const totals = reviewedToday.get(review.deckId) ?? { new: 0, review: 0 }
         if (review.state === State.New) totals.new += 1
         if (review.state === State.Review || ((review.state === State.Learning || review.state === State.Relearning) && review.scheduledDays >= 1)) totals.review += 1
@@ -1604,7 +1615,7 @@ export class Collection extends Dexie {
       for (const deck of subtree) {
         const group = groupsById.get(deck.optionGroupId)
         if (!group) throw new Error('Deck option group not found')
-        const own = cards.filter((card) => card.deckId === deck.id && isReviewEligible(card, now))
+        const own = cards.filter((card) => card.deckId === deck.id && !temporary.has(card.id) && isReviewEligible(card, now))
         const learning = sortWithinDeck(own.filter(isLearningCard), group, 'learning')
         const intradayLearning = learning.filter((card) => !isInterdayLearning(card))
         const interdayLearning = learning.filter(isInterdayLearning)
@@ -1629,9 +1640,9 @@ export class Collection extends Dexie {
     })
   }
 
-  async reviewChoices(cardId: string, now = new Date()): Promise<ReviewChoice[]> {
+  async reviewChoices(cardId: string, now = new Date(), allowEarly = false): Promise<ReviewChoice[]> {
     const card = await this.cards.get(cardId)
-    if (!card || !isReviewEligible(card, now)) return []
+    if (!card || !(allowEarly ? isQueueEligible(card, now) : isReviewEligible(card, now))) return []
     const deck = await this.decks.get(card.deckId)
     const group = deck ? await this.deckOptionGroups.get(deck.optionGroupId) : undefined
     if (!deck || !group) throw new Error('Deck option group not found')
@@ -1651,7 +1662,7 @@ export class Collection extends Dexie {
 
   /** The renderable queue shared by the reviewer and today's workload. */
   async reviewQueue(deckId: string, now = new Date()): Promise<CardRecord[]> {
-    return this.transaction('r', [this.decks, this.deckOptionGroups, this.cards, this.notes, this.noteTypes, this.reviewEntries], async () => {
+    return this.transaction('r', [this.decks, this.deckOptionGroups, this.cards, this.notes, this.noteTypes, this.reviewEntries, this.settings], async () => {
       const scheduled = await this.dueCards(deckId, now)
       const [notes, types, stored] = await Promise.all([
         this.notes.bulkGet(scheduled.map((card) => card.noteId)), this.noteTypes.toArray(), this.cards.bulkGet(scheduled.map((card) => card.id)),
@@ -1670,12 +1681,12 @@ export class Collection extends Dexie {
     })
   }
 
-  async answer(cardId: string, rating: Grade, now = new Date(), durationMs?: number): Promise<ReviewEntry> {
+  async answer(cardId: string, rating: Grade, now = new Date(), durationMs?: number, options?: { allowEarly: boolean; reschedule: boolean }): Promise<ReviewEntry> {
     return this.transaction('rw', [this.decks, this.deckOptionGroups, this.notes, this.cards, this.reviewEntries, this.outbox, this.settings], async () => {
       const existing = await this.cards.get(cardId)
       if (!existing) throw new Error('Card not found')
       if (!isQueueEligible(existing, now)) throw new Error('Card is unavailable because it is suspended or buried')
-      if (!isDueForStudy(existing, now)) throw new Error('Card is not due')
+      if (!options?.allowEarly && !isDueForStudy(existing, now)) throw new Error('Card is not due')
       const deck = await this.decks.get(existing.deckId)
       const group = deck ? await this.deckOptionGroups.get(deck.optionGroupId) : undefined
       if (!deck || !group) throw new Error('Deck option group not found')
@@ -1687,6 +1698,15 @@ export class Collection extends Dexie {
         deckId: existing.deckId,
       })
       if (durationMs !== undefined && Number.isFinite(durationMs) && durationMs >= 0) review.durationMs = Math.round(Math.min(60_000, durationMs))
+      if (options?.reschedule === false) {
+        Object.assign(review, { rescheduled: false, due: existing.due, stability: existing.stability, difficulty: existing.difficulty, elapsedDays: existing.elapsedDays, scheduledDays: existing.scheduledDays, learningSteps: existing.learningSteps })
+        await this.reviewEntries.add(review)
+        const operation: SyncOperation = { opId: id(), entityType: 'review', entityId: review.id, action: 'create', occurredAt: review.reviewedAt, payload: review }
+        await this.outbox.add(operation)
+        const syncEpoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
+        await this.settings.put({ key: 'reviewUndo', value: { review, syncEpoch, operationIds: [operation.opId], cards: [{ before: existing, after: existing }] } satisfies ReviewUndo })
+        return review
+      }
       const operations: SyncOperation[] = []
       const changedCards: ReviewUndo['cards'] = []
       let changedNote: ReviewUndo['note']
@@ -1735,6 +1755,7 @@ export class Collection extends Dexie {
     const undo = (await this.settings.get('reviewUndo'))?.value as ReviewUndo | undefined
     const epoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
     if (!undo || undo.syncEpoch !== epoch) return null
+    if (undo.customSession && JSON.stringify((await customStudySessions(this)).find((session) => session.id === undo.customSession!.after.id)) !== JSON.stringify(undo.customSession.after)) return null
     if ((await this.outbox.bulkGet(undo.operationIds)).some((operation) => !operation)) return null
     if ((await this.cards.bulkGet(undo.cards.map(({ after }) => after.id))).some((card, index) => JSON.stringify(card) !== JSON.stringify(undo.cards[index].after))) return null
     if (undo.note && JSON.stringify(await this.notes.get(undo.note.after.id)) !== JSON.stringify(undo.note.after)) return null
@@ -1753,6 +1774,8 @@ export class Collection extends Dexie {
     return this.transaction('rw', [this.settings, this.cards, this.notes, this.reviewEntries, this.outbox], async () => {
       const undo = (await this.settings.get('reviewUndo'))?.value as ReviewUndo | undefined
       if (!undo) throw new Error('No recent review to undo')
+      const sessions = undo.customSession ? await customStudySessions(this) : []
+      if (undo.customSession && JSON.stringify(sessions.find((session) => session.id === undo.customSession!.after.id)) !== JSON.stringify(undo.customSession.after)) throw new Error('The custom session changed; undo is unavailable')
       const epoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
       if (epoch !== undo.syncEpoch) throw new Error('This review cannot be undone after a sync attempt')
       const pending = await this.outbox.bulkGet(undo.operationIds)
@@ -1764,6 +1787,7 @@ export class Collection extends Dexie {
       await this.cards.bulkPut(undo.cards.map(({ before }) => before))
       if (undo.note) await this.notes.put(undo.note.before)
       await this.reviewEntries.delete(undo.review.id)
+      if (undo.customSession) await this.settings.put({ key: customStudyKey, value: sessions.map((session) => session.id === undo.customSession!.after.id ? undo.customSession!.before : session) })
       await this.outbox.bulkDelete(undo.operationIds)
       await this.settings.delete('reviewUndo')
       return undo.review.cardId
