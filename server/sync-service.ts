@@ -57,6 +57,44 @@ export class SyncCompatibilityError extends Error {
   }
 }
 
+/** Check causal edges before storing any row so a malformed batch cannot poison future syncs. */
+function validateRevisionParents(operations: SyncOperation[], database: DatabaseSync) {
+  const batch = new Map<string, SyncOperation>()
+  for (const operation of operations) {
+    const prior = batch.get(operation.opId)
+    if (prior && (prior.entityType !== operation.entityType || prior.entityId !== operation.entityId || JSON.stringify(prior.parents ?? []) !== JSON.stringify(operation.parents ?? []))) throw new Error('Sync operation identity was reused with different revision parents')
+    batch.set(operation.opId, operation)
+  }
+  const graph = new Map<string, string[]>()
+  for (const operation of batch.values()) {
+    const parents = operation.parents ?? []
+    if (!Array.isArray(parents) || parents.some((parent) => typeof parent !== 'string' || !parent || parent === operation.opId) || new Set(parents).size !== parents.length) throw new Error('Invalid sync revision parents')
+    for (const parentId of parents) {
+      const inBatch = batch.get(parentId)
+      const stored = inBatch ? undefined : database.prepare('SELECT entity_type, entity_id FROM changes WHERE op_id = ?').get(parentId) as { entity_type: string; entity_id: string } | undefined
+      if (inBatch ? inBatch.entityType !== operation.entityType || inBatch.entityId !== operation.entityId : !stored || stored.entity_type !== operation.entityType || stored.entity_id !== operation.entityId) throw new Error('Sync revision parent is missing or belongs to another record')
+    }
+    graph.set(operation.opId, parents.filter((parentId) => batch.has(parentId)))
+  }
+  const complete = new Set<string>()
+  const visiting = new Set<string>()
+  for (const start of graph.keys()) {
+    if (complete.has(start)) continue
+    const stack: { id: string; next: number }[] = [{ id: start, next: 0 }]
+    visiting.add(start)
+    while (stack.length) {
+      const frame = stack.at(-1)!
+      const parents = graph.get(frame.id) ?? []
+      if (frame.next === parents.length) {
+        stack.pop(); visiting.delete(frame.id); complete.add(frame.id); continue
+      }
+      const parent = parents[frame.next++]
+      if (visiting.has(parent)) throw new Error('Cyclic sync revision history')
+      if (!complete.has(parent)) { visiting.add(parent); stack.push({ id: parent, next: 0 }) }
+    }
+  }
+}
+
 function compatibilityError(code: IncompatibleSync['code'], message: string, details: Omit<IncompatibleSync, 'code' | 'message' | 'protocolVersion'> = {}) {
   return new SyncCompatibilityError({ code, message, protocolVersion: SYNC_PROTOCOL_VERSION, ...details })
 }
@@ -166,9 +204,9 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
         // the first accepted operation.
         const currentWatermark = persistedCollectionSchemaVersion()
         const nextWatermark = assertCapabilities(request, currentWatermark)
+        validateRevisionParents(request.operations, database)
         const insert = database.prepare('INSERT OR IGNORE INTO changes (op_id, device_id, entity_type, entity_id, action, occurred_at, payload, parents, review_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
         for (const operation of request.operations) {
-          if (operation.parents !== undefined && (!Array.isArray(operation.parents) || operation.parents.some((parent) => typeof parent !== 'string' || !parent || parent === operation.opId) || new Set(operation.parents).size !== operation.parents.length)) throw new Error('Invalid sync revision parents')
           const previous = database.prepare('SELECT entity_type, entity_id, action, occurred_at, payload, parents, review_id FROM changes WHERE op_id = ?').get(operation.opId) as { entity_type: string; entity_id: string; action: string; occurred_at: string; payload: string; parents: string | null; review_id: string | null } | undefined
           if (previous && (previous.entity_type !== operation.entityType || previous.entity_id !== operation.entityId || previous.action !== operation.action || previous.occurred_at !== operation.occurredAt || previous.payload !== JSON.stringify(operation.payload) || previous.parents !== (operation.parents ? JSON.stringify(operation.parents) : null) || previous.review_id !== (operation.reviewId ?? null))) throw new Error('Sync operation identity was reused with different content')
           const result = insert.run(operation.opId, device.id, operation.entityType, operation.entityId, operation.action, operation.occurredAt, JSON.stringify(operation.payload), operation.parents ? JSON.stringify(operation.parents) : null, operation.reviewId ?? null)

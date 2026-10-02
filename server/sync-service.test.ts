@@ -187,6 +187,22 @@ for (const entityType of ['noteMedia', 'noteType', 'deckOptionGroup']) {
   }
 }
 
+test('rejects cyclic, dangling, and cross-entity revision parents without storing any part of the batch', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
+  const service = createSyncService({ databasePath: join(runtimeDirectory, 'collection.sqlite') })
+  try {
+    const { token } = service.pair({ code: service.createPairingCode(), deviceId: 'phone-1' })
+    const operation = (opId: string, entityId: string, parents: string[]) => ({ opId, entityType: 'note' as const, entityId, action: 'update', occurredAt: '2026-10-01T12:00:00.000Z', payload: { id: entityId }, parents })
+    const ordinary = { opId: 'ordinary', entityType: 'deck' as const, entityId: 'deck-1', action: 'create', occurredAt: '2026-10-01T12:00:00.000Z', payload: { id: 'deck-1' } }
+    const send = (operations: Parameters<typeof service.sync>[1]['operations']) => service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 15, cursor: 0, operations })
+    assert.throws(() => send([ordinary, operation('cycle-a', 'note-1', ['cycle-b']), operation('cycle-b', 'note-1', ['cycle-a'])]), /cyclic/i)
+    assert.throws(() => send([ordinary, operation('dangling', 'note-1', ['missing-parent'])]), /parent is missing/i)
+    assert.throws(() => send([ordinary, { ...ordinary, opId: 'other-deck' }, operation('cross-record', 'note-1', ['other-deck'])]), /another record/i)
+    assert.equal(service.changeCount(), 0)
+    assert.equal(service.health().collectionSchemaVersion, 1)
+  } finally { service.close() }
+})
+
 for (const metadataColumn of ['parents', 'review_id']) {
   for (const watermark of [null, '14']) {
     test(`infers causal schema 15 from persisted ${metadataColumn} with ${watermark ?? 'missing'} watermark`, async () => {
