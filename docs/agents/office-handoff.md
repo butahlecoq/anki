@@ -5,7 +5,7 @@
 This section supersedes stale head IDs and progress statements below where they
 conflict. Current `main` is `483958129c58f0f28aaa53f571176ce112f0115f`.
 The clean active worktree is `C:/work/anki-18`, branch
-`feat/18-safe-concurrency`, at `46a2eddffe07a379c87f1766c37b492c4dc75f3b`,
+`feat/18-safe-concurrency`, at `1262a11` (check GitHub for its full hash),
 equal to `origin/feat/18-safe-concurrency`. Draft PR #73 remains open.
 
 The #18 branch now includes schema-watermark and durable metadata-inference
@@ -13,18 +13,21 @@ regressions, a visible two-context offline conflict/choice/convergence journey,
 deletion-undo revision cleanup, both-order deck-deletion/review and manual
 rescheduling/review races, contextual conflict UI with stale-choice rejection,
 and server rejection of cyclic, dangling, and cross-entity revision parents.
-Latest focused results: 275 client tests and 30 server tests pass; typecheck and
-lint pass (with the existing ImageOcclusion fast-refresh warning). Build passed
-before the latest server-only change. The Windows full gate still terminates
-with Playwright `spawn UNKNOWN`, so it provides no browser acceptance.
+The conflict dialog now moves focus into the choice, traps Tab/Shift+Tab,
+supports Escape, restores focus after dismissal, and reports a saved choice
+accessibly. Its focused component test passes. The 30-test server suite,
+typecheck, lint, and production build pass; lint has the existing ImageOcclusion
+fast-refresh warning. The full client run had 274 passes and one known
+load-sensitive nested midnight test timeout; that test passes in isolation.
+The Windows full gate still terminates with Playwright `spawn UNKNOWN`, so it
+provides no browser acceptance.
 
-Exact-head Linux CI run `36999123952` is live at
-https://github.com/butahlecoq/anki/actions/runs/36999123952. Dependency setup
-and Playwright browser installation passed; `npm run check` is running. Check
-this run and inspect its browser artifact before claiming acceptance. Older
-run `36998543275` is still live but targets older head `1aaf8bb`; it is not
-authoritative for this branch. Do not merge or close #18 until the latest CI,
-visible browser journey, and remaining review/acceptance gaps are resolved.
+Exact-head Linux CI run `37000701631` is live at
+https://github.com/butahlecoq/anki/actions/runs/37000701631. Check this run and
+inspect its browser artifact before claiming acceptance. Older runs target
+prior heads and are not authoritative. Do not merge or close #18 until the
+latest CI, visible browser journey, and remaining review/acceptance gaps are
+resolved.
 
 Current worktree inventory is six folders: main plus branches #10, #11, #12,
 #14, #18, and #45. These are separate Git worktrees, not nested copies required
