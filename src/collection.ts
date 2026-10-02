@@ -1089,14 +1089,15 @@ export class Collection extends Dexie {
     })
   }
 
-  async createNote(deckId: string, typeId: string, fields: Record<string, string>, now = new Date()): Promise<Note> {
-    return this.transaction('rw', [this.decks, this.noteTypes, this.notes, this.cards, this.outbox], async () => {
+  async createNote(deckId: string, typeId: string, fields: Record<string, string>, now = new Date(), stableId?: string): Promise<Note> {
+    return this.transaction('rw', [this.decks, this.noteTypes, this.notes, this.cards, this.outbox, this.deletedEntities], async () => {
+      if (stableId !== undefined && (!stableId.length || stableId.length > 512 || [...stableId].some((character) => character.charCodeAt(0) < 32) || await this.deletedEntities.get(tombstoneKey('note', stableId)))) throw new Error('Note identifier is invalid or belongs to a deleted note')
       if (!await this.decks.get(deckId)) throw new Error('Deck not found')
       const noteType = await this.noteTypes.get(typeId)
       if (!noteType) throw new Error('Note type not found')
       if (noteType.kind === 'image-occlusion') throw new Error('Use the image occlusion editor to create this note')
       const values = Object.fromEntries(noteType.fields.map((field) => [field.id, fields[field.id] ?? '']))
-      const note: Note = { id: id(), deckId, type: typeId === BASIC_NOTE_TYPE_ID ? 'basic' : 'custom', typeId, fields: values, createdAt: now.toISOString(), updatedAt: now.toISOString() }
+      const note: Note = { id: stableId ?? id(), deckId, type: typeId === BASIC_NOTE_TYPE_ID ? 'basic' : 'custom', typeId, fields: values, createdAt: now.toISOString(), updatedAt: now.toISOString() }
       const cards = this.cardGenerationStatus(noteType, values).eligible.map((template) => serializeCard(createEmptyCard(now), { id: `${note.id}:${template.id}${template.clozeOrdinal ? `:c${template.clozeOrdinal}` : ''}`, deckId, noteId: note.id, templateId: template.id, ...(template.clozeOrdinal ? { clozeOrdinal: template.clozeOrdinal } : {}) }))
       await this.notes.add(note)
       if (cards.length) await this.cards.bulkAdd(cards)
