@@ -1,4 +1,4 @@
-# Development handoff — 2026-10-02, evening checkpoint
+# Development handoff — 2026-10-02, overnight continuation
 
 The parent goal #1 remains active and incomplete. The required end state is safe two-way sync with the user's existing AnkiWeb account on the installed iPhone while the Windows PC is off, including durable offline recovery. Draft PRs and green CI are not completion. Do not use real-account writes as evidence.
 
@@ -8,11 +8,11 @@ Fetch before relying on checks. Run `git status --short --branch` in each path. 
 
 | Path | Branch | Head | State |
 |---|---|---|---|
-| `C:/work/anki` | `main` | `64af4a5` | clean before this handoff update |
-| `C:/work/anki-17` | `feat/17-text-csv` | `b423520` | pushed; draft PR #72; exact-head CI running |
-| `C:/work/anki-18` | `feat/18-safe-concurrency` | `bfe1042` | pushed; draft PR #73; exact-head CI running |
-| `C:/work/anki-23` | `feat/23-jetbrains-omarchy-ux` | `2fb7647` | pushed; draft PR #74; exact-head CI running |
-| `C:/work/anki-56` | `feat/56-ankiweb-account` | `f9ebd29` | pushed; draft PR #75; exact-head CI running |
+| `C:/work/anki` | `main` | `90cbc07` | clean; handoff update pending on this branch |
+| `C:/work/anki-17` | `feat/17-text-csv` | `7c00ccb` | clean; draft PR #72; exact-head CI `37010267515` passed |
+| `C:/work/anki-18` | `feat/18-safe-concurrency` | `0d132b3` | clean; draft PR #73; exact-head CI `37009509517` running |
+| `C:/work/anki-23` | `feat/23-jetbrains-omarchy-ux` | `68201c8` | clean; draft PR #74; CI for current head pending; earlier head `003f8eb` failed contrast audit |
+| `C:/work/anki-56` | `feat/56-ankiweb-account` | `7181327` | clean; draft PR #75; exact-head CI `37008801248` failed on old touch hint journey and had one flaky cross-device sync journey |
 
 Do not merge the draft PRs. No worktree has been removed.
 
@@ -23,6 +23,10 @@ Do not merge the draft PRs. No worktree has been removed.
 - #23 / PR #74: an additional status-bar/theme follow-up was pushed at `2fb7647` after the earlier green head. Exact-head CI `37008036020` is running. Earlier head `f46e07e` passed full check `37006365277`; do not carry that pass forward to the new commit. Review the new artifacts/screenshots and keep physical iPhone acceptance separate; the CI phone-sized WebKit project is not a device.
 - #56 / PR #75: exact-head CI `37007779740` is running on `f9ebd29`. Prior storage-only head `e16febb` passed CI run `37006347943`.
 - Main CI `37004063690` failed at an existing offline hint test on iPhone WebKit after timing out at 30 seconds; 72 passed, 9 skipped. Failure artifact points to `tests/e2e/hint.spec.ts` around the offline answer/review flow. Investigate as a separate main reliability issue; do not attribute it to the #17 or #56 work.
+- #17 / PR #72: the corrected semantic CSV metadata assertion passed exact-head CI `37010267515` at `7c00ccb`. PR remains draft pending review/acceptance and any issue-specific requirements.
+- #18 / PR #73: `0d132b3` changes the history locator and uses touch `.tap()` for the offline hint journey. Exact-head CI `37009509517` was still running on resume; inspect its full result before reusing its pass as evidence.
+- #23 / PR #74: review of run `37010276739` at `003f8eb` found the live WCAG audit failing on visible section/mobile navigation text. `68201c8` explicitly applies `--text-primary` to panel headings and mobile navigation, retains active navigation with an accent wash, and is pushed for a fresh exact-head run. `ac603ad` also fixes global keyboard shortcuts firing while dialogs are open. Local validation after the accessibility/shortcut slice: typecheck and lint passed (one existing `ImageOcclusion.tsx` warning); 312 client tests passed. Playwright browser execution is not verified locally on this Windows host.
+- #56 / PR #75: run `37008801248` on `7181327` failed the same pre-existing iPhone WebKit hint touch flow that #18 addresses, and marked the PC/phone sync journey flaky. Do not count it as passed. Re-run against the supported fix after the #18 result is known, while checking the two-client journey artifact for the flaky result.
 - #70 / issue #67: previous exact-head CI at `06682d0` passed (`36972904946`), but the private aggregate package preview remains a separate machine-local check. On the machine with private Japanese examples, inspect only `runtime/local-package-preview-summary.json` and confirm no process is still running before deciding to rerun. Never commit packages, credentials, note text, or per-note diagnostics.
 
 ## #56 account work and next steps
@@ -47,10 +51,12 @@ Known projection limits to audit before expanding it: currently it accepts only 
 
 ## At-home start
 
-1. `git fetch origin`, check each listed worktree's branch/status, and inspect current exact-head CI for #17/#18/#56.
+1. Continue in these existing paths; no additional worktrees were created. `git fetch origin`, check each listed branch/status, and inspect current exact-head CI for #18/#23. #17's `7c00ccb` CI is green; #56's `7181327` CI is not.
 2. Start in `C:/work/anki-56`; read issue #56 comments, `docs/ankiweb-account-sync.md`, `docs/native-anki-engine.md`, and this handoff.
-3. Update PR #75's description/checkpoint after its new CI finishes. The GitHub issue comment from this evening has a concise task list.
-4. Continue only the bounded projection/base-manifest design; leave all PRs draft until their issue-specific evidence is complete.
+3. Once #18 CI completes, propagate its touch-flow correction to #56 (and rerun #56 CI); inspect whether the cross-device journey flake reproduces.
+4. Review exact-head contrast screenshots/data for #23 `68201c8`. If it passes, update its handoff with the visual/theme result; physical iPhone acceptance is still separate.
+5. Update PR #75's description/checkpoint after its current source changes receive CI. The GitHub issue comment has the account task list.
+6. Continue only the bounded projection/base-manifest design; leave all PRs draft until their issue-specific evidence is complete.
 5. Check #67's private local preview only on the machine that owns those inputs.
 
 The authoritative issue/PR process and five triage labels are in `docs/agents/issue-tracker.md` and `docs/agents/triage-labels.md`. Use one issue worktree per active feature, and remove it only in the same step as merging that issue's PR.
