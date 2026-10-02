@@ -10,7 +10,7 @@ Fetch before relying on checks. Run `git status --short --branch` in each path. 
 |---|---|---|---|
 | `C:/work/anki` | `main` | current | clean; this file records the latest handoff; docs CI `37018413446` passed on its prior refresh |
 | `C:/work/anki-17` | `feat/17-text-csv` | `7c00ccb` | clean; draft PR #72; exact-head CI `37010267515` passed |
-| `C:/work/anki-18` | `feat/18-safe-concurrency` | `01a65c4` | clean; draft PR #73; exact-head CI `37019083852` running |
+| `C:/work/anki-18` | `feat/18-safe-concurrency` | `01a65c4` | clean; draft PR #73; exact-head CI `37019083852` passed |
 | `C:/work/anki-23` | `feat/23-jetbrains-omarchy-ux` | `b4a6415` | clean; PR #74 marked ready; exact-head CI `37017542638` passed |
 | `C:/work/anki-56` | `feat/56-ankiweb-account` | `d14f610` | clean; draft PR #75; exact-head CI `37018717852` passed |
 
@@ -19,7 +19,7 @@ Do not merge the draft PRs. No worktree has been removed.
 ## Exact-head CI and review findings
 
 - #17 / PR #72: exact-head CI `37010267515` passed at `7c00ccb`. The semantic CSV metadata assertion fixed an earlier quoting-assumption failure. PR remains draft pending final review and issue acceptance.
-- #18 / PR #73: `37016885671` failed at the statistics history button. Its failure snapshot shows that the Card progress dialog had already opened and contained both Good and Easy reviews; Playwright kept trying to click the button after the dialog covered it. `01a65c4` uses the button's keyboard activation path. Local typecheck/lint passed (existing `ImageOcclusion.tsx` warning); exact-head CI `37019083852` is running. Windows Playwright launch still fails with `spawn UNKNOWN`.
+- #18 / PR #73: `37016885671` failed at the statistics history button. Its failure snapshot shows that the Card progress dialog had already opened and contained both Good and Easy reviews; Playwright kept trying to click the button after the dialog covered it. `01a65c4` uses the button's keyboard activation path; exact-head CI `37019083852` passed. Local typecheck/lint passed (existing `ImageOcclusion.tsx` warning). Windows Playwright launch still fails with `spawn UNKNOWN`.
 - #23 / PR #74: #23 includes inherited text colors, mobile contrast fixes, a WebKit theme-paint audit, and hides the keyboard shortcut legend on coarse-pointer phones. `b4a6415` corrects the test comment after CI showed that iPhone WebKit reports a coarse pointer, and asserts visibility on fine pointers. Exact-head CI `37017542638` passed; the PR is now marked ready. This is not physical iPhone evidence; dialog keyboard behavior and visual regression are tracked in #76/#77.
 - #56 / PR #75: `91f2c5c` adds a durable native projection manifest tied to the exact SQLite snapshot and checkpoint revision, including native note/card/review/deck/model/template IDs and original per-card deck bindings. `d14f610` rejects ambiguous card/field ordinal mappings and empty GUIDs before future writeback. Focused tests (9), typecheck, lint, and exact-head CI `37018717852` passed. Account login, native writeback/merge/recovery, gateway deployment, and installed-iPhone sync with PC off remain incomplete.
 - Main documentation CI `37015081542` failed on `ad9a483` in iPhone WebKit: the offline hint journey timed out, and the child-deck study-limit journey timed out waiting for an Easy rating button (then passed on retry). Typecheck, lint, unit/server tests, and build passed before the browser stage. `47f2d99` documentation CI `37018413446` passed. Investigate the hint failure and rating state before making a main-green claim. Do not treat documentation CI as feature acceptance.
@@ -49,9 +49,9 @@ Known projection limits to audit before expanding it: currently it accepts only 
 
 ## At-home start
 
-1. Continue in these existing paths; no additional worktrees were created. `git fetch origin`, check each listed branch/status, and inspect current exact-head CI for #18/#56. #17's `7c00ccb` and #23's `b4a6415` CI are green.
+1. Continue in these existing paths; no additional worktrees were created. `git fetch origin`, check each listed branch/status, and inspect PR review state. #17's `7c00ccb`, #18's `01a65c4`, #23's `b4a6415`, and #56's `d14f610` CI are green.
 2. Start in `C:/work/anki-56`; read issue #56 comments, `docs/ankiweb-account-sync.md`, `docs/native-anki-engine.md`, and this handoff.
-3. Inspect #18 `37019083852`, including the two-client journey and statistics history after the keyboard activation fix.
+3. The two-client journey and statistics history passed at #18 `37019083852`; proceed to the remaining deletion/media race review and independent PR review.
 4. Review #23 `37017542638` and its attached rendered contrast screenshots. Physical iPhone acceptance is still separate.
 5. Continue #56 from the persisted manifest into deterministic app-entity identity mapping and recoverable native writeback; leave all PRs draft until their issue-specific evidence is complete.
 6. Check #67's private local preview only on the machine that owns those inputs.
