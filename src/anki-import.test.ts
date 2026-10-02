@@ -121,9 +121,9 @@ async function imageOcclusionPackage() {
 async function unsupportedPackage() {
   const type = new Notetype({
     id: 1_700_000_000_030,
-    name: 'Unsupported hints',
+    name: 'Unsupported custom filters',
     fields: [{ name: 'Front' }, { name: 'Back' }],
-    templates: [{ name: 'Hint card', questionFormat: '{{hint:Front}}', answerFormat: '{{Back}}' }],
+    templates: [{ name: 'Custom filter card', questionFormat: '{{custom:Front}}', answerFormat: '{{Back}}' }],
   })
   const deck = new Deck({ id: 1_700_000_000_031, name: 'Unsupported' })
   deck.addNote(new AnkiNote({ notetype: type, guid: 'unsupported-guid', fields: ['question', 'answer'] }))
@@ -395,7 +395,7 @@ describe('Anki package import', () => {
     const prepared = await prepareAnkiImport(await unsupportedPackage(), collection, { SQL, now: new Date('2026-10-01T12:00:00.000Z') })
 
     expect(prepared.issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({ severity: 'error', code: 'unsupported-note-type', subject: 'Unsupported hints', detail: expect.stringMatching(/unsupported template filter/i) }),
+      expect.objectContaining({ severity: 'error', code: 'unsupported-note-type', subject: 'Unsupported custom filters', detail: expect.stringMatching(/unsupported template filter/i) }),
       expect.objectContaining({ severity: 'error', code: 'note-skipped', subject: 'unsupported-guid' }),
     ]))
     await expect(prepared.commit()).rejects.toThrow(/resolve package errors/i)

@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { tryRenderTemplate } from './template-renderer'
 
 interface TemplatePreviewProps {
@@ -14,6 +15,10 @@ interface TemplatePreviewProps {
 }
 
 export function TemplatePreview({ front, back, css, fields, side, title = 'Card preview', kind = 'standard', ordinal, media, templateOrdinal = 1 }: TemplatePreviewProps) {
+  const frame = useRef<HTMLIFrameElement>(null)
+  useEffect(() => {
+    if (title === 'Review card') frame.current?.scrollIntoView?.({ block: 'center' })
+  }, [title, side])
   let frontHtml = ''
   let html = ''
   let empty = false
@@ -36,7 +41,7 @@ export function TemplatePreview({ front, back, css, fields, side, title = 'Card 
     <div className="template-preview">
       {error && <p role="alert">{error}</p>}
       {!error && empty && <p className="form-warning" role="status">No card will be created: front has no visible field content.</p>}
-      {!error && <iframe title={title} sandbox="allow-same-origin" srcDoc={srcDoc} />}
+      {!error && <iframe ref={frame} title={title} sandbox="allow-same-origin" srcDoc={srcDoc} />}
     </div>
   )
 }
