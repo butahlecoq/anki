@@ -4,13 +4,14 @@ import { decodeHTMLStrict } from 'entities'
 /** Native note caches are derived from fields, never authoritative content. */
 export function nativeFieldText(field: string): string {
   const stripped = field.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>|<!--[\s\S]*?-->/gi, '')
-    .replace(/<(?:img|audio|video|object|source)\b[^>]*>/gi, (tag) => {
+    .replace(/<(?:img|audio|video|object|source)\b(?:[^>"']|"[^"]*"|'[^']*')*>/gi, (tag) => {
       const name = tag.match(/\b(?:src|data)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i)
       return name ? ` ${name[1] ?? name[2] ?? name[3]} ` : ''
     }).replace(/<[^>]*>/g, '')
   // Native entity decoding preserves the original text when an entity is
   // invalid. Do not silently normalize such field contents differently.
-  if ([...stripped.matchAll(/&([^;\s&]+);/g)].some(([token]) => decodeHTMLStrict(token) === token)) return stripped
+  const entity = /&(?:#[0-9]+|#x[0-9a-f]+|[a-z][a-z0-9]*);/gi
+  if (stripped.replace(entity, '').includes('&') || [...stripped.matchAll(entity)].some(([token]) => decodeHTMLStrict(token) === token)) return stripped
   return decodeHTMLStrict(stripped).replaceAll('\u00a0', ' ')
 }
 

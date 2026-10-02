@@ -64,7 +64,7 @@ else:
         from hashlib import sha1
         def cache_text(field):
             return c._backend.strip_html(text=field,mode=StripHtmlMode.PRESERVE_MEDIA_FILENAMES)
-        fields=['今日','<b>猫</b>&nbsp;<img src="猫.png">','<script>ignore</script>犬<style>ignore</style>','<img src=cat.png>[sound:猫.mp3]','&amp;&lt;&quot;&#12354;','&unknown;&amp;']
+        fields=['今日','<b>猫</b>&nbsp;<img src="猫.png">','<script>ignore</script>犬<style>ignore</style>','<img src=cat.png>[sound:猫.mp3]','&amp;&lt;&quot;&#12354;','&unknown;&amp;','<img src="A>B.png">','plain & text &amp;','line<br>two']
         print(json.dumps([[field,cache_text(field),int(sha1(cache_text(field).encode('utf8')).hexdigest()[:8],16)] for field in fields]))
     elif action=='media-edit':
         sync_media()
