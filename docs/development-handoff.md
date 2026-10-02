@@ -8,11 +8,11 @@ Fetch before relying on checks. Run `git status --short --branch` in each path. 
 
 | Path | Branch | Head | State |
 |---|---|---|---|
-| `C:/work/anki` | `main` | current | clean; this file records the latest handoff; docs CI `37018413446` passed on its prior refresh |
+| `C:/work/anki` | `main` | `7ea668c` | clean; this file records the latest handoff; check docs CI for this head |
 | `C:/work/anki-17` | `feat/17-text-csv` | `7c00ccb` | clean; draft PR #72; exact-head CI `37010267515` passed |
 | `C:/work/anki-18` | `feat/18-safe-concurrency` | `01a65c4` | clean; draft PR #73; exact-head CI `37019083852` passed |
 | `C:/work/anki-23` | `feat/23-jetbrains-omarchy-ux` | `b4a6415` | clean; PR #74 marked ready; exact-head CI `37017542638` passed |
-| `C:/work/anki-56` | `feat/56-ankiweb-account` | `e3e6ffe` | clean and pushed; draft PR #75; check CI for this new head |
+| `C:/work/anki-56` | `feat/56-ankiweb-account` | `e52b9b0` | clean and pushed; draft PR #75; check CI for this new head |
 
 Do not merge the draft PRs. No worktree has been removed.
 
@@ -21,7 +21,7 @@ Do not merge the draft PRs. No worktree has been removed.
 - #17 / PR #72: exact-head CI `37010267515` passed at `7c00ccb`. The semantic CSV metadata assertion fixed an earlier quoting-assumption failure. PR remains draft pending final review and issue acceptance.
 - #18 / PR #73: `37016885671` failed at the statistics history button. Its failure snapshot shows that the Card progress dialog had already opened and contained both Good and Easy reviews; Playwright kept trying to click the button after the dialog covered it. `01a65c4` uses the button's keyboard activation path; exact-head CI `37019083852` passed. Local typecheck/lint passed (existing `ImageOcclusion.tsx` warning). Windows Playwright launch still fails with `spawn UNKNOWN`.
 - #23 / PR #74: #23 includes inherited text colors, mobile contrast fixes, a WebKit theme-paint audit, and hides the keyboard shortcut legend on coarse-pointer phones. `b4a6415` corrects the test comment after CI showed that iPhone WebKit reports a coarse pointer, and asserts visibility on fine pointers. Exact-head CI `37017542638` passed; the PR is now marked ready. This is not physical iPhone evidence; dialog keyboard behavior and visual regression are tracked in #76/#77.
-- #56 / PR #75: `91f2c5c` adds a durable native projection manifest tied to the exact SQLite snapshot and checkpoint revision, including native note/card/review/deck/model/template IDs and original per-card deck bindings. `d14f610` rejects ambiguous card/field ordinal mappings and empty GUIDs. `6af43c2` builds a checked native-to-app identity crosswalk and lists unsupported source records as unmapped; `bdc544f` verifies duplicate app/native card identity rejection. `4bede41` derives the persisted manifest from the actual checkpoint SQLite snapshot rather than accepting a caller-supplied map. Typecheck, lint and focused projection/state tests (9) passed locally; exact-head CI `37023010468` is running. Account login, native writeback/merge/recovery, gateway deployment, and installed-iPhone sync with PC off remain incomplete.
+- #56 / PR #75: `91f2c5c` adds a durable native projection manifest tied to the exact SQLite snapshot and checkpoint revision, including native note/card/review/deck/model/template IDs and original per-card deck bindings. `d14f610` rejects ambiguous card/field ordinal mappings and empty GUIDs. `6af43c2` builds a checked native-to-app identity crosswalk and lists unsupported source records as unmapped; `bdc544f` verifies duplicate app/native card identity rejection. `4bede41` derives the persisted manifest from the actual checkpoint SQLite snapshot rather than accepting a caller-supplied map. `e3e6ffe` exposes a cloned normalized base projection. `e52b9b0` adds a read-only conservative writeback planner for plain fields and tags; it preserves the original snapshot unless a fully supported delta can be prepared, and blocks schedule/review/media/structure changes. Typecheck, lint and 11 focused projection/state tests passed locally; exact-head CI for `e52b9b0` is unverified. Account UI, transactional state integration, remote merge/recovery workflow, gateway deployment, and installed-iPhone sync with PC off remain incomplete.
 - Main documentation CI `37015081542` failed on `ad9a483` in iPhone WebKit: the offline hint journey timed out, and the child-deck study-limit journey timed out waiting for an Easy rating button (then passed on retry). Typecheck, lint, unit/server tests, and build passed before the browser stage. `47f2d99` documentation CI `37018413446` passed. Investigate the hint failure and rating state before making a main-green claim. Do not treat documentation CI as feature acceptance.
 - #67's private aggregate package preview remains machine-local. Check only `runtime/local-package-preview-summary.json` on the machine that owns private Japanese examples. Never commit packages, credentials, note text, or per-note diagnostics.
 
@@ -36,13 +36,15 @@ PR #75 now includes:
 5. `6af43c2`: a deterministic crosswalk resolves app IDs from native identities, checks card/review parent relationships and required fields/templates, and reports app-unsupported records as unmapped. `bdc544f` verifies ambiguous app card identities are rejected.
 6. `4bede41`: manifest persistence derives the map from the current verified SQLite checkpoint and checks the revision again before saving.
 7. `e3e6ffe`: `PreparedAnkiImport.projectedEntities()` exposes a cloned normalized projection without committing it. This is groundwork for comparing current app data with the native base before any writeback; it does not write SQLite or make sync safe by itself.
+8. `e52b9b0`: `prepareNativeAnkiWriteback()` checks snapshot/manifest identity, compares current app records with the normalized native base, and prepares a candidate SQLite snapshot for only existing-note plain text and tag changes. It keeps unchanged native field markup and opaque note data, rebuilds derived note caches, and refuses unsupported deltas without returning candidate bytes. Tests cover unchanged input, HTML-safe field/tag updates, opaque identity/schedule/history preservation, and blocked schedule edits. This is a planner only: it is not connected to `NativeAnkiState`, does not provide a transactional app-revision guard, and must not be called as a completed account sync path.
 
-Validation on `91f2c5c`: typecheck, 268 client tests, lint (existing `ImageOcclusion.tsx` warning), production build, and exact-head CI `37016646020` passed. On `d14f610`, typecheck, lint, 9 focused projection/state tests, and exact-head CI `37018717852` passed. On `4bede41`, typecheck, lint, and 9 focused projection/state tests passed; CI run `37023010468` was observed running on that older head. On `e3e6ffe`, typecheck and all 5 focused projection tests passed; lint completed with the existing `ImageOcclusion.tsx` warning. Check exact-head CI before relying on it. No real account credentials or writes were used.
+Validation on `91f2c5c`: typecheck, 268 client tests, lint (existing `ImageOcclusion.tsx` warning), production build, and exact-head CI `37016646020` passed. On `d14f610`, typecheck, lint, 9 focused projection/state tests, and exact-head CI `37018717852` passed. On `4bede41`, typecheck, lint, and 9 focused projection/state tests passed; CI run `37023010468` was observed running on that older head. On `e3e6ffe`, typecheck and all 5 focused projection tests passed. On `e52b9b0`, typecheck and 11 focused projection/state tests passed; lint had only the existing `ImageOcclusion.tsx` warning. Check exact-head CI before relying on it. No real account credentials or writes were used.
 
 This is only a projection input and storage boundary. It is not wired to visible account UI or sync. Key remaining design/implementation work:
 
 - Compare the mapped app entities against the native base projection, preserving unsupported native rows/configuration/media and original per-card deck IDs even though the app model binds sibling cards through a note deck.
-- Map supported field/card/review edits, deletions, and media back into the original native snapshot. Give newly created review IDs stable across interruption/reopen.
+- Extend the planner to supported reviews, deletions, and media after defining stable review identities and preserving per-card deck bindings. Keep unsupported native rows untouched.
+- Integrate planner output with `NativeAnkiState` using a durable attempt marker, retained backup, checkpoint revision check, and an app-collection revision/fingerprint guard. Do not upload planner output before this boundary exists.
 - Integrate #18 causal revisions after its review/merge; resolve concurrent account/app edits without silently overwriting.
 - Add visible login/status/manual sync/logout, runtime gateway configuration, cancellation, clear full-sync direction previews, and durable backup/recovery controls. Credentials stay in memory.
 - Test round trips and interruption recovery with the isolated official Anki engine and synthetic accounts. Do not use the live account.
@@ -52,11 +54,11 @@ Known projection limits to audit before expanding it: currently it accepts only 
 
 ## At-home start
 
-1. Continue in these existing paths; no additional worktrees were created. `git fetch origin`, check each listed branch/status, inspect PR review state, and check CI for #56 `e3e6ffe` and main docs commit `04f464d`. `gh` was unavailable during this checkpoint, so live PR/review/CI status could not be queried. The latest saved branch heads are #17 `7c00ccb`, #18 `01a65c4`, #23 `b4a6415`, and #56 `e3e6ffe`.
+1. Continue in these existing paths; no additional worktrees were created. `git fetch origin`, check each listed branch/status, inspect PR review state, and check CI for #56 `e52b9b0` and main docs commit `7ea668c`. `gh` was unavailable during this checkpoint, so live PR/review/CI status could not be queried. The latest saved branch heads are #17 `7c00ccb`, #18 `01a65c4`, #23 `b4a6415`, and #56 `e52b9b0`.
 2. Start in `C:/work/anki-56`; read issue #56 comments, `docs/ankiweb-account-sync.md`, `docs/native-anki-engine.md`, and this handoff.
 3. The two-client journey and statistics history passed at #18 `37019083852`; proceed to the remaining deletion/media race review and independent PR review.
 4. Review #23 `37017542638` and its attached rendered contrast screenshots. Physical iPhone acceptance is still separate.
-5. Continue #56 from the checkpoint-bound identity map into native-base comparison and recoverable writeback; leave PR #75 draft until the full account journey is implemented and reviewed.
+5. Continue #56 by adding a revision-guarded state integration around the planner, then account controls and gateway configuration; leave PR #75 draft until the full account journey is implemented and reviewed.
 6. Check #67's private local preview only on the machine that owns those inputs.
 
 ## Handoff audit
@@ -66,7 +68,10 @@ This file is the current cross-branch pickup point. Branch-local copies of
 contain historical inventories and stale main/head IDs; use their feature-specific
 technical notes, but verify every status against current Git before acting. The
 latest check found the main and #17/#18/#23 worktrees clean, and #56 clean after
-`e3e6ffe` was pushed. No extra worktrees were created or removed. The attempted
+`e52b9b0` was pushed. The five Anki folders listed above are the active Git
+worktrees for open PRs; `docs/agents/worktrees.md` says to retain unmerged trees,
+so none were removed. Other directories under `C:/work` are separate project or
+environment folders and were left untouched. No extra worktrees were created or removed. The attempted
 live tracker check could not run (`gh` is not installed); GitHub web fetches for
 the private repository returned 404. No issue or PR status change is claimed here.
 
