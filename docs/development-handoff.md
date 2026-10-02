@@ -52,7 +52,7 @@ Known projection limits to audit before expanding it: currently it accepts only 
 
 ## At-home start
 
-1. Continue in these existing paths; no additional worktrees were created. `git fetch origin`, check each listed branch/status, inspect PR review state, and check CI for `e3e6ffe`. `gh` was unavailable during this checkpoint, so live PR/review/CI status could not be queried. The latest saved branch heads are #17 `7c00ccb`, #18 `01a65c4`, #23 `b4a6415`, and #56 `e3e6ffe`.
+1. Continue in these existing paths; no additional worktrees were created. `git fetch origin`, check each listed branch/status, inspect PR review state, and check CI for #56 `e3e6ffe` and main docs commit `04f464d`. `gh` was unavailable during this checkpoint, so live PR/review/CI status could not be queried. The latest saved branch heads are #17 `7c00ccb`, #18 `01a65c4`, #23 `b4a6415`, and #56 `e3e6ffe`.
 2. Start in `C:/work/anki-56`; read issue #56 comments, `docs/ankiweb-account-sync.md`, `docs/native-anki-engine.md`, and this handoff.
 3. The two-client journey and statistics history passed at #18 `37019083852`; proceed to the remaining deletion/media race review and independent PR review.
 4. Review #23 `37017542638` and its attached rendered contrast screenshots. Physical iPhone acceptance is still separate.
