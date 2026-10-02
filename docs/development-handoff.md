@@ -10,9 +10,9 @@ Fetch before relying on checks. Run `git status --short --branch` in each path. 
 |---|---|---|---|
 | `C:/work/anki` | `main` | `90cbc07` | clean; handoff update pending on this branch |
 | `C:/work/anki-17` | `feat/17-text-csv` | `7c00ccb` | clean; draft PR #72; exact-head CI `37010267515` passed |
-| `C:/work/anki-18` | `feat/18-safe-concurrency` | `0d132b3` | clean; draft PR #73; exact-head CI `37009509517` running |
+| `C:/work/anki-18` | `feat/18-safe-concurrency` | `4d893d1` | clean; draft PR #73; exact-head CI `37012616336` running |
 | `C:/work/anki-23` | `feat/23-jetbrains-omarchy-ux` | `68201c8` | clean; draft PR #74; CI for current head pending; earlier head `003f8eb` failed contrast audit |
-| `C:/work/anki-56` | `feat/56-ankiweb-account` | `7181327` | clean; draft PR #75; exact-head CI `37008801248` failed on old touch hint journey and had one flaky cross-device sync journey |
+| `C:/work/anki-56` | `feat/56-ankiweb-account` | `406b9ef` | clean; draft PR #75; exact-head CI `37012689001` running |
 
 Do not merge the draft PRs. No worktree has been removed.
 
@@ -24,9 +24,9 @@ Do not merge the draft PRs. No worktree has been removed.
 - #56 / PR #75: exact-head CI `37007779740` is running on `f9ebd29`. Prior storage-only head `e16febb` passed CI run `37006347943`.
 - Main CI `37004063690` failed at an existing offline hint test on iPhone WebKit after timing out at 30 seconds; 72 passed, 9 skipped. Failure artifact points to `tests/e2e/hint.spec.ts` around the offline answer/review flow. Investigate as a separate main reliability issue; do not attribute it to the #17 or #56 work.
 - #17 / PR #72: the corrected semantic CSV metadata assertion passed exact-head CI `37010267515` at `7c00ccb`. PR remains draft pending review/acceptance and any issue-specific requirements.
-- #18 / PR #73: `0d132b3` changes the history locator and uses touch `.tap()` for the offline hint journey. Exact-head CI `37009509517` was still running on resume; inspect its full result before reusing its pass as evidence.
-- #23 / PR #74: review of run `37010276739` at `003f8eb` found the live WCAG audit failing on visible section/mobile navigation text. `68201c8` explicitly applies `--text-primary` to panel headings and mobile navigation, retains active navigation with an accent wash, and is pushed for a fresh exact-head run. `ac603ad` also fixes global keyboard shortcuts firing while dialogs are open. Local validation after the accessibility/shortcut slice: typecheck and lint passed (one existing `ImageOcclusion.tsx` warning); 312 client tests passed. Playwright browser execution is not verified locally on this Windows host.
-- #56 / PR #75: run `37008801248` on `7181327` failed the same pre-existing iPhone WebKit hint touch flow that #18 addresses, and marked the PC/phone sync journey flaky. Do not count it as passed. Re-run against the supported fix after the #18 result is known, while checking the two-client journey artifact for the flaky result.
+- #18 / PR #73: run `37009509517` failed for two test issues: the touch-only `.tap()` also ran in desktop Chromium, and the studied-card locator assumed a Japanese front-text label. `4d893d1` uses touch only in touch projects and opens the sole card within “Cards studied in this period”; exact-head CI `37012616336` is running. Typecheck/lint passed locally (one existing warning); local Playwright still fails to launch Chromium with `spawn UNKNOWN`.
+- #23 / PR #74: review of run `37010276739` at `003f8eb` found the live WCAG audit failing on visible section/mobile navigation text. `68201c8` explicitly applies `--text-primary` to panel headings and mobile navigation, retains active navigation with an accent wash, and is pushed; exact-head CI `37012140343` is running. `ac603ad` fixes global keyboard shortcuts firing while dialogs are open. Local validation after the accessibility/shortcut slice: typecheck and lint passed (one existing `ImageOcclusion.tsx` warning); 312 client tests passed. The latest mobile contrast CSS passed local typecheck/lint; browser evidence is pending CI.
+- #56 / PR #75: run `37008801248` on `7181327` failed the old iPhone WebKit hint interaction and marked the PC/phone sync journey flaky. `406b9ef` scopes the disclosure gesture to touch projects; exact-head CI `37012689001` is running. Inspect its two-client journey and artifacts before relying on the flaky prior attempt.
 - #70 / issue #67: previous exact-head CI at `06682d0` passed (`36972904946`), but the private aggregate package preview remains a separate machine-local check. On the machine with private Japanese examples, inspect only `runtime/local-package-preview-summary.json` and confirm no process is still running before deciding to rerun. Never commit packages, credentials, note text, or per-note diagnostics.
 
 ## #56 account work and next steps
@@ -51,11 +51,11 @@ Known projection limits to audit before expanding it: currently it accepts only 
 
 ## At-home start
 
-1. Continue in these existing paths; no additional worktrees were created. `git fetch origin`, check each listed branch/status, and inspect current exact-head CI for #18/#23. #17's `7c00ccb` CI is green; #56's `7181327` CI is not.
+1. Continue in these existing paths; no additional worktrees were created. `git fetch origin`, check each listed branch/status, and inspect current exact-head CI for #18/#23/#56. #17's `7c00ccb` CI is green.
 2. Start in `C:/work/anki-56`; read issue #56 comments, `docs/ankiweb-account-sync.md`, `docs/native-anki-engine.md`, and this handoff.
-3. Once #18 CI completes, propagate its touch-flow correction to #56 (and rerun #56 CI); inspect whether the cross-device journey flake reproduces.
-4. Review exact-head contrast screenshots/data for #23 `68201c8`. If it passes, update its handoff with the visual/theme result; physical iPhone acceptance is still separate.
-5. Update PR #75's description/checkpoint after its current source changes receive CI. The GitHub issue comment has the account task list.
+3. Inspect #18 `37012616336` and #56 `37012689001`, including the two-client failure artifacts if either journey remains flaky.
+4. Review exact-head contrast screenshots/data for #23 `68201c8`. Physical iPhone acceptance is still separate.
+5. Update PR #75's description/checkpoint after `406b9ef` receives CI. The GitHub issue comment has the account task list.
 6. Continue only the bounded projection/base-manifest design; leave all PRs draft until their issue-specific evidence is complete.
 5. Check #67's private local preview only on the machine that owns those inputs.
 
