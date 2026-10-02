@@ -1,7 +1,7 @@
 import { cleanup, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, test } from 'vitest'
 import { App } from './App'
-import { mediaBlock, stylesheet } from './stylesheet-under-test'
+import { mediaBlock, rule, stylesheet } from './stylesheet-under-test'
 
 /*
  * iPhone layout contract for issue #23.
@@ -50,6 +50,15 @@ describe('touch targets', () => {
     for (const selector of ['.text-button', '.nav-item', '.mobile-nav a', '.primary-action', '.rating']) {
       expect(coarse, `${selector} missing a touch-target rule`).toContain(selector)
     }
+  })
+
+  test('the keyboard shortcut legend does not occupy a phone reviewer', () => {
+    // It is discoverability for a keyboard. At 390px it wrapped to four lines
+    // and pushed the card most of a screen down before any Japanese appeared.
+    expect(mediaBlock('pointer: coarse')).toContain('.review-shortcuts')
+    // The legend still has to exist for the desktop, or the bindings it names
+    // become undiscoverable rather than merely compact.
+    expect(rule('.review-shortcuts')).toContain('--text-faint')
   })
 })
 

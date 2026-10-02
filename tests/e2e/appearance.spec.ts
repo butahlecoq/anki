@@ -329,12 +329,19 @@ test('card styling stays inside the card sandbox in every app theme', async ({ p
     expect(card).toEqual({ background: 'rgb(18, 52, 86)', color: 'rgb(254, 220, 186)', fontSize: '29px' })
     rendered.set(theme, card)
 
-    // The shortcut legend is the only discoverability surface for fifteen key
-    // bindings, and it only renders in the reviewer, so it is measured here.
-    const legend = await settledContrast(page, ['.review-shortcuts'])
-    expect(legend.unmeasurable, `${theme}: the shortcut legend could not be judged`).toEqual([])
-    expect(legend.measurements, `${theme}: the shortcut legend rendered no text`).toHaveLength(1)
-    expect(legend.measurements.filter((measurement) => measurement.ratio < 4.5), `${theme}: shortcut legend below WCAG AA`).toEqual([])
+    // The shortcut legend is the discoverability surface for fifteen key
+    // bindings. It renders in the reviewer only where there is a keyboard to
+    // discover them with, and is hidden on a coarse pointer, so it is measured
+    // on the desktop project and asserted absent on the phone.
+    const legend = await page.locator('.review-shortcuts').count()
+    if (testInfo.project.name === 'iphone-webkit') {
+      expect(legend, `${theme}: the keyboard legend should not occupy an iPhone reviewer`).toBe(0)
+    } else {
+      const measured = await settledContrast(page, ['.review-shortcuts'])
+      expect(measured.unmeasurable, `${theme}: the shortcut legend could not be judged`).toEqual([])
+      expect(measured.measurements, `${theme}: the shortcut legend rendered no text`).toHaveLength(1)
+      expect(measured.measurements.filter((measurement) => measurement.ratio < 4.5), `${theme}: shortcut legend below WCAG AA`).toEqual([])
+    }
 
     await testInfo.attach(`review-card-${theme}`, { body: await page.screenshot({ fullPage: true }), contentType: 'image/png' })
   }

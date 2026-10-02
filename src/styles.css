@@ -633,6 +633,11 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   .tile-action { min-height: 52px; }
   .browser-pagination button, .studied-cards button, .browser-bulk-actions button, .occlusion-mask-controls .text-button { min-height: 44px; }
   .review-heatmap button { height: 44px; }
+  /* The legend is discoverability for keyboard users, and a touch device has
+     no keyboard to discover. At 390px it wrapped to four lines and pushed the
+     card about a screen and a half down the page before any Japanese appeared,
+     which is the opposite of what the reviewer is for. */
+  .review-shortcuts { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
