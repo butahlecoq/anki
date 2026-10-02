@@ -1,0 +1,80 @@
+import 'fake-indexeddb/auto'
+import { afterEach, expect, it } from 'vitest'
+import initSqlJs from 'sql.js'
+import { Collection } from './collection'
+import { prepareAnkiDataImport } from './anki-import'
+import { nativeAnkiProjectionData } from './native-anki-projection'
+
+const noteId = 1_700_000_000_100
+const firstCardId = 1_700_000_000_101
+const secondCardId = 1_700_000_000_102
+const reviewId = 1_700_000_000_201
+const originalNote = { id: noteId, guid: 'native-日本語-guid', mid: 100, mod: 1_700_000_000, usn: 0, tags: ' jlpt::n5 ', flds: '猫\u001fcat', sfld: '猫', csum: 1, flags: 0, data: '{"unknown":"preserve in source"}' }
+
+async function nativeFixture(schema = 11) {
+  const SQL = await initSqlJs()
+  const db = new SQL.Database()
+  db.run(`CREATE TABLE col(id INTEGER,crt INTEGER,mod INTEGER,scm INTEGER,ver INTEGER,dty INTEGER,usn INTEGER,ls INTEGER,conf TEXT,models TEXT,decks TEXT,dconf TEXT,tags TEXT);
+    CREATE TABLE notes(id INTEGER,guid TEXT,mid INTEGER,mod INTEGER,usn INTEGER,tags TEXT,flds TEXT,sfld TEXT,csum INTEGER,flags INTEGER,data TEXT);
+    CREATE TABLE cards(id INTEGER,nid INTEGER,did INTEGER,ord INTEGER,mod INTEGER,usn INTEGER,type INTEGER,queue INTEGER,due INTEGER,ivl INTEGER,factor INTEGER,reps INTEGER,lapses INTEGER,left INTEGER,odue INTEGER,odid INTEGER,flags INTEGER,data TEXT);
+    CREATE TABLE revlog(id INTEGER,cid INTEGER,usn INTEGER,ease INTEGER,ivl INTEGER,lastIvl INTEGER,factor INTEGER,time INTEGER,type INTEGER);`)
+  const model = {
+    id: 100, name: 'Japanese two-sided', type: 0, mod: 1_700_000_000, css: '.card { color: green; }',
+    flds: [{ name: 'Front', ord: 0 }, { name: 'Back', ord: 1 }],
+    tmpls: [
+      { name: 'Reading', ord: 0, qfmt: '{{Front}}', afmt: '{{FrontSide}}<hr>{{Back}}' },
+      { name: 'Listening', ord: 1, qfmt: '{{Back}}', afmt: '{{FrontSide}}<hr>{{Front}}' },
+    ],
+  }
+  const decks = {
+    '1': { id: 1, name: 'Default', mod: 1_700_000_000, dyn: 0 },
+    '10': { id: 10, name: '日本語::語彙::読解', mod: 1_700_000_000, dyn: 0 },
+    '11': { id: 11, name: '日本語::語彙::聴解', mod: 1_700_000_000, dyn: 0 },
+  }
+  const now = Math.floor(Date.parse('2026-10-02T12:00:00Z') / 1000)
+  const colCreated = now - 10 * 86_400
+  db.run('INSERT INTO col VALUES(1,?,?,?,?,0,0,0,?,?,?,?,?)', [colCreated, now, now, schema, '{}', JSON.stringify({ 100: model }), JSON.stringify(decks), '{}', '{}'])
+  db.run('INSERT INTO notes VALUES(?,?,?,?,?,?,?,?,?,?,?)', [originalNote.id, originalNote.guid, originalNote.mid, originalNote.mod, originalNote.usn, originalNote.tags, originalNote.flds, originalNote.sfld, originalNote.csum, originalNote.flags, originalNote.data])
+  db.run('INSERT INTO cards VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [firstCardId, noteId, 10, 0, now, 0, 2, 2, 15, 5, 2500, 3, 0, 0, 0, 0, 1, '{}'])
+  db.run('INSERT INTO cards VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [secondCardId, noteId, 11, 1, now, 0, 0, 0, 1, 0, 2500, 0, 0, 0, 0, 0, 0, '{}'])
+  db.run('INSERT INTO revlog VALUES(?,?,?,?,?,?,?,?,?)', [reviewId, firstCardId, 0, 4, 5, 0, 2500, 1_000, 1])
+  const snapshot = db.export()
+  db.close()
+  return { SQL, snapshot }
+}
+
+let collection: Collection | undefined
+afterEach(async () => {
+  if (collection) await collection.delete()
+  collection = undefined
+})
+
+it('projects schema-11 note, card, deck, and review identities without rewriting native rows', async () => {
+  const { SQL, snapshot } = await nativeFixture()
+  const before = Array.from(snapshot)
+  const data = nativeAnkiProjectionData(SQL, snapshot)
+  expect(data.notes[0]).toMatchObject({ id: noteId, guid: originalNote.guid, flds: originalNote.flds, data: originalNote.data })
+  expect(data.cards.map((card) => [card.id, card.did, card.ord])).toEqual([[firstCardId, 10, 0], [secondCardId, 11, 1]])
+  expect(data.revlog[0].id).toBe(reviewId)
+  expect(Array.from(snapshot)).toEqual(before)
+
+  collection = new Collection(`native-projection-${crypto.randomUUID()}`)
+  const prepared = await prepareAnkiDataImport(data, collection, { SQL, now: new Date('2026-10-02T12:00:00Z') })
+  expect(prepared.issues.filter((issue) => issue.severity === 'error')).toEqual([])
+  expect(prepared.summary).toMatchObject({ decks: 4, noteTypes: 1, notes: 1, cards: 2, reviews: 1 })
+  await prepared.commit()
+
+  const note = await collection.notes.get(`anki-note:${originalNote.guid}`)
+  const cards = await collection.cards.where('noteId').equals(`anki-note:${originalNote.guid}`).sortBy('ankiId')
+  const review = await collection.reviewEntries.get(`anki-review:${reviewId}`)
+  expect(note).toMatchObject({ ankiId: noteId, tags: ['jlpt::n5'], fields: { 'anki-field:100:0': '猫', 'anki-field:100:1': 'cat' } })
+  expect(cards).toHaveLength(2)
+  expect(cards.map((card) => card.ankiId)).toEqual([firstCardId, secondCardId])
+  expect(cards.map((card) => card.deckId)).not.toEqual([note?.deckId, note?.deckId])
+  expect(review).toMatchObject({ id: `anki-review:${reviewId}`, cardId: cards[0].id, rating: 4 })
+})
+
+it('refuses an unsupported native schema before producing an app projection', async () => {
+  const { SQL, snapshot } = await nativeFixture(12)
+  expect(() => nativeAnkiProjectionData(SQL, snapshot)).toThrow('unsupported Anki collection schema')
+})

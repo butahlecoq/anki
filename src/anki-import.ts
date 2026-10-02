@@ -1,6 +1,6 @@
 import type { SqlJsStatic } from 'sql.js'
 import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url'
-import type { CardRow, Collection as AnkiCollection, CollectionData, RevlogRow } from 'ankipack'
+import type { CardRow, CollectionData, RevlogRow } from 'ankipack'
 import { DEFAULT_DECK_OPTION_GROUP_ID, State, type CardRecord, type Collection, type Deck, type Note, type NoteMediaReference, type NoteType, type ReviewEntry, type SyncOperation } from './collection'
 import { parseAnkiImageOcclusion, type AnkiImageOcclusionFields } from './image-occlusion-interchange'
 import { digestMedia, validateMedia, type MediaKind, type MediaSide } from './media'
@@ -437,24 +437,26 @@ export class PreparedAnkiImport {
   }
 }
 
-export async function prepareAnkiImport(file: File, collection: Collection, options: PrepareAnkiImportOptions = {}): Promise<PreparedAnkiImport> {
-  if (!/\.(apkg|colpkg)$/i.test(file.name)) throw new Error('Choose an Anki .apkg or .colpkg package')
-  if (!file.size) throw new Error('The selected Anki package is empty')
-  if (file.size > ANKI_ARCHIVE_LIMITS.compressedBytes) throw new Error('The selected Anki package is larger than the 128 MiB compressed import limit')
+async function prepareAnkiImportInternal(file: File | undefined, collection: Collection, options: PrepareAnkiImportOptions, sourceData?: CollectionData): Promise<PreparedAnkiImport> {
+  if (!sourceData && (!file || !/\.(apkg|colpkg)$/i.test(file.name))) throw new Error('Choose an Anki .apkg or .colpkg package')
+  if (!sourceData && !file?.size) throw new Error('The selected Anki package is empty')
+  if (!sourceData && file!.size > ANKI_ARCHIVE_LIMITS.compressedBytes) throw new Error('The selected Anki package is larger than the 128 MiB compressed import limit')
   const now = options.now ?? new Date()
   const importedAt = now.toISOString()
-  let source: AnkiCollection
-  try {
-    const bytes = new Uint8Array(await blobBytes(file))
-    validateAnkiArchive(bytes)
-    const SQL = options.SQL ?? await browserSql()
-    const { Collection: AnkiPackageCollection } = await import('ankipack')
-    source = AnkiPackageCollection.open(bytes, SQL)
-  } catch (reason) {
-    console.error('Anki package preview failed', reason)
-    throw new Error(`Unable to read “${file.name}”: ${reason instanceof Error ? reason.message : 'invalid Anki package'}`)
+  let data: CollectionData
+  if (sourceData) data = sourceData
+  else {
+    try {
+      const bytes = new Uint8Array(await blobBytes(file!))
+      validateAnkiArchive(bytes)
+      const SQL = options.SQL ?? await browserSql()
+      const { Collection: AnkiPackageCollection } = await import('ankipack')
+      data = AnkiPackageCollection.open(bytes, SQL).data
+    } catch (reason) {
+      console.error('Anki package preview failed', reason)
+      throw new Error(`Unable to read “${file!.name}”: ${reason instanceof Error ? reason.message : 'invalid Anki package'}`)
+    }
   }
-  const data = source.data
   const issues: AnkiImportIssue[] = []
   const types = decodeTypes(data, now, issues)
   const referencedTypeIds = new Set(data.notes.map((note) => note.mid))
@@ -844,7 +846,7 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
     if (!existing) writes.blobs.push(value)
   }
 
-  return new PreparedAnkiImport(file.name, {
+  return new PreparedAnkiImport(file?.name ?? 'AnkiWeb account', {
     decks: decks.length,
     noteTypes: noteTypes.length + imageOcclusionTypes.size,
     notes: notes.length,
@@ -852,6 +854,17 @@ export async function prepareAnkiImport(file: File, collection: Collection, opti
     reviews: reviews.length,
     media: data.media.length,
   }, duplicates, issues, collection, writes, snapshots, importedAt)
+}
+
+export function prepareAnkiImport(file: File, collection: Collection, options: PrepareAnkiImportOptions = {}) {
+  return prepareAnkiImportInternal(file, collection, options)
+}
+
+/** Reuses the supported entity/media/scheduling projection without packaging a
+ * native account snapshot through an `.apkg` archive. The native SQLite and
+ * media databases remain authoritative outside this app-facing preview. */
+export function prepareAnkiDataImport(data: CollectionData, collection: Collection, options: PrepareAnkiImportOptions = {}) {
+  return prepareAnkiImportInternal(undefined, collection, options, data)
 }
 
 function imageDimensions(bytes: Uint8Array): { width: number; height: number } | undefined {
