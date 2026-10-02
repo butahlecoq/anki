@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
+import { parseDelimited } from '../../src/text-csv'
 
 const input = '_note_id,_deck,_note_type,_tags,Field: front,Field: back\r\ncat,日本語::語彙,Basic,"[""日本語"",""common""]",<b>猫</b>,"cat, feline\nねこ"\r\ndog,日本語::語彙,Basic,[],犬,dog\r\nbad,日本語::語彙,Basic,[],,missing\r\n'
 
@@ -76,7 +77,11 @@ test('Japanese CSV preview, explicit partial import, offline export and clean-cl
     await expect(imported.getByRole('status')).toHaveText('0 to add · 2 to update · 0 to ignore · 0 invalid')
     await imported.getByRole('button', { name: 'Import 2 valid rows' }).click()
     await expect(imported.getByText('Import complete: 0 added, 2 updated, 0 ignored, 0 invalid rows skipped.', { exact: true })).toBeVisible()
-    expect((await downloadNotes(target)).toString('utf8')).toContain('["更新","common"]')
+    const updatedExport = (await downloadNotes(target)).toString('utf8').replace(/^\uFEFF/, '')
+    const exportedRows = parseDelimited(updatedExport, ',', '"').map((row) => row.values)
+    const tagColumn = exportedRows[0].indexOf('_tags')
+    expect(tagColumn).toBeGreaterThanOrEqual(0)
+    expect(exportedRows.find((row) => row[0] === 'csv-note:Y2F0')?.[tagColumn]).toBe('["更新","common"]')
     await imported.getByRole('button', { name: 'Import text', exact: true }).click()
     await imported.getByLabel('Existing matching notes').selectOption('duplicate')
     await imported.getByRole('button', { name: 'Preview import' }).click()
