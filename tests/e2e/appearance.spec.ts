@@ -335,9 +335,9 @@ test('card styling stays inside the card sandbox in every app theme', async ({ p
     // hasTouch, not a coarse primary pointer - so this asks the engine which
     // side of the rule it is on instead of assuming the phone project is.
     const coarse = await page.evaluate(() => matchMedia('(pointer: coarse)').matches)
-    const legend = await page.locator('.review-shortcuts').count()
+    const legend = page.locator('.review-shortcuts')
     if (coarse) {
-      expect(legend, `${theme}: the keyboard legend should not occupy a coarse-pointer reviewer`).toBe(0)
+      await expect(legend, `${theme}: the keyboard legend should not occupy a coarse-pointer reviewer`).toBeHidden()
     } else {
       const measured = await settledContrast(page, ['.review-shortcuts'])
       expect(measured.unmeasurable, `${theme}: the shortcut legend could not be judged`).toEqual([])
