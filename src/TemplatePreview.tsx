@@ -65,6 +65,8 @@ export function TemplatePreview({ front, back, css, fields, side, title = 'Card 
       body.style.boxSizing = 'border-box'
       body.style.width = `${width}px`
       body.style.padding = '0'
+      body.style.height = 'auto'
+      body.style.minHeight = '0'
       let naturalWidth = width
       // Percentage columns inside overflow:auto containers (common in Anki
       // decks) can clip large glyphs without increasing body.scrollWidth.
