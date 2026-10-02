@@ -32,7 +32,19 @@ test('custom practice works offline and returns unchanged home cards after rebui
   await page.getByRole('button', { name: 'Rebuild 猫 practice', exact: true }).click()
   await page.getByRole('button', { name: 'Confirm rebuild', exact: true }).click()
   await expect(page.getByText('1 temporary cards · 1 available now · 0 answered in this build')).toBeVisible()
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true)
+  const overflow = await page.evaluate(() => {
+    const width = document.documentElement.getBoundingClientRect().width
+    const scope = document.querySelector('.custom-study')!
+    const boxes = [...scope.querySelectorAll('*')].filter(element => element.getBoundingClientRect().right > width + 1).map(element => element.className || element.tagName)
+    const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT)
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (!node.textContent?.trim() || node.parentElement?.closest('option')) continue
+      const range = document.createRange(); range.selectNodeContents(node)
+      if ([...range.getClientRects()].some(rect => rect.right > width + 1)) boxes.push(node.textContent!.slice(0, 80))
+    }
+    return boxes
+  })
+  expect(overflow).toEqual([])
   await page.screenshot({ path: test.info().outputPath('custom-study.png'), fullPage: true })
   await page.getByRole('button', { name: 'Delete 猫 practice', exact: true }).click()
   await page.getByRole('button', { name: 'Confirm delete', exact: true }).click()
