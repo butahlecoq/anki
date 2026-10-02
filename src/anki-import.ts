@@ -27,6 +27,15 @@ export interface AnkiImportSummary {
 
 export interface AnkiDuplicateSummary { create: number; update: number; keepLocal: number; unchanged: number }
 
+export interface AnkiImportProjection {
+  decks: Deck[]
+  noteTypes: NoteType[]
+  notes: Note[]
+  cards: CardRecord[]
+  reviews: ReviewEntry[]
+  references: NoteMediaReference[]
+}
+
 interface StoredMedia { digest: string; blob: ArrayBuffer; byteLength: number; mimeType: string; verifiedAt: string }
 interface ImportWrites {
   decks: Array<{ value: Deck; action: 'create' | 'update' }>
@@ -398,11 +407,18 @@ export class PreparedAnkiImport {
     private readonly writes: ImportWrites,
     private readonly snapshots: Snapshot[],
     private readonly importedAt: string,
+    private readonly projection: AnkiImportProjection,
   ) {
     this.filename = filename
     this.summary = summary
     this.duplicates = duplicates
     this.issues = issues
+  }
+
+  /** Returns the normalized app projection without applying it to the target
+   * collection. Account writeback uses this as the comparable native base. */
+  projectedEntities(): AnkiImportProjection {
+    return structuredClone(this.projection)
   }
 
   async commit(): Promise<void> {
@@ -853,7 +869,7 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
     cards: cards.length,
     reviews: reviews.length,
     media: data.media.length,
-  }, duplicates, issues, collection, writes, snapshots, importedAt)
+  }, duplicates, issues, collection, writes, snapshots, importedAt, { decks, noteTypes, notes, cards, reviews, references })
 }
 
 export function prepareAnkiImport(file: File, collection: Collection, options: PrepareAnkiImportOptions = {}) {

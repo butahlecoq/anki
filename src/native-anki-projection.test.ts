@@ -65,6 +65,10 @@ it('projects schema-11 note, card, deck, and review identities without rewriting
   const prepared = await prepareAnkiDataImport(data, collection, { SQL, now: new Date('2026-10-02T12:00:00Z') })
   expect(prepared.issues.filter((issue) => issue.severity === 'error')).toEqual([])
   expect(prepared.summary).toMatchObject({ decks: 4, noteTypes: 1, notes: 1, cards: 2, reviews: 1 })
+  const projected = prepared.projectedEntities()
+  expect(projected.notes[0]).toMatchObject({ id: `anki-note:${originalNote.guid}`, ankiId: noteId, fields: { 'anki-field:100:0': '猫', 'anki-field:100:1': 'cat' } })
+  projected.notes[0].fields['anki-field:100:0'] = 'mutated copy'
+  expect(prepared.projectedEntities().notes[0].fields['anki-field:100:0']).toBe('猫')
   await prepared.commit()
 
   const note = await collection.notes.get(`anki-note:${originalNote.guid}`)
