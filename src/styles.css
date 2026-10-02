@@ -660,6 +660,6 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 @media (max-width: 680px) { .custom-study-create input, .custom-study-create select { font-size: 16px; } }
 .external-destination { overflow-wrap: anywhere; }
 .external-card-links { padding-top: 12px; }
-.external-card-links p { color: var(--muted); font-size: 11px; line-height: 1.8; }
+.external-card-links p { color: var(--text-muted); font-size: 11px; line-height: 1.8; }
 .external-card-links > div { display: flex; gap: 8px; flex-wrap: wrap; }
 .external-card-links button { max-width: 100%; min-height: 44px; overflow-wrap: anywhere; }
