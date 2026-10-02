@@ -34,6 +34,35 @@ const settlePaint = (page: Page) =>
   page.evaluate(() => new Promise<void>((done) => { requestAnimationFrame(() => requestAnimationFrame(() => done())) }))
 
 /**
+ * Reads contrast until two consecutive reads a frame apart agree.
+ *
+ * A single read is not enough. Switching the theme invalidates a whole subtree,
+ * and WebKit recalculates lazily: the document element and body update first,
+ * then ordinary descendants, and elements inside a compositing layer - the
+ * phone navigation is position: fixed with a backdrop-filter - can lag a frame
+ * or more behind. Run 37012140343 caught that as the navigation reporting the
+ * previous theme's ink, which reads as a ratio of about 1. Either engine or
+ * theme regressing to a real value would show up as a settled ratio below the
+ * threshold, so waiting for agreement cannot hide a genuine failure; it can only
+ * hide one that is still in flight.
+ */
+async function settledContrast(page: Page, selectors: string[]) {
+  let latest: { measurements: Contrast[]; unmeasurable: { selector: string; reason: string }[] } = { measurements: [], unmeasurable: [] }
+  await expect
+    .poll(async () => {
+      const first = await measureChromeContrast(page, selectors)
+      await settlePaint(page)
+      const second = await measureChromeContrast(page, selectors)
+      latest = second
+      const same = JSON.stringify(first) === JSON.stringify(second)
+      const worst = Math.min(...second.measurements.map((measurement) => measurement.ratio), Number.POSITIVE_INFINITY)
+      return { same, worst }
+    }, { message: 'chrome contrast has not settled on a passing value', timeout: 15_000 })
+    .toMatchObject({ same: true })
+  return latest
+}
+
+/**
  * The browser chrome colour an installed iPhone app paints its status bar
  * with, next to the token it is supposed to be tracking. A real engine resolves
  * `--surface-page`, which jsdom cannot, so this is the only place the two can
@@ -80,6 +109,15 @@ function requiredChromeText(page: Page): string[] {
   return width <= 680 ? PHONE_CHROME_TEXT : WIDE_CHROME_TEXT
 }
 
+/** One rendered string, with the colours it actually resolved against. */
+interface Contrast {
+  selector: string
+  text: string
+  color: string
+  background: string
+  ratio: number
+}
+
 /**
  * Measures rendered WCAG contrast for chrome text in the live document.
  *
@@ -91,7 +129,7 @@ function requiredChromeText(page: Page): string[] {
  * few hundredths. Elements that are not rendered, or that carry no text of
  * their own, are skipped rather than guessed at.
  */
-async function measureChromeContrast(page: Page, selectors: string[]) {
+async function measureChromeContrast(page: Page, selectors: string[]): Promise<{ measurements: Contrast[]; unmeasurable: { selector: string; reason: string }[] }> {
   return page.evaluate((list) => {
     type Layer = { r: number; g: number; b: number; a: number }
     const parse = (value: string): Layer | null => {
@@ -191,7 +229,7 @@ test('appearance choice repaints readable chrome in both themes and survives a r
         : { theme: 'light', colorScheme: 'light', page: 'rgb(247, 248, 246)', ink: 'rgb(28, 33, 24)' })
     await settlePaint(page)
 
-    const { measurements, unmeasurable } = await measureChromeContrast(page, required)
+    const { measurements, unmeasurable } = await settledContrast(page, required)
     const covered = new Set(measurements.map((measurement) => measurement.selector))
     expect(required.filter((selector) => !covered.has(selector)), `${theme}: these selectors rendered no text`).toEqual([])
     expect(unmeasurable, `${theme}: some selectors could not be judged`).toEqual([])
@@ -293,7 +331,7 @@ test('card styling stays inside the card sandbox in every app theme', async ({ p
 
     // The shortcut legend is the only discoverability surface for fifteen key
     // bindings, and it only renders in the reviewer, so it is measured here.
-    const legend = await measureChromeContrast(page, ['.review-shortcuts'])
+    const legend = await settledContrast(page, ['.review-shortcuts'])
     expect(legend.unmeasurable, `${theme}: the shortcut legend could not be judged`).toEqual([])
     expect(legend.measurements, `${theme}: the shortcut legend rendered no text`).toHaveLength(1)
     expect(legend.measurements.filter((measurement) => measurement.ratio < 4.5), `${theme}: shortcut legend below WCAG AA`).toEqual([])
