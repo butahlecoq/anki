@@ -3,6 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { collection, type NoteType, type NoteTypeField } from './collection'
 import { TemplatePreview } from './TemplatePreview'
 import { clozeOrdinals } from './template-renderer'
+import { fieldsByName, renderCard } from './card-rendering'
 
 type DraftField = { key: string; id?: string; name: string }
 type DraftTemplate = { key: string; id?: string; name: string; front: string; back: string; css: string }
@@ -76,13 +77,15 @@ function TypeEditor({ noteType, onClose }: { noteType?: NoteType; onClose: () =>
 
   const selected = templates[previewTemplate] ?? templates[0]
   const clozeFieldName = templates[0]?.front.match(/{{\s*cloze:([^{}:]+?)\s*}}/)?.[1].trim()
-  const displayFields = Object.fromEntries(fields.map((field) => [field.name, sampleOverrides[field.id ?? field.key] ?? exampleNote?.fields[field.id ?? field.key] ?? (kind === 'cloze' && field.name === clozeFieldName ? '{{c1::東京::city}}に{{c2::行く}}' : '')]))
+  const sampleFieldsById = Object.fromEntries(fields.map((field) => [field.id ?? field.key, sampleOverrides[field.id ?? field.key] ?? exampleNote?.fields[field.id ?? field.key] ?? (kind === 'cloze' && field.name === clozeFieldName ? '{{c1::東京::city}}に{{c2::行く}}' : '')]))
+  const displayFields = fieldsByName(fields.map((field) => ({ id: field.id ?? field.key, name: field.name })), sampleFieldsById)
   let previewOrdinals: number[] = []
   if (kind === 'cloze') {
     try { previewOrdinals = clozeOrdinals(displayFields[clozeFieldName ?? ''] ?? '') }
     catch { /* The preview reports the malformed sample. */ }
   }
   const shownOrdinal = previewOrdinals.includes(previewOrdinal) ? previewOrdinal : previewOrdinals[0]
+  const rendering = selected ? renderCard(selected, displayFields, { kind, ordinal: shownOrdinal }) : undefined
 
   return (
     <div className="dialog-backdrop">
@@ -134,7 +137,7 @@ function TypeEditor({ noteType, onClose }: { noteType?: NoteType; onClose: () =>
               {kind === 'cloze' && <label>Preview ordinal<select value={shownOrdinal ?? ''} onChange={(event) => setPreviewOrdinal(Number(event.target.value))}>{previewOrdinals.map((ordinal) => <option value={ordinal} key={ordinal}>c{ordinal}</option>)}</select></label>}
             </div>
             <div className="preview-samples">{fields.map((field) => <label key={field.key}>Sample {field.name || 'field'}<input value={displayFields[field.name] ?? ''} onChange={(event) => setSampleOverrides((current) => ({ ...current, [field.id ?? field.key]: event.target.value }))} /></label>)}</div>
-            {selected && <TemplatePreview front={selected.front} back={selected.back} css={selected.css} fields={displayFields} kind={kind} ordinal={shownOrdinal} templateOrdinal={previewTemplate + 1} side={previewSide} />}
+            {rendering && <TemplatePreview rendering={rendering} templateOrdinal={previewTemplate + 1} side={previewSide} />}
           </section>
           {error && <p className="form-error" role="alert">{error}</p>}
           <div className="dialog-actions"><button className="text-button" type="button" onClick={onClose}>Cancel</button><button className="primary-action" type="submit">{noteType ? 'Save changes' : 'Save note type'}</button></div>

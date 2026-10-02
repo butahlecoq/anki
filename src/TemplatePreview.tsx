@@ -1,25 +1,19 @@
 import { useEffect, useLayoutEffect, useRef, useCallback } from 'react'
-import { tryRenderTemplate } from './template-renderer'
 import { useTemplateNavigation } from './use-template-navigation'
 import { renderedNavigationActions } from './template-navigation'
+import { isRenderedCardEmpty, type RenderedCard } from './card-rendering'
 
 interface TemplatePreviewProps {
-  front: string
-  back: string
-  css: string
-  fields: Record<string, string>
+  rendering: RenderedCard
   side: 'front' | 'back'
   title?: string
-  kind?: 'standard' | 'cloze'
-  ordinal?: number
-  media?: Record<string, { kind: 'image' | 'audio'; url: string; automatic?: boolean }>
   templateOrdinal?: number
 }
 
-export function TemplatePreview({ front, back, css, fields, side, title = 'Card preview', kind = 'standard', ordinal, media, templateOrdinal = 1 }: TemplatePreviewProps) {
+export function TemplatePreview({ rendering, side, title = 'Card preview', templateOrdinal = 1 }: TemplatePreviewProps) {
   const frame = useRef<HTMLIFrameElement | null>(null)
   const frameRef = useRef<HTMLIFrameElement>(null)
-  const { frameRef: navigationFrameRef, dialog: navigationDialog, choose: chooseNavigation } = useTemplateNavigation(`${side}:${title}:${front}:${back}:${JSON.stringify(fields)}:${templateOrdinal}`)
+  const { frameRef: navigationFrameRef, dialog: navigationDialog, choose: chooseNavigation } = useTemplateNavigation(`${side}:${title}:${rendering.front?.html}:${rendering.back?.html}:${templateOrdinal}`)
   const combinedFrameRef = useCallback((element: HTMLIFrameElement | null) => {
     frame.current = element
     frameRef.current = element
@@ -28,23 +22,10 @@ export function TemplatePreview({ front, back, css, fields, side, title = 'Card 
   useEffect(() => {
     if (title === 'Review card') frame.current?.scrollIntoView?.({ block: 'center' })
   }, [title, side])
-  let frontHtml = ''
-  let html = ''
-  let empty = false
-  let error = ''
-  const renderedFront = tryRenderTemplate(front, fields, undefined, { kind, ordinal, side: 'front', media })
-  if (!renderedFront.ok) error = renderedFront.error
-  else {
-    frontHtml = renderedFront.value.html
-    empty = renderedFront.value.isEmpty
-    if (side === 'front') html = frontHtml
-    else {
-      const renderedBack = tryRenderTemplate(back, fields, frontHtml, { kind, ordinal, side: 'back', media })
-      if (renderedBack.ok) html = renderedBack.value.html
-      else error = renderedBack.error
-    }
-  }
-  const srcDoc = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:"><style>body{font-family:system-ui,sans-serif;color:#202a22;background:#fff;padding:24px;overflow-wrap:anywhere}.card-image{display:block;max-width:100%;max-height:290px;object-fit:contain}.card-audio{width:min(100%,400px)}a[data-kiroku-href]{color:#175fa6;text-decoration:underline;cursor:pointer}${css}</style></head><body class="card card${templateOrdinal}">${html}</body></html>`
+  const error = rendering.error ?? ''
+  const empty = isRenderedCardEmpty(rendering)
+  const html = (side === 'front' ? rendering.front : rendering.back)?.html ?? ''
+  const srcDoc = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:"><style>body{font-family:system-ui,sans-serif;color:#202a22;background:#fff;padding:24px;overflow-wrap:anywhere}.card-image{display:block;max-width:100%;max-height:290px;object-fit:contain}.card-audio{width:min(100%,400px)}a[data-kiroku-href]{color:#175fa6;text-decoration:underline;cursor:pointer}${rendering.css}</style></head><body class="card card${templateOrdinal}">${html}</body></html>`
   const navigationActions = renderedNavigationActions(html)
   useLayoutEffect(() => {
     const frame = frameRef.current

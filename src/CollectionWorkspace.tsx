@@ -5,7 +5,6 @@ import {
   BASIC_NOTE_TYPE_ID,
   IMAGE_OCCLUSION_NOTE_TYPE_ID,
   collection,
-  tryRenderNoteTemplate,
   type Deck,
   type DeckCounts,
   type DeckOptionGroup,
@@ -29,6 +28,7 @@ import { prepareAnkiImport, type PreparedAnkiImport } from './anki-import'
 import { CardHistory, Statistics, TodayWorkload } from './Statistics'
 import { CollectionBrowser } from './CollectionBrowser'
 import { unavailableReason } from './scheduler'
+import { describeCardMedia, isRenderedCardEmpty, renderNoteCard } from './card-rendering'
 import { ExportDialog } from './ExportDialog'
 import { CustomStudy } from './CustomStudy'
 import { answerCustomStudy, customStudyQueue, practiceChoices, undoCustomStudy } from './custom-study'
@@ -818,12 +818,6 @@ function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: string; se
   const recentCardAction = useLiveQuery(() => collection.latestCardMaintenanceUndo(), [])
   const choices = useLiveQuery(() => card ? sessionId && customSession?.reschedule === false ? practiceChoices : collection.reviewChoices(card.id, new Date(), Boolean(sessionId)) : [], [card?.id, sessionId, customSession?.reschedule], [])
   const template = noteType?.templates.find((candidate) => candidate.id === card?.templateId)
-  const frontResult = template && noteType && note && card
-    ? tryRenderNoteTemplate(template.front, noteType, note.fields, undefined, card.clozeOrdinal, 'front') : undefined
-  const backResult = frontResult?.ok && template && noteType && note && card
-    ? tryRenderNoteTemplate(template.back, noteType, note.fields, frontResult.value.html, card.clozeOrdinal, 'back') : undefined
-  const typedAnswer = frontResult?.ok ? frontResult.value.typedAnswer : undefined
-  const renderError = frontResult && !frontResult.ok ? frontResult.error : backResult && !backResult.ok ? backResult.error : undefined
   const imageOcclusion = noteType?.kind === 'image-occlusion'
   // Only prepare media once the live query has actually resolved for the active card,
   // so a pending read cannot be mistaken for a card that has no attachments. Prepared
@@ -833,6 +827,16 @@ function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: string; se
     ? media.filter((reference) => (!reference.templateId || reference.templateId === activeCard.templateId))
     : []
   const preparedMedia = useReviewMedia(activeMedia, cardId)
+  const attachments = activeMedia.filter((reference) => !reference.inline).map((reference) => describeCardMedia(
+    reference,
+    preparedMedia.sources.byReference[reference.id]?.url,
+    true,
+  ))
+  const renderedCard = template && noteType && note && card
+    ? renderNoteCard(noteType, template, note.fields, card.clozeOrdinal, preparedMedia.sources.byName, attachments)
+    : undefined
+  const typedAnswer = renderedCard?.typedAnswer
+  const renderError = renderedCard?.error
   // A media failure is reported but never blocks the card: a single corrupt or
   // unsupported attachment must not make the card permanently unanswerable.
   const mediaBlocked = !mediaQuery || preparedMedia.pending
@@ -841,7 +845,7 @@ function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: string; se
   const unavailable = card === null || note === null || noteType === null ||
     Boolean(card && unavailableReason(card, new Date()) !== null) ||
     (Boolean(noteType && card) && !template) ||
-    Boolean(frontResult?.ok && frontResult.value.isEmpty && !imageOcclusion)
+    Boolean(renderedCard && isRenderedCardEmpty(renderedCard) && !imageOcclusion)
 
   useEffect(() => {
     if (showAnswer && typedAnswer !== undefined) typedResultRef.current?.focus()
@@ -1091,7 +1095,6 @@ function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: string; se
     <button className="primary-action" type="button" onClick={skipCard}>Skip card</button>
   </section>{reviewerDialogs}</>
 
-  const fields = Object.fromEntries(noteType.fields.map((field) => [field.name, note.fields[field.id] ?? '']))
   const answerDiff = showAnswer && typedAnswer !== undefined ? compareTypedAnswer(typedAnswer, typedInput) : []
 
   return (
@@ -1107,10 +1110,10 @@ function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: string; se
         <span className="card-side">{showAnswer ? 'ANSWER' : 'QUESTION'}</span>
         {mediaBlocked ? <p role="status">Preparing card media…</p> : imageOcclusion
           ? <ImageOcclusionReview note={note} card={card} showAnswer={showAnswer} imageUrl={preparedMedia.sources.byReference[note.imageOcclusion?.sourceMediaId ?? '']?.url} />
-          : <TemplatePreview title="Review card" key={card.id} front={template.front} back={template.back} css={template.css} fields={fields} kind={noteType.kind} ordinal={card.clozeOrdinal} templateOrdinal={Math.max(1, noteType.templates.findIndex((candidate) => candidate.id === template.id) + 1)} side={showAnswer ? 'back' : 'front'} media={preparedMedia.sources.byName} />}
+          : <TemplatePreview title="Review card" key={card.id} rendering={renderedCard!} templateOrdinal={Math.max(1, noteType.templates.findIndex((candidate) => candidate.id === template.id) + 1)} side={showAnswer ? 'back' : 'front'} />}
         {preparedMedia.error && <p className="form-error" role="alert">Some attachments could not be shown: {preparedMedia.error}</p>}
-        {!mediaBlocked && noteType.kind !== 'image-occlusion' && media.filter((reference) => !reference.inline && reference.side === 'front' && (!reference.templateId || reference.templateId === card.templateId)).map((reference) => <MediaRenderer key={reference.id} reference={reference} url={preparedMedia.sources.byReference[reference.id]?.url} automatic />)}
-        {!mediaBlocked && noteType.kind !== 'image-occlusion' && showAnswer && media.filter((reference) => !reference.inline && reference.side === 'back' && (!reference.templateId || reference.templateId === card.templateId)).map((reference) => <MediaRenderer key={reference.id} reference={reference} url={preparedMedia.sources.byReference[reference.id]?.url} automatic />)}
+        {!mediaBlocked && noteType.kind !== 'image-occlusion' && renderedCard?.media.filter((description) => description.side === 'front').map((description) => <MediaRenderer key={description.id} description={description} />)}
+        {!mediaBlocked && noteType.kind !== 'image-occlusion' && showAnswer && renderedCard?.media.filter((description) => description.side === 'back').map((description) => <MediaRenderer key={description.id} description={description} />)}
         {typedAnswer !== undefined && !showAnswer && <label className="typed-answer">Type your answer
           <input autoComplete="off" value={typedInput} onChange={(event) => setTypedDraft({ cardId, value: event.target.value })} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); if (!mediaBlocked) setShownAnswerCardId(cardId) } }} />
         </label>}

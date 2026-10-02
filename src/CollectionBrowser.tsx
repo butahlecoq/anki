@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { collection, State, tryRenderNoteTemplate, type Note } from './collection'
+import { collection, State, type Note } from './collection'
 import { collectionDeckPaths, collectionSearchRows, compileCollectionSearch, plainField, SearchSyntaxError, type SearchRow } from './collection-search'
 import { applyBulkAction, applyFieldChanges, previewFieldChanges, selectionSummary, type BrowserSelection, type BulkAction, type FieldChange, type FieldOperation } from './browser-maintenance'
 import { customStudyMembership } from './custom-study-state'
 import { unavailableReason } from './scheduler'
 import { ImageOcclusionEditor } from './ImageOcclusion'
+import { isRenderedCardEmpty, renderNoteCard } from './card-rendering'
 
 type View = 'cards' | 'notes'
 type Sort = { key: string; descending: boolean }
@@ -157,8 +158,7 @@ export function CollectionBrowser() {
       const template = row.noteType?.templates.find((candidate) => candidate.id === row.card?.templateId)
       if (!template || !row.noteType) return true
       if (row.noteType.kind === 'image-occlusion') return false
-      const front = tryRenderNoteTemplate(template.front, row.noteType, row.note.fields, undefined, row.card.clozeOrdinal, 'front')
-      return front.ok && front.value.isEmpty
+      return isRenderedCardEmpty(renderNoteCard(row.noteType, template, row.note.fields, row.card.clozeOrdinal))
     })
     if (view === 'notes') matches = [...new Map(matches.map((row) => [row.note.id, row])).values()]
     const cardCounts = new Map<string, number>()

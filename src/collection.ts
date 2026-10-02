@@ -4,6 +4,7 @@ import { createEmptyCard } from 'ts-fsrs'
 import { answerWithSchedule, deserializeCard, eligibleForQueue, eligibleForStudy, isBuried, isLearningCard, nextStudyBoundary, Rating, reviewChoices as previewReviewChoices, schedulerFor, selectDueCards, serializeCard, State, templateSuspended, validateSteps, type Grade } from './scheduler'
 import { digestMedia, validateMedia, type AudioPlayback, type MediaKind, type MediaSide } from './media'
 import { clozeOrdinals, renderTemplate, tryRenderTemplate, validateTemplate } from './template-renderer'
+import { fieldsByName, isRenderedCardEmpty, renderNoteCard } from './card-rendering'
 import { mergeRevisions, revisionHeads, type RevisionMerge } from './sync-revisions'
 
 export { Rating, State }
@@ -137,12 +138,12 @@ const imageOcclusionNoteType: NoteType = {
 
 /** Note values are stored by immutable field ID; templates address display names. */
 export function renderNoteTemplate(template: string, noteType: NoteType, fieldsById: Record<string, string>, front?: string, ordinal?: number, side?: 'front' | 'back') {
-  const displayFields = Object.fromEntries(noteType.fields.map((field) => [field.name, fieldsById[field.id] ?? '']))
+  const displayFields = fieldsByName(noteType.fields, fieldsById)
   return renderTemplate(template, displayFields, front, { kind: noteType.kind === 'image-occlusion' ? 'standard' : noteType.kind, ordinal, side: side ?? (front === undefined ? 'front' : 'back') })
 }
 
 export function tryRenderNoteTemplate(template: string, noteType: NoteType, fieldsById: Record<string, string>, front?: string, ordinal?: number, side?: 'front' | 'back') {
-  const displayFields = Object.fromEntries(noteType.fields.map((field) => [field.name, fieldsById[field.id] ?? '']))
+  const displayFields = fieldsByName(noteType.fields, fieldsById)
   return tryRenderTemplate(template, displayFields, front, { kind: noteType.kind === 'image-occlusion' ? 'standard' : noteType.kind, ordinal, side: side ?? (front === undefined ? 'front' : 'back') })
 }
 
@@ -885,7 +886,9 @@ export class Collection extends Dexie {
       return { eligible, skipped }
     }
     for (const template of noteType.templates) {
-      if (renderNoteTemplate(template.front, noteType, fields).isEmpty) skipped.push({ templateId: template.id, reason: 'Front has no visible field content' })
+      const rendered = renderNoteCard(noteType, template, fields)
+      if (rendered.error) throw new Error(rendered.error)
+      if (isRenderedCardEmpty(rendered)) skipped.push({ templateId: template.id, reason: 'Front has no visible field content' })
       else eligible.push(template)
     }
     return { eligible, skipped }
@@ -1493,8 +1496,8 @@ export class Collection extends Dexie {
         const template = type?.templates.find((candidate) => candidate.id === card.templateId)
         if (!note || !type || !template || !eligibleForStudy(card, now)) return false
         if (type.kind === 'image-occlusion') return true
-        const front = tryRenderNoteTemplate(template.front, type, note.fields, undefined, card.clozeOrdinal, 'front')
-        return !front.ok || !front.value.isEmpty
+        const rendered = renderNoteCard(type, template, note.fields, card.clozeOrdinal)
+        return !isRenderedCardEmpty(rendered)
       })
     })
   }

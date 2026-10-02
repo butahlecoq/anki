@@ -1,4 +1,5 @@
-import { tryRenderNoteTemplate, type CardRecord, type Collection, type Grade } from './collection'
+import type { CardRecord, Collection, Grade } from './collection'
+import { isRenderedCardEmpty, renderNoteCard } from './card-rendering'
 import { collectionSearchRows, compileCollectionSearch, type SearchRow } from './collection-search'
 import { customStudyKey, customStudySessions, type CustomStudySession } from './custom-study-state'
 import { eligibleForQueue } from './scheduler'
@@ -9,8 +10,7 @@ function renderable(row: SearchRow, now: Date) {
   const template = row.noteType.templates.find((entry) => entry.id === row.card!.templateId)
   if (!template) return false
   if (row.noteType.kind === 'image-occlusion') return true
-  const front = tryRenderNoteTemplate(template.front, row.noteType, row.note.fields, undefined, row.card.clozeOrdinal, 'front')
-  return !front.ok || !front.value.isEmpty
+  return !isRenderedCardEmpty(renderNoteCard(row.noteType, template, row.note.fields, row.card.clozeOrdinal))
 }
 function rank(value: string) {
   let hash = 2166136261
