@@ -205,6 +205,23 @@ describe('Anki package import', () => {
 
     expect(prepared.summary).toMatchObject({ decks: 2, noteTypes: 2, notes: 2, cards: 4, reviews: 1, media: 2 })
     expect(prepared.duplicates).toEqual({ create: 2, update: 0, keepLocal: 0, unchanged: 0 })
+    expect(structuredClone(prepared.plan)).toMatchObject({
+      blocksImport: false,
+      writes: {
+        decks: expect.arrayContaining([expect.objectContaining({ action: 'create', value: expect.objectContaining({ id: 'anki-deck:1700000000010' }) })]),
+        noteTypes: expect.arrayContaining([expect.objectContaining({ action: 'create', value: expect.objectContaining({ id: 'anki-note-type:1700000000001' }) })]),
+        notes: expect.arrayContaining([expect.objectContaining({ action: 'create', value: expect.objectContaining({ id: 'anki-note:stable-vocabulary-guid' }) })]),
+        cards: expect.arrayContaining([expect.objectContaining({ action: 'create', value: expect.objectContaining({ id: expect.any(String) }) })]),
+        reviews: [expect.objectContaining({ action: 'create', value: expect.objectContaining({ id: 'anki-review:1725192000000' }) })],
+        references: expect.arrayContaining([expect.objectContaining({ action: 'create', value: expect.objectContaining({ noteId: 'anki-note:stable-vocabulary-guid' }) })]),
+      },
+      decisions: expect.arrayContaining([
+        { entity: 'note', id: 'anki-note:stable-vocabulary-guid', action: 'create' },
+        { entity: 'review', id: 'anki-review:1725192000000', action: 'create' },
+      ]),
+    })
+    expect(prepared.plan).not.toHaveProperty('collection')
+    expect(prepared.plan.writes.blobs.every((blob) => !('blob' in blob))).toBe(true)
     expect(prepared.issues.filter((issue) => issue.severity === 'error')).toEqual([])
     expect(prepared.issues).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'deck-hierarchy', detail: expect.stringContaining('Japanese::Core') }),
@@ -275,6 +292,8 @@ describe('Anki package import', () => {
 
     const prepared = await prepareAnkiImport(olderPackage, collection, { SQL, now: new Date('2026-10-02T12:00:00.000Z') })
     expect(prepared.duplicates.keepLocal).toBe(1)
+    expect(prepared.plan.decisions).toContainEqual({ entity: 'note', id: note.id, action: 'keepLocal' })
+    expect(prepared.plan.writes.notes).not.toContainEqual(expect.objectContaining({ value: expect.objectContaining({ id: note.id }) }))
     await prepared.commit()
     await expect(collection.notes.get(note.id)).resolves.toMatchObject({ fields: { 'anki-field:1700000000001:2': 'feline' } })
     await expect(collection.mediaForNote(note.id)).resolves.toEqual(existingMedia)
@@ -409,9 +428,11 @@ describe('Anki package import', () => {
   test('blocks executable templates and malformed media bytes with detailed errors', async () => {
     collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
     const executable = await prepareAnkiImport(await executableTemplatePackage(), collection, { SQL })
+    expect(executable.plan.blocksImport).toBe(true)
     expect(executable.issues).toEqual(expect.arrayContaining([expect.objectContaining({ severity: 'error', code: 'unsupported-note-type', subject: 'Executable template', detail: expect.stringMatching(/executable/i) })]))
     await expect(executable.commit()).rejects.toThrow(/resolve package errors/i)
     const malformed = await prepareAnkiImport(await malformedMediaPackage(), collection, { SQL })
+    expect(malformed.plan.blocksImport).toBe(true)
     expect(malformed.issues).toEqual(expect.arrayContaining([expect.objectContaining({ severity: 'error', code: 'media-malformed', subject: 'broken.png' })]))
     await expect(malformed.commit()).rejects.toThrow(/resolve package errors/i)
   })
