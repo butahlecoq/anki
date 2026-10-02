@@ -8,26 +8,22 @@ Fetch before relying on checks. Run `git status --short --branch` in each path. 
 
 | Path | Branch | Head | State |
 |---|---|---|---|
-| `C:/work/anki` | `main` | `90cbc07` | clean; handoff update pending on this branch |
+| `C:/work/anki` | `main` | `ad9a483` | this handoff refresh pending; preceding documentation CI `37015081542` failed |
 | `C:/work/anki-17` | `feat/17-text-csv` | `7c00ccb` | clean; draft PR #72; exact-head CI `37010267515` passed |
-| `C:/work/anki-18` | `feat/18-safe-concurrency` | `aa08a1e` | clean; draft PR #73; exact-head CI `37014980937` running |
-| `C:/work/anki-23` | `feat/23-jetbrains-omarchy-ux` | `1402c44` | in progress; draft PR #74; exact-head CI `37014188208` running; three uncommitted mobile-layout/theme test edits preserved |
-| `C:/work/anki-56` | `feat/56-ankiweb-account` | `406b9ef` | clean; draft PR #75; exact-head CI `37012689001` passed |
+| `C:/work/anki-18` | `feat/18-safe-concurrency` | `c1fa803` | clean; draft PR #73; exact-head CI `37016885671` running |
+| `C:/work/anki-23` | `feat/23-jetbrains-omarchy-ux` | `b4a6415` | clean; draft PR #74; exact-head CI `37017542638` running |
+| `C:/work/anki-56` | `feat/56-ankiweb-account` | `91f2c5c` | clean; draft PR #75; exact-head CI `37016646020` passed |
 
 Do not merge the draft PRs. No worktree has been removed.
 
 ## Exact-head CI and review findings
 
-- #17 / PR #72: old run `37006282653` failed because its browser test queried every `role=status` after import; the preview summary and “Working…” indicator made that locator ambiguous. The test now waits for the exact “Import complete: …” message at `b423520`; new run `37007876080` is running. Inspect its exact-head result and artifacts before making any readiness claim.
-- #18 / PR #73: `bfe1042` isolates the concurrency browser test's sync server and runtime directory after stale conflicts from other tests contaminated the fixture. Run `37006286987` was still running at this checkpoint. The PR comments contain earlier server compatibility, undo/race, and conflict UI handoffs. Check this run and preserve remaining manual scheduling/deletion/media-race and visible journey acceptance gaps.
-- #23 / PR #74: an additional status-bar/theme follow-up was pushed at `2fb7647` after the earlier green head. Exact-head CI `37008036020` is running. Earlier head `f46e07e` passed full check `37006365277`; do not carry that pass forward to the new commit. Review the new artifacts/screenshots and keep physical iPhone acceptance separate; the CI phone-sized WebKit project is not a device.
-- #56 / PR #75: exact-head CI `37007779740` is running on `f9ebd29`. Prior storage-only head `e16febb` passed CI run `37006347943`.
-- Main CI `37004063690` failed at an existing offline hint test on iPhone WebKit after timing out at 30 seconds; 72 passed, 9 skipped. Failure artifact points to `tests/e2e/hint.spec.ts` around the offline answer/review flow. Investigate as a separate main reliability issue; do not attribute it to the #17 or #56 work.
-- #17 / PR #72: the corrected semantic CSV metadata assertion passed exact-head CI `37010267515` at `7c00ccb`. PR remains draft pending review/acceptance and any issue-specific requirements.
-- #18 / PR #73: run `37009509517` failed for test issues: the touch-only `.tap()` also ran in desktop Chromium, and the studied-card locator assumed a Japanese front-text label. `4d893d1` scopes touch to touch projects and targets the sole studied card. Run `37012616336` then failed on a smooth-scroll hang while clicking that button; the hint journey was flaky but passed on retry. `aa08a1e` enables reduced-motion in the two-client browser journey; exact-head CI `37014980937` is running. Typecheck/lint passed locally (one existing warning); local Playwright still fails to launch Chromium with `spawn UNKNOWN`.
-- #23 / PR #74: review of run `37010276739` at `003f8eb` found the live WCAG audit failing on visible section/mobile navigation text. `68201c8` gives panel headings and mobile navigation primary text; the audit then exposed a WebKit paint race (readings combined current surfaces with descendant text from the previous theme). `62663e1` waits for two animation frames and asserts body ink; `cf6a771` adds viewport screenshots; `494bd6d` sets primary text directly on mobile label spans; and `1402c44` waits for two consecutive agreeing contrast readings before judging the result. Exact-head CI `37014188208` is running on `1402c44`. Three uncommitted changes now add a coarse-pointer rule hiding the keyboard-only reviewer legend, a structural test for that rule, and matching appearance assertions; preserve these edits and review them with their author before staging. `ac603ad` fixes global keyboard shortcuts firing while dialogs are open. Local typecheck/lint passed (one existing `ImageOcclusion.tsx` warning); 312 client tests passed before the latest uncommitted edits. Windows Playwright still fails with `spawn UNKNOWN`.
-- #56 / PR #75: `406b9ef` scopes the offline hint gesture to touch projects. Exact-head CI `37012689001` passed. This only verifies the existing branch gate; account login, round-trip writeback, deployment, and physical iPhone PC-off sync are still not implemented or evidenced.
-- #70 / issue #67: previous exact-head CI at `06682d0` passed (`36972904946`), but the private aggregate package preview remains a separate machine-local check. On the machine with private Japanese examples, inspect only `runtime/local-package-preview-summary.json` and confirm no process is still running before deciding to rerun. Never commit packages, credentials, note text, or per-note diagnostics.
+- #17 / PR #72: exact-head CI `37010267515` passed at `7c00ccb`. The semantic CSV metadata assertion fixed an earlier quoting-assumption failure. PR remains draft pending final review and issue acceptance.
+- #18 / PR #73: `37014980937` failed when the two-client journey still hung while clicking the studied-card button; iPhone empty-template/hint tests also timed out or flaked. `c1fa803` explicitly scrolls that control into view before clicking. Exact-head CI `37016885671` is running. Typecheck/lint passed locally (existing `ImageOcclusion.tsx` warning); Windows Playwright launch still fails with `spawn UNKNOWN`.
+- #23 / PR #74: #23 includes inherited text colors, mobile contrast fixes, a WebKit theme-paint audit, and hides the keyboard shortcut legend on coarse-pointer phones. `37015641465` failed because the test counted a hidden DOM node; `d6a8189` checks visibility instead. `b4a6415` corrects the test comment after CI showed that iPhone WebKit reports a coarse pointer, and asserts visibility on fine pointers. Exact-head CI `37017542638` is running; the prior `d6a8189` run `37017074261` is also still running. This is not physical iPhone evidence.
+- #56 / PR #75: `91f2c5c` adds a durable native projection manifest tied to the exact SQLite snapshot and checkpoint revision, including native note/card/review/deck/model/template IDs and original per-card deck bindings. It rejects stale saves and invalidates the map after checkpoint replacement. Focused tests, 268 client tests, typecheck, lint, build, and exact-head CI `37016646020` passed. Account login, native writeback/merge/recovery, gateway deployment, and installed-iPhone sync with PC off remain incomplete.
+- Main documentation CI `37015081542` failed on `ad9a483` in iPhone WebKit: the offline hint journey timed out, and the child-deck study-limit journey timed out waiting for an Easy rating button (then passed on retry). Typecheck, lint, unit/server tests, and build passed before the browser stage. Investigate the hint failure and rating state before making a main-green claim. Do not treat documentation CI as feature acceptance.
+- #67's private aggregate package preview remains machine-local. Check only `runtime/local-package-preview-summary.json` on the machine that owns private Japanese examples. Never commit packages, credentials, note text, or per-note diagnostics.
 
 ## #56 account work and next steps
 
@@ -35,12 +31,13 @@ PR #75 now includes:
 
 1. `e16febb`: namespaced IndexedDB stores for native collection checkpoints and media, derived from normalized username without persisting credentials. This is namespacing, not encryption.
 2. `f9ebd29`: a schema-11 SQLite reader that validates the snapshot and builds an in-memory `CollectionData` projection input; importer logic can consume that data without wrapping the whole native account in an `.apkg` archive. Its focused fixture checks native note/card/review identities, siblings in separate decks, Japanese data, source snapshot immutability, and unsupported schema rejection.
+3. `91f2c5c`: a persisted base manifest tied to the exact native snapshot and checkpoint revision, with native IDs, note type ordinals, and original per-card deck bindings. Replacing the checkpoint invalidates the manifest. This map is not yet wired to app edits or native writeback.
 
-Validation on `f9ebd29`: typecheck passed; 266 client tests passed; lint passed with the existing `ImageOcclusion.tsx` warning; production build passed. Full browser CI is pending. No real account credentials or writes were used.
+Validation on the latest manifest head: typecheck, 268 client tests, lint (existing `ImageOcclusion.tsx` warning), production build, and exact-head CI `37016646020` passed. No real account credentials or writes were used.
 
 This is only a projection input and storage boundary. It is not wired to visible account UI or sync. Key remaining design/implementation work:
 
-- Persist a recoverable base manifest; preserve unsupported native rows/configuration/media and original per-card deck IDs even though the app model binds sibling cards through a note deck.
+- Integrate the persisted base manifest with supported app entities while preserving unsupported native rows/configuration/media and original per-card deck IDs even though the app model binds sibling cards through a note deck.
 - Map supported field/card/review edits, deletions, and media back into the original native snapshot. Give newly created review IDs stable across interruption/reopen.
 - Integrate #18 causal revisions after its review/merge; resolve concurrent account/app edits without silently overwriting.
 - Add visible login/status/manual sync/logout, runtime gateway configuration, cancellation, clear full-sync direction previews, and durable backup/recovery controls. Credentials stay in memory.
@@ -51,12 +48,11 @@ Known projection limits to audit before expanding it: currently it accepts only 
 
 ## At-home start
 
-1. Continue in these existing paths; no additional worktrees were created. `git fetch origin`, check each listed branch/status, and inspect current exact-head CI for #18/#23/#56. #17's `7c00ccb` CI is green.
+1. Continue in these existing paths; no additional worktrees were created. `git fetch origin`, check each listed branch/status, and inspect current exact-head CI for #18/#23. #17's `7c00ccb` and #56's `91f2c5c` CI are green.
 2. Start in `C:/work/anki-56`; read issue #56 comments, `docs/ankiweb-account-sync.md`, `docs/native-anki-engine.md`, and this handoff.
-3. Inspect #18 `37014980937`, including the two-client journey artifacts if it fails or flakes.
-4. Review exact-head contrast screenshots/data for #23 `1402c44`, then review the preserved uncommitted phone-layout slice. Physical iPhone acceptance is still separate.
-5. Update PR #75's description/checkpoint after `406b9ef` receives CI. The GitHub issue comment has the account task list.
-6. Continue only the bounded projection/base-manifest design; leave all PRs draft until their issue-specific evidence is complete.
-5. Check #67's private local preview only on the machine that owns those inputs.
+3. Inspect #18 `37016885671`, including the two-client journey artifacts if it fails or flakes.
+4. Inspect #23 `37017542638` and its attached rendered contrast screenshots. Physical iPhone acceptance is still separate.
+5. Continue #56 from the persisted manifest into deterministic app-entity identity mapping and recoverable native writeback; leave all PRs draft until their issue-specific evidence is complete.
+6. Check #67's private local preview only on the machine that owns those inputs.
 
 The authoritative issue/PR process and five triage labels are in `docs/agents/issue-tracker.md` and `docs/agents/triage-labels.md`. Use one issue worktree per active feature, and remove it only in the same step as merging that issue's PR.
