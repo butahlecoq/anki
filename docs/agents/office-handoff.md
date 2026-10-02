@@ -5,9 +5,9 @@
 This section supersedes stale head IDs and progress statements below where they
 conflict. Current `main` is `483958129c58f0f28aaa53f571176ce112f0115f`.
 The clean active worktree is `C:/work/anki-18`, branch
-`feat/18-safe-concurrency`, at the latest pushed branch head (fetch GitHub for
-the exact hash), equal to `origin/feat/18-safe-concurrency`. Draft PR #73
-remains open.
+The office branch is being rebased onto current `origin/main` in a separate
+worktree. The original `feat/18-safe-concurrency` branch and draft PR #73 are
+preserved until the rebased work passes validation and is pushed.
 
 The #18 branch now includes schema-watermark and durable metadata-inference
 regressions, a visible two-context offline conflict/choice/convergence journey,
