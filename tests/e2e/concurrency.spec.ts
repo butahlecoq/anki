@@ -157,8 +157,12 @@ test('independent offline clients merge fields, retain conflicts through reload,
       const studiedCards = page.getByRole('heading', { name: 'Cards studied in this period' }).locator('..')
       await expect(studiedCards.getByRole('button')).toHaveCount(1)
       const historyButton = studiedCards.getByRole('button')
-      await historyButton.evaluate((button) => button.scrollIntoView({ block: 'center', behavior: 'instant' }))
-      await historyButton.click()
+      // The statistics panel is tall enough that Chromium repeatedly scrolls
+      // this nested control while waiting for a stable pointer hit target.
+      // Exercise the real keyboard activation path used by accessible buttons.
+      await historyButton.focus()
+      await expect(historyButton).toBeFocused()
+      await page.keyboard.press('Enter')
       const history = page.getByRole('region', { name: 'Card review history' })
       await expect(history.getByRole('listitem')).toHaveCount(2)
       await expect(history).toContainText('Good'); await expect(history).toContainText('Easy')
