@@ -34,6 +34,7 @@ import { answerCustomStudy, customStudyQueue, practiceChoices, undoCustomStudy }
 import { customStudySessions } from './custom-study-state'
 import { isShortcutBlocked } from './keyboard-shortcuts'
 import { TextCollectionDialog } from './TextCollectionDialog'
+import { SyncConflicts } from './SyncConflicts'
 
 type Route =
   | { view: 'decks' }
@@ -1178,6 +1179,7 @@ export function CollectionWorkspace() {
   return (
     <>
       <SyncControls />
+      <SyncConflicts />
       <button className="text-button" onClick={() => setExporting(true)}>Export Anki package</button>
       <button className="text-button" onClick={() => setTextTransfer(true)}>Import / export text</button>
       {content}

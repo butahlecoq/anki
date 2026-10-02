@@ -425,7 +425,7 @@ export class PreparedAnkiImport {
     if (this.committed) throw new Error('This package has already been imported')
     if (this.issues.some((issue) => issue.severity === 'error')) throw new Error('Resolve package errors before importing')
     const collection = this.collection
-    await collection.transaction('rw', [collection.decks, collection.noteTypes, collection.notes, collection.cards, collection.reviewEntries, collection.noteMedia, collection.mediaBlobs, collection.outbox], async () => {
+    await collection.transaction('rw', [collection.decks, collection.noteTypes, collection.notes, collection.cards, collection.reviewEntries, collection.noteMedia, collection.mediaBlobs, collection.outbox, collection.syncRevisions], async () => {
       for (const snapshot of this.snapshots) {
         const current = await collection[snapshot.table].get(snapshot.id as never)
         if (fingerprint(current) !== snapshot.value) throw new Error('The collection changed after this preview. Please preview again before importing.')
@@ -447,7 +447,7 @@ export class PreparedAnkiImport {
         ...this.writes.references.map(({ value, action }) => operation('noteMedia', value.id, action, value, this.importedAt)),
         ...this.writes.deletedReferences.map((value) => ({ opId: crypto.randomUUID(), entityType: 'noteMedia' as const, entityId: value.id, action: 'delete' as const, payload: { id: value.id }, occurredAt: this.importedAt })),
       ]
-      if (operations.length) await collection.outbox.bulkAdd(operations)
+      if (operations.length) await collection.enqueueOperations(operations)
     })
     this.committed = true
   }

@@ -13,6 +13,8 @@ type SyncOperation = {
   action: string
   occurredAt: string
   payload: unknown
+  parents?: string[]
+  reviewId?: string
 }
 type SyncRequest = SyncCapabilities & { cursor: number; operations: SyncOperation[] }
 
@@ -25,12 +27,13 @@ const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(v
  * collection format needed to preserve their payload so a service upgrade
  * cannot reopen a mixed-version sync hole.
  */
-function schemaRequiredByOperation(operation: Pick<SyncOperation, 'entityType' | 'action' | 'payload'>): number {
-  let required = 1
+function schemaRequiredByOperation(operation: Pick<SyncOperation, 'entityType' | 'action' | 'payload' | 'parents' | 'reviewId'>): number {
+  let required = operation.parents !== undefined || operation.reviewId !== undefined ? 15 : 1
   if (operation.entityType === 'noteMedia') required = 5
   if (operation.entityType === 'noteType') required = 6
   if (operation.entityType === 'deckOptionGroup') required = 9
   const payload = isRecord(operation.payload) ? operation.payload : {}
+  if (operation.entityType === 'review' && 'scheduling' in payload) required = Math.max(required, 15)
   if (operation.entityType === 'review' && 'rescheduled' in payload) required = Math.max(required, 14)
   if (operation.entityType === 'note' && typeof payload.typeId === 'string') required = Math.max(required, 6)
   if (operation.entityType === 'card' && typeof payload.templateId === 'string') required = Math.max(required, 6)
@@ -75,6 +78,9 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
     CREATE TABLE IF NOT EXISTS media_blobs (digest TEXT PRIMARY KEY, byte_length INTEGER NOT NULL, mime_type TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS collection_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
   `)
+  const changeColumns = database.prepare('PRAGMA table_info(changes)').all() as Array<{ name: string }>
+  if (!changeColumns.some((column) => column.name === 'parents')) database.exec('ALTER TABLE changes ADD COLUMN parents TEXT')
+  if (!changeColumns.some((column) => column.name === 'review_id')) database.exec('ALTER TABLE changes ADD COLUMN review_id TEXT')
   const storedWatermark = database.prepare("SELECT value FROM collection_metadata WHERE key = 'collection_schema_version'").get() as { value: string } | undefined
   const persistedWatermark = storedWatermark && Number.parseInt(storedWatermark.value, 10)
   const inferredWatermark = (database.prepare('SELECT entity_type, action, payload FROM changes').all() as PersistedChange[]).reduce((maximum, change) => {
@@ -156,9 +162,12 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
         // the first accepted operation.
         const currentWatermark = persistedCollectionSchemaVersion()
         const nextWatermark = assertCapabilities(request, currentWatermark)
-        const insert = database.prepare('INSERT OR IGNORE INTO changes (op_id, device_id, entity_type, entity_id, action, occurred_at, payload) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        const insert = database.prepare('INSERT OR IGNORE INTO changes (op_id, device_id, entity_type, entity_id, action, occurred_at, payload, parents, review_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
         for (const operation of request.operations) {
-          const result = insert.run(operation.opId, device.id, operation.entityType, operation.entityId, operation.action, operation.occurredAt, JSON.stringify(operation.payload))
+          if (operation.parents !== undefined && (!Array.isArray(operation.parents) || operation.parents.some((parent) => typeof parent !== 'string' || !parent || parent === operation.opId) || new Set(operation.parents).size !== operation.parents.length)) throw new Error('Invalid sync revision parents')
+          const previous = database.prepare('SELECT entity_type, entity_id, action, occurred_at, payload, parents, review_id FROM changes WHERE op_id = ?').get(operation.opId) as { entity_type: string; entity_id: string; action: string; occurred_at: string; payload: string; parents: string | null; review_id: string | null } | undefined
+          if (previous && (previous.entity_type !== operation.entityType || previous.entity_id !== operation.entityId || previous.action !== operation.action || previous.occurred_at !== operation.occurredAt || previous.payload !== JSON.stringify(operation.payload) || previous.parents !== (operation.parents ? JSON.stringify(operation.parents) : null) || previous.review_id !== (operation.reviewId ?? null))) throw new Error('Sync operation identity was reused with different content')
+          const result = insert.run(operation.opId, device.id, operation.entityType, operation.entityId, operation.action, operation.occurredAt, JSON.stringify(operation.payload), operation.parents ? JSON.stringify(operation.parents) : null, operation.reviewId ?? null)
           accepted += Number(result.changes)
         }
         if (nextWatermark > currentWatermark) {
@@ -170,7 +179,7 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
         database.exec('ROLLBACK')
         throw error
       }
-      const changes = database.prepare('SELECT cursor, op_id, device_id, entity_type, entity_id, action, occurred_at, payload FROM changes WHERE cursor > ? ORDER BY cursor').all(request.cursor) as Array<{ cursor: number; op_id: string; device_id: string; entity_type: string; entity_id: string; action: string; occurred_at: string; payload: string }>
+      const changes = database.prepare('SELECT cursor, op_id, device_id, entity_type, entity_id, action, occurred_at, payload, parents, review_id FROM changes WHERE cursor > ? ORDER BY cursor').all(request.cursor) as Array<{ cursor: number; op_id: string; device_id: string; entity_type: string; entity_id: string; action: string; occurred_at: string; payload: string; parents: string | null; review_id: string | null }>
       const cursor = changes.at(-1)?.cursor ?? request.cursor
       return {
         protocolVersion: SYNC_PROTOCOL_VERSION,
@@ -186,6 +195,8 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
           action: change.action,
           occurredAt: change.occurred_at,
           payload: JSON.parse(change.payload) as unknown,
+          ...(change.parents !== null ? { parents: JSON.parse(change.parents) as string[] } : {}),
+          ...(change.review_id !== null ? { reviewId: change.review_id } : {}),
         })),
       }
     },

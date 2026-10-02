@@ -11,7 +11,7 @@ import { createSyncService } from './sync-service.js'
 import { createSyncHttpHandler } from './sync-http.js'
 
 let runtimeDirectory: string | undefined
-const serviceHealth = (collectionSchemaVersion = 1) => ({ ready: true, schemaVersion: 1, protocolVersion: 2, collectionSchemaVersion, maximumCollectionSchemaVersion: 14, store: 'sqlite' as const })
+const serviceHealth = (collectionSchemaVersion = 1) => ({ ready: true, schemaVersion: 1, protocolVersion: 2, collectionSchemaVersion, maximumCollectionSchemaVersion: 15, store: 'sqlite' as const })
 
 afterEach(async () => {
   if (runtimeDirectory) await rm(runtimeDirectory, { recursive: true, force: true })
@@ -71,7 +71,7 @@ test('persists a collection schema watermark and rejects an incompatible client 
   assert.equal(service.changeCount(), 0)
   assert.equal(service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 12, cursor: 0, operations: [] }).accepted, 0)
   assert.equal(service.health().collectionSchemaVersion, 12)
-  assert.throws(() => service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 15, cursor: 0, operations: [] }), /supports collection schemas through 14/i)
+  assert.throws(() => service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 16, cursor: 0, operations: [] }), /supports collection schemas through 15/i)
   assert.equal(service.changeCount(), 0)
   service.close()
 

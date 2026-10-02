@@ -11,6 +11,7 @@ import {
 } from 'ts-fsrs'
 import { digestMedia, validateMedia, type AudioPlayback, type MediaKind, type MediaSide } from './media'
 import { clozeOrdinals, renderTemplate, tryRenderTemplate, validateTemplate } from './template-renderer'
+import { mergeRevisions, revisionHeads, type RevisionMerge } from './sync-revisions'
 
 export { Rating, State }
 export type { Grade }
@@ -256,6 +257,8 @@ export interface ReviewEntry {
   durationMs?: number
   /** False for custom-study practice: the scheduling record stays unchanged. */
   rescheduled?: boolean
+  /** Original schedule and policy make independently produced reviews replayable. */
+  scheduling?: { before: CardRecord; options: DeckOptionGroup }
 }
 
 export interface DeckCounts {
@@ -284,7 +287,12 @@ export interface SyncOperation {
   action: 'create' | 'update' | 'delete'
   occurredAt: string
   payload: unknown
+  parents?: string[]
+  reviewId?: string
 }
+
+export interface SyncConflict extends RevisionMerge { key: string; entityType: SyncOperation['entityType']; entityId: string }
+interface SyncRevision extends SyncOperation { key: string }
 
 export interface SyncSettings { endpoint: string; token: string; cursor: number }
 interface DeletionTombstone { key: string; entityType: SyncOperation['entityType']; entityId: string; occurredAt: string }
@@ -732,6 +740,8 @@ export class Collection extends Dexie {
   cards!: EntityTable<CardRecord, 'id'>
   reviewEntries!: EntityTable<ReviewEntry, 'id'>
   outbox!: EntityTable<SyncOperation, 'opId'>
+  syncRevisions!: EntityTable<SyncRevision, 'opId'>
+  syncConflicts!: EntityTable<SyncConflict, 'key'>
   settings!: EntityTable<{ key: string; value: unknown }, 'key'>
   receivedOperations!: EntityTable<{ opId: string }, 'opId'>
   deletedEntities!: EntityTable<DeletionTombstone, 'key'>
@@ -815,6 +825,7 @@ export class Collection extends Dexie {
       await transaction.table('cards').toCollection().modify((card: CardRecord) => { if (card.flag === undefined) card.flag = 0 })
     })
     this.version(14).stores({})
+    this.version(15).stores({ syncRevisions: 'opId, key', syncConflicts: 'key, entityType, entityId' })
     this.on('populate', (transaction) => {
       transaction.table('noteTypes').put(basicNoteType)
       transaction.table('noteTypes').put(imageOcclusionNoteType)
@@ -841,15 +852,15 @@ export class Collection extends Dexie {
       templates: input.templates.map((template) => ({ id: id(), name: requiredText(template.name, 'Template name'), front: template.front, back: template.back, css: template.css })),
       createdAt: now.toISOString(), updatedAt: now.toISOString(),
     }
-    await this.transaction('rw', this.noteTypes, this.outbox, async () => {
+    await this.transaction('rw', this.noteTypes, this.outbox, this.syncRevisions, async () => {
       await this.noteTypes.add(noteType)
-      await this.outbox.add({ opId: id(), entityType: 'noteType', entityId: noteType.id, action: 'create', occurredAt: noteType.createdAt, payload: noteType })
+      await this.enqueueOperation({ opId: id(), entityType: 'noteType', entityId: noteType.id, action: 'create', occurredAt: noteType.createdAt, payload: noteType })
     })
     return noteType
   }
 
   async cloneNoteType(typeId: string, name?: string, now = new Date()): Promise<NoteType> {
-    return this.transaction('rw', [this.noteTypes, this.outbox], async () => {
+    return this.transaction('rw', [this.noteTypes, this.outbox, this.syncRevisions], async () => {
       const source = await this.noteTypes.get(typeId)
       if (!source) throw new Error('Note type not found')
       if (source.kind === 'image-occlusion') throw new Error('Image occlusion type cannot be cloned')
@@ -883,7 +894,7 @@ export class Collection extends Dexie {
   }
 
   async updateNoteType(typeId: string, input: UpdateNoteType, now = new Date()): Promise<NoteType> {
-    return this.transaction('rw', [this.noteTypes, this.notes, this.cards, this.outbox], async () => {
+    return this.transaction('rw', [this.noteTypes, this.notes, this.cards, this.outbox, this.syncRevisions], async () => {
       const previous = await this.noteTypes.get(typeId)
       if (!previous) throw new Error('Note type not found')
       if (previous.protected) throw new Error('Protected note type cannot be changed')
@@ -946,13 +957,13 @@ export class Collection extends Dexie {
         await this.reconcileCards(revised, updated, now, operations)
       }
       await this.noteTypes.put(updated)
-      await this.outbox.bulkAdd(operations)
+      await this.enqueueOperations(operations)
       return updated
     })
   }
 
   async deleteNoteType(typeId: string, replacement?: NoteTypeReplacement, now = new Date()): Promise<void> {
-    await this.transaction('rw', [this.noteTypes, this.notes, this.cards, this.outbox, this.deletedEntities], async () => {
+    await this.transaction('rw', [this.noteTypes, this.notes, this.cards, this.outbox, this.syncRevisions, this.deletedEntities], async () => {
       const source = await this.noteTypes.get(typeId)
       if (!source) throw new Error('Note type not found')
       if (source.protected) throw new Error('Protected note type cannot be deleted')
@@ -985,7 +996,7 @@ export class Collection extends Dexie {
       await this.noteTypes.delete(typeId)
       await this.deletedEntities.put({ key: tombstoneKey('noteType', typeId), entityType: 'noteType', entityId: typeId, occurredAt: now.toISOString() })
       operations.push({ opId: id(), entityType: 'noteType', entityId: typeId, action: 'delete', occurredAt: now.toISOString(), payload: { id: typeId } })
-      await this.outbox.bulkAdd(operations)
+      await this.enqueueOperations(operations)
     })
   }
 
@@ -1043,7 +1054,7 @@ export class Collection extends Dexie {
     const note: Note = { id: noteId, deckId, type: 'custom', typeId: IMAGE_OCCLUSION_NOTE_TYPE_ID, fields: { header: input.header, backExtra: input.backExtra }, tags: normalizeTags(input.tags), imageOcclusion, createdAt, updatedAt: createdAt }
     const reference: NoteMediaReference = { id: mediaId, noteId, digest, kind: 'image', mimeType: input.image.type, displayName: input.image.name, side: 'front', playback: 'manual', createdAt, updatedAt: createdAt }
     const blob: StoredMediaBlob = { digest, blob: storedImage, byteLength: input.image.size, mimeType: input.image.type, verifiedAt: createdAt }
-    return this.transaction('rw', [this.decks, this.notes, this.cards, this.noteMedia, this.mediaBlobs, this.outbox], async () => {
+    return this.transaction('rw', [this.decks, this.notes, this.cards, this.noteMedia, this.mediaBlobs, this.outbox, this.syncRevisions], async () => {
       if (!await this.decks.get(deckId)) throw new Error('Deck not found')
       await this.mediaBlobs.put(blob)
       await this.noteMedia.add(reference)
@@ -1053,7 +1064,7 @@ export class Collection extends Dexie {
         { opId: id(), entityType: 'noteMedia', entityId: reference.id, action: 'create', occurredAt: createdAt, payload: reference },
       ]
       await this.reconcileCards(note, imageOcclusionNoteType, now, operations)
-      await this.outbox.bulkAdd(operations)
+      await this.enqueueOperations(operations)
       return note
     })
   }
@@ -1064,7 +1075,7 @@ export class Collection extends Dexie {
     if (definition && definition.kind !== 'image') throw new Error('Image occlusion requires an image')
     const digest = input.image ? await digestMedia(input.image) : undefined
     const storedImage = input.image ? await mediaBytes(input.image) : undefined
-    await this.transaction('rw', [this.notes, this.cards, this.noteMedia, this.mediaBlobs, this.outbox], async () => {
+    await this.transaction('rw', [this.notes, this.cards, this.noteMedia, this.mediaBlobs, this.outbox, this.syncRevisions], async () => {
       const note = await this.notes.get(noteId)
       if (!note || note.typeId !== IMAGE_OCCLUSION_NOTE_TYPE_ID || !note.imageOcclusion) throw new Error('Image occlusion note not found')
       const original = note.imageOcclusion
@@ -1085,12 +1096,12 @@ export class Collection extends Dexie {
       }
       await this.notes.put(updated)
       await this.reconcileCards(updated, imageOcclusionNoteType, now, operations)
-      await this.outbox.bulkAdd(operations)
+      await this.enqueueOperations(operations)
     })
   }
 
   async createNote(deckId: string, typeId: string, fields: Record<string, string>, now = new Date(), stableId?: string): Promise<Note> {
-    return this.transaction('rw', [this.decks, this.noteTypes, this.notes, this.cards, this.outbox, this.deletedEntities], async () => {
+    return this.transaction('rw', [this.decks, this.noteTypes, this.notes, this.cards, this.outbox, this.deletedEntities, this.syncRevisions], async () => {
       if (stableId !== undefined && (!stableId.length || stableId.length > 512 || [...stableId].some((character) => character.charCodeAt(0) < 32) || await this.deletedEntities.get(tombstoneKey('note', stableId)))) throw new Error('Note identifier is invalid or belongs to a deleted note')
       if (!await this.decks.get(deckId)) throw new Error('Deck not found')
       const noteType = await this.noteTypes.get(typeId)
@@ -1101,7 +1112,7 @@ export class Collection extends Dexie {
       const cards = this.cardGenerationStatus(noteType, values).eligible.map((template) => serializeCard(createEmptyCard(now), { id: `${note.id}:${template.id}${template.clozeOrdinal ? `:c${template.clozeOrdinal}` : ''}`, deckId, noteId: note.id, templateId: template.id, ...(template.clozeOrdinal ? { clozeOrdinal: template.clozeOrdinal } : {}) }))
       await this.notes.add(note)
       if (cards.length) await this.cards.bulkAdd(cards)
-      await this.outbox.bulkAdd([
+      await this.enqueueOperations([
         { opId: id(), entityType: 'note', entityId: note.id, action: 'create', occurredAt: note.createdAt, payload: note },
         ...cards.map((card) => ({ opId: id(), entityType: 'card' as const, entityId: card.id, action: 'create' as const, occurredAt: note.createdAt, payload: card })),
       ])
@@ -1110,7 +1121,7 @@ export class Collection extends Dexie {
   }
 
   async updateNote(noteId: string, fields: Record<string, string>, now = new Date()): Promise<void> {
-    await this.transaction('rw', [this.noteTypes, this.notes, this.cards, this.outbox], async () => {
+    await this.transaction('rw', [this.noteTypes, this.notes, this.cards, this.outbox, this.syncRevisions], async () => {
       const note = await this.notes.get(noteId)
       if (!note) throw new Error('Note not found')
       const noteType = await this.noteTypes.get(note.typeId)
@@ -1121,7 +1132,7 @@ export class Collection extends Dexie {
       const changes: SyncOperation[] = [{ opId: id(), entityType: 'note', entityId: noteId, action: 'update', occurredAt: updated.updatedAt, payload: updated }]
       await this.reconcileCards(updated, noteType, now, changes)
       await this.notes.put(updated)
-      await this.outbox.bulkAdd(changes)
+      await this.enqueueOperations(changes)
     })
   }
 
@@ -1170,39 +1181,39 @@ export class Collection extends Dexie {
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
     }
-    await this.transaction('rw', [this.decks, this.deckOptionGroups, this.outbox], async () => {
+    await this.transaction('rw', [this.decks, this.deckOptionGroups, this.outbox, this.syncRevisions], async () => {
       if (!await this.deckOptionGroups.get(deck.optionGroupId)) throw new Error('Deck option group not found')
       await this.validateDeckHierarchy(deck)
       await this.decks.add(deck)
-      await this.outbox.add({ opId: id(), entityType: 'deck', entityId: deck.id, action: 'create', occurredAt: deck.createdAt, payload: deck })
+      await this.enqueueOperation({ opId: id(), entityType: 'deck', entityId: deck.id, action: 'create', occurredAt: deck.createdAt, payload: deck })
     })
     return deck
   }
 
   async renameDeck(deckId: string, name: string, now = new Date()): Promise<void> {
-    await this.transaction('rw', this.decks, this.outbox, async () => {
+    await this.transaction('rw', this.decks, this.outbox, this.syncRevisions, async () => {
       const deck = await this.decks.get(deckId)
       if (!deck) throw new Error('Deck not found')
       const updated = { ...deck, name: requiredText(name, 'Deck name'), updatedAt: now.toISOString() }
       await this.validateDeckHierarchy(updated)
       await this.decks.put(updated)
-      await this.outbox.add({ opId: id(), entityType: 'deck', entityId: deckId, action: 'update', occurredAt: updated.updatedAt, payload: updated })
+      await this.enqueueOperation({ opId: id(), entityType: 'deck', entityId: deckId, action: 'update', occurredAt: updated.updatedAt, payload: updated })
     })
   }
 
   async moveDeck(deckId: string, parentId: string | null, now = new Date()): Promise<void> {
-    await this.transaction('rw', this.decks, this.outbox, async () => {
+    await this.transaction('rw', this.decks, this.outbox, this.syncRevisions, async () => {
       const deck = await this.decks.get(deckId)
       if (!deck) throw new Error('Deck not found')
       const updated = { ...deck, parentId, updatedAt: now.toISOString() }
       await this.validateDeckHierarchy(updated)
       await this.decks.put(updated)
-      await this.outbox.add({ opId: id(), entityType: 'deck', entityId: deckId, action: 'update', occurredAt: updated.updatedAt, payload: updated })
+      await this.enqueueOperation({ opId: id(), entityType: 'deck', entityId: deckId, action: 'update', occurredAt: updated.updatedAt, payload: updated })
     })
   }
 
   async moveNote(noteId: string, destinationDeckId: string, now = new Date()): Promise<void> {
-    await this.transaction('rw', [this.decks, this.notes, this.cards, this.outbox], async () => {
+    await this.transaction('rw', [this.decks, this.notes, this.cards, this.outbox, this.syncRevisions], async () => {
       const [note, destination] = await Promise.all([this.notes.get(noteId), this.decks.get(destinationDeckId)])
       if (!note) throw new Error('Note not found')
       if (!destination) throw new Error('Destination deck not found')
@@ -1213,7 +1224,7 @@ export class Collection extends Dexie {
       const updatedCards = cards.map((card) => ({ ...card, deckId: destinationDeckId }))
       await this.notes.put(updatedNote)
       if (updatedCards.length) await this.cards.bulkPut(updatedCards)
-      await this.outbox.bulkAdd([
+      await this.enqueueOperations([
         { opId: id(), entityType: 'note', entityId: noteId, action: 'update', occurredAt, payload: updatedNote },
         ...updatedCards.map((card) => ({ opId: id(), entityType: 'card' as const, entityId: card.id, action: 'update' as const, occurredAt, payload: card })),
       ])
@@ -1222,49 +1233,49 @@ export class Collection extends Dexie {
 
   async createDeckOptionGroup(name: string, now = new Date()): Promise<DeckOptionGroup> {
     const group: DeckOptionGroup = { id: id(), name: requiredText(name, 'Deck option group name'), protected: false, ...copiedDeckOptionSettings(defaultDeckOptionSettings), createdAt: now.toISOString(), updatedAt: now.toISOString() }
-    await this.transaction('rw', this.deckOptionGroups, this.outbox, async () => {
+    await this.transaction('rw', this.deckOptionGroups, this.outbox, this.syncRevisions, async () => {
       await this.deckOptionGroups.add(group)
-      await this.outbox.add({ opId: id(), entityType: 'deckOptionGroup', entityId: group.id, action: 'create', occurredAt: group.createdAt, payload: group })
+      await this.enqueueOperation({ opId: id(), entityType: 'deckOptionGroup', entityId: group.id, action: 'create', occurredAt: group.createdAt, payload: group })
     })
     return group
   }
 
   async renameDeckOptionGroup(groupId: string, name: string, now = new Date()): Promise<void> {
-    await this.transaction('rw', this.deckOptionGroups, this.outbox, async () => {
+    await this.transaction('rw', this.deckOptionGroups, this.outbox, this.syncRevisions, async () => {
       const group = await this.deckOptionGroups.get(groupId)
       if (!group) throw new Error('Deck option group not found')
       if (group.protected) throw new Error('The Default deck option group is protected')
       const updated = { ...group, name: requiredText(name, 'Deck option group name'), updatedAt: now.toISOString() }
       await this.deckOptionGroups.put(updated)
-      await this.outbox.add({ opId: id(), entityType: 'deckOptionGroup', entityId: group.id, action: 'update', occurredAt: updated.updatedAt, payload: updated })
+      await this.enqueueOperation({ opId: id(), entityType: 'deckOptionGroup', entityId: group.id, action: 'update', occurredAt: updated.updatedAt, payload: updated })
     })
   }
 
   async updateDeckOptionGroup(groupId: string, settings: DeckOptionSettings, now = new Date()): Promise<void> {
-    await this.transaction('rw', this.deckOptionGroups, this.outbox, async () => {
+    await this.transaction('rw', this.deckOptionGroups, this.outbox, this.syncRevisions, async () => {
       const group = await this.deckOptionGroups.get(groupId)
       if (!group) throw new Error('Deck option group not found')
       const validated = validateDeckOptionSettings({ ...group, ...settings })
       const updated: DeckOptionGroup = { ...group, ...validated, updatedAt: now.toISOString() }
       await this.deckOptionGroups.put(updated)
-      await this.outbox.add({ opId: id(), entityType: 'deckOptionGroup', entityId: group.id, action: 'update', occurredAt: updated.updatedAt, payload: updated })
+      await this.enqueueOperation({ opId: id(), entityType: 'deckOptionGroup', entityId: group.id, action: 'update', occurredAt: updated.updatedAt, payload: updated })
     })
   }
 
   async assignDeckOptionGroup(deckId: string, groupId: string, now = new Date()): Promise<void> {
-    await this.transaction('rw', [this.decks, this.deckOptionGroups, this.outbox], async () => {
+    await this.transaction('rw', [this.decks, this.deckOptionGroups, this.outbox, this.syncRevisions], async () => {
       const [deck, group] = await Promise.all([this.decks.get(deckId), this.deckOptionGroups.get(groupId)])
       if (!deck) throw new Error('Deck not found')
       if (!group) throw new Error('Deck option group not found')
       if (deck.optionGroupId === groupId) return
       const updated = { ...deck, optionGroupId: groupId, updatedAt: now.toISOString() }
       await this.decks.put(updated)
-      await this.outbox.add({ opId: id(), entityType: 'deck', entityId: deckId, action: 'update', occurredAt: updated.updatedAt, payload: updated })
+      await this.enqueueOperation({ opId: id(), entityType: 'deck', entityId: deckId, action: 'update', occurredAt: updated.updatedAt, payload: updated })
     })
   }
 
   async deleteDeckOptionGroup(groupId: string, replacementGroupId?: string, now = new Date()): Promise<void> {
-    await this.transaction('rw', [this.decks, this.deckOptionGroups, this.outbox, this.deletedEntities], async () => {
+    await this.transaction('rw', [this.decks, this.deckOptionGroups, this.outbox, this.syncRevisions, this.deletedEntities], async () => {
       const group = await this.deckOptionGroups.get(groupId)
       if (!group) throw new Error('Deck option group not found')
       if (group.protected) throw new Error('The Default deck option group is protected')
@@ -1277,7 +1288,7 @@ export class Collection extends Dexie {
       if (updated.length) await this.decks.bulkPut(updated)
       await this.deckOptionGroups.delete(groupId)
       await this.deletedEntities.put({ key: tombstoneKey('deckOptionGroup', groupId), entityType: 'deckOptionGroup', entityId: groupId, occurredAt })
-      await this.outbox.bulkAdd([
+      await this.enqueueOperations([
         ...updated.map((deck) => ({ opId: id(), entityType: 'deck' as const, entityId: deck.id, action: 'update' as const, occurredAt, payload: deck })),
         { opId: id(), entityType: 'deckOptionGroup', entityId: groupId, action: 'delete', occurredAt, payload: { id: groupId } },
       ])
@@ -1285,7 +1296,7 @@ export class Collection extends Dexie {
   }
 
   async deleteNote(noteId: string, now = new Date()): Promise<void> {
-    await this.transaction('rw', [this.noteTypes, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.outbox, this.deletedEntities, this.settings], async () => {
+    await this.transaction('rw', [this.noteTypes, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.outbox, this.syncRevisions, this.deletedEntities, this.settings], async () => {
       const note = await this.notes.get(noteId)
       if (!note) throw new Error('Note not found')
       const noteType = await this.noteTypes.get(note.typeId)
@@ -1309,7 +1320,7 @@ export class Collection extends Dexie {
       await this.noteMedia.where('noteId').equals(noteId).delete()
       await this.deletedEntities.bulkPut(tombstones)
       const operationId = id()
-      await this.outbox.add({ opId: operationId, entityType: 'note', entityId: noteId, action: 'delete', occurredAt, payload: { id: noteId } })
+      await this.enqueueOperation({ opId: operationId, entityType: 'note', entityId: noteId, action: 'delete', occurredAt, payload: { id: noteId } })
       const syncEpoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
       await this.settings.put({ key: 'noteDeletionUndo', value: { syncEpoch, operationId, occurredAt, note, noteType, cards, reviews, media } satisfies NoteDeletionUndo })
     })
@@ -1325,7 +1336,7 @@ export class Collection extends Dexie {
   }
 
   async undoLastNoteDeletion(): Promise<string> {
-    return this.transaction('rw', [this.decks, this.noteTypes, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.outbox, this.deletedEntities, this.settings], async () => {
+    return this.transaction('rw', [this.decks, this.noteTypes, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.outbox, this.syncRevisions, this.deletedEntities, this.settings], async () => {
       const undo = (await this.settings.get('noteDeletionUndo'))?.value as NoteDeletionUndo | undefined
       if (!undo) throw new Error('No recent note deletion to undo')
       const epoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
@@ -1348,7 +1359,7 @@ export class Collection extends Dexie {
   }
 
   async deleteDeck(deckId: string, options: DeleteDeckOptions, now = new Date()): Promise<void> {
-    await this.transaction('rw', [this.decks, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.outbox, this.deletedEntities], async () => {
+    await this.transaction('rw', [this.decks, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.outbox, this.syncRevisions, this.deletedEntities], async () => {
       const deck = await this.decks.get(deckId)
       if (!deck) throw new Error('Deck not found')
       const occurredAt = now.toISOString()
@@ -1371,7 +1382,7 @@ export class Collection extends Dexie {
         if (updatedChildren.length) await this.decks.bulkPut(updatedChildren)
         await this.decks.delete(deckId)
         await this.deletedEntities.put({ key: tombstoneKey('deck', deckId), entityType: 'deck', entityId: deckId, occurredAt })
-        await this.outbox.bulkAdd([
+        await this.enqueueOperations([
           ...updatedChildren.map((child) => ({ opId: id(), entityType: 'deck' as const, entityId: child.id, action: 'update' as const, occurredAt, payload: child })),
           ...updatedNotes.map((note) => ({ opId: id(), entityType: 'note' as const, entityId: note.id, action: 'update' as const, occurredAt, payload: note })),
           ...updatedCards.map((card) => ({ opId: id(), entityType: 'card' as const, entityId: card.id, action: 'update' as const, occurredAt, payload: card })),
@@ -1400,7 +1411,7 @@ export class Collection extends Dexie {
         ...reviews.map((review) => ({ key: tombstoneKey('review', review.id), entityType: 'review' as const, entityId: review.id, occurredAt })),
         ...media.map((reference) => ({ key: tombstoneKey('noteMedia', reference.id), entityType: 'noteMedia' as const, entityId: reference.id, occurredAt })),
       ])
-      await this.outbox.bulkAdd(subtree.sort((left, right) => Number(right.parentId !== null) - Number(left.parentId !== null)).map((item) => ({ opId: id(), entityType: 'deck' as const, entityId: item.id, action: 'delete' as const, occurredAt, payload: { id: item.id } })))
+      await this.enqueueOperations(subtree.sort((left, right) => Number(right.parentId !== null) - Number(left.parentId !== null)).map((item) => ({ opId: id(), entityType: 'deck' as const, entityId: item.id, action: 'delete' as const, occurredAt, payload: { id: item.id } })))
     })
   }
 
@@ -1433,13 +1444,13 @@ export class Collection extends Dexie {
     const references: NoteMediaReference[] = prepared.map(({ definition, file, digest, side, playback }) => ({ id: id(), noteId, digest, kind: definition.kind, mimeType: file.type, displayName: file.name, side, playback, createdAt, updatedAt: createdAt }))
     const blobs = [...new Map(prepared.map(({ file, digest, bytes }) => [digest, { digest, blob: bytes, byteLength: file.size, mimeType: file.type, verifiedAt: createdAt } satisfies StoredMediaBlob])).values()]
 
-    await this.transaction('rw', [this.decks, this.notes, this.cards, this.noteMedia, this.mediaBlobs, this.outbox], async () => {
+    await this.transaction('rw', [this.decks, this.notes, this.cards, this.noteMedia, this.mediaBlobs, this.outbox, this.syncRevisions], async () => {
       if (!await this.decks.get(deckId)) throw new Error('Deck not found')
       await this.notes.add(note)
       await this.cards.add(card)
       if (references.length) await this.noteMedia.bulkAdd(references)
       if (blobs.length) await this.mediaBlobs.bulkPut(blobs)
-      await this.outbox.bulkAdd([
+      await this.enqueueOperations([
         { opId: id(), entityType: 'note', entityId: note.id, action: 'create', occurredAt: note.createdAt, payload: note },
         { opId: id(), entityType: 'card', entityId: card.id, action: 'create', occurredAt: note.createdAt, payload: card },
         ...references.map((reference) => ({ opId: id(), entityType: 'noteMedia' as const, entityId: reference.id, action: 'create' as const, occurredAt: reference.createdAt, payload: reference })),
@@ -1449,7 +1460,7 @@ export class Collection extends Dexie {
   }
 
   async updateBasicNote(noteId: string, fields: BasicNoteFields, now = new Date()): Promise<void> {
-    await this.transaction('rw', this.notes, this.outbox, async () => {
+    await this.transaction('rw', this.notes, this.outbox, this.syncRevisions, async () => {
       const note = await this.notes.get(noteId)
       if (!note) throw new Error('Note not found')
       const updated = {
@@ -1461,18 +1472,18 @@ export class Collection extends Dexie {
         updatedAt: now.toISOString(),
       }
       await this.notes.put(updated)
-      await this.outbox.add({ opId: id(), entityType: 'note', entityId: noteId, action: 'update', occurredAt: updated.updatedAt, payload: updated })
+      await this.enqueueOperation({ opId: id(), entityType: 'note', entityId: noteId, action: 'update', occurredAt: updated.updatedAt, payload: updated })
     })
   }
 
   async updateNoteTags(noteId: string, tags: string[], now = new Date()): Promise<void> {
     const normalizedTags = normalizeTags(tags)
-    await this.transaction('rw', [this.notes, this.outbox], async () => {
+    await this.transaction('rw', [this.notes, this.outbox, this.syncRevisions], async () => {
       const note = await this.notes.get(noteId)
       if (!note) throw new Error('Note not found')
       const updated: Note = { ...note, tags: normalizedTags, updatedAt: now.toISOString() }
       await this.notes.put(updated)
-      await this.outbox.add({ opId: id(), entityType: 'note', entityId: noteId, action: 'update', occurredAt: updated.updatedAt, payload: updated })
+      await this.enqueueOperation({ opId: id(), entityType: 'note', entityId: noteId, action: 'update', occurredAt: updated.updatedAt, payload: updated })
     })
   }
 
@@ -1482,10 +1493,10 @@ export class Collection extends Dexie {
     const digest = await digestMedia(file)
     const reference: NoteMediaReference = { id: id(), noteId, digest, kind: definition.kind, mimeType: file.type, displayName: file.name, side, playback, createdAt: now.toISOString(), updatedAt: now.toISOString() }
     const blob: StoredMediaBlob = { digest, blob: await mediaBytes(file), byteLength: file.size, mimeType: file.type, verifiedAt: now.toISOString() }
-    await this.transaction('rw', this.noteMedia, this.mediaBlobs, this.outbox, async () => {
+    await this.transaction('rw', this.noteMedia, this.mediaBlobs, this.outbox, this.syncRevisions, async () => {
       await this.mediaBlobs.put(blob)
       await this.noteMedia.add(reference)
-      await this.outbox.add({ opId: id(), entityType: 'noteMedia', entityId: reference.id, action: 'create', occurredAt: reference.createdAt, payload: reference })
+      await this.enqueueOperation({ opId: id(), entityType: 'noteMedia', entityId: reference.id, action: 'create', occurredAt: reference.createdAt, payload: reference })
     })
     return reference
   }
@@ -1522,13 +1533,13 @@ export class Collection extends Dexie {
   }
 
   async removeMedia(referenceId: string, now = new Date()) {
-    await this.transaction('rw', this.notes, this.noteMedia, this.outbox, async () => {
+    await this.transaction('rw', this.notes, this.noteMedia, this.outbox, this.syncRevisions, async () => {
       const reference = await this.noteMedia.get(referenceId)
       if (!reference) throw new Error('Media reference not found')
       const note = await this.notes.get(reference.noteId)
       if (note?.imageOcclusion?.sourceMediaId === referenceId) throw new Error('Cannot remove the source image from an image occlusion note')
       await this.noteMedia.delete(referenceId)
-      await this.outbox.add({ opId: id(), entityType: 'noteMedia', entityId: referenceId, action: 'delete', occurredAt: now.toISOString(), payload: { id: referenceId, noteId: reference.noteId, digest: reference.digest } })
+      await this.enqueueOperation({ opId: id(), entityType: 'noteMedia', entityId: referenceId, action: 'delete', occurredAt: now.toISOString(), payload: { id: referenceId, noteId: reference.noteId, digest: reference.digest } })
     })
   }
 
@@ -1683,7 +1694,7 @@ export class Collection extends Dexie {
   }
 
   async answer(cardId: string, rating: Grade, now = new Date(), durationMs?: number, options?: { allowEarly: boolean; reschedule: boolean }): Promise<ReviewEntry> {
-    return this.transaction('rw', [this.decks, this.deckOptionGroups, this.notes, this.cards, this.reviewEntries, this.outbox, this.settings], async () => {
+    return this.transaction('rw', [this.decks, this.deckOptionGroups, this.notes, this.cards, this.reviewEntries, this.outbox, this.syncRevisions, this.settings], async () => {
       const existing = await this.cards.get(cardId)
       if (!existing) throw new Error('Card not found')
       if (!isQueueEligible(existing, now)) throw new Error('Card is unavailable because it is suspended or buried')
@@ -1698,12 +1709,13 @@ export class Collection extends Dexie {
         cardId,
         deckId: existing.deckId,
       })
+      review.scheduling = { before: existing, options: group }
       if (durationMs !== undefined && Number.isFinite(durationMs) && durationMs >= 0) review.durationMs = Math.round(Math.min(60_000, durationMs))
       if (options?.reschedule === false) {
         Object.assign(review, { rescheduled: false, due: existing.due, stability: existing.stability, difficulty: existing.difficulty, elapsedDays: existing.elapsedDays, scheduledDays: existing.scheduledDays, learningSteps: existing.learningSteps })
         await this.reviewEntries.add(review)
         const operation: SyncOperation = { opId: id(), entityType: 'review', entityId: review.id, action: 'create', occurredAt: review.reviewedAt, payload: review }
-        await this.outbox.add(operation)
+        await this.enqueueOperation(operation)
         const syncEpoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
         await this.settings.put({ key: 'reviewUndo', value: { review, syncEpoch, operationIds: [operation.opId], cards: [{ before: existing, after: existing }] } satisfies ReviewUndo })
         return review
@@ -1741,11 +1753,11 @@ export class Collection extends Dexie {
       changedCards.push({ before: existing, after: card })
       await this.reviewEntries.add(review)
       const outbound: SyncOperation[] = [
-        { opId: id(), entityType: 'card', entityId: card.id, action: 'update', occurredAt: review.reviewedAt, payload: card },
+        { opId: id(), entityType: 'card', entityId: card.id, action: 'update', occurredAt: review.reviewedAt, payload: card, reviewId: review.id },
         { opId: id(), entityType: 'review', entityId: review.id, action: 'create', occurredAt: review.reviewedAt, payload: review },
         ...operations,
       ]
-      await this.outbox.bulkAdd(outbound)
+      await this.enqueueOperations(outbound)
       const syncEpoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
       await this.settings.put({ key: 'reviewUndo', value: { review, syncEpoch, operationIds: outbound.map((operation) => operation.opId), cards: changedCards, ...(changedNote ? { note: changedNote } : {}) } satisfies ReviewUndo })
       return review
@@ -1772,7 +1784,7 @@ export class Collection extends Dexie {
   }
 
   async undoLastReview(): Promise<string> {
-    return this.transaction('rw', [this.settings, this.cards, this.notes, this.reviewEntries, this.outbox], async () => {
+    return this.transaction('rw', [this.settings, this.cards, this.notes, this.reviewEntries, this.outbox, this.syncRevisions], async () => {
       const undo = (await this.settings.get('reviewUndo'))?.value as ReviewUndo | undefined
       if (!undo) throw new Error('No recent review to undo')
       const sessions = undo.customSession ? await customStudySessions(this) : []
@@ -1790,6 +1802,7 @@ export class Collection extends Dexie {
       await this.reviewEntries.delete(undo.review.id)
       if (undo.customSession) await this.settings.put({ key: customStudyKey, value: sessions.map((session) => session.id === undo.customSession!.after.id ? undo.customSession!.before : session) })
       await this.outbox.bulkDelete(undo.operationIds)
+      await this.syncRevisions.bulkDelete(undo.operationIds)
       await this.settings.delete('reviewUndo')
       return undo.review.cardId
     })
@@ -1800,13 +1813,13 @@ export class Collection extends Dexie {
   }
 
   async unsuspendCard(cardId: string, now = new Date()): Promise<void> {
-    await this.transaction('rw', [this.cards, this.outbox], async () => {
+    await this.transaction('rw', [this.cards, this.outbox, this.syncRevisions], async () => {
       const card = await this.cards.get(cardId)
       if (!card) throw new Error('Card not found')
       if (!card.manualSuspended) return
       const updated = withPolicyDefaults({ ...card, manualSuspended: false })
       await this.cards.put(updated)
-      await this.outbox.add({ opId: id(), entityType: 'card', entityId: cardId, action: 'update', occurredAt: now.toISOString(), payload: updated })
+      await this.enqueueOperation({ opId: id(), entityType: 'card', entityId: cardId, action: 'update', occurredAt: now.toISOString(), payload: updated })
     })
   }
 
@@ -1816,26 +1829,26 @@ export class Collection extends Dexie {
   }
 
   async unburyCard(cardId: string, now = new Date()): Promise<void> {
-    await this.transaction('rw', [this.cards, this.outbox], async () => {
+    await this.transaction('rw', [this.cards, this.outbox, this.syncRevisions], async () => {
       const card = await this.cards.get(cardId)
       if (!card) throw new Error('Card not found')
       if (card.buriedUntil === null || card.buriedUntil === undefined) return
       const updated = withPolicyDefaults({ ...card, buriedUntil: null })
       await this.cards.put(updated)
-      await this.outbox.add({ opId: id(), entityType: 'card', entityId: cardId, action: 'update', occurredAt: now.toISOString(), payload: updated })
+      await this.enqueueOperation({ opId: id(), entityType: 'card', entityId: cardId, action: 'update', occurredAt: now.toISOString(), payload: updated })
     })
   }
 
   async rescheduleCard(cardId: string, due: Date, now = new Date()): Promise<void> {
     if (Number.isNaN(due.getTime())) throw new Error('Reschedule time is invalid')
-    await this.transaction('rw', [this.cards, this.outbox], async () => {
+    await this.transaction('rw', [this.cards, this.outbox, this.syncRevisions], async () => {
       const card = await this.cards.get(cardId)
       if (!card) throw new Error('Card not found')
       const state = card.state === State.New ? State.Review : card.state
       if (state !== State.Learning && state !== State.Relearning && state !== State.Review) throw new Error('Card state cannot be rescheduled')
       const updated = withPolicyDefaults({ ...card, state, due: due.toISOString() })
       await this.cards.put(updated)
-      await this.outbox.add({ opId: id(), entityType: 'card', entityId: cardId, action: 'update', occurredAt: now.toISOString(), payload: updated })
+      await this.enqueueOperation({ opId: id(), entityType: 'card', entityId: cardId, action: 'update', occurredAt: now.toISOString(), payload: updated })
     })
   }
 
@@ -1845,14 +1858,14 @@ export class Collection extends Dexie {
   }
 
   private async updateCardWithUndo(cardId: string, action: CardMaintenanceUndo['action'], now: Date, update: (card: CardRecord) => CardRecord | null): Promise<void> {
-    await this.transaction('rw', [this.cards, this.outbox, this.settings], async () => {
+    await this.transaction('rw', [this.cards, this.outbox, this.syncRevisions, this.settings], async () => {
       const card = await this.cards.get(cardId)
       if (!card) throw new Error('Card not found')
       const updated = update(card)
       if (!updated) return
       await this.cards.put(updated)
       const operationId = id()
-      await this.outbox.add({ opId: operationId, entityType: 'card', entityId: cardId, action: 'update', occurredAt: now.toISOString(), payload: updated })
+      await this.enqueueOperation({ opId: operationId, entityType: 'card', entityId: cardId, action: 'update', occurredAt: now.toISOString(), payload: updated })
       const syncEpoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
       await this.settings.put({ key: 'cardMaintenanceUndo', value: { syncEpoch, operationId, action, before: card, after: updated } satisfies CardMaintenanceUndo })
     })
@@ -1867,7 +1880,7 @@ export class Collection extends Dexie {
   }
 
   async undoLastCardMaintenance(): Promise<string> {
-    return this.transaction('rw', [this.cards, this.outbox, this.settings], async () => {
+    return this.transaction('rw', [this.cards, this.outbox, this.syncRevisions, this.settings], async () => {
       const undo = (await this.settings.get('cardMaintenanceUndo'))?.value as CardMaintenanceUndo | undefined
       if (!undo) throw new Error('No recent card action to undo')
       const epoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
@@ -1875,6 +1888,8 @@ export class Collection extends Dexie {
       if (JSON.stringify(await this.cards.get(undo.after.id)) !== JSON.stringify(undo.after)) throw new Error('The card changed since this action; undo is unavailable')
       await this.cards.put(undo.before)
       await this.outbox.delete(undo.operationId)
+      await this.syncRevisions.delete(undo.operationId)
+      await this.syncRevisions.delete(undo.operationId)
       await this.settings.delete('cardMaintenanceUndo')
       return undo.before.id
     })
@@ -1884,8 +1899,82 @@ export class Collection extends Dexie {
     return this.outbox.orderBy('occurredAt').toArray()
   }
 
+  async enqueueOperation(operation: SyncOperation) {
+    const key = tombstoneKey(operation.entityType, operation.entityId)
+    const history = await this.syncRevisions.where('key').equals(key).toArray()
+    if (!operation.parents && this.mergeSyncRevisions(operation.entityType, history).conflicts.length) throw new Error('Resolve the retained sync conflict before editing this record.')
+    const revision = { ...operation, parents: operation.parents ?? revisionHeads(history) }
+    await this.syncRevisions.add({ ...revision, key })
+    return this.outbox.add(revision)
+  }
+
+  async enqueueOperations(operations: SyncOperation[]) {
+    for (const operation of operations) await this.enqueueOperation(operation)
+  }
+
+  private mergeSyncRevisions(entityType: SyncOperation['entityType'], revisions: SyncOperation[]) {
+    if (entityType !== 'card') return mergeRevisions(revisions)
+    const scheduling = ['due', 'stability', 'difficulty', 'elapsedDays', 'scheduledDays', 'reps', 'lapses', 'state', 'lastReview', 'learningSteps']
+    const projected = new Map<string, SyncOperation>()
+    const project = (revision: SyncOperation): SyncOperation => {
+      const prior = projected.get(revision.opId)
+      if (prior) return prior
+      const payload = { ...revision.payload as Record<string, unknown> }
+      const schedule = Object.fromEntries(scheduling.map((field) => [field, payload[field]]))
+      for (const field of scheduling) delete payload[field]
+      payload.$schedule = schedule
+      // Reviews are append-only domain events. Their card snapshots carry policy
+      // changes, while chronological replay owns the resulting FSRS schedule.
+      if (revision.reviewId) {
+        const parent = revisions.find((candidate) => (revision.parents ?? []).includes(candidate.opId))
+        if (parent) payload.$schedule = (project(parent).payload as Record<string, unknown>).$schedule
+      }
+      const result = { ...revision, payload }
+      projected.set(revision.opId, result)
+      return result
+    }
+    revisionHeads(revisions) // Reject cycles before recursively projecting parents.
+    const stripped = revisions.map(project)
+    const merged = mergeRevisions(stripped)
+    const value = { ...merged.value as Record<string, unknown> }
+    Object.assign(value, value.$schedule)
+    delete value.$schedule
+    return { ...merged, value, versions: merged.heads.map((opId) => {
+      const revision = revisions.find((revision) => revision.opId === opId)!
+      return { opId, value: revision.action === 'delete' ? null : revision.payload }
+    }) }
+  }
+
+  async resolveSyncConflict(key: string, headId: string, expectedHeads: string[], now = new Date()) {
+    const conflict = await this.syncConflicts.get(key)
+    if (!conflict || JSON.stringify(conflict.heads) !== JSON.stringify(expectedHeads)) throw new Error('This conflict changed. Review its current versions before choosing.')
+    const chosen = conflict.versions.find((version) => version.opId === headId)
+    if (!chosen) throw new Error('Conflict version was not found')
+    if (conflict.deleted && chosen.value !== null) throw new Error('Deleted records cannot be restored by a stale conflict choice. Copy the retained content into a new note.')
+    let resolved = structuredClone(conflict.value)
+    for (const conflicted of conflict.deleted ? [] : conflict.conflicts) {
+      if (conflicted === '$') { resolved = structuredClone(chosen.value); break }
+      if (conflicted === '$deleted') continue
+      const path = conflicted.replace(/^\$schedule\./, '').split('.')
+      let target = resolved as Record<string, unknown>
+      let source = chosen.value as Record<string, unknown>
+      for (const part of path.slice(0, -1)) {
+        target = target[part] as Record<string, unknown>
+        source = source[part] as Record<string, unknown>
+      }
+      target[path.at(-1)!] = structuredClone(source[path.at(-1)!])
+    }
+    const operation: SyncOperation = { opId: id(), entityType: conflict.entityType, entityId: conflict.entityId, action: conflict.deleted ? 'delete' : 'update', occurredAt: now.toISOString(), payload: conflict.deleted ? { id: conflict.entityId } : resolved, parents: expectedHeads }
+    await this.transaction('rw', [this.decks, this.deckOptionGroups, this.noteTypes, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.receivedOperations, this.settings, this.deletedEntities, this.syncRevisions, this.syncConflicts, this.outbox], async () => {
+      const current = await this.syncConflicts.get(key)
+      if (!current || JSON.stringify(current.heads) !== JSON.stringify(expectedHeads)) throw new Error('This conflict changed. Review its current versions before choosing.')
+      await this.enqueueOperation(operation)
+      await this.applyRemoteChanges([operation], (await this.syncSettings())?.cursor ?? 0)
+    })
+  }
+
   async captureSyncOperations(): Promise<SyncOperation[]> {
-    return this.transaction('rw', [this.outbox, this.settings], async () => {
+    return this.transaction('rw', [this.outbox, this.syncRevisions, this.settings], async () => {
       // Reviews can be recorded while preflight or media upload is running.
       // Invalidate their undo in the same transaction that captures the batch.
       const epoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
@@ -1907,15 +1996,38 @@ export class Collection extends Dexie {
   }
 
   async applyRemoteChanges(changes: SyncOperation[], cursor: number) {
-    await this.transaction('rw', [this.decks, this.deckOptionGroups, this.noteTypes, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.receivedOperations, this.settings, this.deletedEntities], async () => {
+    await this.transaction('rw', [this.decks, this.deckOptionGroups, this.noteTypes, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.receivedOperations, this.settings, this.deletedEntities, this.syncRevisions, this.syncConflicts], async () => {
       const affectedNoteIds = new Set<string>()
       const affectedTypeIds = new Set<string>()
+      const reviewedCardIds = new Set<string>()
       // A parent-deck tombstone can suppress a historical note before its later media/card operations arrive.
       const suppressedNoteIds = new Set<string>()
       const suppressedCardIds = new Set<string>()
       // Resolve type and note changes before their cards, even when equal timestamps arrive in index order.
-      for (const change of orderInboundChanges(changes)) {
+      for (const source of orderInboundChanges(changes)) {
+        const change = { ...source }
         if (await this.receivedOperations.get(change.opId)) continue
+        const key = tombstoneKey(change.entityType, change.entityId)
+        const previousRevision = await this.syncRevisions.get(change.opId)
+        if (!previousRevision) {
+          const history = await this.syncRevisions.where('key').equals(key).toArray()
+          await this.syncRevisions.add({ ...change, parents: change.parents ?? revisionHeads(history), key })
+        } else if (JSON.stringify(previousRevision.payload) !== JSON.stringify(change.payload) || previousRevision.action !== change.action) {
+          throw new Error('Sync operation identity was reused with different content')
+        }
+        const history = await this.syncRevisions.where('key').equals(key).toArray()
+        const merged = this.mergeSyncRevisions(change.entityType, history)
+        if (merged.conflicts.length) await this.syncConflicts.put({ ...merged, key, entityType: change.entityType, entityId: change.entityId })
+        else await this.syncConflicts.delete(key)
+        if (merged.conflicts.length && change.action !== 'delete' && !merged.deleted) {
+          await this.receivedOperations.add({ opId: change.opId })
+          continue
+        }
+        if (merged.deleted && change.action !== 'delete') {
+          await this.receivedOperations.add({ opId: change.opId })
+          continue
+        }
+        if (change.action !== 'delete') change.payload = merged.value
         if (change.entityType === 'noteMedia') {
           const previous = await this.noteMedia.get(change.entityId)
           if (previous) affectedNoteIds.add(previous.noteId)
@@ -2116,7 +2228,11 @@ export class Collection extends Dexie {
         else if (change.entityType === 'card') await this.cards.put(canonicalCard(change.payload as LegacyCard))
         else if (change.entityType === 'noteMedia') await this.noteMedia.put(change.payload as NoteMediaReference)
         else if (change.entityType === 'noteType' && change.entityId !== BASIC_NOTE_TYPE_ID) await this.noteTypes.put(canonicalNoteType(change.payload as LegacyNoteType))
-        else if (change.entityType === 'review') await this.reviewEntries.put(change.payload as ReviewEntry)
+        else if (change.entityType === 'review') {
+          const review = change.payload as ReviewEntry
+          await this.reviewEntries.put(review)
+          reviewedCardIds.add(review.cardId)
+        }
         await this.receivedOperations.add({ opId: change.opId })
         if (change.entityType === 'note') affectedNoteIds.add(change.entityId)
         if (change.entityType === 'noteMedia') {
@@ -2128,6 +2244,38 @@ export class Collection extends Dexie {
           if (noteId) affectedNoteIds.add(noteId)
         }
         if (change.entityType === 'noteType') affectedTypeIds.add(change.entityId)
+      }
+      for (const cardId of reviewedCardIds) {
+        const conflict = await this.syncConflicts.get(tombstoneKey('card', cardId))
+        if (conflict?.conflicts.some((path) => path.startsWith('$schedule') || path === '$deleted')) continue
+        const card = await this.cards.get(cardId)
+        if (!card) continue
+        const reviews = (await this.reviewEntries.where('cardId').equals(cardId).toArray())
+          .filter((review) => review.rescheduled !== false && review.scheduling)
+          .sort((a, b) => a.reviewedAt.localeCompare(b.reviewedAt) || a.id.localeCompare(b.id))
+        if (!reviews.length) continue
+        let schedule = deserializeCard(reviews[0].scheduling!.before)
+        const history = await this.syncRevisions.where('key').equals(tombstoneKey('card', cardId)).toArray()
+        const commands = history.filter((revision) => {
+          if (revision.action !== 'update' || revision.reviewId || revision.occurredAt < reviews[0].reviewedAt) return false
+          const parent = history.find((candidate) => revision.parents?.includes(candidate.opId))
+          const before = parent?.payload as CardRecord | undefined
+          const after = revision.payload as CardRecord
+          return before && (before.due !== after.due || before.state !== after.state)
+        })
+        const events = [
+          ...reviews.map((review) => ({ at: review.reviewedAt, id: review.id, review, command: undefined as SyncRevision | undefined })),
+          ...commands.map((command) => ({ at: command.occurredAt, id: command.opId, review: undefined as ReviewEntry | undefined, command })),
+        ].sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id))
+        for (const event of events) {
+          if (event.review) schedule = schedulerFor(event.review.scheduling!.options).next(schedule, new Date(event.at), event.review.rating as Grade).card
+          else if (event.command) {
+            const commanded = event.command.payload as CardRecord
+            schedule = { ...schedule, due: new Date(commanded.due), state: commanded.state }
+          }
+        }
+        const updated = serializeCard(schedule, card)
+        await this.cards.put({ ...card, ...updated, manualSuspended: card.manualSuspended, templateSuspended: card.templateSuspended, suspended: card.suspended, buriedUntil: card.buriedUntil })
       }
       for (const typeId of affectedTypeIds) {
         for (const noteId of await this.notes.where('typeId').equals(typeId).primaryKeys()) affectedNoteIds.add(noteId as string)
