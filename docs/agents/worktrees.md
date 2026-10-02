@@ -31,6 +31,23 @@ git worktree list
 git worktree prune
 ```
 
+`git worktree remove` fails with `Permission denied` when the current working
+directory is inside the worktree being deleted, which is the normal case when a
+session ends in the worktree it just merged. Leave it first and detach `HEAD` so
+no branch stays checked out there:
+
+```sh
+cd /somewhere/else
+git worktree remove <path> --force
+```
+
+If the directory still resists, another process holds a handle. Identify it
+before retrying, and never kill a process another agent may own:
+
+```sh
+Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*<slug>*' }
+```
+
 ## Before deleting a branch
 
 Squash merges make ancestry checks unreliable. `--is-ancestor` reports a merged
