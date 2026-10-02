@@ -19,7 +19,7 @@ interface TemplatePreviewProps {
 export function TemplatePreview({ front, back, css, fields, side, title = 'Card preview', kind = 'standard', ordinal, media, templateOrdinal = 1 }: TemplatePreviewProps) {
   const frame = useRef<HTMLIFrameElement | null>(null)
   const frameRef = useRef<HTMLIFrameElement>(null)
-  const { frameRef: navigationFrameRef, dialog: navigationDialog, choose: chooseNavigation } = useTemplateNavigation(`${side}:${title}:${html}`)
+  const { frameRef: navigationFrameRef, dialog: navigationDialog, choose: chooseNavigation } = useTemplateNavigation(`${side}:${title}:${front}:${back}:${JSON.stringify(fields)}:${templateOrdinal}`)
   const combinedFrameRef = useCallback((element: HTMLIFrameElement | null) => {
     frame.current = element
     navigationFrameRef(element)
@@ -45,7 +45,6 @@ export function TemplatePreview({ front, back, css, fields, side, title = 'Card 
   }
   const srcDoc = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:"><style>body{font-family:system-ui,sans-serif;color:#202a22;background:#fff;padding:24px;overflow-wrap:anywhere}.card-image{display:block;max-width:100%;max-height:290px;object-fit:contain}.card-audio{width:min(100%,400px)}a[data-kiroku-href]{color:#175fa6;text-decoration:underline;cursor:pointer}${css}</style></head><body class="card card${templateOrdinal}">${html}</body></html>`
   const navigationActions = renderedNavigationActions(html)
-  useLayoutEffect(() => {
   useLayoutEffect(() => {
     const frame = frameRef.current
     if (!frame) return
