@@ -142,6 +142,14 @@ Decks can be nested. A parent deck’s counts and study session include all of i
 
 Open **Scheduling options** on a deck to reuse an existing group or create one. A group controls daily new and review limits, desired retention, learning and relearning steps, and new, review, and interday-learning order. It can bury new or review siblings until the next local study day after one of their note-mates is answered. Set a leech threshold, a tag, and whether crossing that threshold also suspends the card. The dialog lists every deck that uses the selected group. Saving changes affects future scheduling decisions only; it never rewrites cards or review history.
 
+### Anki scheduling parity
+
+Scheduling follows Anki 26.9.3. Kiroku uses FSRS-6 with the same 21 default weights Anki ships, a 36,500-day maximum interval, and 0.9 desired retention by default.
+
+As in Anki, review intervals are fuzzed: any interval of 2.5 days or more is spread across a bounded range so that cards in the same state do not all come due on the same day. The spread is seeded from the card itself, so replaying or synchronising a review reproduces the same interval, and sibling cards get independent offsets.
+
+The default **Due date** review order is really *due date, then random*. Cards sharing a due time are ordered by a hash of each card's own last answer rather than by card identity, so the order is deliberately shuffled, holds still across local midnight, and moves when a card is answered. Choosing **Random** instead orders by a hash salted with the study day, reshuffling between days. New-card order follows the same rule: **Added first** orders by note creation time, **Random** by the day-seeded hash. Learning and relearning cards are ordered by due time and are not shuffled.
+
 Use **Manage cards** beside a note to resume a manually suspended card, unbury it, or set its next due time. The reviewer also has **Suspend card** and **Bury card** actions; either one refreshes the session queue immediately. These lifecycle controls retain card identity, scheduler data, and review history. Cards suspended because their template no longer generates content remain unavailable until that content is restored.
 
 While reviewing, you can edit or move the current note, change its tags, mark it, choose a colored card flag, inspect card details, and replay attached audio. **Delete note** removes the note with its cards, review history, and media references. **Undo last review** restores the prior schedule and review log, including sibling burial and leech effects; **Undo note deletion** restores the deleted note and related records. **Undo card action** reverses the latest flag, bury, or suspend action. These local undo actions are available until the next sync attempt or a conflicting edit. Reviewer shortcuts are shown above the card; the same actions are available as touch controls.
