@@ -1,7 +1,8 @@
 # Issue 17 checkpoint: text and CSV
 
-Branch: `feat/17-text-csv`. Dedicated worktree: `D:/work/anki-csv-17`.
-Base: `d5f9dcca4aba50133aa68514f34911b0acc4aec0`.
+Branch: `feat/17-text-csv`. Current dedicated worktree: `C:/work/anki-17`.
+Rebased onto `origin/main` at `4839581`; current branch commit is `f0328e1`
+before the README and handoff follow-up. Fetch the branch for the exact head.
 
 The collection workspace now offers **Import / export text**. Import supports
 file/paste, UTF-8/BOM, UTF-16 and explicit Shift JIS, delimiter/quoting/header
@@ -32,11 +33,26 @@ created only when explicitly enabled. Existing note types are required.
   clients. Its first local browser run was in progress at checkpoint; consult the
   PR/issue handoff for its final result. This is not yet acceptance evidence.
 
+## Rebase and current verification (2026-10-02)
+
+Rebased the branch onto current `origin/main` (`4839581`). The one conflict in
+`src/CollectionWorkspace.tsx` was the competing import block; both main's custom
+study imports and this branch's text-transfer import are retained. The stable
+note identifier parameter and deleted-ID guard in `createNote()` remain intact.
+Added README instructions for text import/export.
+
+- All 10 focused text CSV tests pass.
+- Full client suite passes 271 tests across 22 files.
+- Typecheck, lint, and production build pass; lint reports the existing
+  `ImageOcclusion.tsx` fast-refresh warning.
+- Local desktop Chromium E2E could not launch on this Windows host
+  (`browserType.launch: spawn UNKNOWN`). It is not user-visible acceptance.
+- Exact-head Linux CI and review of its browser artifacts remain required.
+
 ## Resume
 
-1. Fetch and rebase onto current `origin/main`. Root owns issue 18 and changes
-   collection sync/conflict handling; reconcile the optional `createNote` stable
-   identifier parameter carefully. No schema or remote-change edits are part of 17.
+1. Fetch and inspect the current branch/PR state. If #18 merges first, rebase
+   again and preserve its causal enqueue semantics while reconciling stable IDs.
 2. Finish and verify the visible E2E journey on Chromium and iPhone WebKit. Add
    visible stable-ID update/intentional-duplicate/history evidence if needed.
 3. Review parser/import limits and UI behavior; add user-facing README instructions.
