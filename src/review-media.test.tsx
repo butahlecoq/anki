@@ -8,30 +8,30 @@ import * as reviewMedia from './review-media'
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 const reference = (digest: string, displayName: string): NoteMediaReference => ({
-  id: displayName, digest, displayName, kind: 'image', mimeType: 'image/png', noteId: 'note', side: 'front', playback: 'manual', createdAt: '2026-10-01', updatedAt: '2026-10-01',
+  id: `${digest}:${displayName}`, inline: true, digest, displayName, kind: 'image', mimeType: 'image/png', noteId: 'note', side: 'front', playback: 'manual', createdAt: '2026-10-01', updatedAt: '2026-10-01',
 })
 const stored = (digest: string): MediaBytes => ({ digest, bytes: new Uint8Array([1, 2, 3]).buffer, byteLength: 3, mimeType: 'image/png', verifiedAt: '2026-10-01' })
 
 test('prepares multiple images and aliases from verified bytes without blob network requests', async () => {
   const load = vi.fn(async (digest: string) => stored(digest))
   const media = await prepareReviewMedia([reference('one', '猫.png'), reference('one', 'cat.png'), reference('two', '犬.png')], new AbortController().signal, load)
-  expect(media['猫.png'].url).toBe('data:image/png;base64,AQID')
-  expect(media['cat.png'].url).toBe(media['猫.png'].url)
-  expect(media['犬.png'].url).toMatch(/^data:image\/png;base64,/)
+  expect(media.byName['猫.png'].url).toBe('data:image/png;base64,AQID')
+  expect(media.byName['cat.png'].url).toBe(media.byName['猫.png'].url)
+  expect(media.byName['犬.png'].url).toMatch(/^data:image\/png;base64,/)
   expect(load.mock.calls.map(([digest]) => digest)).toEqual(['one', 'two'])
 })
 
 test('base64 preserves binary bytes across chunk boundaries and final padding', async () => {
   const bytes = Uint8Array.from({ length: 49_153 }, (_, index) => index % 256)
   const media = await prepareReviewMedia([reference('one', 'large.png')], new AbortController().signal, async (digest) => ({ ...stored(digest), bytes: bytes.buffer, byteLength: bytes.byteLength }))
-  const decoded = atob(media['large.png'].url.split(',')[1])
+  const decoded = atob(media.byName['large.png'].url.split(',')[1])
   expect(Uint8Array.from(decoded, (character) => character.charCodeAt(0))).toEqual(bytes)
 })
 
 test('audio also encodes offline from stored bytes and retains playback policy', async () => {
   const audio: NoteMediaReference = { ...reference('audio', '猫.wav'), kind: 'audio', mimeType: 'audio/wav', playback: 'automatic' }
   const media = await prepareReviewMedia([audio], new AbortController().signal, async (digest) => ({ ...stored(digest), mimeType: 'audio/wav' }))
-  expect(media['猫.wav']).toEqual({ kind: 'audio', url: 'data:audio/wav;base64,AQID', automatic: true })
+  expect(media.byName['猫.wav']).toEqual({ kind: 'audio', url: 'data:audio/wav;base64,AQID', automatic: true })
 })
 
 test('rejects the aggregate budget with actionable copy before encoding the next attachment', async () => {
@@ -60,7 +60,7 @@ test('a synced oversized image is rejected before allocating a data URL', async 
 
 function Preview({ media, answer = false }: { media: NoteMediaReference[]; answer?: boolean }) {
   const { sources, error } = useReviewMedia(media)
-  return <div>{error && <p role="alert">{error}</p>}<span>{answer ? 'Answer' : 'Question'}</span>{Object.entries(sources).map(([name, source]) => <img key={name} alt={name} src={source.url} />)}</div>
+  return <div>{error && <p role="alert">{error}</p>}<span>{answer ? 'Answer' : 'Question'}</span>{Object.entries(sources.byName).map(([name, source]) => <img key={name} alt={name} src={source.url} />)}</div>
 }
 
 test('a preparation budget failure reaches the reviewer as an actionable alert', async () => {
@@ -102,7 +102,7 @@ test('pending state is reported while attachments load and clears once sources e
   function PendingProbe({ media }: { media: NoteMediaReference[] }) {
     const { sources, pending } = useReviewMedia(media, 'card-1')
     pendingStates.push(pending)
-    return <span>{Object.keys(sources).length === 0 ? 'preparing' : 'ready'}</span>
+    return <span>{Object.keys(sources.byName).length === 0 ? 'preparing' : 'ready'}</span>
   }
   render(<PendingProbe media={[reference('one', '猫.png')]} />)
   await waitFor(() => expect(screen.getByText('ready')).toBeVisible())
@@ -138,7 +138,7 @@ test('a changed owner clears previous sources even while its replacement read ha
   const load = vi.spyOn(collection, 'verifiedMediaBytes').mockImplementation(async (digest) => stored(digest))
   function OwnerProbe({ owner }: { owner: string }) {
     const { sources, pending } = useReviewMedia([reference('one', '猫.png')], owner)
-    return <span>{pending ? 'preparing replacement' : sources['猫.png']?.url}</span>
+    return <span>{pending ? 'preparing replacement' : sources.byName['猫.png']?.url}</span>
   }
   const { rerender } = render(<OwnerProbe owner="first-card" />)
   await waitFor(() => expect(screen.getByText('data:image/png;base64,AQID')).toBeVisible())
@@ -147,4 +147,19 @@ test('a changed owner clears previous sources even while its replacement read ha
   await waitFor(() => expect(load).toHaveBeenCalledTimes(2))
   expect(screen.getByText('preparing replacement')).toBeVisible()
   expect(screen.queryByText('data:image/png;base64,AQID')).not.toBeInTheDocument()
+})
+
+test('same-name attachments keep distinct reference sources and ambiguous inline names are reported', async () => {
+  const first = reference('red', 'picture.png')
+  const second = reference('blue', 'picture.png')
+  const load = async (digest: string) => ({ ...stored(digest), bytes: new Uint8Array(digest === 'red' ? [255, 0, 0] : [0, 0, 255]).buffer })
+  const attachments = await prepareReviewMedia([{ ...first, inline: false }, { ...second, inline: false }], new AbortController().signal, load)
+  expect(attachments.byReference[first.id].url).toBe('data:image/png;base64,/wAA')
+  expect(attachments.byReference[second.id].url).toBe('data:image/png;base64,AAD/')
+  expect(Object.keys(attachments.byName)).toEqual([])
+  expect(attachments.warnings).toEqual([])
+  const inline = await prepareReviewMedia([first, second, first], new AbortController().signal, load)
+  expect(inline.byName['picture.png']).toBeUndefined()
+  expect(inline.byReference[first.id].url).not.toBe(inline.byReference[second.id].url)
+  expect(inline.warnings).toEqual([expect.stringContaining('refers to different attachments')])
 })

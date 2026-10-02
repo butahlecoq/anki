@@ -3,7 +3,9 @@ import { validateMedia } from './media'
 import type { RenderOptions } from './template-renderer'
 
 export const REVIEW_MEDIA_BYTE_BUDGET = 64 * 1024 * 1024
-export type ReviewMediaSources = NonNullable<RenderOptions['media']>
+type SourceMap = NonNullable<RenderOptions['media']>
+export type ReviewMediaSources = { byName: SourceMap; byReference: SourceMap; warnings: string[] }
+export const emptyReviewMedia = (): ReviewMediaSources => ({ byName: Object.create(null), byReference: Object.create(null), warnings: [] })
 
 function dataUrl(bytes: ArrayBuffer, mimeType: string, signal: AbortSignal) {
   const view = new Uint8Array(bytes)
@@ -25,7 +27,9 @@ export async function prepareReviewMedia(
   byteBudget = REVIEW_MEDIA_BYTE_BUDGET,
 ): Promise<ReviewMediaSources> {
   const byDigest = new Map<string, string>()
-  const sources: ReviewMediaSources = {}
+  const sources = emptyReviewMedia()
+  const inlineDigests = new Map<string, string>()
+  const ambiguousNames = new Set<string>()
   let preparedBytes = 0
   // Read sequentially to avoid concurrently allocating each attachment's bytes.
   for (const reference of references) {
@@ -43,7 +47,19 @@ export async function prepareReviewMedia(
       url = dataUrl(stored.bytes, stored.mimeType, signal)
       byDigest.set(reference.digest, url)
     }
-    sources[reference.displayName] = { kind: reference.kind, url, automatic: reference.playback === 'automatic' }
+    const source = { kind: reference.kind, url, automatic: reference.playback === 'automatic' }
+    sources.byReference[reference.id] = source
+    if (reference.inline && !ambiguousNames.has(reference.displayName)) {
+      const previous = inlineDigests.get(reference.displayName)
+      if (previous && previous !== reference.digest) {
+        delete sources.byName[reference.displayName]
+        ambiguousNames.add(reference.displayName)
+        sources.warnings.push(`Inline media name “${reference.displayName}” refers to different attachments. Rename one attachment to show it in the template.`)
+      } else {
+        inlineDigests.set(reference.displayName, reference.digest)
+        sources.byName[reference.displayName] = source
+      }
+    }
   }
   return sources
 }

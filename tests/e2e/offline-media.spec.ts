@@ -126,3 +126,36 @@ test('occlusion source decodes when the first masked card is rendered offline', 
   await page.getByRole('button', { name: /^Good ·/ }).click()
   await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
 })
+
+test('same-filename uploaded front and back images retain their own decoded pixels offline', async ({ page, context }) => {
+  const red = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=='
+  const blue = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYPj/HwADAgH/5ncLrgAAAABJRU5ErkJggg=='
+  await createImageDeck(page)
+  await page.getByLabel('Front', { exact: true }).fill('赤')
+  await page.getByLabel('Back', { exact: true }).fill('青')
+  await page.getByLabel('Images and audio').setInputFiles([red, blue].map((base64) => ({ name: 'picture.png', mimeType: 'image/png', buffer: Buffer.from(base64, 'base64') })))
+  await page.getByLabel('Show on').nth(1).selectOption('back')
+  await page.getByRole('button', { name: 'Save note' }).click()
+  await page.evaluate(async () => { await navigator.serviceWorker.ready })
+  await context.setOffline(true)
+  await page.getByRole('button', { name: 'Study now' }).click()
+  const images = page.locator('.review-card .card-image')
+  await expectDecoded(images, 1)
+  await expect(images.first()).toHaveAttribute('src', `data:image/png;base64,${red}`)
+  const pixel = (image: Locator) => image.evaluate((element: HTMLImageElement) => {
+    const canvas = document.createElement('canvas')
+    canvas.width = canvas.height = 1
+    const drawing = canvas.getContext('2d')!
+    drawing.drawImage(element, 0, 0)
+    return Array.from(drawing.getImageData(0, 0, 1, 1).data)
+  })
+  await expect.poll(() => pixel(images.first())).toEqual([255, 0, 0, 255])
+  await page.getByRole('button', { name: 'Show answer' }).click()
+  await expectDecoded(images, 2)
+  await expect(images.first()).toHaveAttribute('src', `data:image/png;base64,${red}`)
+  await expect(images.nth(1)).toHaveAttribute('src', `data:image/png;base64,${blue}`)
+  await expect.poll(() => pixel(images.first())).toEqual([255, 0, 0, 255])
+  await expect.poll(() => pixel(images.nth(1))).toEqual([0, 0, 255, 255])
+  await page.getByRole('button', { name: /^Good ·/ }).click()
+  await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
+})
