@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { collection, type SyncConflict } from './collection'
 
@@ -19,6 +19,18 @@ export function SyncConflicts() {
   const [choice, setChoice] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [savedChoice, setSavedChoice] = useState(false)
+  const panelRef = useRef<HTMLElement>(null)
+  const dialogRef = useRef<HTMLElement>(null)
+  const openerRef = useRef<HTMLElement | null>(null)
+  useEffect(() => {
+    if (!selected) {
+      if (openerRef.current?.isConnected) openerRef.current.focus()
+      else panelRef.current?.focus()
+      return
+    }
+    dialogRef.current?.querySelector<HTMLElement>('input:not([disabled]), button:not([disabled])')?.focus()
+  }, [selected])
   const context = useLiveQuery(async () => {
     if (!selected) return undefined
     const version = selected.versions.map((version) => recordValue(version.value)).find(Boolean)
@@ -30,20 +42,38 @@ export function SyncConflicts() {
     const expression = type && fields ? fields[type.fields[0]?.id] : undefined
     return { name: typeof expression === 'string' ? expression.slice(0, 100) : typeof version?.name === 'string' ? version.name : selected.entityId, type: type?.name, deck: deck?.name, fieldNames: Object.fromEntries(type?.fields.map((field) => [field.id, field.name]) ?? []) }
   }, [selected])
-  if (!conflicts.length && !selected) return null
+  if (!conflicts.length && !selected && !savedChoice) return null
   async function resolve() {
     if (!selected || !choice) return
     setBusy(true); setError('')
     try {
       await collection.resolveSyncConflict(selected.key, choice, selected.heads)
-      setSelected(null); setChoice('')
+      setSavedChoice(true); setSelected(null); setChoice('')
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to save your choice.') }
     finally { setBusy(false) }
   }
-  return <section aria-label="Sync conflicts" className="sync-controls">
+  function containDialogFocus(event: KeyboardEvent<HTMLElement>) {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      setSelected(null)
+      setChoice('')
+      return
+    }
+    if (event.key !== 'Tab') return
+    const focusable = [...(dialogRef.current?.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])') ?? [])]
+    if (!focusable.length) { event.preventDefault(); dialogRef.current?.focus(); return }
+    const first = focusable[0], last = focusable.at(-1)!
+    if (event.shiftKey && (document.activeElement === first || !dialogRef.current?.contains(document.activeElement))) {
+      event.preventDefault(); last.focus()
+    } else if (!event.shiftKey && (document.activeElement === last || !dialogRef.current?.contains(document.activeElement))) {
+      event.preventDefault(); first.focus()
+    }
+  }
+  return <section ref={panelRef} tabIndex={-1} aria-label="Sync conflicts" className="sync-controls">
     <div><h2>Review conflicting changes</h2><p>{conflicts.length} record{conflicts.length === 1 ? '' : 's'} need a choice. Both versions are saved on this device.</p></div>
-    {conflicts.map((conflict) => <button className="text-button" key={conflict.key} onClick={() => { setSelected(conflict); setChoice(''); setError('') }}>Review {conflict.entityType === 'noteMedia' ? 'attachment' : conflict.entityType === 'deckOptionGroup' ? 'deck options' : conflict.entityType} conflict</button>)}
-    {selected && <div className="dialog-backdrop"><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="conflict-title">
+    {savedChoice && !selected && <p role="status">Choice saved. It will sync to your other devices.</p>}
+    {conflicts.map((conflict) => <button className="text-button" key={conflict.key} onClick={(event) => { openerRef.current = event.currentTarget; setSelected(conflict); setChoice(''); setError('') }}>Review {conflict.entityType === 'noteMedia' ? 'attachment' : conflict.entityType === 'deckOptionGroup' ? 'deck options' : conflict.entityType} conflict</button>)}
+    {selected && <div className="dialog-backdrop"><section ref={dialogRef} className="dialog" role="dialog" aria-modal="true" aria-labelledby="conflict-title" onKeyDown={containDialogFocus}>
       <h2 id="conflict-title">Choose the saved version</h2>
       {context && <p>Record: <strong>{context.name}</strong>{context.type && <> · {context.type}</>}{context.deck && <> · Deck: {context.deck}</>}</p>}
       <p>Conflicting properties: {selected.conflicts.map((path) => path.startsWith('fields.') ? context?.fieldNames[path.slice(7)] ?? path.slice(7) : path === '$deleted' ? 'Deletion' : path === '$' ? 'Whole record' : path.replace(/^\$schedule\.?/, 'Schedule ')).join(', ')}.</p>
