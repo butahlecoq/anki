@@ -32,11 +32,13 @@ test('oversized imported cards fit the frame on both sides and after resizing', 
       const frame = window.frameElement as HTMLIFrameElement
       const rect = element.getBoundingClientRect()
       return {
+        bodyRect: { top: rect.top, bottom: rect.bottom, height: rect.height },
+        frame: { clientHeight: frame.clientHeight, offsetHeight: frame.offsetHeight, inlineHeight: frame.style.height, inlineMinHeight: frame.style.minHeight, inlineMarginBottom: frame.style.marginBottom },
         fitsWidth: rect.right <= frame.clientWidth + 1,
         fitsHeight: rect.bottom <= frame.clientHeight + 1,
         overflowing: [...element.querySelectorAll<HTMLElement>('*')].filter((child) => child.clientWidth > 0 && child.scrollWidth > child.clientWidth + 1).map((child) => ({ className: child.className, width: child.clientWidth, scrollWidth: child.scrollWidth })),
       }
-    })).toEqual({ fitsWidth: true, fitsHeight: true, overflowing: [] })
+    })).toMatchObject({ fitsWidth: true, fitsHeight: true, overflowing: [] })
   }
   await expect(body).toContainText('木')
   await fits()
