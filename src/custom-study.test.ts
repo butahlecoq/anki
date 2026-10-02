@@ -38,6 +38,16 @@ test('practice history syncs without scheduling changes and undo restores member
   expect(review).toMatchObject({ rescheduled: false, due: card.due, durationMs: 1234 })
   expect(await db.cards.get(card.id)).toEqual(card)
   expect((await db.pendingOperations()).find(op => op.entityId === review.id)?.payload).toEqual(review)
+  const receiver = createCollection(`custom-receiver-${crypto.randomUUID()}`)
+  try {
+    const operations = await db.pendingOperations()
+    await receiver.applyRemoteChanges(operations, 1)
+    await receiver.applyRemoteChanges(operations, 2)
+    expect(await receiver.reviewEntries.toArray()).toEqual([review])
+    expect(await receiver.cards.get(card.id)).toEqual(card)
+    expect(await customStudySessions(receiver)).toEqual([])
+    expect((await receiver.reviewQueue(card.deckId, now)).map(item => item.id)).toContain(card.id)
+  } finally { await receiver.delete() }
   expect((await customStudySessions(db))[0].cardIds).toEqual([])
   await undoCustomStudy(db, session.id)
   expect(await db.reviewEntries.get(review.id)).toBeUndefined()
