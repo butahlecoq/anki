@@ -5,6 +5,7 @@ import { DEFAULT_DECK_OPTION_GROUP_ID, State, type CardRecord, type Collection, 
 import { parseAnkiImageOcclusion, type AnkiImageOcclusionFields } from './image-occlusion-interchange'
 import { digestMedia, validateMedia, type MediaKind, type MediaSide } from './media'
 import { validateTemplate } from './template-renderer'
+import { supportedNavigationTemplate } from './template-navigation'
 import { ANKI_ARCHIVE_LIMITS, validateAnkiArchive } from './anki-archive'
 import { readKirokuSchedule, readKirokuReview } from './anki-scheduling-metadata'
 
@@ -279,6 +280,10 @@ function validateSupportedTemplateMarkup(front: string, back: string, css: strin
     if (['SCRIPT', 'IFRAME', 'OBJECT', 'EMBED', 'LINK', 'FORM'].includes(element.tagName) || [...element.attributes].some((attribute) => attribute.name.toLocaleLowerCase().startsWith('on'))) throw new Error('Executable or embedded template markup is unsupported')
     for (const attribute of ['src', 'href', 'srcset', 'poster']) {
       const value = element.getAttribute(attribute)?.trim()
+      if (attribute === 'href' && element.tagName === 'A' && value) {
+        if (!supportedNavigationTemplate(value)) throw new Error('Navigation links must use HTTPS URLs without credentials')
+        continue
+      }
       if (value && !value.toLocaleLowerCase().startsWith('data:')) throw new Error('Template-static or remote resource references are unsupported; media must come from note fields')
     }
     if (/url\s*\(/i.test(element.getAttribute('style') ?? '')) throw new Error('Inline style resource URLs are unsupported')

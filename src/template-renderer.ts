@@ -1,3 +1,5 @@
+import { resolveTemplateNavigation } from './template-navigation'
+
 export interface RenderedTemplate {
   html: string
   isEmpty: boolean
@@ -136,12 +138,14 @@ export function validateTemplate(template: string, fieldNames: readonly string[]
 
 /** Replace fields without evaluating template text or field contents as code. */
 export function renderTemplate(template: string, fields: Record<string, string>, front?: string, options: RenderOptions = {}): RenderedTemplate {
+  const navigation = resolveTemplateNavigation(template, fields)
+  template = navigation.markup
   const side = options.side ?? (front === undefined ? 'front' : 'back')
   const known = new Set(Object.keys(fields))
   let html = ''
   let cursor = 0
   let section: { name: string; enabled: boolean } | undefined
-  let visibleField = false
+  let visibleField = navigation.hasContent
   let typedAnswer: string | undefined
   for (const match of template.matchAll(token)) {
     const position = match.index

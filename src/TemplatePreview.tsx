@@ -1,5 +1,7 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useCallback } from 'react'
 import { tryRenderTemplate } from './template-renderer'
+import { useTemplateNavigation } from './use-template-navigation'
+import { renderedNavigationActions } from './template-navigation'
 
 interface TemplatePreviewProps {
   front: string
@@ -15,7 +17,7 @@ interface TemplatePreviewProps {
 }
 
 export function TemplatePreview({ front, back, css, fields, side, title = 'Card preview', kind = 'standard', ordinal, media, templateOrdinal = 1 }: TemplatePreviewProps) {
-  const frame = useRef<HTMLIFrameElement>(null)
+  const frame = useRef<HTMLIFrameElement | null>(null)
   useEffect(() => {
     if (title === 'Review card') frame.current?.scrollIntoView?.({ block: 'center' })
   }, [title, side])
@@ -35,13 +37,24 @@ export function TemplatePreview({ front, back, css, fields, side, title = 'Card 
       else error = renderedBack.error
     }
   }
-  const srcDoc = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:"><style>body{font-family:system-ui,sans-serif;color:#202a22;background:#fff;padding:24px;overflow-wrap:anywhere}.card-image{display:block;max-width:100%;max-height:290px;object-fit:contain}.card-audio{width:min(100%,400px)}${css}</style></head><body class="card card${templateOrdinal}">${html}</body></html>`
+  const srcDoc = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:"><style>body{font-family:system-ui,sans-serif;color:#202a22;background:#fff;padding:24px;overflow-wrap:anywhere}.card-image{display:block;max-width:100%;max-height:290px;object-fit:contain}.card-audio{width:min(100%,400px)}a[data-kiroku-href]{color:#175fa6;text-decoration:underline;cursor:pointer}${css}</style></head><body class="card card${templateOrdinal}">${html}</body></html>`
+  const { frameRef: navigationFrameRef, dialog: navigationDialog, choose: chooseNavigation } = useTemplateNavigation(srcDoc)
+  const combinedFrameRef = useCallback((element: HTMLIFrameElement | null) => {
+    frame.current = element
+    navigationFrameRef(element)
+  }, [navigationFrameRef])
+  const navigationActions = renderedNavigationActions(html)
 
   return (
     <div className="template-preview">
       {error && <p role="alert">{error}</p>}
       {!error && empty && <p className="form-warning" role="status">No card will be created: front has no visible field content.</p>}
-      {!error && <iframe ref={frame} title={title} sandbox="allow-same-origin" srcDoc={srcDoc} />}
+      {!error && <iframe ref={combinedFrameRef} title={title} sandbox="allow-same-origin" srcDoc={srcDoc} />}
+      {!error && navigationActions.length > 0 && <section className="external-card-links" aria-label="External card links">
+        <p>Links from this card are also available here. Preview the destination before opening another tab.</p>
+        <div>{navigationActions.map((link, index) => <button className="text-button" type="button" aria-label={`${link.label} · ${link.host}`} key={`${index}:${link.url}`} onClick={() => chooseNavigation(link.url)}><span>{link.label}</span><span aria-hidden="true"> · </span><bdi>{link.host}</bdi></button>)}</div>
+      </section>}
+      {navigationDialog}
     </div>
   )
 }
