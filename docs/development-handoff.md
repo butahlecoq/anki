@@ -8,7 +8,7 @@ Fetch before relying on checks. Run `git status --short --branch` in each path. 
 
 | Path | Branch | Head | State |
 |---|---|---|---|
-| `C:/work/anki` | `main` | `47f2d99` | clean; documentation CI `37018413446` passed; follow-up pending |
+| `C:/work/anki` | `main` | current | clean; this file records the latest handoff; docs CI `37018413446` passed on its prior refresh |
 | `C:/work/anki-17` | `feat/17-text-csv` | `7c00ccb` | clean; draft PR #72; exact-head CI `37010267515` passed |
 | `C:/work/anki-18` | `feat/18-safe-concurrency` | `01a65c4` | clean; draft PR #73; exact-head CI `37019083852` running |
 | `C:/work/anki-23` | `feat/23-jetbrains-omarchy-ux` | `b4a6415` | clean; PR #74 marked ready; exact-head CI `37017542638` passed |
@@ -57,3 +57,4 @@ Known projection limits to audit before expanding it: currently it accepts only 
 6. Check #67's private local preview only on the machine that owns those inputs.
 
 The authoritative issue/PR process and five triage labels are in `docs/agents/issue-tracker.md` and `docs/agents/triage-labels.md`. Use one issue worktree per active feature, and remove it only in the same step as merging that issue's PR.
+
