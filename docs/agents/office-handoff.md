@@ -1,5 +1,53 @@
 # Office handoff — 2026-10-02
 
+## Home continuation update — 2026-10-02
+
+This section supersedes stale head IDs and progress statements below where they
+conflict. Current `main` is `483958129c58f0f28aaa53f571176ce112f0115f`.
+The clean active worktree is `C:/work/anki-18`, branch
+`feat/18-safe-concurrency`, at `46a2eddffe07a379c87f1766c37b492c4dc75f3b`,
+equal to `origin/feat/18-safe-concurrency`. Draft PR #73 remains open.
+
+The #18 branch now includes schema-watermark and durable metadata-inference
+regressions, a visible two-context offline conflict/choice/convergence journey,
+deletion-undo revision cleanup, both-order deck-deletion/review and manual
+rescheduling/review races, contextual conflict UI with stale-choice rejection,
+and server rejection of cyclic, dangling, and cross-entity revision parents.
+Latest focused results: 275 client tests and 30 server tests pass; typecheck and
+lint pass (with the existing ImageOcclusion fast-refresh warning). Build passed
+before the latest server-only change. The Windows full gate still terminates
+with Playwright `spawn UNKNOWN`, so it provides no browser acceptance.
+
+Exact-head Linux CI run `36999123952` is live at
+https://github.com/butahlecoq/anki/actions/runs/36999123952. Dependency setup
+and Playwright browser installation passed; `npm run check` is running. Check
+this run and inspect its browser artifact before claiming acceptance. Older
+run `36998543275` is still live but targets older head `1aaf8bb`; it is not
+authoritative for this branch. Do not merge or close #18 until the latest CI,
+visible browser journey, and remaining review/acceptance gaps are resolved.
+
+Current worktree inventory is six folders: main plus branches #10, #11, #12,
+#14, #18, and #45. These are separate Git worktrees, not nested copies required
+for normal use. The merge/cleanup review removed verified dead trees, but the
+remaining issue worktrees were preserved. Do not remove a tree based on branch
+ancestry alone; follow `docs/agents/worktrees.md` and inspect dirty state first.
+
+Other handoff findings rechecked from GitHub:
+
+- #17 / PR #72 is still draft and conflicting with main; rebase before further
+  acceptance. `docs/text-csv-handoff.md` and issue #17 comments have details.
+- #67 / PR #70 is draft and mergeable; exact-head CI `36972904946` passed.
+  Supplied private-package aggregate preview evidence remains outstanding.
+- #56 has a design/checkpoint only at `feat/56-ankiweb-account` head `76fa434`;
+  the app integration and original AnkiWeb account workflow remain unimplemented.
+- Parent #1 remains explicitly incomplete. Device-only iPhone checks, release,
+  and PC-off original-account sync are unproven.
+
+No local private packages or `.env` were present in this checkout. Do not treat
+office-only PIDs, local paths, or old process sessions from other handoffs as
+portable or complete. Never include private package content or credentials in
+GitHub evidence.
+
 The user requested a checkpoint before moving to the office. Implementation has
 stopped at this checkpoint. The application is **not finished**. Keep the original
 scope: Japanese learning PWA on iPhone/Windows, offline review, existing original
