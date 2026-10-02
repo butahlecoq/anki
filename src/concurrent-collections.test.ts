@@ -41,7 +41,7 @@ test('independent offline Japanese field edits converge without losing either ch
 
 test('conflicting edits survive reopening and an explicit revision choice converges', async () => {
   const { a, b, note } = await clients()
-  await a.updateBasicNote(note.id, { front: 'ねこ', back: 'cat' }, new Date('2026-10-02T12:00:00Z'))
+  await a.updateBasicNote(note.id, { front: 'ねこ', back: 'кот · feline' }, new Date('2026-10-02T12:00:00Z'))
   await b.updateBasicNote(note.id, { front: 'ネコ', back: 'cat' }, new Date('2026-10-02T12:00:01Z'))
   await exchange(a, b)
   const conflict = (await a.syncConflicts.toArray())[0]
@@ -51,9 +51,11 @@ test('conflicting edits survive reopening and an explicit revision choice conver
   a.close()
   const reopened = createCollection(name); collections.push(reopened)
   expect(await reopened.syncConflicts.get(conflict.key)).toEqual(conflict)
-  await reopened.resolveSyncConflict(conflict.key, conflict.heads[0], conflict.heads)
+  const selected = conflict.versions.find((version) => (version.value as { fields: { front: string } }).fields.front === 'ネコ')!
+  await reopened.resolveSyncConflict(conflict.key, selected.opId, conflict.heads)
   await exchange(reopened, b)
   expect(await reopened.notes.get(note.id)).toEqual(await b.notes.get(note.id))
+  expect(await reopened.notes.get(note.id)).toMatchObject({ fields: { front: 'ネコ', back: 'кот · feline' } })
   expect(await b.syncConflicts.count()).toBe(0)
   await expect(b.resolveSyncConflict(conflict.key, conflict.heads[1], conflict.heads)).rejects.toThrow(/changed/i)
 })
