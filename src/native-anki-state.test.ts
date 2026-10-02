@@ -1,23 +1,55 @@
 import 'fake-indexeddb/auto'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import initSqlJs from 'sql.js'
+import type { SqlJsStatic } from 'sql.js'
 import { NativeAnkiState } from './native-anki-state'
 import { NativeAnkiClient, NativeSyncConflict } from './native-anki-sync'
 
 let state: NativeAnkiState
+let SQL: SqlJsStatic
+let snapshot: Uint8Array
 let occupied = false
 beforeEach(async () => {
   occupied = false
+  SQL = await initSqlJs()
+  const db = new SQL.Database()
+  db.run(`CREATE TABLE col(id INTEGER,crt INTEGER,mod INTEGER,scm INTEGER,ver INTEGER,dty INTEGER,usn INTEGER,ls INTEGER,conf TEXT,models TEXT,decks TEXT,dconf TEXT,tags TEXT);
+    CREATE TABLE notes(id INTEGER,guid TEXT,mid INTEGER,mod INTEGER,usn INTEGER,tags TEXT,flds TEXT,sfld TEXT,csum INTEGER,flags INTEGER,data TEXT);
+    CREATE TABLE cards(id INTEGER,nid INTEGER,did INTEGER,ord INTEGER,mod INTEGER,usn INTEGER,type INTEGER,queue INTEGER,due INTEGER,ivl INTEGER,factor INTEGER,reps INTEGER,lapses INTEGER,left INTEGER,odue INTEGER,odid INTEGER,flags INTEGER,data TEXT);
+    CREATE TABLE revlog(id INTEGER,cid INTEGER,usn INTEGER,ease INTEGER,ivl INTEGER,lastIvl INTEGER,factor INTEGER,time INTEGER,type INTEGER);
+    INSERT INTO col VALUES(12,0,0,0,11,0,0,0,'{}','{}','{}','{}','{}');`)
+  snapshot = db.export()
+  db.close()
   vi.stubGlobal('navigator', { locks: { request: async (_name: string, _options: unknown, callback: (lock: object | null) => Promise<unknown>) => {
     if (occupied) return callback(null)
     occupied = true
     try { return await callback({}) } finally { occupied = false }
   } } })
   state = new NativeAnkiState(`native-state-${crypto.randomUUID()}`)
-  await state.replace(new Uint8Array([1, 2, 3]), null)
+  await state.replace(snapshot, null)
 })
 afterEach(async () => { await state.delete(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 const client = () => NativeAnkiClient.login(async () => Response.json({ key: 'generated-in-memory-key' }), 'generated-user', 'generated-password')
+
+it('persists a projection map only while its exact native checkpoint remains current', async () => {
+  const manifest = await state.saveProjectionManifest(SQL, 1)
+  expect(manifest).toMatchObject({ version: 1, collectionId: 12, schema: 11, notes: [], cards: [], reviews: [] })
+  const firstRead = await state.projectionManifest()
+  expect(firstRead).toEqual(manifest)
+  if (firstRead) firstRead.decks.push({ id: 999 })
+  expect(await state.projectionManifest()).toEqual(manifest)
+
+  state.close()
+  await state.open()
+  expect(await state.projectionManifest()).toEqual(manifest)
+
+  await state.replace(new Uint8Array([7, 8, 9]), 1)
+  expect(await state.projectionManifest()).toBeUndefined()
+  await expect(state.saveProjectionManifest(SQL, 1)).rejects.toThrow('another operation')
+  state.close()
+  await state.open()
+  expect(await state.projectionManifest()).toBeUndefined()
+})
 
 it('keeps the durable checkpoint after a lost finish response and commits only the recovered result', async () => {
   const account = await client(), SQL = await initSqlJs()
@@ -25,7 +57,7 @@ it('keeps the durable checkpoint after a lost finish response and commits only t
   await expect(state.synchronize(account, SQL)).rejects.toThrow('lost finish')
   state.close()
   await state.open()
-  expect(Array.from((await state.checkpoint())!.collection)).toEqual([1, 2, 3])
+  expect(Array.from((await state.checkpoint())!.collection)).toEqual(Array.from(snapshot))
   expect((await state.recovery())?.status).toBe('recovery-required')
   await expect(state.synchronize(account, SQL)).rejects.toThrow('needs recovery')
   await state.recover(account, SQL)
