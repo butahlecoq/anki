@@ -88,7 +88,7 @@ function renderReading(value: string, filter: 'furigana' | 'kana' | 'kanji'): st
   return html + escapeHtml(value.slice(cursor))
 }
 
-type Replacement = { field: string; filter?: 'text' | 'furigana' | 'kana' | 'kanji' | 'cloze' | 'type' | 'type-cloze' }
+type Replacement = { field: string; filter?: 'text' | 'furigana' | 'kana' | 'kanji' | 'cloze' | 'type' | 'type-cloze' | 'hint' }
 
 function replacement(raw: string, known: ReadonlySet<string>): Replacement {
   const name = raw.trim()
@@ -97,7 +97,7 @@ function replacement(raw: string, known: ReadonlySet<string>): Replacement {
   if (parts.length === 1) return { field: name }
   const [filter, second, third] = parts
   if (filter === 'type' && second === 'cloze' && third && parts.length === 3) return { field: third, filter: 'type-cloze' }
-  if (['text', 'furigana', 'kana', 'kanji', 'cloze', 'type'].includes(filter) && second && parts.length === 2) return { field: second, filter: filter as Replacement['filter'] }
+  if (['text', 'furigana', 'kana', 'kanji', 'cloze', 'type', 'hint'].includes(filter) && second && parts.length === 2) return { field: second, filter: filter as Replacement['filter'] }
   throw new Error(`Unsupported template filter: ${parts.slice(0, -1).join(':')}`)
 }
 
@@ -166,7 +166,7 @@ export function renderTemplate(template: string, fields: Record<string, string>,
         if (typedAnswer.trim()) visibleField = true
       } else {
         if (value.trim() && name !== 'FrontSide') visibleField = true
-        html += name === 'FrontSide' ? value : filter === 'cloze'
+        html += filter === 'hint' ? (value.trim() ? `<details class="card-hint"><summary>Show ${escapeHtml(name)}</summary><div>${renderField(value, options.media)}</div></details>` : '') : name === 'FrontSide' ? value : filter === 'cloze'
           ? renderCloze(value, ordinal ?? 0, side)
           : filter === 'furigana' || filter === 'kana' || filter === 'kanji' ? renderReading(value, filter)
             : renderField(value, options.media)

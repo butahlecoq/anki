@@ -2,6 +2,18 @@ import { describe, expect, test } from 'vitest'
 import { clozeOrdinals, renderTemplate, tryRenderTemplate, validateTemplate } from './template-renderer'
 
 describe('renderTemplate', () => {
+  test('hint fields use native accessible disclosure without executing field markup', () => {
+    const result = renderTemplate('{{Word}} {{hint:Meaning}}', { Word: '猫', Meaning: '<script>alert(1)</script>cat' })
+    const body = new DOMParser().parseFromString(result.html, 'text/html').body
+    expect(body.querySelector('details')?.open).toBe(false)
+    expect(body.querySelector('summary')?.textContent).toBe('Show Meaning')
+    expect(body.querySelector('details div')?.textContent).toBe('<script>alert(1)</script>cat')
+    expect(body.querySelector('script')).toBeNull()
+    expect(result.isEmpty).toBe(false)
+    expect(renderTemplate('{{hint:Meaning}}', { Meaning: ' ' }).isEmpty).toBe(true)
+    expect(renderTemplate('{{hint:Meaning}}', { Meaning: ' ' }).html).toBe('')
+    expect(tryRenderTemplate('{{hint:furigana:Word}}', { Word: '猫[ねこ]' }).ok).toBe(false)
+  })
   test('renders trusted imported media tokens inline and respects surrounding conditionals', () => {
     const fields = { Show: 'yes', Media: 'before [[kiroku-media:cat.png]] after' }
     const media = { 'cat.png': { kind: 'image' as const, url: 'blob:cat' } }

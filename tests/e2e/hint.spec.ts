@@ -1,0 +1,40 @@
+import { expect, test } from '@playwright/test'
+import initSqlJs from 'sql.js'
+import { Deck, Note, Notetype, Package } from 'ankipack'
+
+test('Japanese hint reveals by touch and keyboard offline inside the script-free card sandbox', async ({ page, context }) => {
+  const SQL = await initSqlJs({ locateFile: () => './node_modules/sql.js/dist/sql-wasm.wasm' })
+  const type = new Notetype({ id: 1700000660001, name: 'Japanese hints', fields: [{ name: 'Word' }, { name: 'Meaning' }], templates: [{ name: 'Recognition', questionFormat: '{{Word}} {{hint:Meaning}}', answerFormat: '{{FrontSide}}<hr>{{Meaning}}' }] })
+  const deck = new Deck({ id: 1700000660002, name: '日本語 hints' })
+  deck.addNote(new Note({ notetype: type, guid: 'synthetic-hint-note', fields: ['猫', 'cat · ねこ'] }))
+  const pkg = new Package(); pkg.addDeck(deck)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Import Anki package', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Import Anki package' })
+  await dialog.getByLabel('Anki package', { exact: true }).setInputFiles({ name: 'hints.apkg', mimeType: 'application/octet-stream', buffer: Buffer.from(await pkg.toUint8Array(SQL)) })
+  await expect(dialog.getByText('1 note', { exact: true })).toBeVisible()
+  await dialog.getByRole('button', { name: 'Import package', exact: true }).click()
+  await page.getByRole('button', { name: 'Open 日本語 hints', exact: true }).click()
+  await expect(page.getByText('Offline shell ready', { exact: true })).toBeVisible()
+  await context.setOffline(true)
+  try {
+    await page.getByRole('button', { name: 'Study now', exact: true }).click()
+    const review = page.frameLocator('iframe[title="Review card"]')
+    const summary = review.locator('summary'), hint = review.locator('details div')
+    await expect(review.locator('body')).toContainText('猫')
+    await expect(hint).toBeHidden()
+    await summary.click()
+    await expect(hint).toBeVisible()
+    await expect(hint).toHaveText('cat · ねこ')
+    await summary.press('Enter')
+    await expect(hint).toBeHidden()
+    await summary.press('Space')
+    await expect(hint).toBeVisible()
+    await expect(review.locator('script')).toHaveCount(0)
+    await expect(page.locator('iframe[title="Review card"]')).toHaveAttribute('sandbox', 'allow-same-origin')
+    await page.getByRole('button', { name: 'Show answer', exact: true }).click()
+    await expect(review.locator('body')).toContainText('cat · ねこ')
+    await page.getByRole('button', { name: /^Easy ·/ }).click()
+    await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
+  } finally { await context.setOffline(false) }
+})
