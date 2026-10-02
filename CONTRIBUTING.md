@@ -22,6 +22,8 @@ git worktree add ..\anki-3 -b feat/3-first-offline-review origin/main
 
 Never run two implementation agents in the same worktree. Separate worktrees prevent uncommitted changes, test artifacts, and generated files from overwriting each other.
 
+CI runs fast typecheck, lint, unit, and server checks separately from the serial Chromium and WebKit browser suite. See [the CI guide](docs/agents/ci.md) for the reason and timeout policy; `npm run check` remains the complete local gate.
+
 ## Pull requests
 
 - Keep one ticket per PR unless an issue explicitly says otherwise.
