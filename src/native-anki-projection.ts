@@ -1,5 +1,6 @@
 import type { CardRow, CollectionData, DeckRow, FieldRow, NoteRow, NotetypeRow, RevlogRow, TemplateRow } from 'ankipack'
 import type { Database as SqlDatabase, SqlJsStatic } from 'sql.js'
+import type { CardRecord, CardTemplate, Deck, Note, NoteType, NoteTypeField, ReviewEntry } from './collection'
 import { nativeSnapshotHash } from './native-anki-sync'
 
 export interface NativeProjectionMedia { name: string; data: Uint8Array }
@@ -16,6 +17,31 @@ export interface NativeAnkiProjectionManifest {
   reviews: Array<{ id: number; cardId: number }>
   decks: Array<{ id: number }>
   notetypes: Array<{ id: number; fieldOrdinals: number[]; templateOrdinals: number[] }>
+}
+
+export interface NativeAnkiProjectionEntities {
+  notes: readonly Note[]
+  cards: readonly CardRecord[]
+  reviews: readonly ReviewEntry[]
+  decks: readonly Deck[]
+  notetypes: readonly NoteType[]
+}
+
+export interface NativeAnkiProjectionEntityMap {
+  notes: ReadonlyMap<number, string>
+  cards: ReadonlyMap<number, string>
+  reviews: ReadonlyMap<number, string>
+  decks: ReadonlyMap<number, string>
+  notetypes: ReadonlyMap<number, string>
+  fields: ReadonlyMap<string, NoteTypeField>
+  templates: ReadonlyMap<string, CardTemplate>
+  unmapped: {
+    notes: number[]
+    cards: number[]
+    reviews: number[]
+    decks: number[]
+    notetypes: number[]
+  }
 }
 
 function invalid(): Error {
@@ -250,5 +276,93 @@ export async function nativeAnkiProjectionManifest(SQL: SqlJsStatic, snapshot: U
       fieldOrdinals: data.fields.filter((field) => field.ntid === id).map((field) => field.ord).sort((a, b) => a - b),
       templateOrdinals: data.templates.filter((template) => template.ntid === id).map((template) => template.ord).sort((a, b) => a - b),
     })),
+  }
+}
+
+/** Builds the native-to-app crosswalk from stable importer identities. Native
+ * entities unsupported by the app are reported as unmapped so a writer can
+ * preserve them byte-for-byte in the authoritative SQLite snapshot. */
+export function nativeAnkiProjectionEntityMap(manifest: NativeAnkiProjectionManifest, entities: NativeAnkiProjectionEntities): NativeAnkiProjectionEntityMap {
+  const invalidMap = () => new Error('The imported Anki entities do not match their native identity map.')
+  const unique = <T>(items: readonly T[], identity: (item: T) => number | undefined): Map<number, T> => {
+    const result = new Map<number, T>()
+    for (const item of items) {
+      const id = identity(item)
+      if (id === undefined) continue
+      if (!Number.isSafeInteger(id) || id <= 0 || result.has(id)) throw invalidMap()
+      result.set(id, item)
+    }
+    return result
+  }
+
+  const appNotes = unique(entities.notes, (note) => note.ankiId)
+  const appCards = unique(entities.cards, (card) => card.ankiId)
+  const appReviews = new Map<number, ReviewEntry>()
+  for (const review of entities.reviews) {
+    if (!review.id.startsWith('anki-review:')) continue
+    const id = Number(review.id.slice('anki-review:'.length))
+    if (!Number.isSafeInteger(id) || id <= 0 || appReviews.has(id)) throw invalidMap()
+    appReviews.set(id, review)
+  }
+  const notes = new Map<number, string>()
+  const cards = new Map<number, string>()
+  const reviews = new Map<number, string>()
+  const decks = new Map<number, string>()
+  const notetypes = new Map<number, string>()
+  const fields = new Map<string, NoteTypeField>()
+  const templates = new Map<string, CardTemplate>()
+
+  for (const native of manifest.notes) {
+    const app = appNotes.get(native.id)
+    if (!app) continue
+    if (app.id !== `anki-note:${native.guid}` || app.typeId !== `anki-note-type:${native.notetypeId}` && app.typeId !== 'image-occlusion') throw invalidMap()
+    notes.set(native.id, app.id)
+  }
+  for (const native of manifest.cards) {
+    const app = appCards.get(native.id)
+    if (!app) continue
+    const noteId = notes.get(native.noteId)
+    if (!noteId || app.noteId !== noteId) throw invalidMap()
+    cards.set(native.id, app.id)
+  }
+  for (const native of manifest.reviews) {
+    const cardId = cards.get(native.cardId)
+    const app = appReviews.get(native.id)
+    if (!app) continue
+    if (app.cardId !== cardId) throw invalidMap()
+    reviews.set(native.id, app.id)
+  }
+  for (const native of manifest.decks) {
+    const id = `anki-deck:${native.id}`
+    if (entities.decks.some((deck) => deck.id === id)) decks.set(native.id, id)
+  }
+  for (const native of manifest.notetypes) {
+    const id = `anki-note-type:${native.id}`
+    const app = entities.notetypes.find((notetype) => notetype.id === id)
+    if (!app) continue
+    notetypes.set(native.id, id)
+    for (const ordinal of native.fieldOrdinals) {
+      const fieldId = `anki-field:${native.id}:${ordinal}`
+      const field = app.fields.find((candidate) => candidate.id === fieldId)
+      if (!field) throw invalidMap()
+      fields.set(`${native.id}:${ordinal}`, field)
+    }
+    for (const ordinal of native.templateOrdinals) {
+      const templateId = `anki-template:${native.id}:${ordinal}`
+      const template = app.templates.find((candidate) => candidate.id === templateId)
+      if (!template) throw invalidMap()
+      templates.set(`${native.id}:${ordinal}`, template)
+    }
+  }
+
+  return {
+    notes, cards, reviews, decks, notetypes, fields, templates,
+    unmapped: {
+      notes: manifest.notes.filter(({ id }) => !notes.has(id)).map(({ id }) => id),
+      cards: manifest.cards.filter(({ id }) => !cards.has(id)).map(({ id }) => id),
+      reviews: manifest.reviews.filter(({ id }) => !reviews.has(id)).map(({ id }) => id),
+      decks: manifest.decks.filter(({ id }) => !decks.has(id)).map(({ id }) => id),
+      notetypes: manifest.notetypes.filter(({ id }) => !notetypes.has(id)).map(({ id }) => id),
+    },
   }
 }

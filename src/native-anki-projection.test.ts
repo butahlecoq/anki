@@ -3,7 +3,7 @@ import { afterEach, expect, it } from 'vitest'
 import initSqlJs from 'sql.js'
 import { Collection } from './collection'
 import { prepareAnkiDataImport } from './anki-import'
-import { nativeAnkiProjectionData, nativeAnkiProjectionManifest } from './native-anki-projection'
+import { nativeAnkiProjectionData, nativeAnkiProjectionEntityMap, nativeAnkiProjectionManifest } from './native-anki-projection'
 
 const noteId = 1_700_000_000_100
 const firstCardId = 1_700_000_000_101
@@ -75,6 +75,23 @@ it('projects schema-11 note, card, deck, and review identities without rewriting
   expect(cards.map((card) => card.ankiId)).toEqual([firstCardId, secondCardId])
   expect(cards.map((card) => card.deckId)).not.toEqual([note?.deckId, note?.deckId])
   expect(review).toMatchObject({ id: `anki-review:${reviewId}`, cardId: cards[0].id, rating: 4 })
+
+  const manifest = await nativeAnkiProjectionManifest(SQL, snapshot)
+  const entityMap = nativeAnkiProjectionEntityMap(manifest, {
+    notes: await collection.notes.toArray(),
+    cards: await collection.cards.toArray(),
+    reviews: await collection.reviewEntries.toArray(),
+    decks: await collection.decks.toArray(),
+    notetypes: await collection.noteTypes.toArray(),
+  })
+  expect(entityMap.notes.get(noteId)).toBe(`anki-note:${originalNote.guid}`)
+  expect(entityMap.cards.get(firstCardId)).toBe(cards[0].id)
+  expect(entityMap.cards.get(secondCardId)).toBe(cards[1].id)
+  expect(entityMap.reviews.get(reviewId)).toBe(`anki-review:${reviewId}`)
+  expect(entityMap.decks.get(10)).toBe('anki-deck:10')
+  expect(entityMap.fields.get('100:0')?.id).toBe('anki-field:100:0')
+  expect(entityMap.templates.get('100:1')?.id).toBe('anki-template:100:1')
+  expect(entityMap.unmapped.notes).toEqual([])
 })
 
 it('builds a snapshot-bound base map with native identities and both deck bindings', async () => {
