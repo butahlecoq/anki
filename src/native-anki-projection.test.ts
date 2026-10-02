@@ -77,13 +77,14 @@ it('projects schema-11 note, card, deck, and review identities without rewriting
   expect(review).toMatchObject({ id: `anki-review:${reviewId}`, cardId: cards[0].id, rating: 4 })
 
   const manifest = await nativeAnkiProjectionManifest(SQL, snapshot)
-  const entityMap = nativeAnkiProjectionEntityMap(manifest, {
+  const entities = {
     notes: await collection.notes.toArray(),
     cards: await collection.cards.toArray(),
     reviews: await collection.reviewEntries.toArray(),
     decks: await collection.decks.toArray(),
     notetypes: await collection.noteTypes.toArray(),
-  })
+  }
+  const entityMap = nativeAnkiProjectionEntityMap(manifest, entities)
   expect(entityMap.notes.get(noteId)).toBe(`anki-note:${originalNote.guid}`)
   expect(entityMap.cards.get(firstCardId)).toBe(cards[0].id)
   expect(entityMap.cards.get(secondCardId)).toBe(cards[1].id)
@@ -92,6 +93,11 @@ it('projects schema-11 note, card, deck, and review identities without rewriting
   expect(entityMap.fields.get('100:0')?.id).toBe('anki-field:100:0')
   expect(entityMap.templates.get('100:1')?.id).toBe('anki-template:100:1')
   expect(entityMap.unmapped.notes).toEqual([])
+  expect(entityMap.unmapped.decks).toEqual([1])
+  expect(() => nativeAnkiProjectionEntityMap(manifest, {
+    ...entities,
+    cards: [...entities.cards, { ...cards[0], id: 'duplicate-native-card' }],
+  })).toThrow('identity map')
 })
 
 it('builds a snapshot-bound base map with native identities and both deck bindings', async () => {
