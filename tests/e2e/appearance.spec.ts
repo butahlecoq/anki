@@ -61,8 +61,9 @@ const WIDE_CHROME_TEXT = [
   '.brand-copy small',
   '.local-profile small',
   '.local-profile strong',
+  '.keycap',
 ]
-const PHONE_CHROME_TEXT = [...SHARED_CHROME_TEXT, '.mobile-nav a span']
+const PHONE_CHROME_TEXT = [...SHARED_CHROME_TEXT, '.mobile-nav a span', '.keycap']
 
 /** Mirrors the `max-width: 680px` breakpoint in src/styles.css. */
 function requiredChromeText(page: Page): string[] {
@@ -268,6 +269,14 @@ test('card styling stays inside the card sandbox in every app theme', async ({ p
     // to the appearance preference, so these values must not move.
     expect(card).toEqual({ background: 'rgb(18, 52, 86)', color: 'rgb(254, 220, 186)', fontSize: '29px' })
     rendered.set(theme, card)
+
+    // The shortcut legend is the only discoverability surface for fifteen key
+    // bindings, and it only renders in the reviewer, so it is measured here.
+    const legend = await measureChromeContrast(page, ['.review-shortcuts'])
+    expect(legend.unmeasurable, `${theme}: the shortcut legend could not be judged`).toEqual([])
+    expect(legend.measurements, `${theme}: the shortcut legend rendered no text`).toHaveLength(1)
+    expect(legend.measurements.filter((measurement) => measurement.ratio < 4.5), `${theme}: shortcut legend below WCAG AA`).toEqual([])
+
     await testInfo.attach(`review-card-${theme}`, { body: await page.screenshot({ fullPage: true }), contentType: 'image/png' })
   }
   expect(rendered.get('dark')).toEqual(rendered.get('light'))

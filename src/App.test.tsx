@@ -390,6 +390,123 @@ test('review keyboard shortcuts use the same answer and rating actions as touch 
   }
 })
 
+test('review shortcuts stay silent while a control owns the press', async () => {
+  const deck = await collection.createDeck(`Typing review ${crypto.randomUUID()}`)
+  const note = await collection.createBasicNote(deck.id, { front: '書く', back: 'write' })
+  const card = (await collection.cards.where('noteId').equals(note.id).first())!
+  window.location.hash = `#review/${deck.id}`
+  render(<CollectionWorkspace />)
+  try {
+    // The guard reads event.target, so dispatching on window would never reach
+    // it - and the reviewer state flags would mask a broken guard anyway. The
+    // flag select is a real control in the review view that a shortcut must not
+    // reach through.
+    const flag = await screen.findByRole('combobox', { name: 'Card flag' })
+    for (const key of ['e', 'd', 'm', 't', 'i', 's', 'b', 'f', 'k', ' ', '3']) fireEvent.keyDown(flag, { key })
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(await collection.reviewEntries.where('cardId').equals(card.id).count()).toBe(0)
+    expect(await collection.cards.get(card.id)).toMatchObject({ flag: 0 })
+    expect((await collection.notes.get(note.id))?.tags ?? []).not.toContain('marked')
+    expect(flag).toBeVisible()
+  } finally {
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+  }
+})
+
+test('a shortcut cannot reach through a dialog that kept focus on its trigger', async () => {
+  const deck = await collection.createDeck(`Guard review ${crypto.randomUUID()}`)
+  await collection.createBasicNote(deck.id, { front: '飲む', back: 'drink' })
+  window.location.hash = `#review/${deck.id}`
+  render(<CollectionWorkspace />)
+  try {
+    await screen.findByRole('button', { name: 'Show answer' })
+    // The export trigger is rendered outside ReviewSession and the dialog takes
+    // no initial focus, so in a real browser focus is still on the trigger.
+    const trigger = await screen.findByRole('button', { name: 'Export Anki package' })
+    fireEvent.click(trigger)
+    await screen.findByRole('dialog', { name: 'Export Anki package' })
+    trigger.focus()
+    expect(trigger).toHaveFocus()
+
+    for (const key of ['e', 'd', 'm', 't', 'i']) fireEvent.keyDown(trigger, { key })
+    // Only the export dialog may exist; a second modal would be stacked on it.
+    expect(screen.getAllByRole('dialog')).toHaveLength(1)
+  } finally {
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+  }
+})
+
+test('the deck panel keycap advertises a shortcut that works', async () => {
+  render(<CollectionWorkspace />)
+  const keycap = await screen.findByText('N')
+  // The keycap sits in the panel heading of the panel whose action is New deck,
+  // so it only means something if that is the action it opens.
+  expect(keycap.closest('.empty-panel')).toContainElement(screen.getByRole('button', { name: /new deck/i }))
+
+  fireEvent.keyDown(window, { key: 'n' })
+  expect(await screen.findByRole('dialog', { name: 'Create a deck' })).toBeVisible()
+})
+
+test('card actions announce what happened', async () => {
+  const deck = await collection.createDeck(`Announce review ${crypto.randomUUID()}`)
+  await collection.createBasicNote(deck.id, { front: '話す', back: 'speak' })
+  window.location.hash = `#review/${deck.id}`
+  render(<CollectionWorkspace />)
+  try {
+    // Rating a card removes it from view without moving focus, so this is the
+    // only signal a screen-reader user gets that anything happened. The text is
+    // not enough on its own: without the live-region role nothing is spoken.
+    fireEvent.click(await screen.findByRole('button', { name: 'Show answer' }))
+    expect(await screen.findByText(/Answer shown\. Rate the card with 1 to 4\./)).toHaveAttribute('role', 'status')
+
+    fireEvent.click(await screen.findByRole('button', { name: /^Good ·/ }))
+    expect(await screen.findByText(/^Recorded Good\. 1 rated this session\.$/)).toHaveAttribute('role', 'status')
+  } finally {
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+  }
+})
+
+test('maintenance actions announce what happened', async () => {
+  const deck = await collection.createDeck(`Announce maintenance ${crypto.randomUUID()}`)
+  await collection.createBasicNote(deck.id, { front: '帰る', back: 'go home' })
+  window.location.hash = `#review/${deck.id}`
+  render(<CollectionWorkspace />)
+  try {
+    fireEvent.click(await screen.findByRole('button', { name: 'Mark note' }))
+    expect(await screen.findByText('Marked.')).toHaveAttribute('role', 'status')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Suspend card' }))
+    // Suspending empties the queue, so the announcement has to survive the
+    // session-complete branch that replaces the reviewer markup.
+    expect(await screen.findByText('Card suspended.')).toHaveAttribute('role', 'status')
+  } finally {
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+  }
+})
+
+test('a learner can skip the navigation with the keyboard', () => {
+  render(<App />)
+  const skip = screen.getByRole('link', { name: 'Skip to main content' })
+  expect(skip).toHaveAttribute('href', '#decks')
+  // The link is the first focusable element, ahead of the sidebar, and the
+  // target has to be able to receive focus for the jump to mean anything.
+  expect(document.querySelector('a.app-shell > a, .app-shell > a')).toBe(skip)
+  expect(document.getElementById('decks')).toHaveAttribute('tabindex', '-1')
+})
+
+test('labelled groups expose their label to assistive technology', async () => {
+  const deck = await collection.createDeck(`Counted deck ${crypto.randomUUID()}`)
+  window.location.hash = '#decks'
+  render(<App />)
+  try {
+    // aria-label on a plain div is ignored, so these need a role to be exposed.
+    await waitFor(() => expect(screen.getByRole('group', { name: 'Deck counts' })).toBeInTheDocument())
+  } finally {
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+  }
+})
+
 test('reviewer flag control and keyboard shortcut update the current card', async () => {
   const deck = await collection.createDeck(`Flag review ${crypto.randomUUID()}`)
   const note = await collection.createBasicNote(deck.id, { front: '旗', back: 'flag' })
@@ -405,7 +522,7 @@ test('reviewer flag control and keyboard shortcut update the current card', asyn
     await waitFor(async () => expect(await collection.cards.get(card.id)).toMatchObject({ flag: 2 }))
     fireEvent.click(screen.getByRole('button', { name: 'Mark note' }))
     await waitFor(async () => expect(await collection.notes.get(note.id)).toMatchObject({ tags: ['marked'] }))
-    expect(screen.getByRole('button', { name: 'Unmark note' })).toBeVisible()
+    expect(await screen.findByRole('button', { name: 'Unmark note' })).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: 'Card info' }))
     expect(within(await screen.findByRole('dialog', { name: 'Card info' })).getByText('Orange')).toBeVisible()
   } finally {

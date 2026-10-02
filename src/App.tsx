@@ -72,6 +72,9 @@ export function App() {
 
   return (
     <div className="app-shell">
+      {/* The sidebar precedes main content in the DOM, so a keyboard user would
+          otherwise tab past the brand and five destinations on every view. */}
+      <a className="skip-link" href="#decks">Skip to main content</a>
       <aside className="sidebar">
         <a className="brand" href="#decks" aria-label="Kiroku home">
           <span className="brand-mark" lang="ja">記</span>
@@ -87,7 +90,7 @@ export function App() {
         </nav>
         <div className="sidebar-footer"><div className="local-profile"><span className="avatar">私</span><span><strong>Local profile</strong><small>Private on this device</small></span></div></div>
       </aside>
-      <main className="main" id="decks">
+      <main className="main" id="decks" tabIndex={-1}>
         <header className="topbar">
           <div className="eyebrow"><span>COLLECTION</span><span>/</span><span>LOCAL</span></div>
           <div className="topbar-controls">
