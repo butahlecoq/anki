@@ -139,6 +139,16 @@ test('the installed app is described consistently by the shell and both themes',
   expect(indexHtml).toContain('viewport-fit=cover')
 })
 
+test('chrome text colour is inherited from a token, not from the user agent', () => {
+  // The dark theme relies on :root { color-scheme: dark } for the default text
+  // colour, which Chromium resolves to canvastext but WebKit does not. Run
+  // 37008036020 measured .panel-heading h2 at rgb(255, 255, 255) on
+  // rgb(255, 255, 255) in the light theme on iphone-webkit - a ratio of 1, on an
+  // iPhone-shaped viewport, where the heading was simply invisible. Body has to
+  // name the colour it inherits so both engines agree.
+  expect(rule('body')).toContain('color: var(--text-primary)')
+})
+
 test('Japanese study text uses the readable stack and interface text stays monospace', () => {
   expect(dark['--font-jp']).toContain('Hiragino Kaku Gothic ProN')
   expect(dark['--font-jp']).toContain('Noto Sans JP')
