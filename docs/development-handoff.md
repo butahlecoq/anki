@@ -1,115 +1,56 @@
-# Development handoff — 2026-10-02
+# Development handoff — 2026-10-02, evening checkpoint
 
-This is the current portable starting point for continuing work on the parent goal
-#1. The parent remains incomplete. Draft pull requests are not acceptance or merge
-requests. Fetch before relying on any listed CI state.
+The parent goal #1 remains active and incomplete. The required end state is safe two-way sync with the user's existing AnkiWeb account on the installed iPhone while the Windows PC is off, including durable offline recovery. Draft PRs and green CI are not completion. Do not use real-account writes as evidence.
 
-## Start here
+## Git and worktrees
 
-1. Run `git fetch origin` and inspect `git worktree list` plus `git status` in each
-   active checkout. Preserve uncommitted user changes.
-2. Check exact-head CI and review artifacts for the three current runs:
-   - #17 / PR #72, `feat/17-text-csv`, head `698eaea`:
-     https://github.com/butahlecoq/anki/actions/runs/37002877296
-   - #18 / PR #73, `feat/18-safe-concurrency`, head `b4344e7`:
-     https://github.com/butahlecoq/anki/actions/runs/37002859826
-   - #23 / PR #74, `feat/23-jetbrains-omarchy-ux`, head `934c104`:
-     https://github.com/butahlecoq/anki/actions/runs/37003231948
-   These were all in progress at this handoff. Earlier full runs for #17/#18
-   were cancelled at the 15-minute job timeout; the workflow limit is now 30
-   minutes. Do not treat cancelled runs as product failures or acceptance.
-3. For #70 / issue #67, inspect the *local* prepare-only package preview on the
-   machine that has the private Japanese examples. Its GitHub CI completed
-   successfully at head `06682d0`:
-   https://github.com/butahlecoq/anki/actions/runs/36972904946
-   The private aggregate preview was still pending in the last handoff. The
-   recorded PID/session belonged to another machine and is not portable; check
-   whether its expected ignored output
-   `runtime/local-package-preview-summary.json` exists and matches the completed
-   process before deciding whether to rerun. Never commit packages, credentials,
-   note text, or per-note diagnostics; this harness is prepare-only and must not
-   mutate a real collection.
-4. Continue account synchronization in #56 only after reviewing its acceptance
-   and architecture notes. The native protocol engine is on main, but the account
-   feature itself has no implementation yet. The user requires their existing
-   AnkiWeb account to sync to iPhone with the PC off. Do not substitute Kiroku
-   sync or `.apkg` exchange, and never use real-account writes as development
-   evidence.
+Fetch before relying on checks. Run `git status --short --branch` in each path. Current task work is kept in the issue-specific worktrees already required by `docs/agents/worktrees.md`; they share the Git repository object store and do not duplicate the repository history. Continue in these paths and avoid creating more clones/worktrees unless another issue is actively being worked.
 
-## Current branches and evidence
+| Path | Branch | Head | State |
+|---|---|---|---|
+| `C:/work/anki` | `main` | `64af4a5` | clean before this handoff update |
+| `C:/work/anki-17` | `feat/17-text-csv` | `b423520` | pushed; draft PR #72; exact-head CI running |
+| `C:/work/anki-18` | `feat/18-safe-concurrency` | `bfe1042` | pushed; draft PR #73; exact-head CI running |
+| `C:/work/anki-23` | `feat/23-jetbrains-omarchy-ux` | `f46e07e` | pushed; draft PR #74; exact-head CI passed |
+| `C:/work/anki-56` | `feat/56-ankiweb-account` | `f9ebd29` | pushed; draft PR #75; exact-head CI running |
 
-- **#17 / PR #72** — text/CSV import and export, README workflow, expanded visible
-  update/duplicate journey. Current head `698eaea`; worktree clean and mergeable.
-  Locally: 10 focused tests, full client suite (271), typecheck, lint and build
-  passed. Lint has the existing `ImageOcclusion.tsx` refresh warning. Windows
-  Playwright cannot launch (`spawn UNKNOWN`); exact-head Linux CI and artifact
-  review are pending. Details: `docs/text-csv-handoff.md` on that branch.
-- **#18 / PR #73** — causal offline revisions, durable conflict decisions, undo
-  correction, domain races, keyboard-accessible conflict dialog, malformed
-  revision checks, and a real two-context browser journey. Current head
-  `b4344e7`; worktree clean and mergeable. Locally: 275 client and 30 server
-  tests, typecheck, lint and build passed. Earlier full CI hit the old 15-minute
-  timeout while running browser tests; exact-head CI with the 30-minute limit is
-  pending. Read PR #73 comments for remaining review/acceptance gaps; a green
-  workflow alone does not establish every manual scheduling/deletion/media race
-  or user-visible browser journey.
-- **#23 / PR #74** — tokenized light/dark appearance, accessible contrast,
-  typography and mobile sizing. Current head `934c104`; worktree clean and
-  mergeable. Local typecheck, lint, 293 unit + 19 server tests and production
-  build passed. No local browser or physical-iPhone result is claimed. Exact-head
-  CI and visual artifact review are pending.
-- **#56 / `feat/56-ankiweb-account`** — no account integration code yet. The
-  checkout is clean at main `4839581`, while the remote checkpoint branch still
-  points at `76fa434`; main now includes the native engine. There is no reason to
-  keep a separate worktree until implementation starts. Read issue #56 comments,
-  `docs/ankiweb-account-sync.md`, and `docs/native-anki-engine.md`. The essential
-  next design step is safe projection of native schema-11 SQLite and opaque media
-  into the editable app model, preserving native identities, unsupported data,
-  per-card deck bindings, and recoverable base mappings.
-- **#70 / #67** — draft PR remains open at `06682d0`; exact-head CI is successful.
-  Private package aggregate previews are not yet recorded as complete. Keep any
-  private examples and output local and ignored.
+Do not merge the draft PRs. No worktree has been removed.
 
-The main branch is `4839581` and its exact-head CI passed. No PR was merged during
-the overnight continuation. All four current local worktrees (#17, #18, #23,
-#56) were clean when checked. The #56 branch has no feature delta on main; do not
-push its rebased checkpoint as a code change.
+## Exact-head CI and review findings
 
-## Worktree map
+- #17 / PR #72: old run `37006282653` failed because its browser test queried every `role=status` after import; the preview summary and “Working…” indicator made that locator ambiguous. The test now waits for the exact “Import complete: …” message at `b423520`; new run `37007876080` is running. Inspect its exact-head result and artifacts before making any readiness claim.
+- #18 / PR #73: `bfe1042` isolates the concurrency browser test's sync server and runtime directory after stale conflicts from other tests contaminated the fixture. Run `37006286987` was still running at this checkpoint. The PR comments contain earlier server compatibility, undo/race, and conflict UI handoffs. Check this run and preserve remaining manual scheduling/deletion/media-race and visible journey acceptance gaps.
+- #23 / PR #74: exact-head CI `37006365277` passed on `f46e07e` (full check). Its earlier draft comment records 73 browser passes and 9 skips on a prior head. Review latest artifacts/screenshots and keep physical iPhone acceptance separate; the CI phone-sized WebKit project is not a device.
+- #56 / PR #75: exact-head CI `37007779740` is running on `f9ebd29`. Prior storage-only head `e16febb` passed CI run `37006347943`.
+- Main CI `37004063690` failed at an existing offline hint test on iPhone WebKit after timing out at 30 seconds; 72 passed, 9 skipped. Failure artifact points to `tests/e2e/hint.spec.ts` around the offline answer/review flow. Investigate as a separate main reliability issue; do not attribute it to the #17 or #56 work.
+- #70 / issue #67: previous exact-head CI at `06682d0` passed (`36972904946`), but the private aggregate package preview remains a separate machine-local check. On the machine with private Japanese examples, inspect only `runtime/local-package-preview-summary.json` and confirm no process is still running before deciding to rerun. Never commit packages, credentials, note text, or per-note diagnostics.
 
-| Path | Branch | State |
-|---|---|---|
-| `C:/work/anki` | `main` | clean |
-| `C:/work/anki-17` | `feat/17-text-csv` | clean; PR #72 |
-| `C:/work/anki-18` | `feat/18-safe-concurrency` | clean; PR #73 |
-| `C:/work/anki-23` | `feat/23-jetbrains-omarchy-ux` | clean; PR #74 |
-| `C:/work/anki-56` | `feat/56-ankiweb-account` | clean; no feature delta |
+## #56 account work and next steps
 
-Use the repo's `docs/agents/worktrees.md` when creating/removing worktrees. Do not
-remove a live feature checkout or force-remove a dirty tree. The separate
-worktree for #56 can be deferred; its local branch is only a rebased copy of
-main.
+PR #75 now includes:
 
-## Home-machine checklist
+1. `e16febb`: namespaced IndexedDB stores for native collection checkpoints and media, derived from normalized username without persisting credentials. This is namespacing, not encryption.
+2. `f9ebd29`: a schema-11 SQLite reader that validates the snapshot and builds an in-memory `CollectionData` projection input; importer logic can consume that data without wrapping the whole native account in an `.apkg` archive. Its focused fixture checks native note/card/review identities, siblings in separate decks, Japanese data, source snapshot immutability, and unsupported schema rejection.
 
-- [ ] Fetch and confirm latest heads and the three CI runs above; inspect browser
-  screenshots/artifacts before updating any PR's acceptance claims.
-- [ ] Check whether the existing #67 private preview process finished on the
-  machine holding the local packages. Read only its aggregate summary. If it did
-  not finish, resume/recreate the prepare-only preview from issue #67's recipe;
-  do not duplicate a still-running process.
-- [ ] Review #18's actual browser journey and remaining domain race coverage, and
-  #17's semantic clean re-import plus stable-ID/history behavior. Keep both drafts
-  open until exact-head checks and review support readiness.
-- [ ] Review #74 screenshots at desktop and iPhone widths; automated tests do not
-  replace installed-iPhone acceptance.
-- [ ] Start #56's projection/integration work in one worktree after choosing how
-  native per-card deck IDs, base snapshots, stable review-log IDs and crash
-  recovery map to the app collection. Test with the isolated official engine.
-- [ ] Continue #19–#26, deployment and physical iPhone checks under their issues.
-  The parent goal is not done until the existing AnkiWeb account works from the
-  installed iPhone while the PC is off, and offline study/recovery is verified.
+Validation on `f9ebd29`: typecheck passed; 266 client tests passed; lint passed with the existing `ImageOcclusion.tsx` warning; production build passed. Full browser CI is pending. No real account credentials or writes were used.
 
-Follow `CONTRIBUTING.md`, `AGENTS.md`, and the issue/label/domain guidance in
-`docs/agents/`. Do not claim real-account, physical-device, private-package, or
-browser acceptance without the corresponding evidence.
+This is only a projection input and storage boundary. It is not wired to visible account UI or sync. Key remaining design/implementation work:
+
+- Persist a recoverable base manifest; preserve unsupported native rows/configuration/media and original per-card deck IDs even though the app model binds sibling cards through a note deck.
+- Map supported field/card/review edits, deletions, and media back into the original native snapshot. Give newly created review IDs stable across interruption/reopen.
+- Integrate #18 causal revisions after its review/merge; resolve concurrent account/app edits without silently overwriting.
+- Add visible login/status/manual sync/logout, runtime gateway configuration, cancellation, clear full-sync direction previews, and durable backup/recovery controls. Credentials stay in memory.
+- Test round trips and interruption recovery with the isolated official Anki engine and synthetic accounts. Do not use the live account.
+- Complete installed-iPhone/Safari sync with PC off, cold offline reopen and recovery; track deployment and device evidence under #25/#26.
+
+Known projection limits to audit before expanding it: currently it accepts only schema 11, constructs app-facing note/card/review/deck/template input, and copies media into memory. Keep the native snapshot authoritative. Add bounded total-media handling before connecting this to accounts with large collections, and verify actual schema-11 SQLite variants from the official fixture. `prepareAnkiDataImport()` still commits through the app importer/outbox; do not wire it into sync before the base mapping, transactional writeback, and recovery rules exist.
+
+## At-home start
+
+1. `git fetch origin`, check each listed worktree's branch/status, and inspect current exact-head CI for #17/#18/#56.
+2. Start in `C:/work/anki-56`; read issue #56 comments, `docs/ankiweb-account-sync.md`, `docs/native-anki-engine.md`, and this handoff.
+3. Update PR #75's description/checkpoint after its new CI finishes. The GitHub issue comment from this evening has a concise task list.
+4. Continue only the bounded projection/base-manifest design; leave all PRs draft until their issue-specific evidence is complete.
+5. Check #67's private local preview only on the machine that owns those inputs.
+
+The authoritative issue/PR process and five triage labels are in `docs/agents/issue-tracker.md` and `docs/agents/triage-labels.md`. Use one issue worktree per active feature, and remove it only in the same step as merging that issue's PR.
