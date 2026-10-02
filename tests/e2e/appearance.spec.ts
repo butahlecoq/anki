@@ -331,14 +331,15 @@ test('card styling stays inside the card sandbox in every app theme', async ({ p
 
     // The shortcut legend is the discoverability surface for fifteen key
     // bindings, and it is hidden where there is no keyboard to discover them
-    // with. Playwright does not emulate the pointer media feature - it sets
-    // hasTouch, not a coarse primary pointer - so this asks the engine which
-    // side of the rule it is on instead of assuming the phone project is.
+    // with. The engine is asked which side of the rule it is on rather than
+    // assumed from the project: the phone project does report a coarse pointer
+    // under Playwright, which a previous version of this comment denied.
     const coarse = await page.evaluate(() => matchMedia('(pointer: coarse)').matches)
     const legend = page.locator('.review-shortcuts')
     if (coarse) {
       await expect(legend, `${theme}: the keyboard legend should not occupy a coarse-pointer reviewer`).toBeHidden()
     } else {
+      await expect(legend, `${theme}: the keyboard legend should be discoverable with a fine pointer`).toBeVisible()
       const measured = await settledContrast(page, ['.review-shortcuts'])
       expect(measured.unmeasurable, `${theme}: the shortcut legend could not be judged`).toEqual([])
       expect(measured.measurements, `${theme}: the shortcut legend rendered no text`).toHaveLength(1)
