@@ -1,8 +1,8 @@
 # Issue 17 checkpoint: text and CSV
 
 Branch: `feat/17-text-csv`. Current dedicated worktree: `C:/work/anki-17`.
-Rebased onto `origin/main` at `4839581`; current branch commit is `f0328e1`
-before the README and handoff follow-up. Fetch the branch for the exact head.
+Rebased onto `origin/main` at `4839581` and pushed; fetch the branch for its
+exact current head.
 
 The collection workspace now offers **Import / export text**. Import supports
 file/paste, UTF-8/BOM, UTF-16 and explicit Shift JIS, delimiter/quoting/header
@@ -47,14 +47,18 @@ Added README instructions for text import/export.
   `ImageOcclusion.tsx` fast-refresh warning.
 - Local desktop Chromium E2E could not launch on this Windows host
   (`browserType.launch: spawn UNKNOWN`). It is not user-visible acceptance.
+- The visible journey now also previews metadata-only stable-ID updates, applies
+  them, and previews/applies intentional duplicates after the semantic clean
+  re-import. Test discovery succeeds; browser execution remains unverified.
 - Exact-head Linux CI and review of its browser artifacts remain required.
 
 ## Resume
 
 1. Fetch and inspect the current branch/PR state. If #18 merges first, rebase
    again and preserve its causal enqueue semantics while reconciling stable IDs.
-2. Finish and verify the visible E2E journey on Chromium and iPhone WebKit. Add
-   visible stable-ID update/intentional-duplicate/history evidence if needed.
+2. Finish and verify the visible E2E journey on Chromium and iPhone WebKit.
+   Consider adding a visible scheduling/history-preservation check for the
+   stable-ID update if the current browser artifact does not make that clear.
 3. Review parser/import limits and UI behavior; add user-facing README instructions.
 4. Run focused browser tests and the full `npm run check` gate. Record actual
    failures/skips; existing Windows WebKit limits are not physical Safari proof.

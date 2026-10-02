@@ -14,13 +14,13 @@ async function paste(page: Page, text: string) {
   return dialog
 }
 
-async function downloadNotes(page: Page) {
+async function downloadNotes(page: Page, expectedCount = 2) {
   const dialog = page.getByRole('dialog', { name: 'Import and export text' })
   await dialog.getByRole('button', { name: 'Export text', exact: true }).click()
   const pending = page.waitForEvent('download')
   await dialog.getByRole('button', { name: 'Download text export', exact: true }).click()
   const download = await pending
-  await expect(dialog.getByRole('status')).toContainText('Text export ready: 2 notes')
+  await expect(dialog.getByRole('status')).toContainText(`Text export ready: ${expectedCount} notes`)
   return readFile((await download.path())!)
 }
 
@@ -68,6 +68,21 @@ test('Japanese CSV preview, explicit partial import, offline export and clean-cl
     await imported.getByRole('button', { name: 'Import text', exact: true }).click()
     await imported.getByRole('button', { name: 'Preview import' }).click()
     await expect(imported.getByRole('status')).toHaveText('0 to add · 0 to update · 2 to ignore · 0 invalid')
+    const metadataUpdate = '_note_id,_deck,_note_type,_tags\r\ncat,日本語::語彙,Basic,"[""更新"",""common""]"\r\ndog,日本語::語彙,Basic,"[""犬"",""common""]"\r\n'
+    await imported.getByLabel('Text or CSV file').setInputFiles({ name: 'metadata-update.csv', mimeType: 'text/csv', buffer: Buffer.from(metadataUpdate) })
+    await imported.getByRole('button', { name: 'Read columns' }).click()
+    await imported.getByLabel('Existing matching notes').selectOption('update')
+    await imported.getByRole('button', { name: 'Preview import' }).click()
+    await expect(imported.getByRole('status')).toHaveText('0 to add · 2 to update · 0 to ignore · 0 invalid')
+    await imported.getByRole('button', { name: 'Import 2 valid rows' }).click()
+    await expect(imported.getByRole('status')).toContainText('0 added, 2 updated, 0 ignored, 0 invalid')
+    expect((await downloadNotes(target)).toString('utf8')).toContain('["更新","common"]')
+    await imported.getByRole('button', { name: 'Import text', exact: true }).click()
+    await imported.getByLabel('Existing matching notes').selectOption('duplicate')
+    await imported.getByRole('button', { name: 'Preview import' }).click()
+    await expect(imported.getByRole('status')).toHaveText('2 to add · 0 to update · 0 to ignore · 0 invalid')
+    await imported.getByRole('button', { name: 'Import 2 valid rows' }).click()
+    await expect(imported.getByRole('status')).toContainText('2 added, 0 updated, 0 ignored, 0 invalid')
     await imported.getByLabel('Close text import/export').click()
     await target.getByRole('button', { name: 'Open 語彙', exact: true }).click()
     await target.getByRole('button', { name: 'Study now', exact: true }).click()
