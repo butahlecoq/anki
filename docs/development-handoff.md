@@ -1,4 +1,14 @@
-# Development handoff — 2026-10-02, overnight continuation
+> **UNVERIFIED - DO NOT TRUST THE INVENTORY BELOW.**
+>
+> Checked on 2026-10-02: every verifiable claim in this file was found wrong. The
+> worktree paths listed here (`C:/work/anki*`) do not exist on this machine, `gh`
+> is installed, and no part of this file reflects live Git state. It was rewritten
+> 23 times by an agent that never queried the tracker.
+>
+> Run `git worktree list` and `git fetch origin` before acting on anything below.
+> `origin/main` and the tracker are the only authoritative sources. What follows is
+> kept only for its feature-specific technical notes.
+# Development handoff тАФ 2026-10-02, overnight continuation
 
 The parent goal #1 remains active and incomplete. The required end state is safe two-way sync with the user's existing AnkiWeb account on the installed iPhone while the Windows PC is off, including durable offline recovery. Draft PRs and green CI are not completion. Do not use real-account writes as evidence.
 
