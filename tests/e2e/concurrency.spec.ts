@@ -71,6 +71,8 @@ test('independent offline clients merge fields, retain conflicts through reload,
     await expect(dialog).toContainText('ねこ office')
     await expect(dialog).toContainText('ネコ home')
     await expect(dialog).toContainText('кот · feline')
+    await expect(dialog).toContainText(`Deck: ${deckName}`)
+    await expect(dialog).toContainText('Conflicting properties: front')
     await expect.poll(() => phone.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
     await phone.screenshot({ path: test.info().outputPath('offline-conflict-choice.png'), fullPage: true })
     await phoneContext.setOffline(true)
@@ -103,7 +105,7 @@ test('independent offline clients merge fields, retain conflicts through reload,
     await sync(phone); await sync(pc); await sync(phone); await sync(pc)
     for (const page of [pc, phone]) {
       await page.getByRole('link', { name: 'Statistics', exact: true }).click()
-      await page.getByLabel('Statistics deck', { exact: true }).selectOption({ label: deckName })
+      await page.getByLabel('Statistics deck', { exact: true }).selectOption({ label: `${deckName} (with children)` })
       await page.getByLabel('Period', { exact: true }).selectOption('all')
       await expect(page.getByText('ANSWERS', { exact: true }).locator('..').locator('strong')).toHaveText('2')
       await page.getByRole('button', { name: 'ネコ home · basic', exact: true }).click()
