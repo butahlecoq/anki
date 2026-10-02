@@ -22,8 +22,16 @@ const appliedTheme = (page: Page) =>
       theme: document.documentElement.getAttribute('data-theme'),
       colorScheme: root.colorScheme,
       page: getComputedStyle(document.body).backgroundColor,
+      // body inherits --text-primary, so this is the token the whole document
+      // is themed from. Reading it makes a half-applied theme legible instead of
+      // surfacing later as a nonsense contrast ratio.
+      ink: getComputedStyle(document.body).color,
     }
   })
+
+/** Waits for the engine to invalidate and paint the styles a theme switch changed. */
+const settlePaint = (page: Page) =>
+  page.evaluate(() => new Promise<void>((done) => { requestAnimationFrame(() => requestAnimationFrame(() => done())) }))
 
 /**
  * The browser chrome colour an installed iPhone app paints its status bar
@@ -164,13 +172,13 @@ test('appearance choice repaints readable chrome in both themes and survives a r
   await expect(page.getByRole('heading', { name: 'Your Japanese study system' })).toBeVisible()
   const required = requiredChromeText(page)
 
-  // Chrome colours are transitioned over 160ms, so measuring straight after the
-  // switch reads a half-interpolated colour rather than the theme's own. The
-  // first run of this suite failed exactly that way - .nav-item measured
-  // rgb(129, 138, 149), between the dark and light values of --text-muted - and
-  // passed on retry. Honouring the reduced-motion preference collapses those
-  // transitions, which is both how a motion-sensitive learner sees the app and
-  // what makes this measurement deterministic.
+  // Chrome colours are transitioned over 160ms, and switching the theme
+  // invalidates a whole subtree of styles at once. Honouring the reduced-motion
+  // preference collapses the transitions, and settlePaint below waits for the
+  // invalidation to reach the elements being measured. Without the second half,
+  // run 37010848841 read the previous theme's ink on the first iteration - the
+  // document booted into the light theme because CI emulates a light OS, then
+  // switched to dark, and descendants were still reporting the light tokens.
   await page.emulateMedia({ reducedMotion: 'reduce' })
 
   for (const theme of ['dark', 'light'] as const) {
@@ -179,8 +187,9 @@ test('appearance choice repaints readable chrome in both themes and survives a r
     await expect
       .poll(() => appliedTheme(page))
       .toEqual(theme === 'dark'
-        ? { theme: null, colorScheme: 'dark', page: 'rgb(11, 13, 16)' }
-        : { theme: 'light', colorScheme: 'light', page: 'rgb(247, 248, 246)' })
+        ? { theme: null, colorScheme: 'dark', page: 'rgb(11, 13, 16)', ink: 'rgb(233, 237, 227)' }
+        : { theme: 'light', colorScheme: 'light', page: 'rgb(247, 248, 246)', ink: 'rgb(28, 33, 24)' })
+    await settlePaint(page)
 
     const { measurements, unmeasurable } = await measureChromeContrast(page, required)
     const covered = new Set(measurements.map((measurement) => measurement.selector))
@@ -217,21 +226,24 @@ test('appearance choice repaints readable chrome in both themes and survives a r
 })
 
 test('auto follows the operating system setting while the app is open', async ({ page }) => {
+  const DARK = { theme: null, colorScheme: 'dark', page: 'rgb(11, 13, 16)', ink: 'rgb(233, 237, 227)' }
+  const LIGHT = { theme: 'light', colorScheme: 'light', page: 'rgb(247, 248, 246)', ink: 'rgb(28, 33, 24)' }
+
   await page.emulateMedia({ colorScheme: 'dark' })
   await page.goto('/')
   await expect(control(page)).toHaveValue('system')
-  await expect.poll(() => appliedTheme(page)).toEqual({ theme: null, colorScheme: 'dark', page: 'rgb(11, 13, 16)' })
+  await expect.poll(() => appliedTheme(page)).toEqual(DARK)
 
   await page.emulateMedia({ colorScheme: 'light' })
-  await expect.poll(() => appliedTheme(page)).toEqual({ theme: 'light', colorScheme: 'light', page: 'rgb(247, 248, 246)' })
+  await expect.poll(() => appliedTheme(page)).toEqual(LIGHT)
 
   await page.emulateMedia({ colorScheme: 'dark' })
-  await expect.poll(() => appliedTheme(page)).toEqual({ theme: null, colorScheme: 'dark', page: 'rgb(11, 13, 16)' })
+  await expect.poll(() => appliedTheme(page)).toEqual(DARK)
 
   // An explicit choice outranks the operating system and stops following it.
   await control(page).selectOption('light')
   await page.emulateMedia({ colorScheme: 'dark' })
-  await expect.poll(() => appliedTheme(page)).toMatchObject({ theme: 'light', colorScheme: 'light' })
+  await expect.poll(() => appliedTheme(page)).toEqual(LIGHT)
 })
 
 test('card styling stays inside the card sandbox in every app theme', async ({ page }, testInfo) => {
@@ -261,7 +273,12 @@ test('card styling stays inside the card sandbox in every app theme', async ({ p
   const rendered = new Map<string, unknown>()
   for (const theme of ['dark', 'light'] as const) {
     await control(page).selectOption(theme)
-    await expect.poll(() => appliedTheme(page)).toMatchObject({ colorScheme: theme })
+    await expect
+      .poll(() => appliedTheme(page))
+      .toEqual(theme === 'dark'
+        ? { theme: null, colorScheme: 'dark', page: 'rgb(11, 13, 16)', ink: 'rgb(233, 237, 227)' }
+        : { theme: 'light', colorScheme: 'light', page: 'rgb(247, 248, 246)', ink: 'rgb(28, 33, 24)' })
+    await settlePaint(page)
     const review = page.frameLocator('iframe[title="Review card"]')
     await expect(review.locator('body')).toContainText('猫')
 
