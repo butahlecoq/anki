@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { OFFLINE_READY_EVENT, OFFLINE_UNAVAILABLE_EVENT, UPDATE_READY_EVENT } from './appEvents'
+import { chooseAppearance, readAppearance, watchAppearance, type Appearance } from './appearance'
 import { CollectionWorkspace } from './CollectionWorkspace'
 
 function useOnlineStatus() {
@@ -33,8 +34,19 @@ function useOfflineShellStatus() {
   return status
 }
 
+function useAppearance() {
+  const [preference, setPreference] = useState<Appearance>(() => readAppearance())
+  useEffect(() => watchAppearance(() => setPreference(readAppearance())), [])
+  const select = (next: Appearance) => {
+    chooseAppearance(next)
+    setPreference(next)
+  }
+  return { preference, select }
+}
+
 export function App() {
   const online = useOnlineStatus()
+  const appearance = useAppearance()
   const offlineStatus = useOfflineShellStatus()
   const [updateReady, setUpdateReady] = useState(false)
   const [hash, setHash] = useState(() => window.location.hash)
@@ -76,7 +88,20 @@ export function App() {
         <div className="sidebar-footer"><div className="local-profile"><span className="avatar">私</span><span><strong>Local profile</strong><small>Private on this device</small></span></div></div>
       </aside>
       <main className="main" id="decks">
-        <header className="topbar"><div className="eyebrow"><span>COLLECTION</span><span>/</span><span>LOCAL</span></div><div className={`connection ${online ? 'online' : 'offline'}`} role="status"><span className="pulse" />{connection}</div></header>
+        <header className="topbar">
+          <div className="eyebrow"><span>COLLECTION</span><span>/</span><span>LOCAL</span></div>
+          <div className="topbar-controls">
+            <div className={`connection ${online ? 'online' : 'offline'}`} role="status"><span className="pulse" />{connection}</div>
+            <label className="appearance-control">
+              <span className="visually-hidden">Appearance</span>
+              <select value={appearance.preference} onChange={(event) => appearance.select(event.target.value as Appearance)}>
+                <option value="system">Auto</option>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+              </select>
+            </label>
+          </div>
+        </header>
         <CollectionWorkspace />
         <footer className="footer-line"><span>KIROKU / PRIVATE WORKSPACE</span><span>BUILD 0002</span></footer>
       </main>
