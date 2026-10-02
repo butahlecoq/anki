@@ -57,4 +57,3 @@ Known projection limits to audit before expanding it: currently it accepts only 
 6. Check #67's private local preview only on the machine that owns those inputs.
 
 The authoritative issue/PR process and five triage labels are in `docs/agents/issue-tracker.md` and `docs/agents/triage-labels.md`. Use one issue worktree per active feature, and remove it only in the same step as merging that issue's PR.
-
