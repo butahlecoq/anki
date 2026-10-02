@@ -1,7 +1,7 @@
 import { Dexie, type Table } from 'dexie'
 import type { SqlJsStatic } from 'sql.js'
 import { NativeAnkiClient, NativeSyncConflict, NativeSyncError, nativeSnapshotHash, prepareNativeUpload, type NativeFullSyncDecision, type NativeRequestOptions, type NativeSyncMeta } from './native-anki-sync.js'
-import type { NativeAnkiProjectionManifest } from './native-anki-projection.js'
+import { nativeAnkiProjectionManifest, type NativeAnkiProjectionManifest } from './native-anki-projection.js'
 
 interface Checkpoint {
   id: 'collection'
@@ -51,14 +51,16 @@ export class NativeAnkiState extends Dexie {
   /** Persists the source-to-projection identity map only for the exact current
    * native checkpoint. A stale preview cannot attach its mapping to a newer
    * account snapshot. */
-  async saveProjectionManifest(manifest: NativeAnkiProjectionManifest, expectedRevision: number) {
+  async saveProjectionManifest(SQL: SqlJsStatic, expectedRevision: number) {
     const initial = await this.checkpoint()
-    if (!initial || initial.revision !== expectedRevision || await nativeSnapshotHash(initial.collection) !== manifest.snapshotHash) throw this.concurrentChange()
+    if (!initial || initial.revision !== expectedRevision) throw this.concurrentChange()
+    const manifest = await nativeAnkiProjectionManifest(SQL, initial.collection)
     await this.transaction('rw', this.checkpoints, this.projections, async () => {
       const current = await this.checkpoint()
       if (!current || current.revision !== expectedRevision) throw this.concurrentChange()
       await this.projections.put({ id: 'base', revision: expectedRevision, snapshotHash: manifest.snapshotHash, manifest: structuredClone(manifest), savedAt: Date.now() })
     })
+    return structuredClone(manifest)
   }
 
   /** Returns no mapping when its source checkpoint has since changed. */
