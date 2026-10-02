@@ -1,5 +1,6 @@
 import { expect, test } from 'vitest'
-import { rule, stylesheet } from './stylesheet-under-test'
+import { APPEARANCE_FALLBACK_COLORS } from './appearance'
+import { indexHtml, rule, stylesheet } from './stylesheet-under-test'
 
 /*
  * Design-token contract for issue #23.
@@ -121,6 +122,21 @@ test('every referenced token is defined by a theme block', () => {
   const used = new Set([...stylesheet.matchAll(/var\((--[a-z0-9-]+)/g)].map((match) => match[1]))
   const defined = new Set([...Object.keys(dark), ...Object.keys(light)])
   expect([...used].filter((name) => !defined.has(name) && !inline.has(name))).toEqual([])
+})
+
+test('the installed app is described consistently by the shell and both themes', () => {
+  // src/appearance.ts reads --surface-page at runtime, so these constants are
+  // only a fallback for a document whose stylesheet has not resolved yet. They
+  // still have to name the same colours, or a first paint would disagree with
+  // the page that follows it.
+  expect(APPEARANCE_FALLBACK_COLORS.dark).toBe(dark['--surface-page'])
+  expect(APPEARANCE_FALLBACK_COLORS.light).toBe(light['--surface-page'])
+
+  // The first-paint theme-color is the dark default, and both schemes are
+  // declared so the user agent does not assume the app is dark-only.
+  expect(indexHtml).toContain(`<meta name="theme-color" content="${APPEARANCE_FALLBACK_COLORS.dark}" />`)
+  expect(indexHtml).toContain('<meta name="color-scheme" content="dark light" />')
+  expect(indexHtml).toContain('viewport-fit=cover')
 })
 
 test('Japanese study text uses the readable stack and interface text stays monospace', () => {

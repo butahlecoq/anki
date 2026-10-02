@@ -2,12 +2,15 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 /*
- * Reads the shipped stylesheet for the design-system suites.
+ * Reads the shipped front-end sources for the design-system suites.
  *
  * These helpers run under Node, so the suites that use them are type-checked by
  * tsconfig.node.json. Vitest always runs from the repository root.
  */
 export const stylesheet = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf8').replace(/\r\n/g, '\n')
+
+/** The document shell, whose meta tags the installed PWA is described by. */
+export const indexHtml = readFileSync(resolve(process.cwd(), 'index.html'), 'utf8').replace(/\r\n/g, '\n')
 
 /** Returns the declaration body of the rule for an exact selector. */
 export function rule(selector: string): string {

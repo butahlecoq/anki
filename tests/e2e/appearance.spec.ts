@@ -26,6 +26,18 @@ const appliedTheme = (page: Page) =>
   })
 
 /**
+ * The browser chrome colour an installed iPhone app paints its status bar
+ * with, next to the token it is supposed to be tracking. A real engine resolves
+ * `--surface-page`, which jsdom cannot, so this is the only place the two can
+ * be compared for real.
+ */
+const chromeColor = (page: Page) =>
+  page.evaluate(() => ({
+    meta: document.querySelector('meta[name="theme-color"]')?.content ?? null,
+    token: getComputedStyle(document.documentElement).getPropertyValue('--surface-page').trim(),
+  }))
+
+/**
  * The phone layout drops the sidebar, the `/ LOCAL` eyebrow and the footer
  * line, so the selectors that must render depend on the viewport. Everything
  * listed here is measured whichever way the layout falls; only the "required"
@@ -151,6 +163,15 @@ test('appearance choice repaints readable chrome in both themes and survives a r
   await expect(page.getByRole('heading', { name: 'Your Japanese study system' })).toBeVisible()
   const required = requiredChromeText(page)
 
+  // Chrome colours are transitioned over 160ms, so measuring straight after the
+  // switch reads a half-interpolated colour rather than the theme's own. The
+  // first run of this suite failed exactly that way - .nav-item measured
+  // rgb(129, 138, 149), between the dark and light values of --text-muted - and
+  // passed on retry. Honouring the reduced-motion preference collapses those
+  // transitions, which is both how a motion-sensitive learner sees the app and
+  // what makes this measurement deterministic.
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+
   for (const theme of ['dark', 'light'] as const) {
     await control(page).selectOption(theme)
     await expect(control(page)).toHaveValue(theme)
@@ -165,8 +186,15 @@ test('appearance choice repaints readable chrome in both themes and survives a r
     expect(required.filter((selector) => !covered.has(selector)), `${theme}: these selectors rendered no text`).toEqual([])
     expect(unmeasurable, `${theme}: some selectors could not be judged`).toEqual([])
     expect(measurements.filter((measurement) => measurement.ratio < 4.5), `${theme}: rendered contrast below WCAG AA`).toEqual([])
+
+    // The installed app must not paint its status bar with a colour the page is
+    // not using: white status-bar text over the light theme is unreadable.
+    const chrome = await chromeColor(page)
+    expect(chrome.token.toLowerCase(), `${theme}: unexpected page surface`).toBe(theme === 'dark' ? '#0b0d10' : '#f7f8f6')
+    expect(chrome.meta?.toLowerCase(), `${theme}: status bar colour drifted from the page`).toBe(chrome.token.toLowerCase())
+
     await testInfo.attach(`contrast-${theme}`, {
-      body: Buffer.from(JSON.stringify({ theme, measurements }, null, 2)),
+      body: Buffer.from(JSON.stringify({ theme, chrome, measurements }, null, 2)),
       contentType: 'application/json',
     })
     await testInfo.attach(`appearance-${theme}-workspace`, { body: await page.screenshot({ fullPage: true }), contentType: 'image/png' })

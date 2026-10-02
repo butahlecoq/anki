@@ -9,6 +9,13 @@
 
 export const APPEARANCE_STORAGE_KEY = 'kiroku:appearance'
 
+/*
+ * Fallback page colours, used only when the stylesheet has not resolved
+ * `--surface-page` yet. src/design-tokens.test.ts pins these to the token so
+ * the two cannot drift apart.
+ */
+export const APPEARANCE_FALLBACK_COLORS = { dark: '#0b0d10', light: '#f7f8f6' } as const
+
 export type Appearance = 'system' | 'light' | 'dark'
 
 export function readAppearance(storage: Storage | undefined = safeStorage()): Appearance {
@@ -30,6 +37,26 @@ export function resolveAppearance(preference: Appearance, prefersDark: boolean):
 export function applyAppearance(theme: 'light' | 'dark', root: HTMLElement = document.documentElement): void {
   if (theme === 'dark') root.removeAttribute('data-theme')
   else root.setAttribute('data-theme', theme)
+  applyThemeColor(theme, root)
+}
+
+/**
+ * Keeps the browser chrome in step with the theme actually on screen.
+ *
+ * `<meta name="theme-color">` is what an installed iPhone app paints its status
+ * bar with, so leaving it on the dark default would put white status-bar text
+ * over the light page. The value is read from the `--surface-page` token rather
+ * than hardcoded, so the status bar can never disagree with the page.
+ *
+ * This deliberately does not touch the web app manifest: `theme_color` there
+ * describes the install prompt and the splash screen, which stay dark, and
+ * tests/e2e/shell.spec.ts asserts that.
+ */
+export function applyThemeColor(theme: 'light' | 'dark', root: HTMLElement = document.documentElement): void {
+  const meta = root.ownerDocument.querySelector<HTMLMetaElement>('meta[name="theme-color"]')
+  if (!meta) return
+  const token = window.getComputedStyle(root).getPropertyValue('--surface-page').trim()
+  meta.content = token || APPEARANCE_FALLBACK_COLORS[theme]
 }
 
 export function storeAppearance(preference: Appearance, storage: Storage | undefined = safeStorage()): void {

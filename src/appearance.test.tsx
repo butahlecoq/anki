@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { App } from './App'
 import {
+  APPEARANCE_FALLBACK_COLORS,
   APPEARANCE_STORAGE_KEY,
   applyAppearance,
   chooseAppearance,
@@ -106,6 +107,46 @@ describe('appearance preference', () => {
     window.localStorage.setItem(APPEARANCE_STORAGE_KEY, 'light')
     fireEvent(window, new StorageEvent('storage', { key: APPEARANCE_STORAGE_KEY }))
     expect(document.documentElement).not.toHaveAttribute('data-theme')
+  })
+})
+
+describe('browser chrome colour', () => {
+  // index.html is not part of the jsdom document, so the suite supplies the
+  // meta tag the shipped page declares. tests/e2e/appearance.spec.ts reads the
+  // real one in a browser.
+  const themeColorMeta = () => document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')
+
+  beforeEach(() => {
+    const meta = document.createElement('meta')
+    meta.name = 'theme-color'
+    meta.content = '#0b0d10'
+    document.head.appendChild(meta)
+  })
+
+  afterEach(() => {
+    themeColorMeta()?.remove()
+    document.documentElement.style.removeProperty('--surface-page')
+  })
+
+  test('tracks the applied theme so an installed app status bar stays readable', () => {
+    applyAppearance('dark')
+    expect(themeColorMeta()?.content).toBe(APPEARANCE_FALLBACK_COLORS.dark)
+    applyAppearance('light')
+    expect(themeColorMeta()?.content).toBe(APPEARANCE_FALLBACK_COLORS.light)
+    applyAppearance('dark')
+    expect(themeColorMeta()?.content).toBe(APPEARANCE_FALLBACK_COLORS.dark)
+  })
+
+  test('prefers the resolved page surface over the fallback', () => {
+    document.documentElement.style.setProperty('--surface-page', '#123456')
+    applyAppearance('light')
+    expect(themeColorMeta()?.content).toBe('#123456')
+  })
+
+  test('a document without the meta tag still applies the theme', () => {
+    themeColorMeta()?.remove()
+    expect(() => applyAppearance('light')).not.toThrow()
+    expect(document.documentElement).toHaveAttribute('data-theme', 'light')
   })
 })
 
