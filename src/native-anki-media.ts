@@ -127,7 +127,7 @@ export class NativeAnkiMedia extends Dexie {
     try { manifest = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(entries._meta)) } catch { throw invalid() }
     if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) throw invalid()
     const map = Object.entries(manifest)
-    if (map.length !== 1 || map[0][1] !== name || map[0][0] === '_meta' || !entries[map[0][0]]) throw invalid()
+    if (map.length !== 1 || map[0][1] !== name || !/^(0|[1-9][0-9]*)$/.test(map[0][0]) || !Object.hasOwn(entries, map[0][0])) throw invalid()
     const file = await record(name, entries[map[0][0]], false)
     if (file.sha1 !== sha1) throw new NativeSyncError('transfer', 'Account media content changed or was damaged in transit. Its cursor was not committed.')
     return file
