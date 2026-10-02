@@ -81,11 +81,13 @@ export function TemplatePreview({ front, back, css, fields, side, title = 'Card 
       const scale = Math.min(1, width / naturalWidth)
       body.style.width = `${naturalWidth}px`
       const height = Math.max(body.scrollHeight, body.getBoundingClientRect().height)
+      const renderedTop = body.getBoundingClientRect().top
       body.style.transform = `scale(${scale})`
       document.documentElement.style.overflow = 'hidden'
       const fittedHeight = Math.ceil(height * scale)
       frame.style.height = `${fittedHeight}px`
       frame.style.minHeight = `${fittedHeight}px`
+      frame.style.marginBottom = `${Math.ceil(Math.max(0, renderedTop) * scale)}px`
     }
     const schedule = () => {
       if (active && !scheduled) scheduled = requestAnimationFrame(fit)
