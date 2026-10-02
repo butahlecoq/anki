@@ -22,6 +22,7 @@ export function TemplatePreview({ front, back, css, fields, side, title = 'Card 
   const { frameRef: navigationFrameRef, dialog: navigationDialog, choose: chooseNavigation } = useTemplateNavigation(`${side}:${title}:${front}:${back}:${JSON.stringify(fields)}:${templateOrdinal}`)
   const combinedFrameRef = useCallback((element: HTMLIFrameElement | null) => {
     frame.current = element
+    frameRef.current = element
     navigationFrameRef(element)
   }, [navigationFrameRef])
   useEffect(() => {
