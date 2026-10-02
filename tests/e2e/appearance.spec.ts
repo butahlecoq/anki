@@ -199,6 +199,10 @@ test('appearance choice repaints readable chrome in both themes and survives a r
       contentType: 'application/json',
     })
     await testInfo.attach(`appearance-${theme}-workspace`, { body: await page.screenshot({ fullPage: true }), contentType: 'image/png' })
+    // A full-page capture draws position: fixed chrome at its viewport offset,
+    // so the phone navigation lands in the middle of the image and can be misread
+    // as content being covered. The viewport capture is what the learner sees.
+    await testInfo.attach(`appearance-${theme}-viewport`, { body: await page.screenshot(), contentType: 'image/png' })
   }
 
   await page.reload()
