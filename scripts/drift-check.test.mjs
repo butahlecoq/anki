@@ -1,5 +1,8 @@
 // @vitest-environment node
 import { execFileSync } from 'node:child_process'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   analyseDrift,
@@ -41,6 +44,7 @@ describe('the local main', () => {
     expect(finding.level).toBe('drift')
     expect(finding.subject).toBe('main')
     expect(finding.message).toMatch(/3 commit\(s\) behind origin\/main/)
+    expect(findingsFor(input, 'main-ahead')).toEqual([])
     expect(analyseDrift(input).exitCode).toBe(1)
   })
 
@@ -49,6 +53,8 @@ describe('the local main', () => {
     const [finding] = findingsFor(input, 'main-ahead')
     expect(finding.level).toBe('drift')
     expect(finding.message).toMatch(/1 commit\(s\) not on origin\/main/)
+    expect(finding.remedy).toMatch(/never commit straight to main/)
+    expect(findingsFor(input, 'main-behind')).toEqual([])
   })
 
   it('names the primary working directory when it is not on main', () => {
@@ -570,7 +576,8 @@ describe('parsing what the shell reported', () => {
   })
 
   it('reads the ahead/behind counts for main', () => {
-    expect(parseLeftRightCount('3\t0\n')).toEqual({ behind: 3, ahead: 0 })
+    expect(parseLeftRightCount('0\t3\n')).toEqual({ behind: 3, ahead: 0 })
+    expect(parseLeftRightCount('2\t0\n')).toEqual({ behind: 0, ahead: 2 })
     expect(parseLeftRightCount('')).toEqual(null)
   })
 
@@ -608,6 +615,69 @@ describe('reading the command line', () => {
     expect(parseArgv(['--help']).help).toBe(true)
     expect(USAGE).toMatch(/npm run drift|node scripts\/drift-check\.mjs/)
     expect(USAGE).toMatch(/2 {2}possible loss/)
+  })
+})
+
+describe('which side of main is ahead, according to git', () => {
+  const git = (repo, args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', stdio: 'pipe' })
+
+  // The check reads one line of counts from git and has to know which column is
+  // which. A hand-written string cannot answer that: `3\t0` is what git prints
+  // for `origin/main...main`, and the check reads `main...origin/main`. So the
+  // counts come from a throwaway repository, in both directions.
+  const scratchRepo = () => {
+    const repo = mkdtempSync(join(tmpdir(), 'drift-counts-'))
+    git(repo, ['init', '--quiet', '--initial-branch=main'])
+    commit(repo, 'first')
+    return repo
+  }
+
+  const commit = (repo, message) => {
+    writeFileSync(join(repo, 'file.txt'), `${message}\n`)
+    git(repo, ['add', 'file.txt'])
+    git(repo, ['-c', 'user.name=drift', '-c', 'user.email=drift@example.com', 'commit', '--quiet', '-m', message])
+  }
+
+  const counts = (repo) => parseLeftRightCount(git(repo, ['rev-list', '--left-right', '--count', 'main...origin/main']))
+
+  it('reads a commit on main that is not on origin/main as ahead, not behind', () => {
+    const repo = scratchRepo()
+    try {
+      git(repo, ['branch', 'origin/main'])
+      commit(repo, 'straight to main')
+      expect(git(repo, ['rev-list', '--left-right', '--count', 'main...origin/main'])).toMatch(/^1\t0/)
+      expect(counts(repo)).toEqual({ behind: 0, ahead: 1 })
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+    }
+  })
+
+  it('reads a main that is behind origin/main as behind, not ahead', () => {
+    const repo = scratchRepo()
+    try {
+      git(repo, ['checkout', '--quiet', '-b', 'theirs'])
+      commit(repo, 'someone else merged first')
+      git(repo, ['branch', '-f', 'origin/main', 'theirs'])
+      git(repo, ['checkout', '--quiet', 'main'])
+      expect(git(repo, ['rev-list', '--left-right', '--count', 'main...origin/main'])).toMatch(/^0\t1/)
+      expect(counts(repo)).toEqual({ behind: 1, ahead: 0 })
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+    }
+  })
+
+  it('reads a main that has both as both', () => {
+    const repo = scratchRepo()
+    try {
+      git(repo, ['checkout', '--quiet', '-b', 'theirs'])
+      commit(repo, 'merged elsewhere')
+      git(repo, ['checkout', '--quiet', 'main'])
+      commit(repo, 'straight to main')
+      git(repo, ['branch', '-f', 'origin/main', 'theirs'])
+      expect(counts(repo)).toEqual({ behind: 1, ahead: 1 })
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+    }
   })
 })
 

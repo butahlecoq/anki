@@ -88,10 +88,13 @@ export function parseWorktreePorcelain(text) {
   return worktrees
 }
 
-// `git rev-list --left-right --count main...origin/main` prints "behind<TAB>ahead".
+// `git rev-list --left-right --count main...origin/main` prints one column per
+// side of the `...`, in that order: the first is what `main` has and
+// `origin/main` does not, which is ahead, and the second is the reverse, which
+// is behind.
 export function parseLeftRightCount(text) {
   const match = /^(\d+)\s+(\d+)$/.exec(text.trim())
-  return match ? { behind: Number(match[1]), ahead: Number(match[2]) } : null
+  return match ? { ahead: Number(match[1]), behind: Number(match[2]) } : null
 }
 
 // `git diff --numstat` prints "added<TAB>deleted<TAB>path" per file, and "-" for a
