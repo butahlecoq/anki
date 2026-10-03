@@ -110,15 +110,80 @@ test('a collection holding a legacy path identity ends the import with one deck,
   ])
 
   const prepared = await prepareAnkiDataImport(data, db, { SQL })
-  const derived = (await deckPaths(db)).find(([path]) => path === 'JLPT')?.[1]
-  expect(prepared.projectedEntities().decks.map(({ id, name, parentId }) => [name, id === legacy ? 'legacy' : id, parentId === legacy ? 'legacy' : parentId]))
-    .toEqual([['JLPT', expect.stringMatching(/^anki-deck:\d+$/), null], ['N5', 'anki-deck:1', expect.stringMatching(/^anki-deck:\d+$/)]])
+  // What the learner is shown before committing is what gets written.
+  const previewed = new Map(prepared.projectedEntities().decks.map(({ id, name, parentId }) => [name, { id, parentId }]))
+  const shown = previewed.get('JLPT')!
+  expect(shown.id).toMatch(/^anki-deck:\d+$/)
+  expect(previewed.get('N5')!.parentId).toBe(shown.id)
   expect(prepared.issues.filter((issue) => issue.code === 'deck-identity-normalised'))
-    .toEqual([expect.objectContaining({ severity: 'info', subject: 'JLPT' })])
+    .toEqual([expect.objectContaining({ severity: 'info', subject: 'JLPT', detail: expect.stringContaining(legacy) })])
   expect(prepared.issues.filter((issue) => issue.severity === 'error')).toEqual([])
 
   await prepared.commit()
-  expect(await deckPaths(db)).toEqual([['JLPT', derived === legacy ? expect.stringMatching(/^anki-deck:\d+$/) as unknown as string : derived!], ['JLPT::N5', 'anki-deck:1']])
+  expect((await db.decks.get(shown.id))?.parentId).toBeNull()
+  expect((await db.decks.get('anki-deck:1'))?.parentId).toBe(shown.id)
   expect(await db.decks.get(legacy)).toBeUndefined()
   expect((await db.cards.toArray()).map(({ deckId }) => deckId)).toEqual(['anki-deck:1'])
+})
+
+test('a deck holding a duplicate of the same Deck Path is reconciled, not left alongside it', async () => {
+  const data = await packageNaming(['JLPT::N5'])
+  const db = database()
+  const now = new Date('2026-10-02T12:00:00Z').toISOString()
+  // The symptom of an import made before the identity was derived: two decks
+  // answering to one Deck Path, one of them holding the learner's cards.
+  const [older, newer] = ['anki-deck-path:JLPT', 'anki-deck:1110936686436']
+  await db.decks.bulkPut([
+    { id: older, name: 'JLPT', parentId: null, optionGroupId: DEFAULT_DECK_OPTION_GROUP_ID, createdAt: now, updatedAt: now },
+    { id: newer, name: 'JLPT', parentId: null, optionGroupId: DEFAULT_DECK_OPTION_GROUP_ID, createdAt: now, updatedAt: now },
+    { id: 'anki-deck:1', name: 'N5', parentId: newer, optionGroupId: DEFAULT_DECK_OPTION_GROUP_ID, createdAt: now, updatedAt: now },
+  ])
+
+  const prepared = await prepareAnkiDataImport(data, db, { SQL })
+  expect(prepared.issues.filter((issue) => issue.code === 'deck-identity-normalised'))
+    .toEqual([expect.objectContaining({ severity: 'info', subject: 'JLPT', detail: expect.stringContaining(older) })])
+  await prepared.commit()
+  expect(await deckPaths(db)).toEqual([['JLPT', newer], ['JLPT::N5', 'anki-deck:1']])
+  expect(await db.decks.get(older)).toBeUndefined()
+})
+
+test('a Deck Path with an empty name segment is still refused', async () => {
+  const db = database()
+  const prepared = await prepareAnkiDataImport(await packageNaming(['JLPT::N5']), db, { SQL })
+  expect(prepared.issues.filter((issue) => issue.severity === 'error')).toEqual([])
+
+  const malformed = database()
+  const data = await packageNaming(['JLPT::N5'])
+  data.decks[0].name = ['JLPT', '', 'N5'].join('\u001f')
+  const refused = await prepareAnkiDataImport(data, malformed, { SQL })
+  expect(refused.issues).toContainEqual(expect.objectContaining({ severity: 'error', code: 'deck-hierarchy-malformed', subject: 'JLPT::::N5' }))
+  await expect(refused.commit()).rejects.toThrow('Resolve package errors before importing')
+  expect(await malformed.decks.count()).toBe(0)
+})
+
+test('a superseded deck hands its notes, cards and reviews to the one that survives', async () => {
+  const data = await packageNaming(['JLPT::N5'])
+  const db = database()
+  const now = new Date('2026-10-02T12:00:00Z').toISOString()
+  // A deck reconciled away for duplicating another Deck Path may not be an empty
+  // container, so what pointed at it has to follow rather than be orphaned.
+  const duplicate = 'anki-deck-path:JLPT'
+  const standing = 'anki-deck:1110936686436'
+  await (await prepareAnkiDataImport(data, db, { SQL })).commit()
+  const note = (await db.notes.toArray())[0]
+  const card = (await db.cards.toArray())[0]
+  await db.reviewEntries.put({ id: 'anki-review:1700000000900', cardId: card.id, deckId: duplicate, rating: 3, reviewedAt: now, scheduling: { options: 'default', elapsedDays: 0, scheduledDays: 1, stability: 1, difficulty: 5, state: 1 } } as never)
+  await db.decks.bulkPut([
+    { id: duplicate, name: 'JLPT', parentId: null, optionGroupId: DEFAULT_DECK_OPTION_GROUP_ID, createdAt: now, updatedAt: now },
+    { id: standing, name: 'JLPT', parentId: null, optionGroupId: DEFAULT_DECK_OPTION_GROUP_ID, createdAt: now, updatedAt: now },
+    { id: 'anki-deck:1', name: 'N5', parentId: standing, optionGroupId: DEFAULT_DECK_OPTION_GROUP_ID, createdAt: now, updatedAt: now },
+  ])
+  await db.notes.update(note.id, { deckId: duplicate })
+  await db.cards.update(card.id, { deckId: duplicate })
+
+  await (await prepareAnkiDataImport(data, db, { SQL })).commit()
+  expect(await db.decks.get(duplicate)).toBeUndefined()
+  expect((await db.notes.get(note.id))?.deckId).toBe(standing)
+  expect((await db.cards.get(card.id))?.deckId).toBe(standing)
+  expect((await db.reviewEntries.get('anki-review:1700000000900'))?.deckId).toBe(standing)
 })

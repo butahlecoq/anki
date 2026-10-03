@@ -8,7 +8,7 @@ import { validateTemplate } from './template-renderer'
 import { supportedNavigationTemplate } from './template-navigation'
 import { ANKI_ARCHIVE_LIMITS, validateAnkiArchive } from './anki-archive'
 import { readKirokuSchedule, readKirokuReview } from './anki-scheduling-metadata'
-import { derivedNativeId, legacyDeckIdentity, nativeIdentity as stableId } from './anki-identity'
+import { deckIdentity, hasLegacyDeckIdentity, nativeIdentity } from './anki-identity'
 
 /** The Deck Path a deck occupies in the app's own hierarchy. */
 function deckPath(deck: Deck, byId: ReadonlyMap<string, Deck>, seen = new Set<string>()): string {
@@ -16,6 +16,25 @@ function deckPath(deck: Deck, byId: ReadonlyMap<string, Deck>, seen = new Set<st
   seen.add(deck.id)
   const parent = deck.parentId ? byId.get(deck.parentId) : undefined
   return parent ? `${deckPath(parent, byId, seen)}::${deck.name}` : deck.name
+}
+
+/**
+ * Which identity a Deck Path resolves to, and which local decks it supersedes.
+ *
+ * A path the package defines keeps the Native Identity it arrived with. A path
+ * it names only inside a longer one has none, so it takes the identity derived
+ * from the path - unless the app already holds a deck at that path under an
+ * identity of its own, which a repeat import should not disturb. Every other
+ * local deck at the path is superseded, whether it carries the legacy identity
+ * form or is a duplicate this reconciliation is tidying up.
+ */
+function resolveDeckIdentity(path: string, matchedId: number | undefined, local: readonly Deck[]) {
+  if (matchedId !== undefined) return { id: nativeIdentity('deck', matchedId), adopted: [] as Deck[] }
+  // A local deck carrying the legacy identity form is never the one that
+  // survives: it takes the derived identity instead, whether or not it is the
+  // only deck at the path.
+  const current = local.find((deck) => !hasLegacyDeckIdentity(deck.id))
+  return { id: current?.id ?? deckIdentity(path), adopted: local.filter((deck) => deck !== current) }
 }
 
 export interface AnkiImportIssue {
@@ -52,6 +71,8 @@ interface ImportWrites {
   notes: Array<{ value: Note; action: 'create' | 'update' }>
   cards: Array<{ value: CardRecord; action: 'create' | 'update' }>
   reviews: ReviewEntry[]
+  /** Review entries whose deck reference moved with a rekeyed deck. */
+  updatedReviews: ReviewEntry[]
   references: Array<{ value: NoteMediaReference; action: 'create' | 'update' }>
   deletedReferences: NoteMediaReference[]
   deletedDecks: Deck[]
@@ -177,7 +198,7 @@ function decodeTypes(data: CollectionData, fallback: Date, issues: AnkiImportIss
       }
       result.set(row.id, {
         id: row.id,
-        localId: stableId('note-type', row.id),
+        localId: nativeIdentity('note-type', row.id),
         name: row.name,
         kind,
         stockKind: protobufNumber(config, 9),
@@ -442,6 +463,7 @@ export class PreparedAnkiImport {
       if (this.writes.notes.length) await collection.notes.bulkPut(this.writes.notes.map(({ value }) => value))
       if (this.writes.cards.length) await collection.cards.bulkPut(this.writes.cards.map(({ value }) => value))
       if (this.writes.reviews.length) await collection.reviewEntries.bulkAdd(this.writes.reviews)
+      if (this.writes.updatedReviews.length) await collection.reviewEntries.bulkPut(this.writes.updatedReviews)
       if (this.writes.references.length) await collection.noteMedia.bulkPut(this.writes.references.map(({ value }) => value))
       if (this.writes.deletedReferences.length) await collection.noteMedia.bulkDelete(this.writes.deletedReferences.map(({ id }) => id))
       if (this.writes.blobs.length) await collection.mediaBlobs.bulkPut(this.writes.blobs)
@@ -452,6 +474,7 @@ export class PreparedAnkiImport {
         ...this.writes.notes.map(({ value, action }) => operation('note', value.id, action, value, this.importedAt)),
         ...this.writes.cards.map(({ value, action }) => operation('card', value.id, action, value, this.importedAt)),
         ...this.writes.reviews.map((value) => operation('review', value.id, 'create', value, this.importedAt)),
+        ...this.writes.updatedReviews.map((value) => operation('review', value.id, 'update', value, this.importedAt)),
         ...this.writes.references.map(({ value, action }) => operation('noteMedia', value.id, action, value, this.importedAt)),
         ...this.writes.deletedReferences.map((value) => ({ opId: crypto.randomUUID(), entityType: 'noteMedia' as const, entityId: value.id, action: 'delete' as const, payload: { id: value.id }, occurredAt: this.importedAt })),
       ]
@@ -500,8 +523,12 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
   // still carrying the legacy identity form is adopted and rekeyed.
   const localDecks = await collection.decks.toArray()
   const localDecksById = new Map(localDecks.map((deck) => [deck.id, deck]))
-  const localDecksByPath = new Map(localDecks.map((deck) => [deckPath(deck, localDecksById), deck]))
-  const rekeyedDecks: Array<{ path: string; from: string; to: string }> = []
+  const localDecksByPath = new Map<string, Deck[]>()
+  for (const deck of localDecks) {
+    const path = deckPath(deck, localDecksById)
+    localDecksByPath.set(path, [...(localDecksByPath.get(path) ?? []), deck])
+  }
+  const rekeyedDecks: Array<{ from: string; to: string }> = []
   const deckRecords = new Map<string, Deck>()
   const deckBySource = new Map<number, string>()
   for (const sourceDeckId of usedDeckIds) {
@@ -517,14 +544,11 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
     for (let index = 0; index < segments.length; index += 1) {
       const path = segments.slice(0, index + 1).join('::')
       const matched = sourceDeckByName.get(path)
-      // A deck the package names only inside a Deck Path carries no Native
-      // Identity, so one is derived from that path. See ADR 0001.
-      const derived = stableId('deck', derivedNativeId(`deck-path:${path}`))
-      const adopted = matched ? undefined : localDecksByPath.get(path)
-      const id = matched ? stableId('deck', matched.id) : adopted && !legacyDeckIdentity(adopted.id) ? adopted.id : derived
-      if (adopted && adopted.id !== id) {
-        rekeyedDecks.push({ path, from: adopted.id, to: id })
-        issues.push({ severity: 'info', code: 'deck-identity-normalised', subject: path, detail: `Deck identity ${adopted.id} was brought into the package scheme as ${id}.` })
+      const { id, adopted } = resolveDeckIdentity(path, matched?.id, localDecksByPath.get(path) ?? [])
+      for (const superseded of adopted ?? []) {
+        if (superseded.id === id) continue
+        rekeyedDecks.push({ from: superseded.id, to: id })
+        issues.push({ severity: 'info', code: 'deck-identity-normalised', subject: path, detail: `Deck identity ${superseded.id} was brought into the package scheme as ${id}.` })
       }
       const timestamps = matched ?? sourceDeck
       if (!deckRecords.has(id)) deckRecords.set(id, {
@@ -574,7 +598,7 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
       const unsupportedHtml = value.replace(/<img\b[^>]*>/gi, '').replace(/<br\s*\/?>/gi, '').match(/<[^>]+>/)
       if (unsupportedHtml) issues.push({ severity: 'warning', code: 'field-html-normalized', subject: `${row.guid} · ${sourceType.fields[index].name}`, detail: `Field HTML ${unsupportedHtml[0]} was converted to plain text because imported field markup is outside the supported template subset.` })
     })
-    const noteId = stableId('note', row.guid)
+    const noteId = nativeIdentity('note', row.guid)
     const noteCreatedAt = isoFromSeconds(Math.floor(row.id / 1000), now)
     const noteUpdatedAt = isoFromSeconds(row.mod, now)
     const referenceUpdatedAt = sourceType.updatedAt > noteUpdatedAt ? sourceType.updatedAt : noteUpdatedAt
@@ -759,7 +783,7 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
       issues.push({ severity: 'error', code: 'invalid-export-review', subject: String(row.id), detail: reason instanceof Error ? reason.message : 'Invalid exported review' })
     }
     reviews.push({
-      id: stableId('review', row.id),
+      id: nativeIdentity('review', row.id),
       cardId,
       deckId: card.deckId,
       rating: row.ease,
@@ -782,31 +806,56 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
   }
 
   for (const typeId of imageOcclusionTypes) {
-    const index = noteTypes.findIndex((type) => type.id === stableId('note-type', typeId))
+    const index = noteTypes.findIndex((type) => type.id === nativeIdentity('note-type', typeId))
     if (index >= 0) noteTypes.splice(index, 1)
   }
   const referencedNames = new Set([...references.map((reference) => reference.displayName), ...nativeReferencedNames])
   for (const media of data.media) if (!referencedNames.has(media.name)) issues.push({ severity: 'warning', code: 'media-unreferenced', subject: media.name, detail: 'Unreferenced or template-static media is reported but not attached to a note.' })
 
-  const writes: ImportWrites = { decks: [], noteTypes: [], notes: [], cards: [], reviews: [], references: [], deletedReferences: [], deletedDecks: [], blobs: [] }
+  const localNotes = await collection.notes.toArray()
+  const localCards = await collection.cards.toArray()
+  const localReviews = await collection.reviewEntries.toArray()
+  const writes: ImportWrites = { decks: [], noteTypes: [], notes: [], cards: [], reviews: [], updatedReviews: [], references: [], deletedReferences: [], deletedDecks: [], blobs: [] }
   const snapshots: Snapshot[] = []
   // A deck rekeyed out of the legacy identity form leaves a row behind, and
   // every child still points at it. The children keep their own identity, so
   // only their parent reference moves - and it has to move whatever the local
   // timestamps say, because a reference to a row about to be deleted is not a
   // content conflict the learner could sensibly win.
-  for (const { from, to } of rekeyedDecks) {
+  const superseded = new Map(rekeyedDecks.map(({ from, to }) => [from, to]))
+  // A superseded deck can itself be superseded, so follow the chain to the
+  // identity that ends up standing at the path.
+  const standing = (id: string): string => superseded.get(id) ? standing(superseded.get(id)!) : id
+  for (const { from } of rekeyedDecks) {
+    const to = standing(from)
+    if (to === from) continue
     const existing = localDecksById.get(from)
     if (existing) {
       snapshots.push({ table: 'decks', id: from, value: fingerprint(existing) })
       writes.deletedDecks.push(existing)
     }
-    for (const child of localDecks.filter((deck) => deck.parentId === from)) {
+    for (const child of localDecks.filter((deck) => deck.parentId === from && !superseded.has(deck.id))) {
       snapshots.push({ table: 'decks', id: child.id, value: fingerprint(child) })
       const incoming = deckRecords.get(child.id)
       const value = { ...(incoming ?? child), parentId: to, updatedAt: now.toISOString() }
       writes.decks.push({ value, action: 'update' })
       deckRecords.set(child.id, value)
+    }
+    // A Synthesised Deck is provably an empty container, so nothing should point
+    // at it. A deck reconciled away for holding a duplicate of the same path
+    // might not be, so carry its notes, cards and reviews across rather than
+    // leaving them on an identity that is about to be deleted.
+    for (const note of localNotes.filter((note) => note.deckId === from)) {
+      snapshots.push({ table: 'notes', id: note.id, value: fingerprint(note) })
+      writes.notes.push({ value: { ...note, deckId: to, updatedAt: now.toISOString() }, action: 'update' })
+    }
+    for (const card of localCards.filter((card) => card.deckId === from)) {
+      snapshots.push({ table: 'cards', id: card.id, value: fingerprint(card) })
+      writes.cards.push({ value: { ...card, deckId: to }, action: 'update' })
+    }
+    for (const review of localReviews.filter((review) => review.deckId === from)) {
+      snapshots.push({ table: 'reviewEntries', id: review.id, value: fingerprint(review) })
+      writes.updatedReviews.push({ ...review, deckId: to })
     }
   }
   const duplicates: AnkiDuplicateSummary = { create: 0, update: 0, keepLocal: 0, unchanged: 0 }

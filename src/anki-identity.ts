@@ -13,9 +13,11 @@
  * See docs/adr/0001-synthesised-deck-identity.md.
  */
 
+const scheme = (kind: string) => `anki-${kind}:`
+
 /** The app identity of an entity that arrived from a package. */
 export function nativeIdentity(kind: string, source: string | number) {
-  return `anki-${kind}:${source}`
+  return `${scheme(kind)}${source}`
 }
 
 /**
@@ -29,19 +31,28 @@ export function derivedNativeId(seed: string) {
 }
 
 /**
- * The identity form a deck took before its identity was derived from its Deck
- * Path. Still present in collections imported before ADR 0001, and reconciled
- * at import time rather than by a migration.
+ * The number to write into a package: the one an identity already carries, or
+ * one derived from the identity itself when it carries none.
  */
-export function legacyDeckIdentity(identity: string) {
-  return identity.startsWith('anki-deck-path:')
+export function nativeNumberOf(identity: string, kind: string) {
+  const prefix = scheme(kind)
+  const carried = identity.startsWith(prefix) ? Number(identity.slice(prefix.length)) : Number.NaN
+  return Number.isSafeInteger(carried) && carried > 0 ? carried : derivedNativeId(identity)
 }
 
 /**
- * The Native Identity to write into a package: the number an identity already
- * carries, or one derived from the identity itself when it carries none.
+ * The identity of a deck a package names only inside a Deck Path, derived from
+ * that path so a Synthesised Deck is exchangeable like any other deck.
  */
-export function nativeIdOf(identity: string, kind: string) {
-  const carried = identity.startsWith(`anki-${kind}:`) ? Number(identity.slice(`anki-${kind}:`.length)) : Number.NaN
-  return Number.isSafeInteger(carried) && carried > 0 ? carried : derivedNativeId(identity)
+export function deckIdentity(deckPath: string) {
+  return nativeIdentity('deck', derivedNativeId(`deck-path:${deckPath}`))
+}
+
+/**
+ * Whether a deck still carries the identity form it took before its identity
+ * was derived from its Deck Path. Present in collections imported before ADR
+ * 0001, and reconciled at import time rather than by a migration.
+ */
+export function hasLegacyDeckIdentity(identity: string) {
+  return identity.startsWith('anki-deck-path:')
 }
