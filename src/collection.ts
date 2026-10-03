@@ -1,16 +1,7 @@
 import Dexie, { type EntityTable } from 'dexie'
 import { customStudyKey, customStudyMembership, customStudySessions, type CustomStudySession } from './custom-study-state'
-import {
-  Rating,
-  State,
-  StrategyMode,
-  createEmptyCard,
-  fsrs,
-  type AbstractScheduler,
-  type Card as FsrsCard,
-  type Grade,
-  type ReviewLog as FsrsReviewLog,
-} from 'ts-fsrs'
+import { createEmptyCard } from 'ts-fsrs'
+import { answerWithSchedule, deserializeCard, eligibleForQueue, eligibleForStudy, isBuried, isLearningCard, nextStudyBoundary, Rating, reviewChoices as previewReviewChoices, schedulerFor, selectDueCards, serializeCard, State, templateSuspended, validateSteps, type Grade } from './scheduler'
 import { digestMedia, validateMedia, type AudioPlayback, type MediaKind, type MediaSide } from './media'
 import { clozeOrdinals, renderTemplate, tryRenderTemplate, validateTemplate } from './template-renderer'
 import { mergeRevisions, revisionHeads, type RevisionMerge } from './sync-revisions'
@@ -33,7 +24,6 @@ export const DEFAULT_DECK_OPTION_GROUP_ID = 'default'
 export type NewCardOrder = 'added' | 'random'
 export type ReviewCardOrder = 'due' | 'random'
 export type InterdayLearningOrder = 'before-reviews' | 'after-reviews'
-type FsrsStep = `${number}${'m' | 'h' | 'd'}`
 
 export interface DeckOptionSettings {
   dailyNewLimit: number
@@ -281,7 +271,8 @@ export interface DeckSummary extends Deck {
   counts: DeckCounts
   noteCount: number
   reviewCount: number
-  temporaryCount: number
+  /** Cards currently claimed by a Custom Study Session in this Deck. */
+  sessionCount: number
 }
 
 export interface ReviewChoice {
@@ -410,17 +401,6 @@ function validateDailyLimit(value: number, label: string) {
   return value
 }
 
-function validateSteps(value: readonly string[], label: string): FsrsStep[] {
-  if (!Array.isArray(value) || value.length > 10) throw new Error(`${label} are invalid`)
-  const steps = value.map((step) => {
-    if (typeof step !== 'string' || !/^(?:[1-9]\d*(?:\.\d+)?)(?:m|h|d)$/.test(step)) throw new Error(`${label} contain an invalid learning step`)
-    const duration = Number.parseFloat(step)
-    if (!Number.isFinite(duration) || duration > 365) throw new Error(`${label} contain an invalid learning step`)
-    return step as FsrsStep
-  })
-  return steps
-}
-
 function validateLeechThreshold(value: number) {
   if (!Number.isSafeInteger(value) || value < 1 || value > 9999) throw new Error('Leech threshold must be a whole number from 1 to 9999')
   return value
@@ -482,68 +462,6 @@ function canonicalDeckOptionGroup(group: LegacyDeckOptionGroup): DeckOptionGroup
   }
 }
 
-function schedulerFor(group: DeckOptionGroup, cardId: string) {
-  const scheduler = fsrs({
-    request_retention: group.desiredRetention,
-    maximum_interval: 36500,
-    // Anki has no fuzz toggle: review intervals of 2.5 days or more are always
-    // spread across a bounded range so cards due together do not clump forever.
-    enable_fuzz: true,
-    enable_short_term: true,
-    learning_steps: validateSteps(group.learningSteps, 'Learning steps'),
-    relearning_steps: validateSteps(group.relearningSteps, 'Relearning steps'),
-  })
-  // Anki seeds fuzz from the card's identity, not the wall clock, so a replayed or
-  // synchronised review lands on the same interval and sibling cards get independent
-  // offsets. ts-fsrs would otherwise seed from review time, difficulty and stability.
-  return scheduler.useStrategy(StrategyMode.SEED, function (this: AbstractScheduler) {
-    return `${cardId}_${this.current.reps}`
-  })
-}
-
-function studyDay(value: Date) {
-  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`
-}
-
-function studyDayWindow(value: Date) {
-  const start = new Date(value.getFullYear(), value.getMonth(), value.getDate())
-  const end = new Date(value.getFullYear(), value.getMonth(), value.getDate() + 1)
-  return { start: start.getTime(), end: end.getTime() }
-}
-
-function nextStudyBoundary(value: Date) {
-  return new Date(value.getFullYear(), value.getMonth(), value.getDate() + 1)
-}
-
-function templateSuspended(card: CardRecord) {
-  return card.templateSuspended ?? Boolean(card.suspended)
-}
-
-function isBuried(card: CardRecord, now: Date) {
-  return card.buriedUntil !== null && card.buriedUntil !== undefined && new Date(card.buriedUntil).getTime() > now.getTime()
-}
-
-function isQueueEligible(card: CardRecord, now: Date) {
-  return card.manualSuspended !== true && !templateSuspended(card) && !isBuried(card, now)
-}
-
-function isDueForStudy(card: CardRecord, now: Date) {
-  return card.state === State.New || new Date(card.due).getTime() <= now.getTime()
-}
-
-function isReviewEligible(card: CardRecord, now: Date) {
-  return isQueueEligible(card, now) && isDueForStudy(card, now)
-}
-
-function isLearningCard(card: CardRecord) {
-  return card.state === State.Learning || card.state === State.Relearning
-}
-
-/** FSRS records day-crossing (interday) steps with a positive scheduled-day count. */
-function isInterdayLearning(card: CardRecord) {
-  return isLearningCard(card) && card.scheduledDays >= 1
-}
-
 function withPolicyDefaults(card: CardRecord): CardRecord {
   return {
     ...card,
@@ -553,24 +471,6 @@ function withPolicyDefaults(card: CardRecord): CardRecord {
     buriedUntil: card.buriedUntil ?? null,
     flag: card.flag ?? 0,
   }
-}
-
-function stableRank(value: string) {
-  let hash = 2166136261
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index)
-    hash = Math.imul(hash, 16777619)
-  }
-  return hash >>> 0
-}
-
-/**
- * A deliberately shuffled ordering key that is stable for the whole study day. Only
- * the explicitly random card orders use this; Anki salts those by the day so a deck
- * reshuffles between days without reshuffling mid-session.
- */
-function dailyShuffleRank(card: Pick<CardRecord, 'deckId' | 'id'>, day: string) {
-  return String(stableRank(`${day}:${card.deckId}:${card.id}`)).padStart(10, '0')
 }
 
 async function mediaBytes(file: Blob) {
@@ -686,68 +586,6 @@ const defaultDeckOptionGroup: DeckOptionGroup = {
   ...copiedDeckOptionSettings(defaultDeckOptionSettings),
   createdAt: '1970-01-01T00:00:00.000Z',
   updatedAt: '1970-01-01T00:00:00.000Z',
-}
-
-function serializeCard(card: FsrsCard, identity: Pick<CardRecord, 'id' | 'deckId' | 'noteId' | 'templateId' | 'clozeOrdinal' | 'flag'>): CardRecord {
-  return {
-    manualSuspended: false,
-    templateSuspended: false,
-    buriedUntil: null,
-    suspended: false,
-    ...identity,
-    flag: identity.flag ?? 0,
-    due: card.due.toISOString(),
-    stability: card.stability,
-    difficulty: card.difficulty,
-    elapsedDays: card.elapsed_days,
-    scheduledDays: card.scheduled_days,
-    learningSteps: card.learning_steps,
-    reps: card.reps,
-    lapses: card.lapses,
-    state: card.state,
-    lastReview: card.last_review?.toISOString() ?? null,
-  }
-}
-
-function deserializeCard(card: CardRecord): FsrsCard {
-  return {
-    due: new Date(card.due),
-    stability: card.stability,
-    difficulty: card.difficulty,
-    elapsed_days: card.elapsedDays,
-    scheduled_days: card.scheduledDays,
-    learning_steps: card.learningSteps,
-    reps: card.reps,
-    lapses: card.lapses,
-    state: card.state,
-    last_review: card.lastReview ? new Date(card.lastReview) : undefined,
-  }
-}
-
-function serializeReview(log: FsrsReviewLog, identity: Pick<ReviewEntry, 'id' | 'cardId' | 'deckId'>): ReviewEntry {
-  return {
-    ...identity,
-    rating: log.rating,
-    state: log.state,
-    due: log.due.toISOString(),
-    stability: log.stability,
-    difficulty: log.difficulty,
-    elapsedDays: log.elapsed_days,
-    lastElapsedDays: log.last_elapsed_days,
-    scheduledDays: log.scheduled_days,
-    learningSteps: log.learning_steps,
-    reviewedAt: log.review.toISOString(),
-  }
-}
-
-function intervalLabel(due: Date, reviewedAt: Date) {
-  const seconds = Math.max(1, Math.round((due.getTime() - reviewedAt.getTime()) / 1000))
-  if (seconds < 60) return `${seconds}s`
-  const minutes = Math.round(seconds / 60)
-  if (minutes < 60) return `${minutes}m`
-  const hours = Math.round(minutes / 60)
-  if (hours < 24) return `${hours}h`
-  return `${Math.round(hours / 24)}d`
 }
 
 function countsFor(cards: CardRecord[]): DeckCounts {
@@ -1578,7 +1416,7 @@ export class Collection extends Dexie {
 
   async summaries(): Promise<DeckSummary[]> {
     return this.transaction('r', [this.settings, this.decks, this.notes, this.cards, this.reviewEntries], async () => {
-    const temporary = await customStudyMembership(this)
+    const sessionCards = await customStudyMembership(this)
     const [decks, notes, cards, reviews] = await Promise.all([
       this.decks.orderBy('createdAt').toArray(),
       this.notes.toArray(),
@@ -1605,7 +1443,7 @@ export class Collection extends Dexie {
         counts: countsFor(cards.filter((card) => ids.has(card.deckId))),
         noteCount: notes.filter((note) => ids.has(note.deckId)).length,
         reviewCount: reviews.filter((review) => ids.has(review.deckId)).length,
-        temporaryCount: cards.filter((card) => ids.has(card.deckId) && temporary.has(card.id)).length,
+        sessionCount: cards.filter((card) => ids.has(card.deckId) && sessionCards.has(card.id)).length,
       }
     }))
     })
@@ -1613,7 +1451,7 @@ export class Collection extends Dexie {
 
   async dueCards(deckId: string, now = new Date()): Promise<CardRecord[]> {
     return this.transaction('r', [this.decks, this.deckOptionGroups, this.notes, this.cards, this.reviewEntries, this.settings], async () => {
-      const temporary = await customStudyMembership(this)
+      const sessionCards = await customStudyMembership(this)
       const subtree = await this.deckSubtree(deckId)
       if (!subtree.length) return []
       const deckIds = subtree.map((deck) => deck.id)
@@ -1623,98 +1461,21 @@ export class Collection extends Dexie {
         this.deckOptionGroups.toArray(),
         this.reviewEntries.toArray(),
       ])
-      const decks = new Map(subtree.map((deck) => [deck.id, deck]))
-      const groupsById = new Map(groups.map((group) => [group.id, group]))
-      const notesById = new Map(notes.map((note) => [note.id, note]))
-      const selectedDeck = decks.get(deckId)
-      const selectedGroup = selectedDeck && groupsById.get(selectedDeck.optionGroupId)
-      if (!selectedGroup) throw new Error('Deck option group not found')
-      const { start, end } = studyDayWindow(now)
-      const reviewedToday = new Map<string, { new: number; review: number }>()
-      for (const review of reviewEntries) {
-        const timestamp = new Date(review.reviewedAt).getTime()
-        if (review.rescheduled === false || !decks.has(review.deckId) || timestamp < start || timestamp >= end) continue
-        const totals = reviewedToday.get(review.deckId) ?? { new: 0, review: 0 }
-        if (review.state === State.New) totals.new += 1
-        if (review.state === State.Review || ((review.state === State.Learning || review.state === State.Relearning) && review.scheduledDays >= 1)) totals.review += 1
-        reviewedToday.set(review.deckId, totals)
-      }
-      const day = studyDay(now)
-      const orderKey = (card: CardRecord, group: DeckOptionGroup, kind: 'new' | 'review' | 'learning') => {
-        const random = kind === 'new' ? group.newCardOrder === 'random' : kind === 'review' ? group.reviewCardOrder === 'random' : false
-        if (random) return dailyShuffleRank(card, day)
-        return kind === 'new' ? notesById.get(card.noteId)?.createdAt ?? card.due : card.due
-      }
-      // Anki's "Due date" review order is really "due date, then random": it always
-      // breaks same-due ties with a salted hash, never with card identity. Without
-      // this the order is frozen for the life of the collection. Anki salts the
-      // review tiebreak with the card's own modification time, so the order holds
-      // still across local midnight and only moves when the card is answered. Only
-      // the explicitly random orders are day-seeded. New and learning cards keep
-      // identity ordering so daily-limit truncation stays predictable.
-      const tiebreakKey = (card: CardRecord, group: DeckOptionGroup, kind: 'new' | 'review' | 'learning') => {
-        if (kind !== 'review' || group.reviewCardOrder !== 'due') return card.id
-        return String(stableRank(`${card.lastReview ?? ''}:${card.reps}:${card.deckId}:${card.id}`)).padStart(10, '0')
-      }
-      const compareWithinDeck = (left: CardRecord, right: CardRecord, group: DeckOptionGroup, kind: 'new' | 'review' | 'learning') =>
-        orderKey(left, group, kind).localeCompare(orderKey(right, group, kind))
-        || tiebreakKey(left, group, kind).localeCompare(tiebreakKey(right, group, kind))
-        || left.id.localeCompare(right.id)
-      const sortWithinDeck = (candidates: CardRecord[], group: DeckOptionGroup, kind: 'new' | 'review' | 'learning') => candidates.sort((left, right) => compareWithinDeck(left, right, group, kind))
-      const sortQueue = (candidates: CardRecord[], kind: 'new' | 'review' | 'learning') => candidates.sort((left, right) => {
-        if (left.deckId !== right.deckId) return left.deckId.localeCompare(right.deckId)
-        const deck = decks.get(left.deckId)!
-        const group = groupsById.get(deck.optionGroupId)
-        if (!group) throw new Error('Deck option group not found')
-        return compareWithinDeck(left, right, group, kind)
-      })
-      const selected: CardRecord[] = []
-      for (const deck of subtree) {
-        const group = groupsById.get(deck.optionGroupId)
-        if (!group) throw new Error('Deck option group not found')
-        const own = cards.filter((card) => card.deckId === deck.id && !temporary.has(card.id) && isReviewEligible(card, now))
-        const learning = sortWithinDeck(own.filter(isLearningCard), group, 'learning')
-        const intradayLearning = learning.filter((card) => !isInterdayLearning(card))
-        const interdayLearning = learning.filter(isInterdayLearning)
-        const reviewsDue = sortWithinDeck(own.filter((card) => card.state === State.Review), group, 'review')
-        const newCards = sortWithinDeck(own.filter((card) => card.state === State.New), group, 'new')
-        const totals = reviewedToday.get(deck.id) ?? { new: 0, review: 0 }
-        // Each owning deck applies its own policy while gathering from its daily review budget.
-        const limited = group.interdayLearningOrder === 'before-reviews'
-          ? [...interdayLearning, ...reviewsDue]
-          : [...reviewsDue, ...interdayLearning]
-        selected.push(...intradayLearning, ...limited.slice(0, Math.max(0, group.dailyReviewLimit - totals.review)), ...newCards.slice(0, Math.max(0, group.dailyNewLimit - totals.new)))
-      }
-      const intradayLearning = sortQueue(selected.filter((card) => isLearningCard(card) && !isInterdayLearning(card)), 'learning')
-      const interdayLearning = sortQueue(selected.filter(isInterdayLearning), 'learning')
-      const orderedReviews = sortQueue(selected.filter((card) => card.state === State.Review), 'review')
-      const newCards = sortQueue(selected.filter((card) => card.state === State.New), 'new')
-      // The selected deck then provides one stable display policy when its subtree is merged.
-      const reviewQueue = selectedGroup.interdayLearningOrder === 'before-reviews'
-        ? [...interdayLearning, ...orderedReviews]
-        : [...orderedReviews, ...interdayLearning]
-      return [...intradayLearning, ...reviewQueue, ...newCards]
+      return selectDueCards({ deckId, now, decks: subtree, groups, notes, cards, reviews: reviewEntries, sessionCardIds: new Set(sessionCards.keys()) })
     })
   }
 
+  /** Eligibility for every rating is decided by the scheduler module. An
+   * ineligible card resolves to no choices without consulting its deck policy,
+   * so a card whose deck has since lost its option group cannot turn the
+   * reviewer's poll into an error. */
   async reviewChoices(cardId: string, now = new Date(), allowEarly = false): Promise<ReviewChoice[]> {
     const card = await this.cards.get(cardId)
-    if (!card || !(allowEarly ? isQueueEligible(card, now) : isReviewEligible(card, now))) return []
+    if (!card || !(allowEarly ? eligibleForQueue(card, now) : eligibleForStudy(card, now))) return []
     const deck = await this.decks.get(card.deckId)
     const group = deck ? await this.deckOptionGroups.get(deck.optionGroupId) : undefined
     if (!deck || !group) throw new Error('Deck option group not found')
-    const preview = schedulerFor(group, card.id).repeat(deserializeCard(card), now)
-    const choices: Array<[Grade, ReviewChoice['label']]> = [
-      [Rating.Again, 'Again'],
-      [Rating.Hard, 'Hard'],
-      [Rating.Good, 'Good'],
-      [Rating.Easy, 'Easy'],
-    ]
-    return choices.map(([rating, label]) => ({
-      rating,
-      label,
-      interval: intervalLabel(preview[rating].card.due, now),
-    }))
+    return previewReviewChoices(card, group, now, allowEarly)
   }
 
   /** The renderable queue shared by the reviewer and today's workload. */
@@ -1730,7 +1491,7 @@ export class Collection extends Dexie {
         const note = notesById.get(card.noteId)
         const type = note && typesById.get(note.typeId)
         const template = type?.templates.find((candidate) => candidate.id === card.templateId)
-        if (!note || !type || !template || !isReviewEligible(card, now)) return false
+        if (!note || !type || !template || !eligibleForStudy(card, now)) return false
         if (type.kind === 'image-occlusion') return true
         const front = tryRenderNoteTemplate(template.front, type, note.fields, undefined, card.clozeOrdinal, 'front')
         return !front.ok || !front.value.isEmpty
@@ -1742,19 +1503,14 @@ export class Collection extends Dexie {
     return this.transaction('rw', [this.decks, this.deckOptionGroups, this.notes, this.cards, this.reviewEntries, this.outbox, this.syncRevisions, this.settings], async () => {
       const existing = await this.cards.get(cardId)
       if (!existing) throw new Error('Card not found')
-      if (!isQueueEligible(existing, now)) throw new Error('Card is unavailable because it is suspended or buried')
-      if (!options?.allowEarly && !isDueForStudy(existing, now)) throw new Error('Card is not due')
+      if (!eligibleForQueue(existing, now)) throw new Error('Card is unavailable because it is suspended or buried')
+      if (!options?.allowEarly && !eligibleForStudy(existing, now)) throw new Error('Card is not due')
       const deck = await this.decks.get(existing.deckId)
       const group = deck ? await this.deckOptionGroups.get(deck.optionGroupId) : undefined
       if (!deck || !group) throw new Error('Deck option group not found')
-      const result = schedulerFor(group, existing.id).next(deserializeCard(existing), now, rating)
-      let card = withPolicyDefaults(serializeCard(result.card, existing))
-      const review = serializeReview(result.log, {
-        id: id(),
-        cardId,
-        deckId: existing.deckId,
-      })
-      review.scheduling = { before: existing, options: group }
+      const scheduled = answerWithSchedule(existing, group, rating, now, id())
+      let card = withPolicyDefaults(scheduled.card)
+      const review = scheduled.review
       if (durationMs !== undefined && Number.isFinite(durationMs) && durationMs >= 0) review.durationMs = Math.round(Math.min(60_000, durationMs))
       if (options?.reschedule === false) {
         Object.assign(review, { rescheduled: false, due: existing.due, stability: existing.stability, difficulty: existing.difficulty, elapsedDays: existing.elapsedDays, scheduledDays: existing.scheduledDays, learningSteps: existing.learningSteps, afterState: existing.state, afterDue: existing.due, afterStability: existing.stability, afterDifficulty: existing.difficulty, afterElapsedDays: existing.elapsedDays, afterScheduledDays: existing.scheduledDays, afterLearningSteps: existing.learningSteps })

@@ -28,6 +28,7 @@ import { compareTypedAnswer } from './typed-answer'
 import { prepareAnkiImport, type PreparedAnkiImport } from './anki-import'
 import { CardHistory, Statistics, TodayWorkload } from './Statistics'
 import { CollectionBrowser } from './CollectionBrowser'
+import { unavailableReason } from './scheduler'
 import { ExportDialog } from './ExportDialog'
 import { CustomStudy } from './CustomStudy'
 import { answerCustomStudy, customStudyQueue, practiceChoices, undoCustomStudy } from './custom-study'
@@ -474,7 +475,7 @@ function DeckList({ decks, onNewDeck, onImport, onOpen }: { decks: DeckSummary[]
           <article className="deck-tile" role="treeitem" aria-level={depth} style={{ '--deck-depth': depth - 1 } as CSSProperties} key={deck.id}>
             <span className="deck-index">{deck.name === SAMPLE_DECK_NAME ? 'SAMPLE DECK' : 'DECK'} // {String(deck.noteCount).padStart(2, '0')} NOTES</span>
             <h2>{deck.name}</h2>
-            <CountStrip counts={deck.counts} reviews={deck.reviewCount} />{deck.temporaryCount > 0 && <p className="temporary-membership">{deck.temporaryCount} home cards temporarily reserved for custom study</p>}
+            <CountStrip counts={deck.counts} reviews={deck.reviewCount} />{deck.sessionCount > 0 && <p className="temporary-membership">{deck.sessionCount} home cards temporarily reserved for custom study</p>}
             <button className="tile-action" type="button" aria-label={`Open ${deck.name}`} onClick={() => onOpen(deck.id)}>Open deck <span>→</span></button>
           </article>
         ))}
@@ -663,9 +664,10 @@ function localDateTimeValue(value: string) {
 }
 
 function cardStatus(card: CardRecord) {
-  if (card.templateSuspended || card.suspended) return 'Template content unavailable'
-  if (card.manualSuspended) return 'Suspended manually'
-  if (card.buriedUntil && new Date(card.buriedUntil).getTime() > Date.now()) return `Buried until ${new Date(card.buriedUntil).toLocaleString()}`
+  const reason = unavailableReason(card, new Date())
+  if (reason === 'template') return 'Template content unavailable'
+  if (reason === 'manual') return 'Suspended manually'
+  if (reason === 'buried') return `Buried until ${new Date(card.buriedUntil!).toLocaleString()}`
   return 'Available for scheduling'
 }
 
@@ -741,7 +743,7 @@ function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () =>
         <button className="text-button back-button" type="button" onClick={onBack}>← All decks</button>
         <span className="section-code">{deck.name === SAMPLE_DECK_NAME ? 'SAMPLE // STARTER DECK' : 'DECK // LOCAL'}</span>
         <h1>{deck.name}</h1>
-        <CountStrip counts={summary.counts} reviews={summary.reviewCount} />{deck.name === SAMPLE_DECK_NAME ? <p className="temporary-membership">A small sample collection for trying Japanese review. Remove it any time from this page.</p> : <p className="temporary-membership">{summary.temporaryCount} home cards reserved for custom study. Home totals include them; today’s normal queue excludes them.</p>}
+        <CountStrip counts={summary.counts} reviews={summary.reviewCount} />{deck.name === SAMPLE_DECK_NAME ? <p className="temporary-membership">A small sample collection for trying Japanese review. Remove it any time from this page.</p> : <p className="temporary-membership">{summary.sessionCount} home cards reserved for custom study. Home totals include them; today’s normal queue excludes them.</p>}
         <div className="deck-actions">
           <button className="primary-action" type="button" onClick={() => setNoteDialog({})}>Add note</button>
           <button className="primary-action study-action" type="button" disabled={!hasDueCards} onClick={onStudy}>Study now</button>
@@ -835,8 +837,10 @@ function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: string; se
   // A media failure is reported but never blocks the card: a single corrupt or
   // unsupported attachment must not make the card permanently unanswerable.
   const mediaBlocked = !mediaQuery || preparedMedia.pending
+  // Answering already refuses a suspended or buried card, so the reviewer asks the
+  // scheduler for the same reason rather than restating a weaker suspension test.
   const unavailable = card === null || note === null || noteType === null ||
-    Boolean(card?.suspended || card?.manualSuspended || card?.templateSuspended) ||
+    Boolean(card && unavailableReason(card, new Date()) !== null) ||
     (Boolean(noteType && card) && !template) ||
     Boolean(frontResult?.ok && frontResult.value.isEmpty && !imageOcclusion)
 

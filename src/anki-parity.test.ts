@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto'
 import { afterEach, describe, expect, test } from 'vitest'
-import { fsrs, get_fuzz_range, Rating, State, type Card as FsrsCard } from 'ts-fsrs'
+import { fsrs, get_fuzz_range, type Card as FsrsCard } from 'ts-fsrs'
+import { Rating, State } from './scheduler'
 import { createCollection, type CardRecord, type Collection } from './collection'
 
 let collection: Collection | undefined

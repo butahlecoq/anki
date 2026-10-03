@@ -1,11 +1,11 @@
 import { tryRenderNoteTemplate, type CardRecord, type Collection, type Grade } from './collection'
 import { collectionSearchRows, compileCollectionSearch, type SearchRow } from './collection-search'
 import { customStudyKey, customStudySessions, type CustomStudySession } from './custom-study-state'
+import { eligibleForQueue } from './scheduler'
 
 export type CustomStudyDefinition = Pick<CustomStudySession, 'name' | 'search' | 'limit' | 'order' | 'reschedule'>
-const available = (card: CardRecord, now: Date) => !card.manualSuspended && !card.templateSuspended && !card.suspended && !(card.buriedUntil && Date.parse(card.buriedUntil) > now.getTime())
 function renderable(row: SearchRow, now: Date) {
-  if (!row.card || !row.noteType || !available(row.card, now)) return false
+  if (!row.card || !row.noteType || !eligibleForQueue(row.card, now)) return false
   const template = row.noteType.templates.find((entry) => entry.id === row.card!.templateId)
   if (!template) return false
   if (row.noteType.kind === 'image-occlusion') return true
@@ -60,7 +60,7 @@ export async function customStudyQueue(db: Collection, id: string, now = new Dat
   const session = (await customStudySessions(db)).find((item) => item.id === id)
   if (!session) return []
   const records = await db.cards.bulkGet(session.cardIds)
-  const cards = records.filter((card): card is CardRecord => Boolean(card && available(card, now)))
+  const cards = records.filter((card): card is CardRecord => Boolean(card && eligibleForQueue(card, now)))
   const notes = await db.notes.bulkGet(cards.map((card) => card.noteId)), types = await db.noteTypes.toArray()
   return cards.filter((card, index) => {
     const note = notes[index], noteType = note && types.find((type) => type.id === note.typeId)

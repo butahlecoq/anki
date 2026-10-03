@@ -51,6 +51,19 @@ direction. Import and export are the two directions of one Exchange, and share
 one vocabulary.
 _Avoid_: synchronisation, sync, transfer
 
+**Custom Study Session**:
+A named, ordered set of cards a learner has set aside to practise on their own,
+held apart from the daily queue until answered or rebuilt.
+_Avoid_: temporary cards, reserved cards, drill session
+
+**Study Eligibility**:
+Whether a card may enter a queue. One rule decides it: a card is ineligible while
+its template content is suspended, while it is suspended manually, or while it is
+buried. Every surface - the reviewer, the browser, custom study, workload
+reporting - asks the scheduler module for that one answer rather than testing
+suspension fields itself.
+_Avoid_: availability, schedulable, active
+
 ## Reading further
 
 - [ADR 0001: a Synthesised Deck's identity is derived from its Deck Path](docs/adr/0001-synthesised-deck-identity.md)

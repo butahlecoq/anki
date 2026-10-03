@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto'
 import Dexie from 'dexie'
 import { afterEach, describe, expect, test } from 'vitest'
 import { BASIC_NOTE_TYPE_ID, createCollection, Rating, State, type CardRecord, type Collection, type DeckOptionSettings } from './collection'
+import { intervalLabel } from './scheduler'
 
 let collection: Collection | undefined
 
@@ -13,15 +14,7 @@ function directCard(id: string, deckId: string, noteId: string, state: State, du
   return { id, deckId, noteId, templateId: 'basic', due, stability: 0, difficulty: 0, elapsedDays: 0, scheduledDays: 0, learningSteps: 0, reps: 0, lapses: 0, state, lastReview: null }
 }
 
-function intervalLabelForTest(due: Date, reviewedAt: Date) {
-  const seconds = Math.max(1, Math.round((due.getTime() - reviewedAt.getTime()) / 1000))
-  if (seconds < 60) return `${seconds}s`
-  const minutes = Math.round(seconds / 60)
-  if (minutes < 60) return `${minutes}m`
-  const hours = Math.round(minutes / 60)
-  if (hours < 24) return `${hours}h`
-  return `${Math.round(hours / 24)}d`
-}
+
 
 afterEach(async () => {
   await collection?.delete()
@@ -183,6 +176,35 @@ describe('local collection', () => {
     await expect(collection.answer(card.id, Rating.Good, now)).resolves.toMatchObject({ cardId: card.id, rating: Rating.Good })
   })
 
+  test('an ineligible card yields no review choices even when its deck policy is gone', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Choices')
+    const note = await collection.createBasicNote(deck.id, { front: 'front', back: 'back' })
+    const [card] = await collection.cards.where('noteId').equals(note.id).toArray()
+    const now = new Date('2026-10-01T12:00:00.000Z')
+    // An eligible card in a deck that has lost its option group is a real fault.
+    await collection.deckOptionGroups.delete(deck.optionGroupId)
+    await expect(collection.reviewChoices(card.id, now)).rejects.toThrow(/option group/i)
+    // An ineligible one is refused on eligibility alone, before the deck policy
+    // is read, so the reviewer's poll cannot fail on a card it would not show.
+    await collection.cards.update(card.id, { manualSuspended: true })
+    await expect(collection.reviewChoices(card.id, now)).resolves.toEqual([])
+    await expect(collection.reviewChoices(card.id, now, true)).resolves.toEqual([])
+  })
+
+  test('a card suspended only by the legacy flag stays ineligible for review', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Legacy suspension')
+    const note = await collection.createBasicNote(deck.id, { front: 'front', back: 'back' })
+    const [card] = await collection.cards.where('noteId').equals(note.id).toArray()
+    const now = new Date('2026-10-01T12:00:00.000Z')
+    // Package import and note-type deletion write `suspended` alone.
+    await collection.cards.update(card.id, { templateSuspended: false, suspended: true })
+    await expect(collection.reviewChoices(card.id, now)).resolves.toEqual([])
+    await expect(collection.reviewChoices(card.id, now, true)).resolves.toEqual([])
+    await expect(collection.answer(card.id, Rating.Good, now)).rejects.toThrow(/suspended or buried/i)
+  })
+
   test('does not let template reconciliation clear a manual suspension', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const deck = await collection.createDeck('Policies')
@@ -287,7 +309,7 @@ describe('local collection', () => {
       const persisted = (await collection.cards.get(card.id))!
       expect(review.rating).toBe(rating)
       expect(persisted.state).not.toBe(State.New)
-      expect(intervalLabelForTest(new Date(persisted.due), now)).toBe(choice.interval)
+      expect(intervalLabel(new Date(persisted.due), now)).toBe(choice.interval)
     }
   })
 
