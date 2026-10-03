@@ -76,3 +76,36 @@ is a separate, larger change, tracked by #110, #111 and #112, and it is
 attempted only after these seams are stable - not because it is unimportant,
 but because every step of it touches code that was being moved at the same
 time.
+
+## What carrying this out actually required
+
+Applying the decision was not a matter of moving code. Four findings came out of
+it that were not visible before, and they are the reason the change took the
+shape it did.
+
+**A duplicated rule is often not duplicated by accident.** The eligibility rule
+existed in four places; three used `a || b` and one used `a ?? Boolean(b)`. The
+latter is not a stylistic variant - two writers in the codebase (package import
+and note-type deletion) set only the legacy `suspended` field, so under `??`
+those cards read as *available* and a suspended card became answerable again.
+Consolidating onto one rule had to pick the semantics that were correct, which
+meant finding out which writers exist.
+
+**A new seam creates the conditions for a new defect.** Routing import through
+a Collection operation surfaced that import had been skipping every invariant
+the app enforces elsewhere - and that it had been skipping them on the one
+route that writes thousands of rows at a time. Making import obey the rules was
+most of the work; the seam itself was the smaller half.
+
+**Some invariants resist being derived.** The sync service's per-operation
+minimum was a hand-written mirror of the ladder. Deriving it from the ladder is
+right in principle, but two of the old rules were discriminators rather than
+field-presence tests. Those are now stated explicitly, and a test carries every
+case the old rules got right so the derivation is verified rather than assumed.
+The first run of that test failed, which is the point of having written it.
+
+**Some rules are wrong in the direction you are consolidating.** The check that
+a card sits in its note's deck looks obviously correct and is not: Anki's
+filtered decks borrow a card without moving its note. Enforcing it would have
+broken a working import. The comment now says why it is deliberately absent, so
+the next reader does not "fix" it.
