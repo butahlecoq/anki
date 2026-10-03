@@ -1,7 +1,7 @@
-import type { NoteMediaReference } from './collection'
+import type { CardMediaDescription } from './card-rendering'
 
-export function MediaRenderer({ reference, url, automatic = false }: { reference: NoteMediaReference; url?: string; automatic?: boolean }) {
-  if (!url) return <p className="media-pending" role="status">{reference.displayName} will be available after its media sync finishes.</p>
-  if (reference.kind === 'image') return <img className="card-image" src={url} alt={reference.displayName} />
-  return <audio className="card-audio" controls autoPlay={automatic && reference.playback === 'automatic'} src={url}>Audio: {reference.displayName}</audio>
+export function MediaRenderer({ description }: { description: CardMediaDescription }) {
+  if (!description.url) return <p className="media-pending" role="status">{description.displayName} will be available after its media sync finishes.</p>
+  if (description.kind === 'image') return <img className="card-image" src={description.url} alt={description.displayName} />
+  return <audio className="card-audio" controls autoPlay={description.playback === 'automatic'} src={description.url}>Audio: {description.displayName}</audio>
 }
