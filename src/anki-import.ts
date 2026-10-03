@@ -1,3 +1,4 @@
+import { blobBytes, mediaTypeForFilename } from '../anki-interchange'
 import type { SqlJsStatic } from 'sql.js'
 import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url'
 import type { CardRow, CollectionData, RevlogRow } from 'ankipack'
@@ -246,11 +247,6 @@ function decodeTypes(data: CollectionData, fallback: Date, issues: AnkiImportIss
   return result
 }
 
-function mimeType(name: string): string | undefined {
-  const extension = name.toLocaleLowerCase().split('.').pop()
-  return ({ png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', mp3: 'audio/mpeg', ogg: 'audio/ogg', wav: 'audio/wav' } as Record<string, string>)[extension ?? '']
-}
-
 export function validateMediaBytes(bytes: Uint8Array, mime: string) {
   const text = (start: number, end: number) => textDecoder.decode(bytes.slice(start, end))
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
@@ -433,16 +429,6 @@ function ownedBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.slice().buffer as ArrayBuffer
 }
 
-async function blobBytes(blob: Blob): Promise<ArrayBuffer> {
-  if ('arrayBuffer' in blob && typeof blob.arrayBuffer === 'function') return blob.arrayBuffer()
-  return new Promise<ArrayBuffer>((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onerror = () => reject(reader.error ?? new Error('Unable to read package bytes'))
-    reader.onload = () => resolve(reader.result as ArrayBuffer)
-    reader.readAsArrayBuffer(blob)
-  })
-}
-
 export class PreparedAnkiImport {
   readonly summary: AnkiImportSummary
   readonly duplicates: AnkiDuplicateSummary
@@ -518,7 +504,7 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
   if (sourceData) data = sourceData
   else {
     try {
-      const bytes = new Uint8Array(await blobBytes(file!))
+      const bytes = await blobBytes(file!)
       validateAnkiArchive(bytes)
       const SQL = options.SQL ?? await browserSql()
       const { Collection: AnkiPackageCollection } = await import('ankipack')
@@ -636,7 +622,7 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
       try {
         const parsed = parseAnkiImageOcclusion(fieldByName as unknown as AnkiImageOcclusionFields)
         const media = sourceMedia.get(parsed.imageName)
-        const mime = media && mimeType(media.name)
+        const mime = media && mediaTypeForFilename(media.name)
         if (!media || !mime || !mime.startsWith('image/')) throw new Error(`Image occlusion source “${parsed.imageName}” is missing or unsupported`)
         validateMedia(new File([ownedBuffer(media.data)], media.name, { type: mime }))
         validateMediaBytes(media.data, mime)
@@ -664,7 +650,7 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
         const fieldName = sourceType.fields[fieldIndex]?.name
         for (const name of names) {
           const media = sourceMedia.get(name)
-          const mime = media && mimeType(media.name)
+          const mime = media && mediaTypeForFilename(media.name)
           if (!media || !mime) {
             issues.push({ severity: 'warning', code: 'media-unsupported', subject: name, detail: media ? 'Media type is not supported by the offline reviewer.' : 'Referenced media is missing from the package.' })
             continue
