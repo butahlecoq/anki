@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { SERVER_MAX_COLLECTION_SCHEMA_VERSION, SYNC_PROTOCOL_VERSION, type IncompatibleSync, type SyncCapabilities, type SyncHealth } from '../sync-capabilities.js'
 import { schemaRequiredByPayload } from '../schema-ladder.js'
-import { isSupportedMediaType } from '../media-types.js'
+import { isSupportedMediaType } from '../anki-interchange.js'
 
 type ServiceOptions = { databasePath: string; mediaDirectory?: string }
 type PairRequest = { code: string; deviceId: string }

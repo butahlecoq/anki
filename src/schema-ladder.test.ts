@@ -116,11 +116,11 @@ test('deriving the minimum matches the rules the service used to transcribe', ()
 })
 
 test('the media allowlist is one table read by both runtimes', async () => {
-  const { SUPPORTED_MEDIA_TYPES, isSupportedMediaType, mediaTypeForFilename } = await import('../media-types')
+  const { SUPPORTED_MEDIA_TYPES, isSupportedMediaType, mediaTypeForFilename } = await import('../anki-interchange')
   // Every type the browser accepts is one the service accepts.
   for (const definition of SUPPORTED_MEDIA_TYPES) {
     expect(`${definition.mimeType}:${isSupportedMediaType(definition.mimeType)}`).toBe(`${definition.mimeType}:true`)
-    expect(mediaTypeForFilename(`recording.${definition.extensions[0]}`)).toMatchObject({ mimeType: definition.mimeType })
+    expect(mediaTypeForFilename(`recording.${definition.extensions[0]}`)).toBe(definition.mimeType)
   }
   expect(isSupportedMediaType('application/zip')).toBe(false)
   expect(mediaTypeForFilename('payload.exe')).toBeUndefined()
