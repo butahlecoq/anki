@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { BASIC_NOTE_TYPE_ID, collection } from './collection'
+import { userFacingStorageError } from './offline-storage'
 import { applyTextImport, defaultMapping, exportTextCollection, pathsForDecks, previewTextImport, readTextDocument, serializeDelimited, TEXT_BYTE_LIMIT, type ColumnMapping, type CsvDocument, type Delimiter, type ImportOptions, type TextEncoding, type TextPreview } from './text-csv'
 
 function downloadText(text: string, filename: string) {
@@ -87,7 +88,7 @@ export function TextCollectionDialog({ onClose }: { onClose: () => void }) {
       const counts = await applyTextImport(collection, preview, partial)
       setResult(`Import complete: ${counts.added} added, ${counts.updated} updated, ${counts.ignored} ignored, ${counts.errors} invalid rows skipped.`)
       setPreview(undefined)
-    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to import rows.') }
+    } catch (reason) { setError(userFacingStorageError(reason, 'Unable to import rows.')) }
     finally { setBusy(false) }
   }
 

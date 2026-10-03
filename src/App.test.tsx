@@ -58,8 +58,8 @@ describe('application shell', () => {
     window.dispatchEvent(new CustomEvent(UPDATE_READY_EVENT))
 
     fireEvent.click(await screen.findByRole('button', { name: 'Update app' }))
-    expect(await screen.findByText(/The update is no longer waiting/)).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Retry update' })).toBeVisible()
+    expect(await screen.findByText(/This update is no longer waiting/)).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Reload to check' })).toBeVisible()
   })
 })
 

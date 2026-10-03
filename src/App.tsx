@@ -64,7 +64,7 @@ export function App() {
     try {
       const activated = await activateAvailableUpdate()
       if (!activated) {
-        setUpdateError('The update is no longer waiting. Reload the app to check again.')
+        setUpdateError('This update is no longer waiting. Reload to check for the current version.')
         setActivatingUpdate(false)
       }
     } catch {
@@ -133,7 +133,7 @@ export function App() {
         <a className={onBrowse ? 'active' : ''} href="#browse" aria-label="Browse"><span>Browse</span></a>
         <a className={onStatistics ? 'active' : ''} href="#statistics" aria-label="Statistics"><span>Stats</span></a>
       </nav>
-      {updateReady && <div className="update-toast" role="status"><span>{updateError || (activatingUpdate ? 'Updating the app…' : 'A new version is ready.')}</span>{!activatingUpdate && <button type="button" onClick={() => void activateUpdate()}>{updateError ? 'Retry update' : 'Update app'}</button>}</div>}
+      {updateReady && <div className="update-toast" role="status"><span>{updateError || (activatingUpdate ? 'Updating the app…' : 'A new version is ready.')}</span>{!activatingUpdate && <button type="button" onClick={() => updateError ? window.location.reload() : void activateUpdate()}>{updateError ? 'Reload to check' : 'Update app'}</button>}</div>}
     </div>
   )
 }

@@ -307,24 +307,27 @@ function SyncControls() {
     }
     setBusy(true)
     setMessage('Syncing your collection…')
-    const result = await syncCollection(collection)
-    if (result.state === 'complete' && settings) void listPcBackups(settings).then(({ backups: latest }) => setBackups(latest)).catch(() => {})
-    setBusy(false)
-    if (result.state === 'complete') {
-      const media = result.media
-      const mediaError = media?.uploadError ?? media?.downloadError
-      if (mediaError === 'authentication-required') setMessage(`Card sync complete. ${media?.pending ?? 0} media file${media?.pending === 1 ? '' : 's'} still need pairing.`)
-      else if (mediaError) setMessage(`Card sync complete. ${media?.pending ?? 0} media file${media?.pending === 1 ? '' : 's'} will retry when the PC is reachable.`)
-      else setMessage(`Sync complete. ${result.accepted} local change${result.accepted === 1 ? '' : 's'} sent; ${media?.uploaded ?? 0} uploaded and ${media?.downloaded ?? 0} downloaded.`)
-    }
-    else if (result.state === 'authentication-required') setMessage('This device needs to be paired again before it can sync.')
-    else if (result.state === 'upgrade-required') {
-      setMessage(result.target === 'this-device'
-        ? 'This device needs a Kiroku update before it can sync this collection. Update the app, then try again. Your local changes remain on this device.'
-        : 'Your PC sync service needs an update before this collection can sync. Update the PC service, then try again. Your local changes remain on this device.')
-    }
-    else if (result.state === 'backup-failed') setMessage(result.message)
-    else setMessage('Your PC service could not be reached. Your changes remain on this device and will retry next time.')
+    try {
+      const result = await syncCollection(collection)
+      if (result.state === 'complete' && settings) void listPcBackups(settings).then(({ backups: latest }) => setBackups(latest)).catch(() => {})
+      if (result.state === 'complete') {
+        const media = result.media
+        const mediaError = media?.uploadError ?? media?.downloadError
+        if (mediaError === 'authentication-required') setMessage(`Card sync complete. ${media?.pending ?? 0} media file${media?.pending === 1 ? '' : 's'} still need pairing.`)
+        else if (mediaError) setMessage(`Card sync complete. ${media?.pending ?? 0} media file${media?.pending === 1 ? '' : 's'} will retry when the PC is reachable.`)
+        else setMessage(`Sync complete. ${result.accepted} local change${result.accepted === 1 ? '' : 's'} sent; ${media?.uploaded ?? 0} uploaded and ${media?.downloaded ?? 0} downloaded.`)
+      }
+      else if (result.state === 'authentication-required') setMessage('This device needs to be paired again before it can sync.')
+      else if (result.state === 'upgrade-required') {
+        setMessage(result.target === 'this-device'
+          ? 'This device needs a Kiroku update before it can sync this collection. Update the app, then try again. Your local changes remain on this device.'
+          : 'Your PC sync service needs an update before this collection can sync. Update the PC service, then try again. Your local changes remain on this device.')
+      }
+      else if (result.state === 'backup-failed') setMessage(result.message)
+      else setMessage('Your PC service could not be reached. Your changes remain on this device and will retry next time.')
+    } catch (error) {
+      setMessage(userFacingStorageError(error, 'Sync could not be applied on this device. Your local collection remains unchanged; free storage and try again.'))
+    } finally { setBusy(false) }
   }
 
   async function backupPcCollection() {

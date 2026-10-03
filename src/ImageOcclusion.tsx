@@ -9,6 +9,7 @@ import {
   type OcclusionMaskDraft,
 } from './collection'
 import { validateMedia } from './media'
+import { userFacingStorageError } from './offline-storage'
 
 type DraftMask = OcclusionMaskDraft & { localId: string }
 type Point = { x: number; y: number }
@@ -226,7 +227,7 @@ export function ImageOcclusionEditor({ deckId, note, onClose }: { deckId: string
       else if (image) await collection.createImageOcclusionNote(destinationDeckId, { ...values, image } satisfies NewImageOcclusionNote)
       else throw new Error('Choose a source image.')
       onClose()
-    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to save image occlusion note') }
+    } catch (reason) { setError(userFacingStorageError(reason, 'Unable to save image occlusion note')) }
   }
 
   return <div className="dialog-backdrop">
