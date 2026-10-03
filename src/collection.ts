@@ -1,7 +1,7 @@
 import Dexie, { type EntityTable } from 'dexie'
 import { customStudyKey, customStudyMembership, customStudySessions, type CustomStudySession } from './custom-study-state'
 import { createEmptyCard } from 'ts-fsrs'
-import { answerWithSchedule, deserializeCard, eligibleForQueue, eligibleForStudy, isBuried, isLearningCard, nextStudyBoundary, Rating, reviewChoices as previewReviewChoices, schedulerFor, selectDueCards, serializeCard, State, templateSuspended, validateSteps, type Grade } from './scheduler'
+import { answerWithSchedule, deserializeCard, eligibleForQueue, eligibleForStudy, isBuried, isInterdayLearning, isLearningCard, nextStudyBoundary, Rating, reviewChoices as previewReviewChoices, schedulerFor, selectDueCards, serializeCard, State, templateSuspended, validateSteps, type Grade } from './scheduler'
 import { SUPPORTED_MEDIA_TYPES } from '../anki-interchange'
 import { digestMedia, validateMedia, type AudioPlayback, type MediaKind, type MediaSide } from './media'
 import { clozeOrdinals, tryRenderTemplate, validateTemplate } from './template-renderer'
@@ -26,8 +26,11 @@ export const DEFAULT_DECK_OPTION_GROUP_ID = 'default'
 
 /** Reusable scheduling settings are introduced independently of any individual deck. */
 export type NewCardOrder = 'added' | 'random'
-export type ReviewCardOrder = 'due' | 'random'
-export type InterdayLearningOrder = 'before-reviews' | 'after-reviews'
+export type NewCardGatherOrder = 'deck' | 'deck-random-notes' | 'ascending-position' | 'descending-position' | 'random-notes' | 'random-cards'
+export type NewCardSortOrder = 'template' | 'gathered' | 'template-random' | 'random-note-template' | 'random'
+export type ReviewCardOrder = 'due' | 'due-then-deck' | 'deck-then-due' | 'interval-ascending' | 'interval-descending' | 'retrievability-ascending' | 'retrievability-descending' | 'random'
+export type ReviewMixOrder = 'mix' | 'before-reviews' | 'after-reviews'
+export type InterdayLearningOrder = ReviewMixOrder
 
 export interface DeckOptionSettings {
   dailyNewLimit: number
@@ -36,12 +39,16 @@ export interface DeckOptionSettings {
   learningSteps: readonly string[]
   relearningSteps: readonly string[]
   newCardOrder: NewCardOrder
+  newCardGatherOrder?: NewCardGatherOrder
+  newCardSortOrder?: NewCardSortOrder
   reviewCardOrder: ReviewCardOrder
+  newReviewOrder?: ReviewMixOrder
   /** Controls where day-crossing learning cards appear relative to review cards. */
   interdayLearningOrder?: InterdayLearningOrder
   /** Omitted by pre-policy callers; the owning group retains its current policy. */
   buryNewSiblings?: boolean
   buryReviewSiblings?: boolean
+  buryInterdayLearningSiblings?: boolean
   leechThreshold?: number
   leechAction?: LeechAction
   leechTag?: string
@@ -59,10 +66,14 @@ export interface DeckOptionGroup {
   learningSteps: readonly string[]
   relearningSteps: readonly string[]
   newCardOrder: NewCardOrder
+  newCardGatherOrder: NewCardGatherOrder
+  newCardSortOrder: NewCardSortOrder
   reviewCardOrder: ReviewCardOrder
+  newReviewOrder: ReviewMixOrder
   interdayLearningOrder: InterdayLearningOrder
   buryNewSiblings: boolean
   buryReviewSiblings: boolean
+  buryInterdayLearningSiblings: boolean
   leechThreshold: number
   leechAction: LeechAction
   leechTag: string
@@ -177,6 +188,10 @@ export interface CardRecord {
   buriedUntil?: string | null
   /** Anki-compatible card flag: 0 is none, 1–7 are the standard colors. */
   flag?: number
+  /** Anki insertion order for new-card gathering; sibling cards share a position. */
+  newPosition?: number
+  /** Anki card ordinal for sorting new cards by template. */
+  templateOrdinal?: number
   due: string
   stability: number
   difficulty: number
@@ -284,10 +299,14 @@ const defaultDeckOptionSettings: Required<DeckOptionSettings> = {
   learningSteps: ['1m', '10m'],
   relearningSteps: ['10m'],
   newCardOrder: 'added',
+  newCardGatherOrder: 'deck',
+  newCardSortOrder: 'template',
   reviewCardOrder: 'due',
-  interdayLearningOrder: 'before-reviews',
+  newReviewOrder: 'mix',
+  interdayLearningOrder: 'mix',
   buryNewSiblings: false,
   buryReviewSiblings: false,
+  buryInterdayLearningSiblings: false,
   leechThreshold: 8,
   leechAction: 'suspend',
   leechTag: 'leech',
@@ -393,9 +412,13 @@ function copiedDeckOptionSettings(settings: DeckOptionSettings): Required<DeckOp
     ...settings,
     learningSteps: [...settings.learningSteps],
     relearningSteps: [...settings.relearningSteps],
+    newCardGatherOrder: settings.newCardGatherOrder ?? defaultDeckOptionSettings.newCardGatherOrder,
+    newCardSortOrder: settings.newCardSortOrder ?? (settings.newCardOrder === 'random' ? 'random' : defaultDeckOptionSettings.newCardSortOrder),
+    newReviewOrder: settings.newReviewOrder ?? defaultDeckOptionSettings.newReviewOrder,
     interdayLearningOrder: settings.interdayLearningOrder ?? defaultDeckOptionSettings.interdayLearningOrder,
     buryNewSiblings: settings.buryNewSiblings ?? defaultDeckOptionSettings.buryNewSiblings,
     buryReviewSiblings: settings.buryReviewSiblings ?? defaultDeckOptionSettings.buryReviewSiblings,
+    buryInterdayLearningSiblings: settings.buryInterdayLearningSiblings ?? defaultDeckOptionSettings.buryInterdayLearningSiblings,
     leechThreshold: settings.leechThreshold ?? defaultDeckOptionSettings.leechThreshold,
     leechAction: settings.leechAction ?? defaultDeckOptionSettings.leechAction,
     leechTag: settings.leechTag ?? defaultDeckOptionSettings.leechTag,
@@ -422,12 +445,19 @@ function validateDeckOptionSettings(input: DeckOptionSettings): Required<DeckOpt
   if (!input || typeof input !== 'object') throw new Error('Deck option settings are invalid')
   if (!Number.isFinite(input.desiredRetention) || input.desiredRetention <= 0 || input.desiredRetention > 1) throw new Error('Desired retention must be greater than 0 and at most 1')
   if (input.newCardOrder !== 'added' && input.newCardOrder !== 'random') throw new Error('New card order is invalid')
-  if (input.reviewCardOrder !== 'due' && input.reviewCardOrder !== 'random') throw new Error('Review card order is invalid')
+  const newCardGatherOrder = input.newCardGatherOrder ?? defaultDeckOptionSettings.newCardGatherOrder
+  if (!['deck', 'deck-random-notes', 'ascending-position', 'descending-position', 'random-notes', 'random-cards'].includes(newCardGatherOrder)) throw new Error('New card gather order is invalid')
+  const newCardSortOrder = input.newCardSortOrder ?? (input.newCardOrder === 'random' ? 'random' : defaultDeckOptionSettings.newCardSortOrder)
+  if (!['template', 'gathered', 'template-random', 'random-note-template', 'random'].includes(newCardSortOrder)) throw new Error('New card sort order is invalid')
+  if (!['due', 'due-then-deck', 'deck-then-due', 'interval-ascending', 'interval-descending', 'retrievability-ascending', 'retrievability-descending', 'random'].includes(input.reviewCardOrder)) throw new Error('Review card order is invalid')
+  const newReviewOrder = input.newReviewOrder ?? defaultDeckOptionSettings.newReviewOrder
+  if (!['mix', 'before-reviews', 'after-reviews'].includes(newReviewOrder)) throw new Error('New/review order is invalid')
   const interdayLearningOrder = input.interdayLearningOrder ?? defaultDeckOptionSettings.interdayLearningOrder
-  if (interdayLearningOrder !== 'before-reviews' && interdayLearningOrder !== 'after-reviews') throw new Error('Interday learning order is invalid')
+  if (!['mix', 'before-reviews', 'after-reviews'].includes(interdayLearningOrder)) throw new Error('Interday learning order is invalid')
   const buryNewSiblings = input.buryNewSiblings ?? defaultDeckOptionSettings.buryNewSiblings
   const buryReviewSiblings = input.buryReviewSiblings ?? defaultDeckOptionSettings.buryReviewSiblings
-  if (typeof buryNewSiblings !== 'boolean' || typeof buryReviewSiblings !== 'boolean') throw new Error('Sibling burying options are invalid')
+  const buryInterdayLearningSiblings = input.buryInterdayLearningSiblings ?? defaultDeckOptionSettings.buryInterdayLearningSiblings
+  if (typeof buryNewSiblings !== 'boolean' || typeof buryReviewSiblings !== 'boolean' || typeof buryInterdayLearningSiblings !== 'boolean') throw new Error('Sibling burying options are invalid')
   const leechAction = input.leechAction ?? defaultDeckOptionSettings.leechAction
   if (leechAction !== 'tag-only' && leechAction !== 'suspend') throw new Error('Leech action is invalid')
   return {
@@ -437,10 +467,14 @@ function validateDeckOptionSettings(input: DeckOptionSettings): Required<DeckOpt
     learningSteps: validateSteps(input.learningSteps, 'Learning steps'),
     relearningSteps: validateSteps(input.relearningSteps, 'Relearning steps'),
     newCardOrder: input.newCardOrder,
+    newCardGatherOrder,
+    newCardSortOrder,
     reviewCardOrder: input.reviewCardOrder,
+    newReviewOrder,
     interdayLearningOrder,
     buryNewSiblings,
     buryReviewSiblings,
+    buryInterdayLearningSiblings,
     leechThreshold: validateLeechThreshold(input.leechThreshold ?? defaultDeckOptionSettings.leechThreshold),
     leechAction,
     leechTag: validateLeechTag(input.leechTag ?? defaultDeckOptionSettings.leechTag),
@@ -457,10 +491,14 @@ function canonicalDeckOptionGroup(group: LegacyDeckOptionGroup): DeckOptionGroup
       learningSteps: group.learningSteps ?? defaultDeckOptionSettings.learningSteps,
       relearningSteps: group.relearningSteps ?? defaultDeckOptionSettings.relearningSteps,
       newCardOrder: group.newCardOrder ?? defaultDeckOptionSettings.newCardOrder,
+      newCardGatherOrder: group.newCardGatherOrder ?? defaultDeckOptionSettings.newCardGatherOrder,
+      newCardSortOrder: group.newCardSortOrder ?? (group.newCardOrder === 'random' ? 'random' : defaultDeckOptionSettings.newCardSortOrder),
       reviewCardOrder: group.reviewCardOrder ?? defaultDeckOptionSettings.reviewCardOrder,
+      newReviewOrder: group.newReviewOrder ?? defaultDeckOptionSettings.newReviewOrder,
       interdayLearningOrder: group.interdayLearningOrder ?? defaultDeckOptionSettings.interdayLearningOrder,
       buryNewSiblings: group.buryNewSiblings ?? defaultDeckOptionSettings.buryNewSiblings,
       buryReviewSiblings: group.buryReviewSiblings ?? defaultDeckOptionSettings.buryReviewSiblings,
+      buryInterdayLearningSiblings: group.buryInterdayLearningSiblings ?? defaultDeckOptionSettings.buryInterdayLearningSiblings,
       leechThreshold: group.leechThreshold ?? defaultDeckOptionSettings.leechThreshold,
       leechAction: group.leechAction ?? defaultDeckOptionSettings.leechAction,
       leechTag: group.leechTag ?? defaultDeckOptionSettings.leechTag,
@@ -572,9 +610,19 @@ function canonicalCard(card: LegacyCard): CardRecord {
   if (card.templateSuspended !== undefined && card.suspended !== undefined && card.templateSuspended !== card.suspended) throw new Error('Card suspension fields conflict')
   if (card.buriedUntil !== undefined && card.buriedUntil !== null && typeof card.buriedUntil !== 'string') throw new Error('Card burial time is invalid')
   if (card.flag !== undefined && (!Number.isSafeInteger(card.flag) || card.flag < 0 || card.flag > 7)) throw new Error('Card flag is invalid')
+  if (card.newPosition !== undefined && (!Number.isSafeInteger(card.newPosition) || card.newPosition < 0)) throw new Error('New card position is invalid')
+  if (card.templateOrdinal !== undefined && (!Number.isSafeInteger(card.templateOrdinal) || card.templateOrdinal < 0)) throw new Error('Card template ordinal is invalid')
   const buriedUntil = card.buriedUntil ?? null
   if (buriedUntil !== null && (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(buriedUntil) || Number.isNaN(new Date(buriedUntil).getTime()))) throw new Error('Card burial time is invalid')
   return withPolicyDefaults({ ...card, templateId: card.templateId ?? BASIC_TEMPLATE_ID, buriedUntil })
+}
+
+/** Anki gathers intraday learning, interday learning, review, then new cards. */
+function queueGatherPriority(card: CardRecord) {
+  if (isLearningCard(card) && !isInterdayLearning(card)) return 0
+  if (isInterdayLearning(card)) return 1
+  if (card.state === State.Review) return 2
+  return 3
 }
 
 function canonicalNoteType(noteType: LegacyNoteType): NoteType {
@@ -698,11 +746,55 @@ export class Collection extends Dexie {
     this.version(14).stores({})
     this.version(15).stores({ syncRevisions: 'opId, key', syncConflicts: 'key, entityType, entityId' })
     this.version(16).stores({})
+    this.version(17).stores({}).upgrade(async (transaction) => {
+      await transaction.table('deckOptionGroups').toCollection().modify((group: LegacyDeckOptionGroup) => Object.assign(group, canonicalDeckOptionGroup(group)))
+    })
+    this.version(18).stores({}).upgrade(async (transaction) => {
+      await transaction.table('deckOptionGroups').toCollection().modify((group: LegacyDeckOptionGroup) => Object.assign(group, canonicalDeckOptionGroup(group)))
+    })
+    this.version(19).stores({
+      decks: 'id, parentId, optionGroupId, name, createdAt', notes: 'id, deckId, typeId, updatedAt', cards: 'id, deckId, noteId, templateId, due, state, newPosition', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId', deletedEntities: 'key, entityType, entityId, occurredAt', noteMedia: 'id, noteId, digest, side, kind, updatedAt', mediaBlobs: 'digest, verifiedAt', noteTypes: 'id, name, updatedAt', deckOptionGroups: 'id, name, updatedAt', syncRevisions: 'opId, key', syncConflicts: 'key, entityType, entityId',
+    }).upgrade(async (transaction) => {
+      const notes = new Map((await transaction.table('notes').toArray()).map((note: Note) => [note.id, note]))
+      const noteTypes = new Map((await transaction.table('noteTypes').toArray()).map((noteType: NoteType) => [noteType.id, noteType]))
+      const cards = await transaction.table('cards').toArray() as CardRecord[]
+      const maxPosition = cards.reduce((max, card) => Math.max(max, card.newPosition ?? -1), -1)
+      const newNotes = [...new Set(cards.filter((card) => card.state === State.New && card.newPosition === undefined).map((card) => card.noteId))]
+        .sort((left, right) => (notes.get(left)?.createdAt ?? '').localeCompare(notes.get(right)?.createdAt ?? '') || left.localeCompare(right))
+      const positions = new Map(newNotes.map((noteId, index) => [noteId, maxPosition + index + 1]))
+      await transaction.table('cards').toCollection().modify((card: CardRecord) => {
+        const note = notes.get(card.noteId)
+        const noteType = note ? noteTypes.get(note.typeId) : undefined
+        card.newPosition ??= card.state === State.New ? positions.get(card.noteId) ?? 0 : undefined
+        card.templateOrdinal ??= noteType?.kind === 'cloze'
+          ? Math.max(0, (card.clozeOrdinal ?? 1) - 1)
+          : noteType?.kind === 'image-occlusion'
+            ? Math.max(0, (card.occlusionOrdinal ?? 1) - 1)
+            : Math.max(0, noteType?.templates.findIndex((template) => template.id === card.templateId) ?? 0)
+      })
+    })
+    this.version(20).stores({}).upgrade(async (transaction) => {
+      await transaction.table('deckOptionGroups').toCollection().modify((group: LegacyDeckOptionGroup) => Object.assign(group, canonicalDeckOptionGroup(group)))
+    })
+    this.version(21).stores({}).upgrade(async (transaction) => {
+      await transaction.table('deckOptionGroups').toCollection().modify((group: LegacyDeckOptionGroup) => Object.assign(group, canonicalDeckOptionGroup(group)))
+    })
     this.on('populate', (transaction) => {
       transaction.table('noteTypes').put(basicNoteType)
       transaction.table('noteTypes').put(imageOcclusionNoteType)
       transaction.table('deckOptionGroups').put(defaultDeckOptionGroup)
     })
+  }
+
+  private async nextNewPosition() {
+    const last = await this.cards.orderBy('newPosition').last()
+    return (last?.newPosition ?? -1) + 1
+  }
+
+  private cardTemplateOrdinal(noteType: NoteType, template: { id: string; clozeOrdinal?: number; occlusionOrdinal?: number }) {
+    if (template.clozeOrdinal !== undefined) return Math.max(0, template.clozeOrdinal - 1)
+    if (template.occlusionOrdinal !== undefined) return Math.max(0, template.occlusionOrdinal - 1)
+    return Math.max(0, noteType.templates.findIndex((candidate) => candidate.id === template.id))
   }
 
   async createNoteType(input: NewNoteType, now = new Date()): Promise<NoteType> {
@@ -747,6 +839,8 @@ export class Collection extends Dexie {
 
   private async reconcileCards(note: Note, noteType: NoteType, now: Date, operations: SyncOperation[]) {
     const existing = await this.cards.where('noteId').equals(note.id).toArray()
+    const existingNewPosition = existing.find((card) => card.state === State.New)?.newPosition
+    const newPosition = existingNewPosition ?? await this.nextNewPosition()
     const eligible = this.cardGenerationStatus(noteType, note.fields, note.imageOcclusion).eligible
     const eligibleIds = new Set(eligible.map((template) => cardKey({ templateId: template.id, clozeOrdinal: template.clozeOrdinal, occlusionId: template.occlusionId })))
     for (const card of existing) {
@@ -760,6 +854,8 @@ export class Collection extends Dexie {
     for (const template of eligible) {
       if (existingIds.has(cardKey({ templateId: template.id, clozeOrdinal: template.clozeOrdinal, occlusionId: template.occlusionId }))) continue
       const card = serializeCard(createEmptyCard(now), { id: `${note.id}:${template.id}${template.clozeOrdinal ? `:c${template.clozeOrdinal}` : template.occlusionId ? `:m${template.occlusionId}` : ''}`, deckId: note.deckId, noteId: note.id, templateId: template.id, ...(template.clozeOrdinal ? { clozeOrdinal: template.clozeOrdinal } : {}), ...(template.occlusionId ? { occlusionId: template.occlusionId, occlusionOrdinal: template.occlusionOrdinal } : {}) })
+      card.newPosition = newPosition
+      card.templateOrdinal = this.cardTemplateOrdinal(noteType, template)
       await this.cards.add(card)
       operations.push({ opId: id(), entityType: 'card', entityId: card.id, action: 'create', occurredAt: now.toISOString(), payload: card })
     }
@@ -998,7 +1094,13 @@ export class Collection extends Dexie {
       if (noteType.kind === 'image-occlusion') throw new Error('Use the image occlusion editor to create this note')
       const values = Object.fromEntries(noteType.fields.map((field) => [field.id, fields[field.id] ?? '']))
       const note: Note = { id: stableId ?? id(), deckId, type: typeId === BASIC_NOTE_TYPE_ID ? 'basic' : 'custom', typeId, fields: values, createdAt: now.toISOString(), updatedAt: now.toISOString() }
-      const cards = this.cardGenerationStatus(noteType, values).eligible.map((template) => serializeCard(createEmptyCard(now), { id: `${note.id}:${template.id}${template.clozeOrdinal ? `:c${template.clozeOrdinal}` : ''}`, deckId, noteId: note.id, templateId: template.id, ...(template.clozeOrdinal ? { clozeOrdinal: template.clozeOrdinal } : {}) }))
+      const newPosition = await this.nextNewPosition()
+      const cards = this.cardGenerationStatus(noteType, values).eligible.map((template) => {
+        const card = serializeCard(createEmptyCard(now), { id: `${note.id}:${template.id}${template.clozeOrdinal ? `:c${template.clozeOrdinal}` : ''}`, deckId, noteId: note.id, templateId: template.id, ...(template.clozeOrdinal ? { clozeOrdinal: template.clozeOrdinal } : {}) })
+        card.newPosition = newPosition
+        card.templateOrdinal = this.cardTemplateOrdinal(noteType, template)
+        return card
+      })
       await this.notes.add(note)
       if (cards.length) await this.cards.bulkAdd(cards)
       await this.enqueueOperations([
@@ -1740,10 +1842,12 @@ export class Collection extends Dexie {
       const siblings = await this.cards.where('noteId').equals(card.noteId).toArray()
       for (const sibling of siblings) {
         if (sibling.id === card.id || isBuried(sibling, now)) continue
-        // Learning and relearning cards carry scheduled material from prior study, so
-        // they share the review-sibling policy. This includes interday learning steps.
-        const bury = (sibling.state === State.New && group.buryNewSiblings)
-          || ((sibling.state === State.Review || isLearningCard(sibling)) && group.buryReviewSiblings)
+        if (queueGatherPriority(sibling) < queueGatherPriority(existing)) continue
+        const bury = sibling.state === State.New
+          ? group.buryNewSiblings
+          : sibling.state === State.Review
+            ? group.buryReviewSiblings
+            : isInterdayLearning(sibling) && group.buryInterdayLearningSiblings
         if (!bury) continue
         const revised = withPolicyDefaults({ ...sibling, buriedUntil })
         await this.cards.put(revised)

@@ -28,8 +28,8 @@ import { prepareAnkiImport, type PreparedAnkiImport } from './anki-import'
 import { CardHistory, Statistics, TodayWorkload } from './Statistics'
 import { CollectionBrowser } from './CollectionBrowser'
 import { unavailableReason } from './scheduler'
-import { undoAnnouncement, undoLabel } from './undo'
 import { describeCardMedia, isRenderedCardDisplayable, renderNoteCard } from './card-rendering'
+import { undoAnnouncement, undoLabel } from './undo'
 import { ExportDialog } from './ExportDialog'
 import { CustomStudy } from './CustomStudy'
 import { answerCustomStudy, customStudyQueue, practiceChoices, undoCustomStudy } from './custom-study'
@@ -443,10 +443,14 @@ function settingsFromGroup(group: DeckOptionGroup): DeckOptionSettings {
     learningSteps: group.learningSteps,
     relearningSteps: group.relearningSteps,
     newCardOrder: group.newCardOrder,
+    newCardGatherOrder: group.newCardGatherOrder,
+    newCardSortOrder: group.newCardSortOrder,
     reviewCardOrder: group.reviewCardOrder,
+    newReviewOrder: group.newReviewOrder,
     interdayLearningOrder: group.interdayLearningOrder,
     buryNewSiblings: group.buryNewSiblings,
     buryReviewSiblings: group.buryReviewSiblings,
+    buryInterdayLearningSiblings: group.buryInterdayLearningSiblings,
     leechThreshold: group.leechThreshold,
     leechAction: group.leechAction,
     leechTag: group.leechTag,
@@ -585,13 +589,16 @@ function DeckOptionsDialog({ deck, onClose }: { deck: Deck; onClose: () => void 
         <label>Desired retention<input aria-label="Desired retention" type="number" min="0.01" max="1" step="0.01" value={selectedSettings.desiredRetention} onChange={(event) => update('desiredRetention', Number(event.target.value))} /></label>
         <label>Learning steps<input aria-label="Learning steps" value={selectedSettings.learningSteps.join(', ')} onChange={(event) => update('learningSteps', stepList(event.target.value))} /><small>Comma-separated minutes, hours, or days (for example: 1m, 10m).</small></label>
         <label>Relearning steps<input aria-label="Relearning steps" value={selectedSettings.relearningSteps.join(', ')} onChange={(event) => update('relearningSteps', stepList(event.target.value))} /></label>
-        <label>New card order<select aria-label="New card order" value={selectedSettings.newCardOrder} onChange={(event) => update('newCardOrder', event.target.value as DeckOptionSettings['newCardOrder'])}><option value="added">Added</option><option value="random">Random</option></select></label>
-        <label>Review card order<select aria-label="Review card order" value={selectedSettings.reviewCardOrder} onChange={(event) => update('reviewCardOrder', event.target.value as DeckOptionSettings['reviewCardOrder'])}><option value="due">Due</option><option value="random">Random</option></select></label>
-        <label>Interday learning order<select aria-label="Interday learning order" value={selectedSettings.interdayLearningOrder} onChange={(event) => update('interdayLearningOrder', event.target.value as DeckOptionSettings['interdayLearningOrder'])}><option value="before-reviews">Before reviews</option><option value="after-reviews">After reviews</option></select></label>
+        <label>New card gather order<select aria-label="New card gather order" data-testid="new-card-gather-order" value={selectedSettings.newCardGatherOrder ?? 'deck'} onChange={(event) => update('newCardGatherOrder', event.target.value as DeckOptionSettings['newCardGatherOrder'])}><option value="deck">Deck</option><option value="deck-random-notes">Deck, then random notes</option><option value="ascending-position">Ascending position</option><option value="descending-position">Descending position</option><option value="random-notes">Random notes</option><option value="random-cards">Random cards</option></select></label>
+        <label>New card sort order<select aria-label="New card sort order" data-testid="new-card-sort-order" value={selectedSettings.newCardSortOrder ?? 'template'} onChange={(event) => update('newCardSortOrder', event.target.value as DeckOptionSettings['newCardSortOrder'])}><option value="template">Card type, then order gathered</option><option value="gathered">Order gathered</option><option value="template-random">Card type, then random</option><option value="random-note-template">Random note, then card type</option><option value="random">Random</option></select></label>
+        <label>Review card order<select aria-label="Review card order" data-testid="review-card-order" value={selectedSettings.reviewCardOrder} onChange={(event) => update('reviewCardOrder', event.target.value as DeckOptionSettings['reviewCardOrder'])}><option value="due">Due date, then random</option><option value="due-then-deck">Due date, then deck</option><option value="deck-then-due">Deck, then due date</option><option value="interval-ascending">Ascending intervals</option><option value="interval-descending">Descending intervals</option><option value="retrievability-ascending">Ascending retrievability</option><option value="retrievability-descending">Descending retrievability</option><option value="random">Random</option></select></label>
+        <label>New/review order<select aria-label="New/review order" value={selectedSettings.newReviewOrder} onChange={(event) => update('newReviewOrder', event.target.value as DeckOptionSettings['newReviewOrder'])}><option value="mix">Mix with reviews</option><option value="before-reviews">Before reviews</option><option value="after-reviews">After reviews</option></select></label>
+        <label>Interday learning order<select aria-label="Interday learning order" value={selectedSettings.interdayLearningOrder} onChange={(event) => update('interdayLearningOrder', event.target.value as DeckOptionSettings['interdayLearningOrder'])}><option value="mix">Mix with reviews</option><option value="before-reviews">Before reviews</option><option value="after-reviews">After reviews</option></select></label>
         <fieldset className="policy-settings"><legend>Sibling burial</legend>
           <label className="choice"><input aria-label="Bury new siblings" type="checkbox" checked={Boolean(selectedSettings.buryNewSiblings)} onChange={(event) => update('buryNewSiblings', event.target.checked)} />Bury new siblings</label>
           <label className="choice"><input aria-label="Bury review siblings" type="checkbox" checked={Boolean(selectedSettings.buryReviewSiblings)} onChange={(event) => update('buryReviewSiblings', event.target.checked)} />Bury review siblings</label>
-          <p className="options-note">After you answer a card, matching siblings stay out of the queue until the next local study day.</p>
+          <label className="choice"><input aria-label="Bury interday learning siblings" type="checkbox" checked={Boolean(selectedSettings.buryInterdayLearningSiblings)} onChange={(event) => update('buryInterdayLearningSiblings', event.target.checked)} />Bury interday learning siblings</label>
+          <p className="options-note">Later siblings stay out of the queue until the next local study day. Intraday learning steps keep their place.</p>
         </fieldset>
         <fieldset className="policy-settings"><legend>Leeches</legend>
           <label>Leech threshold<input aria-label="Leech threshold" type="number" min="1" max="9999" value={selectedSettings.leechThreshold} onChange={(event) => update('leechThreshold', Number(event.target.value))} /></label>

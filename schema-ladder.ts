@@ -43,6 +43,11 @@ export const SCHEMA_LADDER: readonly SchemaStep[] = [
   { schema: 14, fields: [{ entity: 'review', field: 'rescheduled' }], note: 'Practice answers that leave scheduling unchanged.' },
   { schema: 15, fields: [{ entity: 'review', field: 'scheduling' }], note: 'Causal replay: the card as it stood before the answer.' },
   { schema: 16, fields: [{ entity: 'review', field: 'afterState' }, { entity: 'review', field: 'afterDue' }, { entity: 'review', field: 'afterStability' }, { entity: 'review', field: 'afterDifficulty' }, { entity: 'review', field: 'afterElapsedDays' }, { entity: 'review', field: 'afterScheduledDays' }, { entity: 'review', field: 'afterLearningSteps' }], note: 'The schedule an answer produced.' },
+  { schema: 17, fields: [{ entity: 'deckOptionGroup', field: 'newReviewOrder' }], note: 'New-card and review queue mixing.' },
+  { schema: 18, fields: [{ entity: 'deckOptionGroup', field: 'buryInterdayLearningSiblings' }], note: 'Interday-learning sibling burial.' },
+  { schema: 19, fields: [{ entity: 'card', field: 'newPosition' }, { entity: 'card', field: 'templateOrdinal' }], note: 'New-card gather and template order.' },
+  { schema: 20, fields: [{ entity: 'deckOptionGroup', field: 'newCardGatherOrder' }], note: 'New-card gather priority.' },
+  { schema: 21, fields: [{ entity: 'deckOptionGroup', field: 'newCardSortOrder' }], note: 'New-card sort order after gathering.' },
 ]
 
 /** The highest step in the ladder. This is the client's store version. */

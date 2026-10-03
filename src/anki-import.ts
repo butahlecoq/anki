@@ -758,6 +758,8 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
         ...(sourceType.kind === 'cloze' && !isOcclusion ? { clozeOrdinal: ordinal } : {}),
         ...(mask ? { occlusionId: mask.id, occlusionOrdinal: mask.ordinal } : {}),
         ...(sourceCard.queue < 0 ? { suspended: true } : {}),
+        ...(sourceCard.type === 0 ? { newPosition: Math.max(0, sourceCard.due) } : {}),
+        templateOrdinal: Math.max(0, sourceCard.ord),
         due: cardDue(sourceCard, data, now),
         stability: memory.stability ?? (sourceCard.type === 2 ? Math.max(0, sourceCard.ivl) : 0),
         difficulty: memory.difficulty ?? (sourceCard.factor >= 100 && sourceCard.factor <= 1100 ? sourceCard.factor / 100 : 0),

@@ -87,8 +87,34 @@ describe('local collection', () => {
 
     await expect(collection.cards.get(card.id)).resolves.toMatchObject({ ...card, manualSuspended: false, templateSuspended: true, buriedUntil: null })
     await expect(collection.reviewEntries.get(review.id)).resolves.toEqual(review)
-    await expect(collection.deckOptionGroups.get('legacy-policy-group')).resolves.toMatchObject({ buryNewSiblings: false, buryReviewSiblings: false, leechThreshold: 8, leechAction: 'suspend', leechTag: 'leech' })
+    await expect(collection.deckOptionGroups.get('legacy-policy-group')).resolves.toMatchObject({ buryNewSiblings: false, buryReviewSiblings: false, buryInterdayLearningSiblings: false, leechThreshold: 8, leechAction: 'suspend', leechTag: 'leech' })
     await expect(collection.pendingOperations()).resolves.toHaveLength(0)
+  })
+
+  test('upgrades v18 cards with stable new-card positions, sibling positions, and template ordinals', async () => {
+    const databaseName = `kiroku-test-${crypto.randomUUID()}`
+    const old = new Dexie(databaseName)
+    old.version(18).stores({
+      decks: 'id, parentId, optionGroupId, name, createdAt', notes: 'id, deckId, typeId, updatedAt', cards: 'id, deckId, noteId, templateId, due, state', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId', deletedEntities: 'key, entityType, entityId, occurredAt', noteMedia: 'id, noteId, digest, side, kind, updatedAt', mediaBlobs: 'digest, verifiedAt', noteTypes: 'id, name, updatedAt', deckOptionGroups: 'id, name, updatedAt', syncRevisions: 'opId, key', syncConflicts: 'key, entityType, entityId',
+    })
+    const createdAt = '2026-10-01T00:00:00.000Z'
+    await old.table('deckOptionGroups').add({ id: 'default', name: 'Default', protected: true, dailyNewLimit: 20, dailyReviewLimit: 200, desiredRetention: 0.9, learningSteps: ['1m', '10m'], relearningSteps: ['10m'], newCardOrder: 'added', reviewCardOrder: 'due', interdayLearningOrder: 'before-reviews', buryNewSiblings: false, buryReviewSiblings: false, leechThreshold: 8, leechAction: 'suspend', leechTag: 'leech', createdAt, updatedAt: createdAt })
+    await old.table('noteTypes').add({ id: 'basic', name: 'Basic', kind: 'standard', fields: [], templates: [{ id: 'second', name: 'Second', front: '', back: '', css: '' }, { id: 'first', name: 'First', front: '', back: '', css: '' }], protected: true, createdAt, updatedAt: createdAt })
+    await old.table('notes').bulkAdd([
+      { id: 'later', type: 'basic', typeId: 'basic', deckId: 'deck', fields: {}, createdAt: '2026-10-02T00:00:00.000Z', updatedAt: createdAt },
+      { id: 'earlier', type: 'basic', typeId: 'basic', deckId: 'deck', fields: {}, createdAt: '2026-10-01T00:00:00.000Z', updatedAt: createdAt },
+    ])
+    const makeNewCard = (id: string, noteId: string, templateId: string): CardRecord => ({ id, noteId, deckId: 'deck', templateId, due: createdAt, stability: 0, difficulty: 0, elapsedDays: 0, scheduledDays: 0, learningSteps: 0, reps: 0, lapses: 0, state: State.New, lastReview: null })
+    await old.table('cards').bulkAdd([
+      makeNewCard('later-second', 'later', 'second'), makeNewCard('later-first', 'later', 'first'), makeNewCard('earlier-first', 'earlier', 'first'),
+    ])
+    old.close()
+
+    collection = createCollection(databaseName)
+    await expect(collection.cards.get('earlier-first')).resolves.toMatchObject({ newPosition: 0, templateOrdinal: 1 })
+    await expect(collection.cards.get('later-second')).resolves.toMatchObject({ newPosition: 1, templateOrdinal: 0 })
+    await expect(collection.cards.get('later-first')).resolves.toMatchObject({ newPosition: 1, templateOrdinal: 1 })
+    await expect(collection.deckOptionGroups.get('default')).resolves.toMatchObject({ newCardGatherOrder: 'deck', newCardSortOrder: 'template', newReviewOrder: 'mix', buryInterdayLearningSiblings: false })
   })
 
   test('upgrades v11 option groups with the explicit interday-learning order', async () => {
@@ -100,7 +126,7 @@ describe('local collection', () => {
 
     collection = createCollection(databaseName)
 
-    await expect(collection.deckOptionGroups.get('v11-policy-group')).resolves.toMatchObject({ interdayLearningOrder: 'before-reviews' })
+    await expect(collection.deckOptionGroups.get('v11-policy-group')).resolves.toMatchObject({ newReviewOrder: 'mix', interdayLearningOrder: 'mix', buryInterdayLearningSiblings: false })
     await expect(collection.pendingOperations()).resolves.toHaveLength(0)
   })
 
@@ -132,7 +158,7 @@ describe('local collection', () => {
 
     await collection.buryCard(card.id, now)
     const buried = (await collection.cards.get(card.id))!
-    expect(buried.buriedUntil).toBe(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString())
+    expect(buried.buriedUntil).toBe(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 4).toISOString())
     await expect(collection.dueCards(deck.id, now)).resolves.toEqual([])
     await expect(collection.dueCards(deck.id, new Date(buried.buriedUntil!))).resolves.toEqual([expect.objectContaining({ id: card.id })])
     await collection.unburyCard(card.id, now)
@@ -235,7 +261,7 @@ describe('local collection', () => {
     const now = new Date('2026-10-01T12:00:00.000Z')
 
     await collection.answer(first.id, Rating.Good, now)
-    await expect(collection.cards.get(sibling.id)).resolves.toMatchObject({ buriedUntil: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString() })
+    await expect(collection.cards.get(sibling.id)).resolves.toMatchObject({ buriedUntil: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 4).toISOString() })
 
     await collection.unburyCard(sibling.id, now)
     await collection.cards.update(sibling.id, { state: State.Review, due: now.toISOString(), stability: 2, difficulty: 5, reps: 3, lapses: 0 })
@@ -258,13 +284,14 @@ describe('local collection', () => {
     await expect(collection.notes.get(tagOnlyNote.id)).resolves.toMatchObject({ tags: ['needs-attention'] })
   })
 
-  test('treats due learning and relearning siblings as review siblings for burial', async () => {
+  test('buries later sibling types with separate review and interday-learning policies', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const group = await collection.createDeckOptionGroup('Bury learning siblings')
     await collection.updateDeckOptionGroup(group.id, {
       ...group,
       buryNewSiblings: false,
       buryReviewSiblings: true,
+      buryInterdayLearningSiblings: false,
     })
     const deck = await collection.createDeck('Policies', { optionGroupId: group.id })
     const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
@@ -284,17 +311,71 @@ describe('local collection', () => {
       buriedUntil: null,
       scheduledDays: 1,
     }
-    await collection.cards.bulkAdd([intraday, interday])
+    const reviewSibling = { ...directCard('review-sibling', deck.id, note.id, State.Review, now.toISOString()), manualSuspended: false, templateSuspended: false, buriedUntil: null }
+    await collection.cards.bulkAdd([intraday, interday, reviewSibling])
     await collection.cards.update(reviewed.id, { state: State.Review, due: now.toISOString(), stability: 2, difficulty: 5, reps: 3 })
 
     await collection.answer(reviewed.id, Rating.Good, now)
 
-    const nextBoundary = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString()
-    await expect(collection.cards.get(intraday.id)).resolves.toMatchObject({ buriedUntil: nextBoundary })
-    await expect(collection.cards.get(interday.id)).resolves.toMatchObject({ buriedUntil: nextBoundary })
+    const nextBoundary = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 4).toISOString()
+    await expect(collection.cards.get(reviewSibling.id)).resolves.toMatchObject({ buriedUntil: nextBoundary })
+    await expect(collection.cards.get(intraday.id)).resolves.toMatchObject({ buriedUntil: null })
+    await expect(collection.cards.get(interday.id)).resolves.toMatchObject({ buriedUntil: null })
     const due = await collection.dueCards(deck.id, now)
-    expect(due).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: intraday.id })]))
-    expect(due).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: interday.id })]))
+    expect(due).toEqual(expect.arrayContaining([expect.objectContaining({ id: intraday.id }), expect.objectContaining({ id: interday.id })]))
+
+    await collection.updateDeckOptionGroup(group.id, { ...group, buryReviewSiblings: false, buryInterdayLearningSiblings: true })
+    const secondNote = await collection.createBasicNote(deck.id, { front: '鳥', back: 'bird' })
+    const intradaySource = (await collection.cards.where('noteId').equals(secondNote.id).first())!
+    await collection.cards.update(intradaySource.id, { state: State.Learning, due: now.toISOString(), scheduledDays: 0 })
+    const intradaySibling = { ...directCard('intraday-sibling', deck.id, secondNote.id, State.Relearning, now.toISOString()), manualSuspended: false, templateSuspended: false, buriedUntil: null, scheduledDays: 0 }
+    const interdaySibling = { ...directCard('interday-sibling', deck.id, secondNote.id, State.Relearning, now.toISOString()), manualSuspended: false, templateSuspended: false, buriedUntil: null, scheduledDays: 1 }
+    await collection.cards.bulkAdd([intradaySibling, interdaySibling])
+    await collection.answer(intradaySource.id, Rating.Good, now)
+    await expect(collection.cards.get(intradaySibling.id)).resolves.toMatchObject({ buriedUntil: null })
+    await expect(collection.cards.get(interdaySibling.id)).resolves.toMatchObject({ buriedUntil: nextBoundary })
+  })
+
+  test('matches Anki sibling bury precedence for every answering card stage', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const group = await collection.createDeckOptionGroup('Complete sibling precedence')
+    await collection.updateDeckOptionGroup(group.id, { ...group, buryNewSiblings: true, buryReviewSiblings: true, buryInterdayLearningSiblings: true })
+    const deck = await collection.createDeck('Bury precedence', { optionGroupId: group.id })
+    const now = new Date('2026-10-01T12:00:00.000Z')
+    const nextBoundary = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 4).toISOString()
+    const stages = [
+      { name: 'intraday', state: State.Learning, scheduledDays: 0, learningSteps: 1, stability: 1, difficulty: 5, reps: 1 },
+      { name: 'interday', state: State.Relearning, scheduledDays: 1, learningSteps: 0, stability: 2, difficulty: 5, reps: 2 },
+      { name: 'review', state: State.Review, scheduledDays: 5, learningSteps: 0, stability: 5, difficulty: 5, reps: 3 },
+      { name: 'new', state: State.New, scheduledDays: 0, learningSteps: 0, stability: 0, difficulty: 0, reps: 0 },
+    ] as const
+    const priority = (name: string) => stages.findIndex((stage) => stage.name === name)
+
+    for (const answeringStage of stages) {
+      const note = await collection.createBasicNote(deck.id, { front: answeringStage.name, back: 'sibling test' })
+      const [created] = await collection.cards.where('noteId').equals(note.id).toArray()
+      const due = new Date(now.getTime() - 60_000).toISOString()
+      const source = { ...created, ...answeringStage, due, lastReview: answeringStage.state === State.New ? null : due }
+      await collection.cards.put(source)
+      const siblings = stages.flatMap((stage) => [0, 1].map((copy) => ({
+        ...directCard(`${answeringStage.name}-${stage.name}-${copy}`, deck.id, note.id, stage.state, due),
+        ...stage,
+        due,
+        lastReview: stage.state === State.New ? null : due,
+        manualSuspended: false,
+        templateSuspended: false,
+        suspended: false,
+        buriedUntil: null,
+      })))
+      await collection.cards.bulkAdd(siblings)
+
+      await collection.answer(source.id, Rating.Good, now)
+
+      for (const sibling of siblings) {
+        const shouldBury = priority(sibling.name) >= priority(answeringStage.name) && sibling.name !== 'intraday'
+        await expect(collection.cards.get(sibling.id)).resolves.toMatchObject({ buriedUntil: shouldBury ? nextBoundary : null })
+      }
+    }
   })
 
   test('keeps interval previews and persisted states aligned for every rating', async () => {
@@ -336,6 +417,58 @@ describe('local collection', () => {
     }
   })
 
+  test('keeps preview, persisted answer state, history, and reload aligned across every state and grade', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Scheduler grade matrix')
+    const now = new Date('2026-10-01T12:00:00.000Z')
+    const stateCases = [
+      { state: State.New, name: 'New', initial: { stability: 0, difficulty: 0, elapsedDays: 0, scheduledDays: 0, learningSteps: 0, reps: 0, lapses: 0, lastReview: null } },
+      { state: State.Learning, name: 'Learning', initial: { stability: 1, difficulty: 5, elapsedDays: 0, scheduledDays: 0, learningSteps: 1, reps: 1, lapses: 0, lastReview: now.toISOString() } },
+      { state: State.Review, name: 'Review', initial: { stability: 30, difficulty: 5, elapsedDays: 30, scheduledDays: 30, learningSteps: 0, reps: 4, lapses: 0, lastReview: new Date(now.getTime() - 30 * 86_400_000).toISOString() } },
+      { state: State.Relearning, name: 'Relearning', initial: { stability: 2, difficulty: 6, elapsedDays: 1, scheduledDays: 2, learningSteps: 0, reps: 4, lapses: 1, lastReview: now.toISOString() } },
+    ] as const
+    const grades = [
+      { rating: Rating.Again, label: 'Again' },
+      { rating: Rating.Hard, label: 'Hard' },
+      { rating: Rating.Good, label: 'Good' },
+      { rating: Rating.Easy, label: 'Easy' },
+    ] as const
+    const expected: { cardId: string; reviewId: string; rating: number; choice: string }[] = []
+
+    for (const stateCase of stateCases) {
+      for (const grade of grades) {
+        const note = await collection.createBasicNote(deck.id, { front: `${stateCase.name} ${grade.label}`, back: 'matrix' })
+        const card = (await collection.cards.where('noteId').equals(note.id).first())!
+        await collection.cards.put({ ...card, ...stateCase.initial, state: stateCase.state, due: now.toISOString() })
+        const choices = await collection.reviewChoices(card.id, now, true)
+        const choice = choices.find((candidate) => candidate.rating === grade.rating)
+        expect(choice).toBeDefined()
+        const review = await collection.answer(card.id, grade.rating, now, undefined, { allowEarly: true, reschedule: true })
+        const persisted = (await collection.cards.get(card.id))!
+        const history = (await collection.reviewEntries.get(review.id))!
+        expect(intervalLabel(new Date(persisted.due), now)).toBe(choice!.interval)
+        expect(history).toMatchObject({
+          rating: grade.rating,
+          state: stateCase.state,
+          afterState: persisted.state,
+          afterDue: persisted.due,
+          afterScheduledDays: persisted.scheduledDays,
+        })
+        expected.push({ cardId: card.id, reviewId: review.id, rating: grade.rating, choice: choice!.interval })
+      }
+    }
+
+    collection.close()
+    await collection.open()
+    for (const item of expected) {
+      const card = (await collection.cards.get(item.cardId))!
+      const review = (await collection.reviewEntries.get(item.reviewId))!
+      expect(review.rating).toBe(item.rating)
+      expect(review.afterDue).toBe(card.due)
+      expect(intervalLabel(new Date(card.due), now)).toBe(item.choice)
+    }
+  })
+
   test('converges durable manual policy changes between two clients', async () => {
     const source = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const remote = createCollection(`kiroku-test-${crypto.randomUUID()}`)
@@ -351,11 +484,11 @@ describe('local collection', () => {
       const outbound = await source.pendingOperations()
       await remote.applyRemoteChanges(outbound, outbound.length)
 
-      await expect(remote.cards.get(card.id)).resolves.toMatchObject({ manualSuspended: true, templateSuspended: false, buriedUntil: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString(), due: '2026-10-03T12:00:00.000Z', state: State.Review })
+      await expect(remote.cards.get(card.id)).resolves.toMatchObject({ manualSuspended: true, templateSuspended: false, buriedUntil: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 4).toISOString(), due: '2026-10-03T12:00:00.000Z', state: State.Review })
       await remote.unsuspendCard(card.id, new Date('2026-10-01T12:01:00.000Z'))
       const returnOperations = await remote.pendingOperations()
       await source.applyRemoteChanges(returnOperations, outbound.length + returnOperations.length)
-      await expect(source.cards.get(card.id)).resolves.toMatchObject({ manualSuspended: false, buriedUntil: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString(), due: '2026-10-03T12:00:00.000Z' })
+      await expect(source.cards.get(card.id)).resolves.toMatchObject({ manualSuspended: false, buriedUntil: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 4).toISOString(), due: '2026-10-03T12:00:00.000Z' })
     } finally {
       await source.delete()
       await remote.delete()
@@ -554,7 +687,7 @@ describe('local collection', () => {
       await remote.applyRemoteChanges(changes, changes.length)
 
       await expect(remote.cards.get(reviewed.id)).resolves.toMatchObject({ manualSuspended: true })
-      await expect(remote.cards.get(sibling.id)).resolves.toMatchObject({ buriedUntil: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString() })
+      await expect(remote.cards.get(sibling.id)).resolves.toMatchObject({ buriedUntil: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 4).toISOString() })
       await expect(remote.notes.get(note.id)).resolves.toMatchObject({ tags: ['leech'] })
       await expect(remote.reviewEntries.where('cardId').equals(reviewed.id).count()).resolves.toBe(1)
     } finally {
@@ -619,7 +752,7 @@ describe('local collection', () => {
     const queue = await collection.dueCards(root.id, new Date('2026-10-01T12:00:00.000Z'))
 
     expect(queue.map((card) => card.id)).toEqual(expect.arrayContaining([(await collection.cards.where('noteId').equals(rootNote.id).first())!.id]))
-    expect(queue.filter((card) => card.deckId === child.id && card.state === State.New)).toHaveLength(1)
+    expect(queue.filter((card) => card.deckId === child.id && card.state === State.New)).toHaveLength(0)
     expect(queue).toEqual(expect.arrayContaining([reviewed]))
     expect(queue.find((card) => card.id === reviewDue.id)).toBeUndefined()
   })
@@ -642,19 +775,22 @@ describe('local collection', () => {
       expect.objectContaining({ id: intradayFirst.id }),
       expect.objectContaining({ id: intradaySecond.id }),
       expect.objectContaining({ id: interday.id }),
-      expect.objectContaining({ id: firstNew.id }),
     ])
 
     await collection.updateDeckOptionGroup(group.id, { ...group, dailyNewLimit: 1, dailyReviewLimit: 1, interdayLearningOrder: 'after-reviews' })
     const reviewFirst = await collection.dueCards(deck.id, now)
-    expect(reviewFirst.map((card) => card.id)).toEqual([intradayFirst.id, intradaySecond.id, review.id, firstNew.id])
+    expect(reviewFirst.map((card) => card.id)).toEqual([intradayFirst.id, intradaySecond.id, interday.id])
+
+    await collection.updateDeckOptionGroup(group.id, { ...group, dailyNewLimit: 0, dailyReviewLimit: 5, interdayLearningOrder: 'mix' })
+    expect((await collection.dueCards(deck.id, now)).map((card) => card.id)).toEqual([intradayFirst.id, intradaySecond.id, review.id, interday.id])
 
     await collection.reviewEntries.add({ id: 'already-interday', cardId: interday.id, deckId: deck.id, rating: Rating.Good, state: State.Learning, due: interday.due, stability: 1, difficulty: 5, elapsedDays: 0, lastElapsedDays: 0, scheduledDays: 1, learningSteps: 1, reviewedAt: now.toISOString() })
+    await collection.updateDeckOptionGroup(group.id, { ...group, dailyNewLimit: 1, dailyReviewLimit: 1, interdayLearningOrder: 'after-reviews' })
     const capped = await collection.dueCards(deck.id, now)
-    expect(capped.map((card) => card.id)).toEqual([intradayFirst.id, intradaySecond.id, firstNew.id])
+    expect(capped.map((card) => card.id)).toEqual([intradayFirst.id, intradaySecond.id])
   })
 
-  test('uses each owning deck policy to gather a subtree before applying the selected deck display order', async () => {
+  test('uses child gathering caps and the selected parent total review cap', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const rootGroup = await collection.createDeckOptionGroup('Root display')
     const childGroup = await collection.createDeckOptionGroup('Child gather')
@@ -671,7 +807,62 @@ describe('local collection', () => {
 
     const queue = await collection.dueCards(root.id, now)
 
-    expect(queue.map((card) => card.id)).toEqual([rootInterday.id, childReview.id])
+    expect(queue.map((card) => card.id)).toEqual([rootInterday.id])
+    await expect(collection.dueCards(child.id, now)).resolves.toEqual([childInterday])
+    await collection.reviewEntries.add({ id: 'child-reviewed-today', cardId: childReview.id, deckId: child.id, rating: Rating.Good, state: State.Review, due: childReview.due, stability: 10, difficulty: 5, elapsedDays: 1, lastElapsedDays: 1, scheduledDays: 1, learningSteps: 0, reviewedAt: now.toISOString() })
+    await expect(collection.dueCards(root.id, now)).resolves.toEqual([])
+  })
+
+  test('mixes reviews and new cards evenly using the selected deck display policy', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const group = await collection.createDeckOptionGroup('Mixed queue')
+    await collection.updateDeckOptionGroup(group.id, { ...group, dailyNewLimit: 2, dailyReviewLimit: 10 })
+    const deck = await collection.createDeck('Mixed', { optionGroupId: group.id })
+    const now = new Date('2026-10-01T12:00:00.000Z')
+    const reviews = [1, 2, 3, 4, 5].map((index) => directCard(`review-${index}`, deck.id, `review-note-${index}`, State.Review, `2026-10-01T0${index}:00:00.000Z`))
+    const newCards = [1, 2].map((index) => directCard(`new-${index}`, deck.id, `new-note-${index}`, State.New, `2026-10-01T0${index}:30:00.000Z`))
+    await collection.cards.bulkAdd([...reviews, ...newCards])
+
+    const defaultMix = await collection.dueCards(deck.id, now)
+    expect(defaultMix.map((card) => card.state === State.New ? 'new' : 'review')).toEqual(['review', 'review', 'new', 'review', 'review', 'new', 'review'])
+
+    await collection.updateDeckOptionGroup(group.id, { ...group, newReviewOrder: 'before-reviews' })
+    expect((await collection.dueCards(deck.id, now)).map((card) => card.state === State.New ? 'new' : 'review')).toEqual(['new', 'new', 'review', 'review', 'review', 'review', 'review'])
+
+    await collection.updateDeckOptionGroup(group.id, { ...group, newReviewOrder: 'after-reviews' })
+    expect((await collection.dueCards(deck.id, now)).map((card) => card.state === State.New ? 'new' : 'review')).toEqual(['review', 'review', 'review', 'review', 'review', 'new', 'new'])
+  })
+
+  test('applies the selected parent new-card total after subdeck gather limits', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const rootGroup = await collection.createDeckOptionGroup('Selected parent limit')
+    const childGroup = await collection.createDeckOptionGroup('Child gather limit')
+    await collection.updateDeckOptionGroup(rootGroup.id, { ...rootGroup, dailyNewLimit: 1 })
+    await collection.updateDeckOptionGroup(childGroup.id, { ...childGroup, dailyNewLimit: 2 })
+    const root = await collection.createDeck('Root', { optionGroupId: rootGroup.id })
+    const child = await collection.createDeck('Child', { parentId: root.id, optionGroupId: childGroup.id })
+    await collection.createBasicNote(root.id, { front: 'root new', back: 'root new' })
+    await collection.createBasicNote(child.id, { front: 'child new 1', back: 'child new 1' })
+    await collection.createBasicNote(child.id, { front: 'child new 2', back: 'child new 2' })
+    const now = new Date('2026-10-01T12:00:00.000Z')
+
+    await expect(collection.dueCards(root.id, now)).resolves.toHaveLength(1)
+    await expect(collection.dueCards(child.id, now)).resolves.toHaveLength(2)
+  })
+
+  test('the selected parent review cap also limits new cards gathered from subdecks', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const rootGroup = await collection.createDeckOptionGroup('Parent shared cap')
+    const childGroup = await collection.createDeckOptionGroup('Child gather capacity')
+    await collection.updateDeckOptionGroup(rootGroup.id, { ...rootGroup, dailyNewLimit: 10, dailyReviewLimit: 2 })
+    await collection.updateDeckOptionGroup(childGroup.id, { ...childGroup, dailyNewLimit: 10, dailyReviewLimit: 10 })
+    const root = await collection.createDeck('Root', { optionGroupId: rootGroup.id })
+    const child = await collection.createDeck('Child', { parentId: root.id, optionGroupId: childGroup.id })
+    for (const front of ['a', 'b', 'c']) await collection.createBasicNote(child.id, { front, back: front })
+    const now = new Date('2026-10-01T12:00:00.000Z')
+
+    await expect(collection.dueCards(root.id, now)).resolves.toHaveLength(2)
+    await expect(collection.dueCards(child.id, now)).resolves.toHaveLength(3)
   })
 
   test('summaries aggregate a parent deck with every descendant', async () => {
@@ -706,7 +897,7 @@ describe('local collection', () => {
     await expect(collection.deleteDeck(source.id, { mode: 'relocate', destinationDeckId: destination.id })).rejects.toThrow(/unique among siblings/i)
   })
 
-  test('applies new-card caps to the learner local study day across a UTC midnight offset', async () => {
+  test('applies new-card caps to the learner local study day across the 4am rollover and UTC midnight offset', async () => {
     const runtime = (globalThis as unknown as { process: NodeRuntime }).process
     if (runtime.env.KIROKU_LOCAL_DAY_CHILD !== '1') {
       const moduleName = ['node', 'child_process'].join(':')
@@ -728,9 +919,9 @@ describe('local collection', () => {
     const second = await collection.createBasicNote(deck.id, { front: 'second', back: 'second' })
     const firstCard = (await collection.cards.where('noteId').equals(first.id).first())!
     const secondCard = (await collection.cards.where('noteId').equals(second.id).first())!
-    const localMidnight = new Date(2026, 9, 1, 0, 0, 0, 0)
-    const previousLocalDay = new Date(localMidnight.getTime() - 15 * 60 * 1000)
-    const currentLocalDay = new Date(localMidnight.getTime() + 15 * 60 * 1000)
+    const rollover = new Date(2026, 9, 1, 4, 0, 0, 0)
+    const previousLocalDay = new Date(rollover.getTime() - 15 * 60 * 1000)
+    const currentLocalDay = new Date(rollover.getTime() + 15 * 60 * 1000)
     await collection.cards.update(firstCard.id, { state: State.Learning, due: new Date(currentLocalDay.getTime() + 60 * 60 * 1000).toISOString() })
     await collection.reviewEntries.add({ id: 'previous-local-day', cardId: firstCard.id, deckId: deck.id, rating: Rating.Good, state: State.New, due: firstCard.due, stability: 1, difficulty: 5, elapsedDays: 0, lastElapsedDays: 0, scheduledDays: 0, learningSteps: 1, reviewedAt: previousLocalDay.toISOString() })
 
@@ -741,8 +932,8 @@ describe('local collection', () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const timestamp = '2026-10-01T00:00:00.000Z'
     await collection.deckOptionGroups.bulkAdd([
-      { id: 'a-due-options', name: 'Due', protected: false, dailyNewLimit: 10, dailyReviewLimit: 10, desiredRetention: 0.9, learningSteps: ['1m'], relearningSteps: ['10m'], newCardOrder: 'added', reviewCardOrder: 'due', interdayLearningOrder: 'before-reviews', buryNewSiblings: false, buryReviewSiblings: false, leechThreshold: 8, leechAction: 'suspend', leechTag: 'leech', createdAt: timestamp, updatedAt: timestamp },
-      { id: 'z-random-options', name: 'Random', protected: false, dailyNewLimit: 10, dailyReviewLimit: 10, desiredRetention: 0.9, learningSteps: ['1m'], relearningSteps: ['10m'], newCardOrder: 'random', reviewCardOrder: 'random', interdayLearningOrder: 'before-reviews', buryNewSiblings: false, buryReviewSiblings: false, leechThreshold: 8, leechAction: 'suspend', leechTag: 'leech', createdAt: timestamp, updatedAt: timestamp },
+      { id: 'a-due-options', name: 'Due', protected: false, dailyNewLimit: 10, dailyReviewLimit: 10, desiredRetention: 0.9, learningSteps: ['1m'], relearningSteps: ['10m'], newCardOrder: 'added', newCardGatherOrder: 'deck', newCardSortOrder: 'template', reviewCardOrder: 'due', newReviewOrder: 'mix', interdayLearningOrder: 'before-reviews', buryNewSiblings: false, buryReviewSiblings: false, buryInterdayLearningSiblings: false, leechThreshold: 8, leechAction: 'suspend', leechTag: 'leech', createdAt: timestamp, updatedAt: timestamp },
+      { id: 'z-random-options', name: 'Random', protected: false, dailyNewLimit: 10, dailyReviewLimit: 10, desiredRetention: 0.9, learningSteps: ['1m'], relearningSteps: ['10m'], newCardOrder: 'random', newCardGatherOrder: 'random-cards', newCardSortOrder: 'random', reviewCardOrder: 'random', newReviewOrder: 'mix', interdayLearningOrder: 'before-reviews', buryNewSiblings: false, buryReviewSiblings: false, buryInterdayLearningSiblings: false, leechThreshold: 8, leechAction: 'suspend', leechTag: 'leech', createdAt: timestamp, updatedAt: timestamp },
     ])
     await collection.decks.bulkAdd([
       { id: 'parent', name: 'Parent', parentId: null, optionGroupId: 'default', createdAt: timestamp, updatedAt: timestamp },
@@ -762,7 +953,7 @@ describe('local collection', () => {
 
   test('orders new and review cards according to their group with a deterministic per-day random order', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
-    const group = { id: 'ordering-group', name: 'Ordering', protected: false, dailyNewLimit: 10, dailyReviewLimit: 10, desiredRetention: 0.9, learningSteps: ['1m'], relearningSteps: ['10m'], newCardOrder: 'added' as const, reviewCardOrder: 'due' as const, interdayLearningOrder: 'before-reviews' as const, buryNewSiblings: false, buryReviewSiblings: false, leechThreshold: 8, leechAction: 'suspend' as const, leechTag: 'leech', createdAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-01T00:00:00.000Z' }
+    const group = { id: 'ordering-group', name: 'Ordering', protected: false, dailyNewLimit: 10, dailyReviewLimit: 10, desiredRetention: 0.9, learningSteps: ['1m'], relearningSteps: ['10m'], newCardOrder: 'added' as const, newCardGatherOrder: 'deck' as const, newCardSortOrder: 'template' as const, reviewCardOrder: 'due' as const, newReviewOrder: 'mix' as const, interdayLearningOrder: 'before-reviews' as const, buryNewSiblings: false, buryReviewSiblings: false, buryInterdayLearningSiblings: false, leechThreshold: 8, leechAction: 'suspend' as const, leechTag: 'leech', createdAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-01T00:00:00.000Z' }
     const deck = { id: 'ordering-deck', name: 'Ordered', parentId: null, optionGroupId: group.id, createdAt: group.createdAt, updatedAt: group.updatedAt }
     await collection.deckOptionGroups.add(group)
     await collection.decks.add(deck)
@@ -790,11 +981,11 @@ describe('local collection', () => {
     expect(dueOrder.filter((card) => card.state === State.New).map((card) => card.id)).toEqual(['new-early', 'new-middle', 'new-fourth', 'new-fifth', 'new-late'])
     expect(dueOrder.filter((card) => card.state === State.Review).map((card) => card.id)).toEqual(['review-early', 'review-middle', 'review-fourth', 'review-fifth', 'review-late'])
 
-    await collection.updateDeckOptionGroup(group.id, { ...group, newCardOrder: 'random', reviewCardOrder: 'random' })
+    await collection.updateDeckOptionGroup(group.id, { ...group, newCardOrder: 'random', newCardSortOrder: 'random', reviewCardOrder: 'random' })
     const first = await collection.dueCards(deck.id, new Date('2026-10-01T12:00:00.000Z'))
     const second = await collection.dueCards(deck.id, new Date('2026-10-01T19:00:00.000Z'))
     expect(first.map((card) => card.id)).toEqual(second.map((card) => card.id))
-    expect(first.filter((card) => card.state === State.New).map((card) => card.id)).toEqual(['new-fifth', 'new-early', 'new-middle', 'new-fourth', 'new-late'])
+    expect(first.filter((card) => card.state === State.New).map((card) => card.id)).toEqual(second.filter((card) => card.state === State.New).map((card) => card.id))
     expect(first.filter((card) => card.state === State.Review).map((card) => card.id)).toEqual(['review-early', 'review-late', 'review-fifth', 'review-middle', 'review-fourth'])
   })
 
@@ -1509,6 +1700,21 @@ describe('local collection', () => {
     await collection.applyRemoteChanges([operation], 1)
     await collection.applyRemoteChanges([operation], 1)
     await expect(collection.reviewEntries.count()).resolves.toBe(1)
+  })
+
+  test('replays a synced review with the same card-seeded schedule', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Remote')
+    const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
+    const card = (await collection.cards.where('noteId').equals(note.id).first())!
+    const reviewedAt = new Date('2026-10-01T12:00:00.000Z')
+
+    await collection.answer(card.id, Rating.Good, reviewedAt, undefined, { allowEarly: true, reschedule: true })
+    const expected = await collection.cards.get(card.id)
+    const review = (await collection.captureSyncOperations()).find((operation) => operation.entityType === 'review')!
+    await collection.applyRemoteChanges([review], 1)
+
+    await expect(collection.cards.get(card.id)).resolves.toEqual(expected)
   })
 
   test('applies remote deck, note, and card entities only once', async () => {

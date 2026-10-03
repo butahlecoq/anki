@@ -49,6 +49,11 @@ test('a payload requires the step that introduced each field it carries', () => 
     ['deckOptionGroup', { dailyNewLimit: 20 }, 10],
     ['deckOptionGroup', { leechAction: 'suspend' }, 11],
     ['deckOptionGroup', { interdayLearningOrder: 'before-reviews' }, 12],
+    ['deckOptionGroup', { newReviewOrder: 'after-reviews' }, 17],
+    ['deckOptionGroup', { buryInterdayLearningSiblings: true }, 18],
+    ['card', { newPosition: 4, templateOrdinal: 1 }, 19],
+    ['deckOptionGroup', { newCardGatherOrder: 'ascending-position' }, 20],
+    ['deckOptionGroup', { newCardSortOrder: 'template-random' }, 21],
     ['noteMedia', { digest: 'a' }, 5],
   ]
   for (const [entityType, payload, expected] of cases) {
@@ -108,6 +113,9 @@ test('deriving the minimum matches the rules the service used to transcribe', ()
     ['deckOptionGroup', { leechTag: 'leech' }, 11],
     ['deckOptionGroup', { interdayLearningOrder: 'after-reviews' }, 12],
     ['card', { flag: 1 }, 13],
+    ['deckOptionGroup', { newReviewOrder: 'mix', buryInterdayLearningSiblings: true }, 18],
+    ['card', { newPosition: 4 }, 19],
+    ['deckOptionGroup', { newCardGatherOrder: 'random-cards', newCardSortOrder: 'random' }, 21],
   ]
   for (const [entityType, payload, expected] of transcribed) {
     const derived = schemaRequiredByPayload(entityType, payload)

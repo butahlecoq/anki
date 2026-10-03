@@ -2,8 +2,9 @@ import { expect, test, vi } from 'vitest'
 import { foregroundSync, pairCollection, preflightSync, syncCollection } from './sync-client'
 import { createCollection, Rating } from './collection'
 import { digestMedia } from './media'
+import { CLIENT_COLLECTION_SCHEMA_VERSION } from '../sync-capabilities'
 
-const health = (collectionSchemaVersion = 16, maximumCollectionSchemaVersion = 16) => new Response(JSON.stringify({ ready: true, schemaVersion: 1, protocolVersion: 2, collectionSchemaVersion, maximumCollectionSchemaVersion, store: 'sqlite' }), { status: 200 })
+const health = (collectionSchemaVersion = CLIENT_COLLECTION_SCHEMA_VERSION, maximumCollectionSchemaVersion = CLIENT_COLLECTION_SCHEMA_VERSION) => new Response(JSON.stringify({ ready: true, schemaVersion: 1, protocolVersion: 2, collectionSchemaVersion, maximumCollectionSchemaVersion, store: 'sqlite' }), { status: 200 })
 
 test('sends pending operations with the local pairing credential', async () => {
   const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ accepted: 2, cursor: 2, changes: [] }), { status: 200 }))
@@ -11,13 +12,13 @@ test('sends pending operations with the local pairing credential', async () => {
 
   expect(result).toEqual({ state: 'complete', accepted: 2, cursor: 2, changes: [] })
   expect(fetcher).toHaveBeenCalledWith('https://pc.example.test/api/sync', expect.objectContaining({ method: 'POST', headers: expect.objectContaining({ authorization: 'Bearer token' }) }))
-  expect(JSON.parse(fetcher.mock.calls[0][1].body as string)).toMatchObject({ protocolVersion: 2, collectionSchemaVersion: 16, cursor: 0 })
+  expect(JSON.parse(fetcher.mock.calls[0][1].body as string)).toMatchObject({ protocolVersion: 2, collectionSchemaVersion: CLIENT_COLLECTION_SCHEMA_VERSION, cursor: 0 })
 })
 
 test('preflights the service and gives an actionable upgrade result without posting local changes', async () => {
-  const fetcher = vi.fn().mockResolvedValue(health(17, 17))
+  const fetcher = vi.fn().mockResolvedValue(health(CLIENT_COLLECTION_SCHEMA_VERSION + 1, CLIENT_COLLECTION_SCHEMA_VERSION + 1))
 
-  await expect(preflightSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 }, fetcher)).resolves.toMatchObject({ state: 'upgrade-required', target: 'this-device', requiredSchemaVersion: 17 })
+  await expect(preflightSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 }, fetcher)).resolves.toMatchObject({ state: 'upgrade-required', target: 'this-device', requiredSchemaVersion: CLIENT_COLLECTION_SCHEMA_VERSION + 1 })
   expect(fetcher).toHaveBeenCalledWith('https://pc.example.test/api/health')
 })
 

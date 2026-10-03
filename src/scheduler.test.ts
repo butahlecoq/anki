@@ -20,8 +20,8 @@ const deck: Deck = { id: 'deck', name: 'Deck', parentId: null, optionGroupId: 'o
 const options: DeckOptionGroup = {
   id: 'options', name: 'Options', protected: false, dailyNewLimit: 20, dailyReviewLimit: 200,
   desiredRetention: 0.9, learningSteps: ['1m', '10m'], relearningSteps: ['10m'],
-  newCardOrder: 'added', reviewCardOrder: 'due', interdayLearningOrder: 'before-reviews',
-  buryNewSiblings: false, buryReviewSiblings: false, leechThreshold: 8,
+  newCardOrder: 'added', newCardGatherOrder: 'deck', newCardSortOrder: 'template', reviewCardOrder: 'due', newReviewOrder: 'mix', interdayLearningOrder: 'mix',
+  buryNewSiblings: false, buryReviewSiblings: false, buryInterdayLearningSiblings: false, leechThreshold: 8,
   leechAction: 'suspend', leechTag: 'leech', createdAt: '2026-01-01', updatedAt: '2026-01-01',
 }
 
@@ -53,11 +53,101 @@ describe('pure scheduling rules', () => {
     expect(result.map((entry) => entry.id)).toEqual(['review-due', 'new-b'])
   })
 
+  test('review sort modes order gathered cards by due, deck, interval, or retrievability', () => {
+    const child: Deck = { ...deck, id: 'child', name: 'Child', parentId: deck.id, createdAt: '2026-01-01', updatedAt: '2026-01-01' }
+    const optionsFor = (reviewCardOrder: DeckOptionGroup['reviewCardOrder']) => ({ ...options, reviewCardOrder })
+    const cards = [
+      card('long', State.Review, { scheduledDays: 30, due: '2026-10-02T12:00:00.000Z', stability: 3, lastReview: '2026-09-03T12:00:00.000Z' }),
+      card('short', State.Review, { scheduledDays: 3, due: '2026-10-02T12:00:00.000Z', stability: 30, lastReview: '2026-10-01T12:00:00.000Z' }),
+      card('child-due-first', State.Review, { id: 'child-due-first', noteId: 'child-note', deckId: child.id, due: '2026-10-01T12:00:00.000Z', scheduledDays: 5 }),
+    ]
+    const select = (order: DeckOptionGroup['reviewCardOrder'], selectedDeck = deck) => selectDueCards({
+      deckId: selectedDeck.id, now, decks: [deck, child], groups: [optionsFor(order)], notes: [], cards,
+      reviews: [], sessionCardIds: new Set<string>(),
+    }).map((entry) => entry.id)
+
+    expect(select('due-then-deck')).toEqual(['child-due-first', 'long', 'short'])
+    expect(select('deck-then-due', deck)).toEqual(['long', 'short', 'child-due-first'])
+    expect(select('interval-ascending')).toEqual(['short', 'child-due-first', 'long'])
+    expect(select('interval-descending')).toEqual(['long', 'child-due-first', 'short'])
+    expect(select('retrievability-ascending')[0]).toBe('long')
+    expect(select('retrievability-descending')[0]).toBe('short')
+  })
+
+  test('new-card gathering applies deck quotas before sorting the gathered cards', () => {
+    const child: Deck = { ...deck, id: 'child', name: 'Child', parentId: deck.id }
+    const childCard = (id: string, newPosition: number, templateOrdinal: number, noteId = `note-${id}`) => card(id, State.New, {
+      deckId: child.id, noteId, newPosition, templateOrdinal, due: '2026-10-03T12:00:00.000Z',
+    })
+    const parentCard = (id: string, newPosition: number, templateOrdinal: number, noteId = `note-${id}`) => card(id, State.New, {
+      noteId, newPosition, templateOrdinal, due: '2026-10-03T12:00:00.000Z',
+    })
+    const cards = [
+      parentCard('parent-2', 2, 1), parentCard('parent-9', 9, 0),
+      childCard('child-1', 1, 0), childCard('child-4', 4, 1),
+    ]
+    const select = (newCardGatherOrder: DeckOptionGroup['newCardGatherOrder'], newCardSortOrder: DeckOptionGroup['newCardSortOrder'] = 'gathered', dailyNewLimit = 20) => selectDueCards({
+      deckId: deck.id, now, decks: [deck, child],
+      groups: [{ ...options, dailyNewLimit, newCardGatherOrder, newCardSortOrder }],
+      notes: [], cards, reviews: [], sessionCardIds: new Set<string>(),
+    }).map((entry) => entry.id)
+
+    expect(select('deck')).toEqual(['parent-2', 'parent-9', 'child-1', 'child-4'])
+    expect(select('ascending-position')).toEqual(['child-1', 'parent-2', 'child-4', 'parent-9'])
+    expect(select('descending-position')).toEqual(['parent-9', 'child-4', 'parent-2', 'child-1'])
+    expect(select('deck', 'template')).toEqual(['parent-9', 'child-1', 'parent-2', 'child-4'])
+    expect(select('ascending-position', 'gathered', 2)).toEqual(['child-1', 'parent-2'])
+    expect(select('deck', 'template-random').sort()).toEqual(['child-1', 'child-4', 'parent-2', 'parent-9'])
+
+    const siblingCards = [
+      parentCard('sibling-a-0', 5, 0, 'sibling-a'), parentCard('sibling-a-1', 5, 1, 'sibling-a'),
+      childCard('sibling-b-0', 6, 0, 'sibling-b'), childCard('sibling-b-1', 6, 1, 'sibling-b'),
+    ]
+    const selectSiblings = (gather: DeckOptionGroup['newCardGatherOrder'], sort: DeckOptionGroup['newCardSortOrder']) => selectDueCards({
+      deckId: deck.id, now, decks: [deck, child], groups: [{ ...options, newCardGatherOrder: gather, newCardSortOrder: sort }],
+      notes: [], cards: siblingCards, reviews: [], sessionCardIds: new Set<string>(),
+    }).map((entry) => entry.id)
+    const gatheredByRandomNotes = selectSiblings('random-notes', 'gathered')
+    const gatheredByDeckRandomNotes = selectSiblings('deck-random-notes', 'gathered')
+    expect(new Set(gatheredByRandomNotes.slice(0, 2).map((id) => id.slice(0, 10))).size).toBe(1)
+    expect(new Set(gatheredByRandomNotes.slice(2).map((id) => id.slice(0, 10))).size).toBe(1)
+    expect(gatheredByRandomNotes.slice(0, 2).map((id) => id.slice(0, 10))).not.toEqual(gatheredByRandomNotes.slice(2).map((id) => id.slice(0, 10)))
+    expect(gatheredByDeckRandomNotes).toEqual(['sibling-a-0', 'sibling-a-1', 'sibling-b-0', 'sibling-b-1'])
+    expect(selectSiblings('random-notes', 'random-note-template')).toEqual(gatheredByRandomNotes)
+    expect(selectSiblings('random-cards', 'random')).toEqual(selectSiblings('random-cards', 'random'))
+  })
+
+  test('the review limit also caps new cards after reviews and interday learning are gathered', () => {
+    const cards = [
+      card('review', State.Review),
+      card('interday', State.Learning, { scheduledDays: 1 }),
+      card('new-a', State.New),
+      card('new-b', State.New, { due: '2026-10-03T12:01:00.000Z' }),
+      card('new-c', State.New, { due: '2026-10-03T12:02:00.000Z' }),
+    ]
+    const select = (dueCards: CardRecord[], reviews: ReviewEntry[] = []) => selectDueCards({
+      deckId: deck.id, now, decks: [deck], groups: [{ ...options, dailyNewLimit: 5, dailyReviewLimit: 2 }],
+      notes: [], cards: dueCards, reviews, sessionCardIds: new Set<string>(),
+    })
+
+    expect(select(cards.filter((entry) => entry.id !== 'interday')).map((entry) => entry.id)).toEqual(['review', 'new-a'])
+    expect(select(cards).map((entry) => entry.id)).toEqual(['review', 'interday'])
+    expect(select(cards.filter((entry) => entry.id !== 'review' && entry.id !== 'interday')).map((entry) => entry.id)).toEqual(['new-a', 'new-b'])
+
+    const reviewedToday: ReviewEntry = {
+      id: 'today-review', cardId: 'older-card', deckId: deck.id, rating: Rating.Good, state: State.Review,
+      due: now.toISOString(), stability: 10, difficulty: 5, elapsedDays: 1, lastElapsedDays: 1,
+      scheduledDays: 1, learningSteps: 0, reviewedAt: now.toISOString(),
+    }
+    expect(select(cards.filter((entry) => entry.state === State.New), [reviewedToday]).map((entry) => entry.id)).toEqual(['new-a'])
+  })
+
   test('answering is a pure, deterministic schedule transition with an explicit review identity', () => {
-    const source = card('answer-me', State.Review)
+    const source = card('answer-me', State.Review, { occlusionId: 'mask-7', occlusionOrdinal: 7, newPosition: 42, templateOrdinal: 6 })
     const first = answerWithSchedule(source, options, Rating.Good, now, 'review-1')
     const replay = answerWithSchedule(source, options, Rating.Good, now, 'review-2')
     expect(first.card).toEqual(replay.card)
+    expect(first.card).toMatchObject({ occlusionId: 'mask-7', occlusionOrdinal: 7, newPosition: 42, templateOrdinal: 6 })
     expect(Date.parse(first.card.due)).toBeGreaterThan(now.getTime())
     expect(first.review).toMatchObject({ id: 'review-1', cardId: source.id, deckId: source.deckId, rating: Rating.Good, state: State.Review, scheduling: { before: source } })
     expect(reviewChoices(source, options, now).map((choice) => choice.label)).toEqual(['Again', 'Hard', 'Good', 'Easy'])
@@ -107,9 +197,9 @@ describe('pure scheduling rules', () => {
     expect(isInterdayLearning(card('review', State.Review, { scheduledDays: 1 }))).toBe(false)
   })
 
-  test('study day boundaries are local midnight, matching the statistics day key', () => {
+  test('study day boundaries use the local 4 a.m. Anki rollover', () => {
     const { start, end } = studyDayWindow(new Date(2026, 9, 3, 23, 59, 59))
-    expect(new Date(start).getHours()).toBe(0)
+    expect(new Date(start).getHours()).toBe(4)
     expect(new Date(start).getDate()).toBe(3)
     expect(new Date(end).getDate()).toBe(4)
     expect(end - start).toBe(86_400_000)
@@ -130,6 +220,7 @@ describe('pure scheduling rules', () => {
     // Intraday steps always come first; the policy only orders interday against reviews.
     expect(build('before-reviews')).toEqual(['intraday', 'interday', 'review'])
     expect(build('after-reviews')).toEqual(['intraday', 'review', 'interday'])
+    expect(build('mix')).toEqual(['intraday', 'review', 'interday'])
   })
 
   test('learning steps are validated as a bounded, unit-suffixed list', () => {

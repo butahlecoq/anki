@@ -10,15 +10,15 @@ function card(id: string, date: Date, overrides: Partial<CardRecord> = {}): Card
   return { id, noteId: 'note', deckId: 'deck', templateId: 'basic', due: date.toISOString(), stability: 10, difficulty: 5, elapsedDays: 2, scheduledDays: 10, learningSteps: 0, reps: 2, lapses: 0, state: State.Review, lastReview: date.toISOString(), ...overrides }
 }
 
-test('calendar periods align with the scheduler midnight, Mondays, and calendar months', () => {
+test('calendar periods align with the scheduler rollover, Mondays, and calendar months', () => {
   const anchor = new Date(2026, 2, 29, 23, 59)
-  expect(periodWindow('day', anchor)).toEqual({ start: new Date(2026, 2, 29).getTime(), end: new Date(2026, 2, 30).getTime() })
-  expect(periodWindow('week', anchor)).toEqual({ start: new Date(2026, 2, 23).getTime(), end: new Date(2026, 2, 30).getTime() })
-  expect(periodWindow('month', anchor)).toEqual({ start: new Date(2026, 2, 1).getTime(), end: new Date(2026, 3, 1).getTime() })
-  expect(periodWindow('week', new Date(2026, 0, 1))).toEqual({ start: new Date(2025, 11, 29).getTime(), end: new Date(2026, 0, 5).getTime() })
+  expect(periodWindow('day', anchor)).toEqual({ start: new Date(2026, 2, 29, 4).getTime(), end: new Date(2026, 2, 30, 4).getTime() })
+  expect(periodWindow('week', anchor)).toEqual({ start: new Date(2026, 2, 23, 4).getTime(), end: new Date(2026, 2, 30, 4).getTime() })
+  expect(periodWindow('month', anchor)).toEqual({ start: new Date(2026, 2, 1, 4).getTime(), end: new Date(2026, 3, 1, 4).getTime() })
+  expect(periodWindow('week', new Date(2026, 0, 1))).toEqual({ start: new Date(2025, 11, 29, 4).getTime(), end: new Date(2026, 0, 5, 4).getTime() })
 })
 
-test('answers cross the local midnight once, and learning answers do not inflate recall', () => {
+test('answers cross the 4am rollover once, and learning answers do not inflate recall', () => {
   const now = new Date(2026, 9, 1, 12)
   const log = [review('before', new Date(2026, 8, 30, 23, 59)), review('start', new Date(2026, 9, 1)), review('again', now, { rating: Rating.Again, durationMs: 4000 }), review('learning', now, { state: State.Learning, durationMs: 2000 }), review('next', new Date(2026, 9, 2))]
   const stats = reviewStatistics([...log, log[1]], 'day', now)
@@ -29,7 +29,7 @@ test('answers cross the local midnight once, and learning answers do not inflate
   expect(stats.durationMs).toBe(6000)
   expect(stats.timedCount).toBe(2)
   expect(reviewStatistics([], 'all', now).retention).toBeNull()
-  expect(reviewHeatmap([...log, log[1]], now, 2).map((day) => [day.key, day.count])).toEqual([['2026-09-30', 1], ['2026-10-01', 3]])
+  expect(reviewHeatmap([...log, log[1]], now, 2).map((day) => [day.key, day.count])).toEqual([['2026-09-30', 2], ['2026-10-01', 3]])
 })
 
 test('recall uses the resulting state while legacy logs use their original state', () => {
@@ -44,7 +44,7 @@ test('recall uses the resulting state while legacy logs use their original state
 
 test('forecasts count overdue once, respect burial, and exclude suspended and new cards', () => {
   const now = new Date(2026, 9, 1, 12)
-  const tomorrow = new Date(2026, 9, 2)
+  const tomorrow = new Date(2026, 9, 2, 4)
   const stats = schedulingStatistics([
     card('old', new Date(2026, 8, 1)), card('next', tomorrow, { scheduledDays: 35 }),
     card('buried', now, { buriedUntil: tomorrow.toISOString(), scheduledDays: 3 }),
