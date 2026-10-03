@@ -2,6 +2,8 @@
 
 Kiroku uses GitHub Issues as an executable dependency graph. Issue #1 is the parent specification; Issues #2–#26 are vertical slices with native blocking relationships.
 
+Read [the generated live repository status](docs/agents/status.md) before selecting work. Regenerate it with `npm run status`; it reports current PR, CI, branch and worktree evidence from Git and GitHub.
+
 ## First, check for drift
 
 ```sh
