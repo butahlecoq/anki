@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { safeNavigationURL } from './template-navigation'
+import { useDialogKeyboard } from './use-dialog-keyboard'
 
 export function useTemplateNavigation(owner: string) {
   const [frame, setFrame] = useState<HTMLIFrameElement | null>(null)
@@ -46,7 +47,8 @@ export function useTemplateNavigation(owner: string) {
     return () => { window.clearInterval(timer); removeListeners?.() }
   }, [frame, choose])
   const current = destination?.owner === owner ? destination : null
-  const dialog = current && <div className="dialog-backdrop" onKeyDown={(event) => { event.stopPropagation(); if (event.key === 'Escape') setDestination(null) }}><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="external-navigation-title">
+  const dialogKeyboard = useDialogKeyboard(() => setDestination(null), Boolean(current))
+  const dialog = current && <div className="dialog-backdrop"><section {...dialogKeyboard} className="dialog" role="dialog" aria-modal="true" aria-labelledby="external-navigation-title">
     <h2 id="external-navigation-title">Open an external page</h2>
     <p>This link leaves Kiroku in another tab. Your study card stays open.</p>
     <p className="external-destination"><bdi dir="ltr">{current.url}</bdi></p>

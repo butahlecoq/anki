@@ -4,11 +4,13 @@ import { collection, type NoteType, type NoteTypeField } from './collection'
 import { TemplatePreview } from './TemplatePreview'
 import { clozeOrdinals } from './template-renderer'
 import { fieldsByName, renderCard } from './card-rendering'
+import { useDialogKeyboard } from './use-dialog-keyboard'
 
 type DraftField = { key: string; id?: string; name: string }
 type DraftTemplate = { key: string; id?: string; name: string; front: string; back: string; css: string }
 
 function TypeEditor({ noteType, onClose }: { noteType?: NoteType; onClose: () => void }) {
+  const dialogKeyboard = useDialogKeyboard(onClose)
   const [name, setName] = useState(noteType?.name ?? '')
   const [kind, setKind] = useState<Exclude<NoteType['kind'], 'image-occlusion'>>(noteType?.kind === 'cloze' ? 'cloze' : 'standard')
   const [fields, setFields] = useState<DraftField[]>(() => noteType?.fields.map((field) => ({ ...field, key: field.id })) ?? [
@@ -89,11 +91,11 @@ function TypeEditor({ noteType, onClose }: { noteType?: NoteType; onClose: () =>
 
   return (
     <div className="dialog-backdrop">
-      <section className="dialog type-dialog" role="dialog" aria-modal="true" aria-labelledby="type-dialog-title">
+      <section {...dialogKeyboard} className="dialog type-dialog" role="dialog" aria-modal="true" aria-labelledby="type-dialog-title">
         <span className="section-code">NOTE TYPE // {noteType ? 'EDIT' : 'NEW'}</span>
         <h2 id="type-dialog-title">{noteType ? `Edit ${noteType.name}` : 'Create note type'}</h2>
         <form onSubmit={(event) => void save(event)}>
-          <label>Note type name<input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label>
+          <label>Note type name<input value={name} onChange={(event) => setName(event.target.value)} /></label>
           <label>Card generation<select value={kind} disabled={Boolean(noteType)} onChange={(event) => changeKind(event.target.value as Exclude<NoteType['kind'], 'image-occlusion'>)}><option value="standard">Standard</option><option value="cloze">Cloze deletions</option></select></label>
           <section className="editor-section" aria-label="Fields">
             <h3>Fields</h3>
@@ -148,6 +150,7 @@ function TypeEditor({ noteType, onClose }: { noteType?: NoteType; onClose: () =>
 }
 
 function DeleteTypeDialog({ noteType, types, onClose }: { noteType: NoteType; types: NoteType[]; onClose: () => void }) {
+  const dialogKeyboard = useDialogKeyboard(onClose)
   const count = useLiveQuery(() => collection.notes.where('typeId').equals(noteType.id).count(), [noteType.id])
   const [replacementId, setReplacementId] = useState('')
   const [mapping, setMapping] = useState<Record<string, string>>({})
@@ -165,7 +168,7 @@ function DeleteTypeDialog({ noteType, types, onClose }: { noteType: NoteType; ty
     }
   }
 
-  return <div className="dialog-backdrop"><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="delete-type-title">
+  return <div className="dialog-backdrop"><section {...dialogKeyboard} className="dialog" role="dialog" aria-modal="true" aria-labelledby="delete-type-title">
     <h2 id="delete-type-title">Delete {noteType.name}?</h2>
     <form onSubmit={(event) => void remove(event)}>
       {count === undefined ? <p>Checking saved notes…</p> : count > 0 ? <>
@@ -174,7 +177,7 @@ function DeleteTypeDialog({ noteType, types, onClose }: { noteType: NoteType; ty
         {replacement && noteType.fields.map((field) => <label key={field.id}>Map {field.name}<select value={mapping[field.id] ?? ''} onChange={(event) => setMapping((current) => ({ ...current, [field.id]: event.target.value }))}><option value="">Keep as retired data</option>{replacement.fields.filter((target) => !Object.entries(mapping).some(([sourceId, targetId]) => sourceId !== field.id && targetId === target.id)).map((target) => <option value={target.id} key={target.id}>{target.name}</option>)}</select></label>)}
       </> : <p>This type has no saved notes.</p>}
       {error && <p className="form-error" role="alert">{error}</p>}
-      <div className="dialog-actions"><button className="text-button" type="button" autoFocus onClick={onClose}>Cancel</button><button className="text-button danger" type="submit" disabled={count === undefined}>Delete note type</button></div>
+      <div className="dialog-actions"><button className="text-button" type="button" data-dialog-initial-focus onClick={onClose}>Cancel</button><button className="text-button danger" type="submit" disabled={count === undefined}>Delete note type</button></div>
     </form>
   </section></div>
 }
