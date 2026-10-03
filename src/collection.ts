@@ -2,9 +2,11 @@ import Dexie, { type EntityTable } from 'dexie'
 import { customStudyKey, customStudyMembership, customStudySessions, type CustomStudySession } from './custom-study-state'
 import { createEmptyCard } from 'ts-fsrs'
 import { answerWithSchedule, deserializeCard, eligibleForQueue, eligibleForStudy, isBuried, isLearningCard, nextStudyBoundary, Rating, reviewChoices as previewReviewChoices, schedulerFor, selectDueCards, serializeCard, State, templateSuspended, validateSteps, type Grade } from './scheduler'
+import { SUPPORTED_MEDIA_TYPES } from '../media-types'
 import { digestMedia, validateMedia, type AudioPlayback, type MediaKind, type MediaSide } from './media'
 import { clozeOrdinals, renderTemplate, tryRenderTemplate, validateTemplate } from './template-renderer'
 import { mergeRevisions, revisionHeads, type RevisionMerge } from './sync-revisions'
+import { ImportedPackageRejected, rowFingerprint, type ImportedPackageWrites } from './import-contract'
 import { undoBlocker, undoEpochMatches, undoOperationIds, undoOperationsPending, undoRowUnchanged, undoSubject, type CardMaintenanceUndo, type NoteDeletionUndo, type ReviewUndo, type UndoBlocker, type UndoRecord, type UndoRowBlocker } from './undo'
 
 export { Rating, State }
@@ -1008,6 +1010,210 @@ export class Collection extends Dexie {
       await this.notes.put(updated)
       await this.enqueueOperations(changes)
     })
+  }
+
+  /**
+   * The one multi-table write. Package import and inbound sync both go through
+   * a Collection operation rather than naming tables, so an invariant cannot be
+   * mirrored into a second writer and go stale there.
+   *
+   * Everything is checked before anything is written: a rejected import leaves
+   * the collection exactly as it was.
+   */
+  async applyImportedPackage(writes: ImportedPackageWrites, importedAt: string, expectUnchanged: Array<{ table: string; id: string; value: string }> = []): Promise<void> {
+    const scope = [this.decks, this.noteTypes, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.mediaBlobs, this.outbox, this.syncRevisions, this.settings, this.deckOptionGroups, this.deletedEntities]
+    await this.transaction('rw', scope, async () => {
+      // The preview is only trustworthy if the rows it read are unchanged, so
+      // this check shares the transaction rather than preceding it.
+      for (const snapshot of expectUnchanged) {
+        const current = await (this as unknown as Record<string, { get(id: string): Promise<unknown> }>)[snapshot.table].get(snapshot.id)
+        if (rowFingerprint(current) !== snapshot.value) throw new Error('The collection changed after this preview. Please preview again before importing.')
+      }
+      await this.assertImportedPackageValid(writes)
+      const operation = (entityType: SyncOperation['entityType'], entityId: string, action: 'create' | 'update', payload: unknown) =>
+        ({ opId: id(), entityType, entityId, action, occurredAt: importedAt, payload })
+      const deletion = (entityType: SyncOperation['entityType'], entityId: string) =>
+        ({ opId: id(), entityType, entityId, action: 'delete' as const, occurredAt: importedAt, payload: { id: entityId } })
+
+      if (writes.decks.length) await this.decks.bulkPut(writes.decks.map(({ value }) => value))
+      if (writes.deletedDecks.length) await this.decks.bulkDelete(writes.deletedDecks.map(({ id }) => id))
+      for (const { key, value } of writes.undoSettings) await this.settings.put({ key, value })
+      if (writes.noteTypes.length) await this.noteTypes.bulkPut(writes.noteTypes.map(({ value }) => value))
+      if (writes.notes.length) await this.notes.bulkPut(writes.notes.map(({ value }) => value))
+      if (writes.cards.length) await this.cards.bulkPut(writes.cards.map(({ value }) => value))
+      if (writes.reviews.length) await this.reviewEntries.bulkAdd(writes.reviews)
+      if (writes.updatedReviews.length) await this.reviewEntries.bulkPut(writes.updatedReviews)
+      if (writes.references.length) await this.noteMedia.bulkPut(writes.references.map(({ value }) => value))
+      if (writes.deletedReferences.length) await this.noteMedia.bulkDelete(writes.deletedReferences.map(({ id }) => id))
+      if (writes.blobs.length) await this.mediaBlobs.bulkPut(writes.blobs)
+
+      const operations: SyncOperation[] = [
+        ...writes.decks.map(({ value, action }) => operation('deck', value.id, action, value)),
+        ...writes.deletedDecks.map((value) => deletion('deck', value.id)),
+        ...writes.noteTypes.map(({ value, action }) => operation('noteType', value.id, action, value)),
+        ...writes.notes.map(({ value, action }) => operation('note', value.id, action, value)),
+        ...writes.cards.map(({ value, action }) => operation('card', value.id, action, value)),
+        ...writes.reviews.map((value) => operation('review', value.id, 'create', value)),
+        ...writes.updatedReviews.map((value) => operation('review', value.id, 'update', value)),
+        ...writes.references.map(({ value, action }) => operation('noteMedia', value.id, action, value)),
+        ...writes.deletedReferences.map((value) => deletion('noteMedia', value.id)),
+      ]
+      if (operations.length) await this.enqueueOperations(operations)
+    })
+  }
+
+  /**
+   * Applies every rule the hand-written write routes enforce. Import bypassed
+   * all of them, so a package could leave a deck hierarchy that cycles, a tag
+   * the app would have refused, or an occlusion mask outside its image.
+   *
+   * The whole batch is checked before any write, so a refusal is total.
+   */
+  private async assertImportedPackageValid(writes: ImportedPackageWrites): Promise<void> {
+    const groupIds = new Set((await this.deckOptionGroups.toArray()).map(({ id }) => id))
+
+    // Decks: identity, required fields, a resolvable option group, no duplicate
+    // sibling name, no cycle - including cycles created within this batch.
+    const projected = new Map<string, Deck>()
+    for (const deck of await this.decks.toArray()) projected.set(deck.id, deck)
+    // A deck this batch reconciles away does not exist afterwards, so it cannot
+    // make an incoming sibling a duplicate.
+    for (const superseded of writes.deletedDecks) projected.delete(superseded.id)
+    for (const { value: deck } of writes.decks) projected.set(deck.id, deck)
+    // Sibling names are indexed rather than scanned: import is the one route that
+    // writes thousands of decks at once, and a scan per deck made that quadratic.
+    const siblingNames = new Map<string, Set<string>>()
+    for (const deck of projected.values()) {
+      const key = `${deck.parentId ?? ''} ${deck.name.trim().toLocaleLowerCase()}`
+      const ids = siblingNames.get(key) ?? new Set<string>()
+      ids.add(deck.id)
+      siblingNames.set(key, ids)
+    }
+    for (const { value: deck } of writes.decks) {
+      if (!groupIds.has(deck.optionGroupId)) throw new ImportedPackageRejected(`Deck "${deck.name}"`, 'names a deck option group that does not exist')
+      requiredText(deck.name, 'Deck name')
+      const contenders = siblingNames.get(`${deck.parentId ?? ''} ${deck.name.trim().toLocaleLowerCase()}`)
+      if (contenders && [...contenders].some((id) => id !== deck.id)) {
+        throw new ImportedPackageRejected(`Deck "${deck.name}"`, 'duplicates the name of a sibling deck')
+      }
+      const seen = new Set([deck.id])
+      let parentId = deck.parentId
+      while (parentId !== null) {
+        if (seen.has(parentId)) throw new ImportedPackageRejected(`Deck "${deck.name}"`, 'would create a cycle in the deck hierarchy')
+        seen.add(parentId)
+        const parent = projected.get(parentId)
+        if (!parent) throw new ImportedPackageRejected(`Deck "${deck.name}"`, 'names a parent deck that does not exist')
+        parentId = parent.parentId
+      }
+    }
+
+    // Note types: a type with no fields, no templates or a broken cloze field can
+    // never generate a card, so importing one leaves a type the editor refuses
+    // to open.
+    const writtenTypes = new Map(writes.noteTypes.map(({ value }) => [value.id, value]))
+    for (const type of writtenTypes.values()) {
+      if (!type.fields.length) throw new ImportedPackageRejected(`Note type "${type.name}"`, 'has no fields')
+      if (!type.templates.length) throw new ImportedPackageRejected(`Note type "${type.name}"`, 'has no templates')
+      const names = type.fields.map(({ name }) => name.trim().toLocaleLowerCase())
+      if (new Set(names).size !== names.length) throw new ImportedPackageRejected(`Note type "${type.name}"`, 'has duplicate field names')
+      if (names.includes('frontside')) throw new ImportedPackageRejected(`Note type "${type.name}"`, 'uses the reserved field name FrontSide')
+      const templateNames = type.templates.map(({ id }) => id)
+      if (new Set(templateNames).size !== templateNames.length) throw new ImportedPackageRejected(`Note type "${type.name}"`, 'has duplicate template identities')
+      try {
+        for (const template of type.templates) {
+          validateTemplate(template.front, type.fields.map(({ name }) => name), 'front', type.kind === 'image-occlusion' ? 'standard' : type.kind)
+          validateTemplate(template.back, type.fields.map(({ name }) => name), 'back', type.kind === 'image-occlusion' ? 'standard' : type.kind)
+        }
+        if (type.kind === 'cloze') clozeField(type)
+      } catch (reason) {
+        throw new ImportedPackageRejected(`Note type "${type.name}"`, reason instanceof Error ? reason.message : 'has an invalid template')
+      }
+    }
+
+    // Notes: identity, a resolvable deck and note type, normalised tags, and a
+    // valid occlusion mask that does not renumber what already exists.
+    const deckIds = new Set(projected.keys())
+    const typeIds = new Set([...(await this.noteTypes.toArray()).map(({ id }) => id), ...writtenTypes.keys()])
+    const existingNotes = new Map((await this.notes.toArray()).map((note) => [note.id, note]))
+    const existingCards = await this.cards.where('noteId').anyOf([...writes.notes.map(({ value }) => value.id)]).toArray()
+    for (const { value: note } of writes.notes) {
+      if (!note.id.length || note.id.length > 512 || [...note.id].some((character) => character.charCodeAt(0) < 32)) throw new ImportedPackageRejected(`Note ${note.id}`, 'has an invalid identity')
+      // A tombstoned identity must stay dead: inbound sync suppresses every
+      // operation for it, so recreating the row would make it un-syncable.
+      if (await this.deletedEntities.get(tombstoneKey('note', note.id))) throw new ImportedPackageRejected(`Note ${note.id}`, 'has the identity of a deleted note')
+      if (!deckIds.has(note.deckId)) throw new ImportedPackageRejected(`Note ${note.id}`, 'names a deck that does not exist')
+      if (!typeIds.has(note.typeId)) throw new ImportedPackageRejected(`Note ${note.id}`, 'names a note type that does not exist')
+      if (!Array.isArray(note.tags)) throw new ImportedPackageRejected(`Note ${note.id}`, 'has no tag list')
+      let normalized: string[]
+      try {
+        normalized = normalizeTags(note.tags)
+      } catch (reason) {
+        throw new ImportedPackageRejected(`Note ${note.id}`, reason instanceof Error ? reason.message : 'has invalid tags')
+      }
+      // Normalise, do not merely validate: an Anki package carries whatever
+      // whitespace and casing the exporter used, and the app's own paths store
+      // the normalised form.
+      if (JSON.stringify(normalized) !== JSON.stringify(note.tags)) writes.notes[writes.notes.findIndex(({ value }) => value.id === note.id)].value.tags = normalized
+      if (note.typeId === IMAGE_OCCLUSION_NOTE_TYPE_ID) {
+        if (!note.imageOcclusion) throw new ImportedPackageRejected(`Note ${note.id}`, 'is an image occlusion note with no mask data')
+        try {
+          validateImageOcclusion(note.imageOcclusion)
+        } catch (reason) {
+          throw new ImportedPackageRejected(`Note ${note.id}`, reason instanceof Error ? reason.message : 'has an invalid image occlusion mask')
+        }
+        // An older package must not renumber masks a learner already has: card
+        // identities embed the ordinal, so renumbering silently rebinds them.
+        const previous = existingNotes.get(note.id)
+        const priorOrdinals = new Map<string, number>([
+          ...(previous?.imageOcclusion?.masks ?? []).map((mask) => [mask.id, mask.ordinal] as const),
+          ...existingCards.filter((card) => card.noteId === note.id && card.occlusionId && card.occlusionOrdinal).map((card) => [card.occlusionId!, card.occlusionOrdinal!] as const),
+        ])
+        const nextOrdinal = previous?.imageOcclusion?.nextOrdinal ?? 1
+        if (note.imageOcclusion.nextOrdinal < nextOrdinal) throw new ImportedPackageRejected(`Note ${note.id}`, 'would renumber image occlusion masks backwards')
+        for (const mask of note.imageOcclusion.masks) {
+          const prior = priorOrdinals.get(mask.id)
+          if ((prior !== undefined && prior !== mask.ordinal) || (prior === undefined && mask.ordinal < nextOrdinal)) {
+            throw new ImportedPackageRejected(`Note ${note.id}`, 'would change or reuse an existing image occlusion mask ordinal')
+          }
+        }
+      }
+    }
+
+    // Cards: a card belongs to a note, sits in that note's deck, and a note may
+    // not generate the same template twice.
+    const noteIds = new Set([...existingNotes.keys(), ...writes.notes.map(({ value }) => value.id)])
+    const writtenNotes = new Map(writes.notes.map(({ value }) => [value.id, value]))
+    for (const { value: card } of writes.cards) {
+      if (!noteIds.has(card.noteId)) throw new ImportedPackageRejected(`Card ${card.id}`, 'names a note that does not exist')
+      if (!deckIds.has(card.deckId)) throw new ImportedPackageRejected(`Card ${card.id}`, 'names a deck that does not exist')
+      // A card may sit in a deck other than its note's: Anki's filtered decks
+      // borrow a card without moving its note, and import restores such a card
+      // to the deck it originally belonged to. So this is deliberately not a
+      // check that the two agree.
+    }
+
+    // Reviews: a review must reach a card that reaches a note.
+    const cardIds = new Set([...(await this.cards.toArray()).map(({ id }) => id), ...writes.cards.map(({ value }) => value.id)])
+    for (const review of [...writes.reviews, ...writes.updatedReviews]) {
+      if (!cardIds.has(review.cardId)) throw new ImportedPackageRejected(`Review ${review.id}`, 'names a card that does not exist')
+      if (Number.isInteger(review.rating) && (review.rating < 1 || review.rating > 4)) throw new ImportedPackageRejected(`Review ${review.id}`, 'records an unsupported rating')
+    }
+
+    // Media references: a reference must belong to a note, and an occlusion
+    // source must be an image the app can actually render.
+    const digests = new Set([...(await this.mediaBlobs.toArray()).map(({ digest }) => digest), ...writes.blobs.map(({ digest }) => digest)])
+    for (const { value: reference } of writes.references) {
+      if (!noteIds.has(reference.noteId)) throw new ImportedPackageRejected(`Media reference ${reference.id}`, 'names a note that does not exist')
+      if (!/^[a-f0-9]{64}$/.test(reference.digest)) throw new ImportedPackageRejected(`Media reference ${reference.id}`, 'has a malformed content digest')
+      if (!digests.has(reference.digest)) throw new ImportedPackageRejected(`Media reference ${reference.id}`, 'names media the package did not carry')
+      const note = writtenNotes.get(reference.noteId) ?? existingNotes.get(reference.noteId)
+      if (note?.typeId === IMAGE_OCCLUSION_NOTE_TYPE_ID && reference.id === note.imageOcclusion?.sourceMediaId) {
+        if (reference.kind !== 'image' || !SUPPORTED_MEDIA_TYPES.some(({ mimeType }) => mimeType === reference.mimeType)) {
+          throw new ImportedPackageRejected(`Media reference ${reference.id}`, 'is not a supported image occlusion source')
+        }
+        if (reference.side !== 'front') throw new ImportedPackageRejected(`Media reference ${reference.id}`, 'is an occlusion source on the wrong side')
+      }
+    }
   }
 
   private async validateDeckHierarchy(deck: Deck) {
