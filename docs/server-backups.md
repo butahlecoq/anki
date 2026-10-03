@@ -1,0 +1,13 @@
+# PC service backups and recovery
+
+The PC sync service stores its SQLite database in `runtime/kiroku-sync.sqlite`, media blobs in `runtime/media/`, and verified backup archives in `runtime/backups/`. Set `KIROKU_RUNTIME_DIRECTORY` to place the complete service data directory on a chosen disk. Keep a second copy of downloaded backups on another device or drive; local retention cannot protect against disk loss.
+
+After pairing, choose **Download PC backup** in the collection's PC sync controls. Kiroku creates a consistent SQLite snapshot, verifies SQLite integrity and every referenced media digest, then downloads a ZIP containing `collection.sqlite` and each `media/<sha256>` blob. Its manifest records creation time, backup reason, schema version, change count, latest sync cursor, byte counts, and SHA-256 digests. The screen also shows the latest retained backup and offers a verified restore preview. Archives contain server sync history and media, including hashed pairing credentials from the SQLite store; protect downloaded files as private study data.
+
+The service also creates a verified backup before each HTTP sync request that contains operations. If snapshot or media verification fails, the request is rejected before any sync operation is stored. Retention keeps at most 14 archives and removes archives older than 30 days. Backups are not pruned when new backup creation fails.
+
+Startup schema upgrades run inside a SQLite write transaction. An upgrade either commits all current DDL and schema-watermark changes or rolls back to the previous durable schema. The server test suite covers migration from the earlier change-log shape and a deliberately failed migration; this does not yet represent every released schema version.
+
+Restore preview reopens the archived SQLite image read-only, runs `PRAGMA integrity_check`, checks change and cursor totals against the manifest, and verifies every archived media digest. It does not modify the active service. Destructive replacement is intentionally unavailable until sync has a collection-generation/reset protocol: replacing history while paired phones retain cursors could otherwise make them miss changes or merge incompatible timelines. The safe recovery path for now is to preserve the archive and current runtime directory and use a separately reviewed recovery procedure; do not overwrite the SQLite file while the service is running.
+
+Kiroku's per-device collection, unsynced edits, and browser preferences remain in that device's IndexedDB and are not present on the PC service. Server runtime environment configuration such as TLS paths and allowed origin also lives outside the archive. Keep those device collections and deployment settings protected separately.

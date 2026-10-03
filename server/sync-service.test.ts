@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
 import { createServer } from 'node:http'
 import { DatabaseSync } from 'node:sqlite'
+import { unzipSync } from 'fflate'
 import { createPairingCode, startSyncServer } from './index.js'
 import { createSyncService } from './sync-service.js'
 import { createSyncHttpHandler } from './sync-http.js'
@@ -78,6 +79,130 @@ test('persists a collection schema watermark and rejects an incompatible client 
   const reopened = createSyncService({ databasePath })
   assert.equal(reopened.health().collectionSchemaVersion, 12)
   reopened.close()
+})
+
+test('manual PC backups contain a consistent verified SQLite history and every media byte', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-backup-'))
+  const databasePath = join(runtimeDirectory, 'collection.sqlite')
+  const mediaDirectory = join(runtimeDirectory, 'media')
+  const service = createSyncService({ databasePath, mediaDirectory })
+  const code = service.createPairingCode()
+  const { token } = service.pair({ code, deviceId: 'backup-phone' })
+  const image = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 9, 8, 7])
+  const mediaDigest = createHash('sha256').update(image).digest('hex')
+  await service.putMedia(token, mediaDigest, 'image/png', image)
+  service.sync(token, {
+    protocolVersion: 2, collectionSchemaVersion: 15, cursor: 0,
+    operations: [{ opId: 'saved-note', entityType: 'note', entityId: 'note-1', action: 'create', occurredAt: '2026-10-03T10:00:00.000Z', payload: { id: 'note-1', front: '猫', back: 'cat' }, parents: [] }],
+  })
+
+  await assert.rejects(service.listBackups('wrong-token'), /authentication required/i)
+  const manifest = await service.createBackup(token)
+  assert.equal(manifest.reason, 'manual')
+  assert.equal(manifest.changeCount, 1)
+  assert.equal(manifest.latestCursor, 1)
+  assert.deepEqual(manifest.media, [{ digest: mediaDigest, byteLength: image.byteLength, mimeType: 'image/png' }])
+  assert.equal(manifest.databaseSha256.length, 64)
+  assert.equal(manifest.archiveSha256.length, 64)
+
+  const { bytes } = await service.downloadBackup(token, manifest.id)
+  assert.equal(createHash('sha256').update(bytes).digest('hex'), manifest.archiveSha256)
+  const archive = unzipSync(bytes)
+  assert.deepEqual([...archive[`media/${mediaDigest}`]], [...image])
+  const backupPath = join(runtimeDirectory, 'backup-check.sqlite')
+  await writeFile(backupPath, archive['collection.sqlite'])
+  const snapshot = new DatabaseSync(backupPath, { readOnly: true })
+  try {
+    assert.equal((snapshot.prepare('PRAGMA integrity_check').get() as { integrity_check: string }).integrity_check, 'ok')
+    assert.equal((snapshot.prepare('SELECT op_id FROM changes').get() as { op_id: string }).op_id, 'saved-note')
+  } finally { snapshot.close() }
+
+  assert.deepEqual(await service.listBackups(token), [manifest])
+  const preview = await service.previewBackupRestore(token, manifest.id)
+  assert.equal(preview.changeCount, 1)
+  assert.equal(preview.mediaBytes, image.byteLength)
+  assert.equal(preview.restoreAvailable, false)
+  const damaged = new Uint8Array(bytes)
+  damaged[damaged.length - 4] ^= 1
+  await writeFile(join(runtimeDirectory, 'backups', `backup-${manifest.id}.zip`), damaged)
+  assert.deepEqual(await service.listBackups(token), [])
+  await assert.rejects(service.downloadBackup(token, manifest.id), /verified backup not found/i)
+  service.close()
+})
+
+test('retains no more than fourteen verified backups and removes the oldest archive pair', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-backup-retention-'))
+  const service = createSyncService({ databasePath: join(runtimeDirectory, 'collection.sqlite') })
+  const { token } = service.pair({ code: service.createPairingCode(), deviceId: 'backup-phone' })
+  const created: Array<Awaited<ReturnType<typeof service.createBackup>>> = []
+  for (let index = 0; index < 15; index += 1) created.push(await service.createBackup(token))
+  const retained = await service.listBackups(token)
+  assert.equal(retained.length, 14)
+  assert.equal(retained.some(({ id }) => id === created[0].id), false)
+  assert.equal(retained.some(({ id }) => id === created.at(-1)!.id), true)
+  await assert.rejects(service.downloadBackup(token, created[0].id), /verified backup not found/i)
+  service.close()
+})
+
+test('failed backup verification creates no artifact and blocks automatic backup before a risky sync write', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-backup-failure-'))
+  const databasePath = join(runtimeDirectory, 'collection.sqlite')
+  const mediaDirectory = join(runtimeDirectory, 'media')
+  const service = createSyncService({ databasePath, mediaDirectory })
+  const { token } = service.pair({ code: service.createPairingCode(), deviceId: 'backup-phone' })
+  const content = new Uint8Array([1, 2, 3, 4])
+  const mediaDigest = createHash('sha256').update(content).digest('hex')
+  await service.putMedia(token, mediaDigest, 'image/png', content)
+  await rm(join(mediaDirectory, mediaDigest.slice(0, 2), mediaDigest))
+
+  await assert.rejects(service.backupBeforeSync(token, { operations: [{ opId: 'risky-write', entityType: 'note', entityId: 'note-1', action: 'update', occurredAt: '2026-10-03T10:00:00.000Z', payload: { id: 'note-1' } }] }), /backup before syncing/i)
+  assert.equal(service.changeCount(), 0)
+  assert.deepEqual(await service.listBackups(token), [])
+  service.close()
+})
+
+test('migrates a representative legacy sync database while preserving its rows', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-migration-'))
+  const databasePath = join(runtimeDirectory, 'collection.sqlite')
+  const previous = new DatabaseSync(databasePath)
+  previous.exec(`
+    CREATE TABLE changes (cursor INTEGER PRIMARY KEY AUTOINCREMENT, op_id TEXT UNIQUE NOT NULL, device_id TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, action TEXT NOT NULL, occurred_at TEXT NOT NULL, payload TEXT NOT NULL);
+    INSERT INTO changes (op_id, device_id, entity_type, entity_id, action, occurred_at, payload) VALUES ('legacy-note', 'old-phone', 'note', 'note-1', 'create', '2026-10-01T00:00:00.000Z', '{"id":"note-1"}');
+  `)
+  previous.close()
+
+  const service = createSyncService({ databasePath })
+  try {
+    const current = new DatabaseSync(databasePath, { readOnly: true })
+    try {
+      assert.equal((current.prepare('SELECT op_id FROM changes').get() as { op_id: string }).op_id, 'legacy-note')
+      assert.deepEqual((current.prepare('PRAGMA table_info(changes)').all() as Array<{ name: string }>).map(({ name }) => name).slice(-2), ['parents', 'review_id'])
+      assert.equal((current.prepare('PRAGMA integrity_check').get() as { integrity_check: string }).integrity_check, 'ok')
+    } finally { current.close() }
+    assert.equal(service.changeCount(), 1)
+  } finally { service.close() }
+})
+
+test('a failed schema migration rolls back every DDL change and retains the legacy database', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-migration-failure-'))
+  const databasePath = join(runtimeDirectory, 'collection.sqlite')
+  const previous = new DatabaseSync(databasePath)
+  previous.exec(`
+    CREATE TABLE changes (cursor INTEGER PRIMARY KEY AUTOINCREMENT, op_id TEXT UNIQUE NOT NULL, device_id TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, action TEXT NOT NULL, occurred_at TEXT NOT NULL, payload TEXT NOT NULL);
+    INSERT INTO changes (op_id, device_id, entity_type, entity_id, action, occurred_at, payload) VALUES ('legacy-note', 'old-phone', 'note', 'note-1', 'create', '2026-10-01T00:00:00.000Z', '{"id":"note-1"}');
+    CREATE TABLE collection_metadata (unexpected TEXT);
+  `)
+  previous.close()
+
+  assert.throws(() => createSyncService({ databasePath }), /migration failed safely/i)
+  const retained = new DatabaseSync(databasePath, { readOnly: true })
+  try {
+    const names = new Set((retained.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map(({ name }) => name))
+    assert.deepEqual([...names].sort(), ['changes', 'collection_metadata', 'sqlite_sequence'])
+    assert.equal((retained.prepare('SELECT op_id FROM changes').get() as { op_id: string }).op_id, 'legacy-note')
+    assert.deepEqual((retained.prepare('PRAGMA table_info(changes)').all() as Array<{ name: string }>).map(({ name }) => name).slice(-1), ['payload'])
+    assert.equal((retained.prepare('PRAGMA integrity_check').get() as { integrity_check: string }).integrity_check, 'ok')
+  } finally { retained.close() }
 })
 
 test('re-reads the durable watermark under the write lock before accepting a stale request', async () => {
@@ -273,6 +398,44 @@ test('serves health, pairing, and authenticated sync over HTTP', async () => {
   assert.match(downloaded.headers.get('access-control-expose-headers') ?? '', /x-content-sha256/)
   assert.deepEqual(new Uint8Array(await downloaded.arrayBuffer()), mediaBytes)
 
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+    service.close()
+  }
+})
+
+test('exposes manual backup download and verified preview and snapshots before an HTTP sync mutation', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-backup-http-'))
+  const service = createSyncService({ databasePath: join(runtimeDirectory, 'collection.sqlite') })
+  const server = createServer(createSyncHttpHandler(service))
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  assert.ok(address && typeof address !== 'string')
+  const origin = `http://127.0.0.1:${address.port}`
+  try {
+    const code = service.createPairingCode()
+    const paired = await fetch(`${origin}/api/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code, deviceId: 'backup-http-phone' }) })
+    const { token } = await paired.json() as { token: string }
+    const unauthorized = await fetch(`${origin}/api/backups`)
+    assert.equal(unauthorized.status, 401)
+
+    const manual = await fetch(`${origin}/api/backups`, { method: 'POST', headers: { authorization: `Bearer ${token}` } })
+    assert.equal(manual.status, 201)
+    const manifest = await manual.json() as { id: string; reason: string; archiveSha256: string }
+    assert.equal(manifest.reason, 'manual')
+    const file = await fetch(`${origin}/api/backups/${manifest.id}/download`, { headers: { authorization: `Bearer ${token}` } })
+    assert.equal(file.status, 200)
+    assert.equal(file.headers.get('x-content-sha256'), manifest.archiveSha256)
+    assert.match(file.headers.get('content-disposition') ?? '', /kiroku-backup-/)
+    const preview = await fetch(`${origin}/api/backups/${manifest.id}/restore-preview`, { method: 'POST', headers: { authorization: `Bearer ${token}` } })
+    assert.equal(preview.status, 200)
+    assert.equal((await preview.json() as { restoreAvailable: boolean }).restoreAvailable, false)
+
+    const sync = await fetch(`${origin}/api/sync`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, collectionSchemaVersion: 10, cursor: 0, operations: [{ opId: 'before-sync-backup', entityType: 'note', entityId: 'note-1', action: 'create', occurredAt: '2026-10-03T10:00:00.000Z', payload: { id: 'note-1' } }] }) })
+    assert.equal(sync.status, 200)
+    const listed = await fetch(`${origin}/api/backups`, { headers: { authorization: `Bearer ${token}` } })
+    const backups = (await listed.json() as { backups: Array<{ reason: string; changeCount: number }> }).backups
+    assert.deepEqual(backups.map(({ reason, changeCount }) => ({ reason, changeCount })), [{ reason: 'before-sync', changeCount: 0 }, { reason: 'manual', changeCount: 0 }])
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
     service.close()

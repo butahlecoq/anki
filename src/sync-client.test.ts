@@ -41,6 +41,11 @@ test('distinguishes authentication and unreachable service failures', async () =
   await expect(foregroundSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 }, [], vi.fn().mockRejectedValue(new TypeError('network')))).resolves.toEqual({ state: 'unreachable' })
 })
 
+test('surfaces an automatic PC backup failure without misreporting it as a network outage', async () => {
+  const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ code: 'backup-failed', error: 'Media abc is missing. Restore it before syncing.' }), { status: 507 }))
+  await expect(foregroundSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 }, [{ opId: 'one' }], fetcher)).resolves.toEqual({ state: 'backup-failed', message: 'Media abc is missing. Restore it before syncing.' })
+})
+
 test('invalidates local undo before an in-flight sync can capture review operations', async () => {
   const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
   try {

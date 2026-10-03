@@ -48,6 +48,8 @@ npm run server:start
 
 Enter the service’s `https://` address and the one-time code in **Connect a PC**. Credentials remain in that browser’s local collection settings and are never included in the web build.
 
+After pairing, use **Download PC backup** to create and download a verified snapshot of the PC sync history and media. The service retains up to 14 automatic and manual backups for 30 days. See [PC service backups and recovery](docs/server-backups.md) for contents, verification, and restore limits.
+
 ## Progress statistics
 
 Open **Statistics** from the desktop sidebar or the iPhone navigation bar. The home dashboard counts cards available now using the same queue as the reviewer, including daily limits, suspended cards, buried siblings, and renderable templates. **Studied** counts answers today, including repeated learning steps.
