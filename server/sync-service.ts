@@ -3,6 +3,8 @@ import { DatabaseSync } from 'node:sqlite'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { SERVER_MAX_COLLECTION_SCHEMA_VERSION, SYNC_PROTOCOL_VERSION, type IncompatibleSync, type SyncCapabilities, type SyncHealth } from '../sync-capabilities.js'
+import { schemaRequiredByPayload } from '../schema-ladder.js'
+import { isSupportedMediaType } from '../media-types.js'
 
 type ServiceOptions = { databasePath: string; mediaDirectory?: string }
 type PairRequest = { code: string; deviceId: string }
@@ -20,36 +22,19 @@ type SyncRequest = SyncCapabilities & { cursor: number; operations: SyncOperatio
 
 type PersistedChange = { entity_type: string; action: string; payload: string; parents: string | null; review_id: string | null }
 
-const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 
 /**
  * Historical protocol-v1 rows have no declared schema. Infer the minimum
  * collection format needed to preserve their payload so a service upgrade
  * cannot reopen a mixed-version sync hole.
+ *
+ * The per-entity rules come from the shared ladder, so a schema step cannot be
+ * added to the migrations and forgotten here.
  */
 function schemaRequiredByOperation(operation: Pick<SyncOperation, 'entityType' | 'action' | 'payload' | 'parents' | 'reviewId'>): number {
-  let required = operation.parents !== undefined || operation.reviewId !== undefined ? 15 : 1
-  if (operation.entityType === 'noteMedia') required = Math.max(required, 5)
-  if (operation.entityType === 'noteType') required = Math.max(required, 6)
-  if (operation.entityType === 'deckOptionGroup') required = Math.max(required, 9)
-  const payload = isRecord(operation.payload) ? operation.payload : {}
-  if (operation.entityType === 'review' && 'scheduling' in payload) required = Math.max(required, 15)
-  if (operation.entityType === 'review' && 'rescheduled' in payload) required = Math.max(required, 14)
-  if (operation.entityType === 'review' && ['afterState', 'afterDue', 'afterStability', 'afterDifficulty', 'afterElapsedDays', 'afterScheduledDays', 'afterLearningSteps'].some((field) => field in payload)) required = Math.max(required, 16)
-  if (operation.entityType === 'note' && typeof payload.typeId === 'string') required = Math.max(required, 6)
-  if (operation.entityType === 'card' && typeof payload.templateId === 'string') required = Math.max(required, 6)
-  if (operation.entityType === 'noteType' && payload.kind === 'cloze') required = Math.max(required, 7)
-  if (operation.entityType === 'card' && Number.isSafeInteger(payload.clozeOrdinal)) required = Math.max(required, 7)
-  if (operation.entityType === 'note' && (Array.isArray(payload.tags) || 'imageOcclusion' in payload)) required = Math.max(required, 8)
-  if (operation.entityType === 'noteType' && payload.kind === 'image-occlusion') required = Math.max(required, 8)
-  if (operation.entityType === 'card' && ('occlusionId' in payload || 'occlusionOrdinal' in payload)) required = Math.max(required, 8)
-  if (operation.entityType === 'deck' && ('parentId' in payload || 'optionGroupId' in payload)) required = Math.max(required, 9)
-  if (operation.entityType === 'deckOptionGroup' && ['dailyNewLimit', 'dailyReviewLimit', 'desiredRetention', 'learningSteps', 'relearningSteps', 'newCardOrder', 'reviewCardOrder'].some((field) => field in payload)) required = Math.max(required, 10)
-  if (operation.entityType === 'card' && ('manualSuspended' in payload || 'templateSuspended' in payload || 'buriedUntil' in payload)) required = Math.max(required, 11)
-  if (operation.entityType === 'deckOptionGroup' && ['buryNewSiblings', 'buryReviewSiblings', 'leechThreshold', 'leechAction', 'leechTag'].some((field) => field in payload)) required = Math.max(required, 11)
-  if (operation.entityType === 'deckOptionGroup' && 'interdayLearningOrder' in payload) required = Math.max(required, 12)
-  if (operation.entityType === 'card' && 'flag' in payload) required = Math.max(required, 13)
-  return required
+  // A causal link names a card's prior schedule, which only step 15 can hold.
+  const causal = operation.parents !== undefined || operation.reviewId !== undefined ? 15 : 1
+  return Math.max(causal, schemaRequiredByPayload(operation.entityType, operation.payload))
 }
 
 export class SyncCompatibilityError extends Error {
@@ -256,7 +241,7 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
       const device = database.prepare('SELECT devices.id FROM tokens JOIN devices ON devices.id = tokens.device_id WHERE tokens.hash = ? AND devices.revoked_at IS NULL').get(hash(accessToken))
       if (!device) throw new Error('Authentication required.')
       if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error('Media digest is invalid.')
-      if (!['image/png', 'image/jpeg', 'image/webp', 'audio/mpeg', 'audio/ogg', 'audio/wav'].includes(mimeType)) throw new Error('Media type is unsupported.')
+      if (!isSupportedMediaType(mimeType)) throw new Error('Media type is unsupported.')
       if (!bytes.byteLength || bytes.byteLength > 20 * 1024 * 1024) throw new Error('Media size is invalid.')
       if (createHash('sha256').update(bytes).digest('hex') !== digest) throw new Error('Media digest does not match its bytes.')
       await mkdir(join(mediaDirectory, digest.slice(0, 2)), { recursive: true })
