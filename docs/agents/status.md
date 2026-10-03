@@ -47,7 +47,7 @@ Base commit: `60b5cbb5c0a09cfb63c2ce8f9e4cd52ed288206c` (current `origin/main`).
 
 ### [#87 Generate the status document from Git and the tracker](https://github.com/butahlecoq/anki/issues/87)
 
-- No open PR; exact-head checks: not applicable; branch `feat/87-live-status-luna-night`; worktree: D:/work/anki-87-live-status-luna-night; local commits ahead of origin/main: 1; deferred: none stated in checkpoint comments
+- PR [#167](https://github.com/butahlecoq/anki/pull/167) (draft); head `84b97650ff23fac0143b4869198c707c4e5526f1`; exact-head checks: no hosted checks reported; branch `feat/87-live-status-luna-night`; worktree: D:/work/anki-87-live-status-luna-night; deferred: This remains a draft. `npm run check` was not run because the #85 worker is actively using the shared verification suite; the runbook prohibits competing full browser/unit/oracle runs. Run the complete gate on the final PR head after #85 records its final evidence/checkpoint. No merge-readiness claim is made.
 
 ### [#91 Preserve imported field HTML instead of normalising it to plain text](https://github.com/butahlecoq/anki/issues/91)
 
