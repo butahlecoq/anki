@@ -14,16 +14,9 @@ A finding is evidence, not a verdict. "Nothing is in it" means no running proces
 
 ## Claim work safely
 
-1. Find an open issue labelled `ready-for-agent` whose native blocked-by count is zero. The label says who can do the work; the dependency edges say when. Check both:
+1. Find an open issue labelled `ready-for-agent` whose native blocked-by count is zero. The label says who can do the work; the dependency edges say when, and neither implies the other. [The triage labels guide](docs/agents/triage-labels.md) has both commands, what makes an issue human-only, and a blocking-endpoint trap that returns a JSON error object where a list belongs.
 
-   ```sh
-   gh issue view <n> --repo butahlecoq/anki --json labels --jq '[.labels[].name] | join(",")'
-   gh api "repos/butahlecoq/anki/issues/<n>/dependencies/blocked_by" --jq '[.[].number] | join(", ")'
-   ```
-
-   `/dependencies/blocked_by` is the real path. `gh api "repos/butahlecoq/anki/issues/<n>/blocked_by"` is not a GitHub endpoint and returns 404 for every issue, which looks exactly like "no blockers". A 404 on the correct path means the issue number does not exist.
-
-   Do not claim anything labelled `ready-for-human`, `needs-triage` or `needs-info`. `ready-for-agent` means an agent can finish the ticket and prove it unattended; it does not mean an agent could write some code for it. See [the triage labels guide](docs/agents/triage-labels.md) for what puts an issue in the human column: a physical device, a real account, a paid resource, a domain, a person judging whether output looks right, or an environment this machine does not have.
+   Do not claim anything labelled `ready-for-human`, `needs-triage` or `needs-info`. `ready-for-agent` means an agent can finish the ticket and prove it unattended; it does not mean an agent could write some code for it.
 
 2. Assign it to yourself before changing code.
 3. Create a dedicated branch and worktree named for the issue.

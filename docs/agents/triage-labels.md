@@ -4,7 +4,7 @@
 | ----------------- | ------------------ | ---------------------------------------- |
 | `needs-triage`    | `needs-triage`     | Maintainer needs to evaluate this issue  |
 | `needs-info`      | `needs-info`       | Waiting on reporter for more information |
-| `ready-for-agent` | `ready-for-agent`  | Fully specified, ready for an AFK agent  |
+| `ready-for-agent` | `ready-for-agent`  | An agent can finish and prove this        |
 | `ready-for-human` | `ready-for-human`  | Requires human implementation            |
 | `wontfix`         | `wontfix`          | Will not be actioned                     |
 
@@ -12,7 +12,7 @@ When a skill mentions a canonical role, use its corresponding tracker label.
 
 ## `ready-for-agent` is the only label an unattended agent may claim
 
-Every other label means stop. This matters more than it looks: for a long time
+Every other label means stop. This matters more than it looks: until 2026-10-03
 every open issue in this repository carried `ready-for-agent` and nothing else,
 so the label selected nothing at all. An agent that found #24 - which needs a
 trusted certificate, a domain and a router configuration - followed the
@@ -33,42 +33,57 @@ Any one of these is enough:
 | A paid resource | hosted minutes, a paid certificate |
 | A domain or router configuration | #24 |
 | A person judging whether output looks right | #23's "coherent token-driven dark design" |
-| An environment this machine does not have | #77 needs a Linux CI run for its baselines |
+| An environment this repository cannot produce | #77 needs a Linux CI run for its baselines |
 
 The last one is easy to miss and worth stating plainly: an issue can be blocked
-by *this host* rather than by a human. Read the body for what it needs to run.
+by the *environment* rather than by a person. Read the body for what it needs in
+order to run.
+
+**A broken toolchain is not the same thing.** #85 was the hard case: it recorded
+that Playwright could not launch on the development machine, which by the rule
+above would have made it human-only. It was not. The browser launched fine once
+run directly, so the blocker was a stale report rather than a missing capability,
+and the remaining work was ordinary browser work with a test seam. Verify a
+claimed environment blocker before labelling on it - relabelling a ticket away
+from agents on a false premise is as costly as never relabelling it at all.
 
 ## An issue can be `ready-for-agent` and still be blocked
 
 The label says **who** can do the work. The dependency edges say **when**. Both
-have to be checked, and neither implies the other:
+have to be checked, and neither implies the other: #26 is blocked by six open
+issues and would be correctly labelled if it were not, and #88 is unblocked and
+correctly labelled.
+
+**The failure this prevents.** On 2026-10-03 a handoff concluded that this
+repository had no native blocking edges, because
+`gh api repos/butahlecoq/anki/issues/<n>/blocked_by` returned `404` for all
+eleven issues it checked. The path it used is not a GitHub endpoint, so it 404s
+no matter what the issue's real dependencies are - and a `404` from a path that
+does not exist is indistinguishable from an issue with no blockers. The
+instruction to check blocking state was correct; only the command was wrong, and
+a reader following the documented process would conclude every issue in the
+repository was unblocked.
+
+The blocked-by path is `/issues/<n>/dependencies/blocked_by`. The shorter
+`/issues/<n>/blocked_by` is not a GitHub endpoint, and `gh` prints its error body
+to stdout without applying `--jq`, so the command returns a JSON object where a
+list was expected - not an empty list, and not a count. Check the exit status
+before believing the result:
 
 ```sh
-# who may claim it
-gh issue view <n> --repo butahlecoq/anki --json labels --jq '[.labels[].name] | join(",")'
+gh api "repos/butahlecoq/anki/issues/24/dependencies/blocked_by" --jq '[.[].number] | join(", ")'
+# 22            exit 0
 
-# whether it is blocked
-gh api "repos/butahlecoq/anki/issues/<n>/dependencies/blocked_by" --jq '[.[].number] | join(", ")'
+gh api "repos/butahlecoq/anki/issues/24/blocked_by" --jq '[.[].number] | join(", ")'
+# {"message":"Not Found",...,"status":"404"}    exit 1
 ```
 
-An empty result means unblocked. A `404` means the issue number does not exist,
-**not** that the issue is unblocked - `gh` prints both, so read the exit status.
-
-## The endpoint that is easy to get wrong
-
-`/issues/<n>/blocked_by` is not a GitHub endpoint. It 404s for every issue,
-including ones with real dependencies. Piping it into `--jq 'length'` yields
-nothing and a non-zero exit, which is easy to mistake for a count of zero:
+Count the edges yourself rather than trusting a number in this file:
 
 ```sh
-gh api "repos/butahlecoq/anki/issues/24/blocked_by"                 # 404, exit 1
-gh api "repos/butahlecoq/anki/issues/24/dependencies/blocked_by"    # [22], exit 0
+gh issue list --repo butahlecoq/anki --state open --limit 60 --json number --jq '.[].number' |
+  while read n; do gh api "repos/butahlecoq/anki/issues/$n/dependencies/blocked_by" --jq 'length'; done
 ```
-
-A handoff asserted there were no native blocking edges in this repository,
-citing that 404. There are 66 of them, 38 declared on open issues. `24` is
-blocked by `22`, and `26` is blocked by `19`, `21`, `23`, `24`, `25`, `54` and
-`56`.
 
 ## Relabelling
 
