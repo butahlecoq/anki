@@ -1,0 +1,97 @@
+"""Emit a reproducible new-card FSRS reference from official Anki 26.9.3.
+
+Run with: uv run --with anki==26.9.3 python scripts/verify-scheduler-oracle.py
+This uses only a temporary collection and synthetic note; no account or network.
+"""
+
+from importlib.metadata import version
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from anki.collection import Collection
+from anki.deck_config_pb2 import UpdateDeckConfigsRequest, UpdateDeckConfigsMode
+
+
+ANKI_VERSION = "26.9.3"
+CARD_ID = 1234567890000
+
+
+def main() -> None:
+    actual_version = version("anki")
+    assert actual_version == ANKI_VERSION, (actual_version, ANKI_VERSION)
+
+    with TemporaryDirectory(prefix="kiroku-scheduler-oracle-") as directory:
+        collection = Collection(str(Path(directory) / "oracle.anki2"))
+        try:
+            update = collection.decks.get_deck_configs_for_update(1)
+            for entry in update.all_config:
+                config = entry.config.config
+                config.ClearField("fsrs_params_6")
+                config.fsrs_params_6.extend(update.defaults.config.fsrs_params_6)
+            request = UpdateDeckConfigsRequest(
+                target_deck_id=1,
+                mode=UpdateDeckConfigsMode.UPDATE_DECK_CONFIGS_MODE_NORMAL,
+                fsrs=True,
+            )
+            for entry in update.all_config:
+                request.configs.add().CopyFrom(entry.config)
+            request.limits.CopyFrom(update.current_deck.limits)
+            request.fsrs_health_check = update.fsrs_health_check
+            collection.decks.update_deck_configs(request)
+            collection.fsrs_short_term_with_steps_enabled = True
+
+            config = collection.decks.config_dict_for_deck_id(1)
+            assert len(config["fsrsParams6"]) == len(update.defaults.config.fsrs_params_6) == 21, config["fsrsParams6"]
+            assert all(
+                abs(actual - expected) < 0.00001
+                for actual, expected in zip(config["fsrsParams6"], update.defaults.config.fsrs_params_6)
+            )
+            assert config["desiredRetention"] == 0.9
+            assert config["new"]["delays"] == [1.0, 10.0]
+            assert config["lapse"]["delays"] == [10.0]
+            assert config["new"]["perDay"] == 20
+            assert config["rev"]["perDay"] == 200
+
+            easy_days_by_id = {}
+            labels = []
+            for offset in range(64):
+                note = collection.new_note(collection.models.by_name("Basic"))
+                note.fields = [f"猫{offset}", "cat"]
+                collection.add_note(note, 1)
+                generated_id = collection.db.scalar("select id from cards where nid = ?", note.id)
+                card_id = CARD_ID + offset
+                collection.db.execute("update cards set id = ? where id = ?", card_id, generated_id)
+                states = collection._backend.get_scheduling_states(card_id)
+                current_labels = [label.replace("\u2068", "").replace("\u2069", "") for label in collection.sched.describe_next_states(states)]
+                if offset == 0:
+                    labels = current_labels
+                easy_days_by_id[card_id] = states.easy.normal.review.scheduled_days
+
+            easy_days = easy_days_by_id[CARD_ID]
+            easy_range = {"min": min(easy_days_by_id.values()), "max": max(easy_days_by_id.values())}
+
+            assert labels[:3] == ["<1m", "<6m", "<10m"], labels
+            assert easy_days == 8, easy_days
+            assert easy_range == {"min": 6, "max": 10}, easy_range
+            print(json.dumps({
+                "ankiVersion": actual_version,
+                "scheduler": "V3",
+                "algorithm": "FSRS-6",
+                "fsrsParams6": config["fsrsParams6"],
+                "desiredRetention": config["desiredRetention"],
+                "learningStepsMinutes": config["new"]["delays"],
+                "relearningStepsMinutes": config["lapse"]["delays"],
+                "dailyNewLimit": config["new"]["perDay"],
+                "dailyReviewLimit": config["rev"]["perDay"],
+                "nativeCardId": CARD_ID,
+                "newCardChoices": labels,
+                "easyScheduledDays": easy_days,
+                "nativeEasyIntervalRangeFor64CardIds": easy_range,
+            }, indent=2))
+        finally:
+            collection.close()
+
+
+if __name__ == "__main__":
+    main()
