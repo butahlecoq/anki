@@ -8,7 +8,7 @@ import { validateTemplate } from './template-renderer'
 import { supportedNavigationTemplate } from './template-navigation'
 import { ANKI_ARCHIVE_LIMITS, validateAnkiArchive } from './anki-archive'
 import { readKirokuSchedule, readKirokuReview } from './anki-scheduling-metadata'
-import { nativeIdentity as stableId } from './anki-identity'
+import { derivedNativeId, nativeIdentity as stableId } from './anki-identity'
 
 export interface AnkiImportIssue {
   severity: 'info' | 'warning' | 'error'
@@ -499,7 +499,9 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
     for (let index = 0; index < segments.length; index += 1) {
       const path = segments.slice(0, index + 1).join('::')
       const matched = sourceDeckByName.get(path)
-      const id = matched ? stableId('deck', matched.id) : `anki-deck-path:${encodeURIComponent(path)}`
+      // A deck the package names only inside a Deck Path carries no Native
+      // Identity, so one is derived from that path. See ADR 0001.
+      const id = matched ? stableId('deck', matched.id) : stableId('deck', derivedNativeId(`deck-path:${path}`))
       const timestamps = matched ?? sourceDeck
       if (!deckRecords.has(id)) deckRecords.set(id, {
         id,
