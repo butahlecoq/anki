@@ -9,6 +9,7 @@ import { ANKI_ARCHIVE_LIMITS } from './anki-archive'
 
 let SQL: SqlJsStatic
 let collection: Collection | undefined
+let syncReplica: Collection | undefined
 
 beforeAll(async () => {
   SQL = await initSqlJs({ locateFile: () => './node_modules/sql.js/dist/sql-wasm.wasm' })
@@ -16,7 +17,9 @@ beforeAll(async () => {
 
 afterEach(async () => {
   await collection?.delete()
+  await syncReplica?.delete()
   collection = undefined
+  syncReplica = undefined
 })
 
 afterAll(() => {
@@ -317,6 +320,83 @@ describe('Anki package import', () => {
     await expect(collection.notes.get(note.id)).resolves.toMatchObject({ fields: { 'anki-field:1700000000001:2': 'feline' } })
     await expect(collection.mediaForNote(note.id)).resolves.toEqual(existingMedia)
     await expect(collection.reviewEntries.count()).resolves.toBe(1)
+  })
+
+  test('plans suspension only for local cards absent from the package and keeps present local card state', async () => {
+    collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
+    const file = await japanesePackage()
+    await (await prepareAnkiImport(file, collection, { SQL })).commit()
+    const noteId = 'anki-note:stable-vocabulary-guid'
+    const localCards = await collection.cards.where('noteId').equals(noteId).toArray()
+    const missingCard = localCards.find((card) => card.templateId === 'anki-template:1700000000001:1')
+    const presentCard = localCards.find((card) => card.templateId === 'anki-template:1700000000001:0')
+    if (!missingCard || !presentCard) throw new Error('Expected both generated vocabulary cards')
+    await collection.cards.put({ ...missingCard, suspended: false, templateSuspended: false, manualSuspended: true })
+    await collection.cards.put({ ...presentCard, suspended: true, manualSuspended: true })
+
+    const source = AnkiCollection.open(await fileBytes(file), SQL)
+    const sourceNote = source.data.notes.find((candidate) => candidate.guid === 'stable-vocabulary-guid')
+    if (!sourceNote) throw new Error('Fixture note missing')
+    source.data.cards = source.data.cards.filter((card) => card.nid !== sourceNote.id || card.ord !== 1)
+    const reduced = new File([(await source.toUint8Array(SQL)).slice().buffer as ArrayBuffer], 'reduced-cards.apkg')
+    const plan = await prepareAnkiImport(reduced, collection, { SQL })
+
+    expect(plan.plan.writes.cards).toContainEqual(expect.objectContaining({
+      action: 'update',
+      value: expect.objectContaining({ id: missingCard.id, suspended: true, templateSuspended: true, manualSuspended: true }),
+    }))
+    expect(plan.plan.decisions).toContainEqual({ entity: 'card', id: missingCard.id, action: 'update' })
+    expect(plan.plan.decisions).toContainEqual({ entity: 'card', id: presentCard.id, action: 'keepLocal' })
+    expect(plan.plan.writes.cards).not.toContainEqual(expect.objectContaining({ value: expect.objectContaining({ id: presentCard.id }) }))
+
+    syncReplica = createCollection(`kiroku-import-replica-${crypto.randomUUID()}`)
+    await (await prepareAnkiImport(file, syncReplica, { SQL })).commit()
+    await plan.commit()
+    await expect(collection.cards.get(missingCard.id)).resolves.toMatchObject({ suspended: true, templateSuspended: true, manualSuspended: true })
+    const reconciliationOperation = (await collection.pendingOperations()).find((operation) => operation.entityType === 'card' && operation.entityId === missingCard.id && operation.action === 'update')
+    if (!reconciliationOperation) throw new Error('Expected the committed card reconciliation operation in the outbox')
+    await syncReplica.applyRemoteChanges([reconciliationOperation], 1)
+    await expect(syncReplica.receivedOperations.get(reconciliationOperation.opId)).resolves.toBeDefined()
+    await collection.cards.update(missingCard.id, { manualSuspended: false })
+    await expect(collection.dueCards(missingCard.deckId, new Date('2026-10-02T12:00:00.000Z'))).resolves.not.toContainEqual(expect.objectContaining({ id: missingCard.id }))
+  })
+
+  test('plans removal of dropped media references while retaining references still present in the package', async () => {
+    collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
+    const file = await japanesePackage()
+    await (await prepareAnkiImport(file, collection, { SQL })).commit()
+    const noteId = 'anki-note:stable-vocabulary-guid'
+    const localReferences = await collection.mediaForNote(noteId)
+    const dropped = localReferences.find((reference) => reference.displayName === 'cat.png')
+    const retained = localReferences.find((reference) => reference.displayName === 'cat.wav')
+    if (!dropped || !retained) throw new Error('Expected image and audio references')
+
+    const source = AnkiCollection.open(await fileBytes(file), SQL)
+    const sourceNote = source.data.notes.find((candidate) => candidate.guid === 'stable-vocabulary-guid')
+    if (!sourceNote) throw new Error('Fixture note missing')
+    const fields = sourceNote.flds.split('\u001f')
+    fields[3] = '[sound:cat.wav]'
+    sourceNote.flds = fields.join('\u001f')
+    sourceNote.mod = Math.floor(new Date('2027-01-01T00:00:00.000Z').getTime() / 1000)
+    const reduced = new File([(await source.toUint8Array(SQL)).slice().buffer as ArrayBuffer], 'reduced-media.apkg')
+    const plan = await prepareAnkiImport(reduced, collection, { SQL })
+
+    expect(plan.plan.writes.deletedReferences).toContainEqual(expect.objectContaining({ id: dropped.id, noteId }))
+    expect(plan.plan.decisions).toContainEqual({ entity: 'mediaReference', id: dropped.id, action: 'delete' })
+    expect(plan.plan.decisions).toContainEqual(expect.objectContaining({ entity: 'mediaReference', id: retained.id, action: 'update' }))
+    expect(plan.plan.writes.deletedReferences).not.toContainEqual(expect.objectContaining({ id: retained.id }))
+  })
+
+  test('keeps card-generation failures distinct from templates that are simply ineligible', async () => {
+    collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
+    const type = await collection.createNoteType({ name: 'Card generation failure', fields: [{ name: 'Front' }], templates: [{ name: 'Card', front: '{{Front}}', back: 'Answer', css: '' }] })
+    const malformed = { ...type, templates: [{ ...type.templates[0], back: '{{Front' }] }
+
+    expect(collection.tryCardGenerationStatus(type, { [type.fields[0].id]: '' })).toEqual({
+      ok: true,
+      value: { eligible: [], skipped: [{ templateId: type.templates[0].id, reason: 'Front has no visible field content' }] },
+    })
+    expect(collection.tryCardGenerationStatus(malformed, { [type.fields[0].id]: '' })).toMatchObject({ ok: false, error: expect.stringMatching(/template delimiter/i) })
   })
 
   test('applies newer source scheduling without overwriting a newer local review', async () => {
