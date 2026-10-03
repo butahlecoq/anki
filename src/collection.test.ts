@@ -380,7 +380,7 @@ describe('local collection', () => {
     expect(await collection.cards.get(sibling.id)).toMatchObject({ buriedUntil: expect.any(String) })
     expect(await collection.notes.get(note.id)).toMatchObject({ tags: ['leech'] })
 
-    await expect(collection.undoLastReview()).resolves.toBe(card.id)
+    await expect(collection.undo()).resolves.toBe(card.id)
     expect(await collection.cards.get(card.id)).toEqual(before)
     expect(await collection.cards.get(sibling.id)).toEqual(sibling)
     expect(await collection.notes.get(note.id)).toEqual(note)
@@ -397,13 +397,15 @@ describe('local collection', () => {
     const review = await collection.answer(card.id, Rating.Good, now)
     await collection.beginSyncAttempt()
     await expect(collection.latestReviewUndo()).resolves.toBeNull()
-    await expect(collection.undoLastReview()).rejects.toThrow(/sync attempt/i)
+    await expect(collection.undo()).rejects.toThrow(/sync attempt/i)
     expect(await collection.reviewEntries.get(review.id)).toBeDefined()
 
     await collection.cards.put({ ...card, due: now.toISOString() })
     await collection.answer(card.id, Rating.Good, now)
     await collection.setCardFlag(card.id, 1, now)
-    await expect(collection.undoLastReview()).rejects.toThrow(/card changed/i)
+    // A later edit to the same card invalidates the record that captured it.
+    await collection.cards.update(card.id, { flag: 7 })
+    await expect(collection.undo()).rejects.toThrow(/changed since/i)
   })
 
   test('deleting and undoing a note restores its cards, reviews, and media before sync', async () => {
@@ -422,7 +424,7 @@ describe('local collection', () => {
     expect(await collection.noteMedia.get(media.id)).toBeUndefined()
     expect(await collection.deletedEntities.get(`note:${note.id}`)).toBeDefined()
 
-    await expect(collection.undoLastNoteDeletion()).resolves.toBe(note.id)
+    await expect(collection.undo()).resolves.toBe(note.id)
     expect(await collection.notes.get(note.id)).toEqual(note)
     expect(await collection.cards.get(card.id)).toEqual(answered)
     expect(await collection.reviewEntries.get(review.id)).toEqual(review)
@@ -432,7 +434,7 @@ describe('local collection', () => {
 
     await collection.deleteNote(note.id, new Date('2026-10-01T12:02:00.000Z'))
     await collection.beginSyncAttempt()
-    await expect(collection.undoLastNoteDeletion()).rejects.toThrow(/sync attempt/i)
+    await expect(collection.undo()).rejects.toThrow(/sync attempt/i)
   })
 
   test('note deletion syncs its child tombstones and suppresses stale offline card edits', async () => {
@@ -468,7 +470,7 @@ describe('local collection', () => {
     await collection.deleteNote(note.id)
     await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
     await expect(collection.latestNoteDeletionUndo()).resolves.toBeNull()
-    await expect(collection.undoLastNoteDeletion()).rejects.toThrow(/original deck/i)
+    await expect(collection.undo()).rejects.toThrow(/original deck/i)
     expect(await collection.notes.get(note.id)).toBeUndefined()
   })
 
@@ -480,7 +482,7 @@ describe('local collection', () => {
     await collection.deleteNote(note.id)
     await collection.updateNoteType(type.id, { ...type, templates: [{ ...type.templates[0], front: 'Changed {{Term}}' }] })
     await expect(collection.latestNoteDeletionUndo()).resolves.toBeNull()
-    await expect(collection.undoLastNoteDeletion()).rejects.toThrow(/note type changed/i)
+    await expect(collection.undo()).rejects.toThrow(/note type changed/i)
     expect(await collection.notes.get(note.id)).toBeUndefined()
   })
 
@@ -494,19 +496,19 @@ describe('local collection', () => {
     const pendingBefore = (await collection.pendingOperations()).map((operation) => operation.opId)
 
     await collection.suspendCard(card.id, now)
-    await expect(collection.undoLastCardMaintenance()).resolves.toBe(card.id)
+    await expect(collection.undo()).resolves.toBe(card.id)
     expect(await collection.cards.get(card.id)).toEqual(before)
     expect((await collection.pendingOperations()).map((operation) => operation.opId)).toEqual(pendingBefore)
 
     await collection.buryCard(card.id, now)
     await expect(collection.latestCardMaintenanceUndo()).resolves.toMatchObject({ action: 'bury' })
-    await collection.undoLastCardMaintenance()
+    await collection.undo()
     expect(await collection.cards.get(card.id)).toEqual(before)
 
     await collection.setCardFlag(card.id, 1, now)
     await collection.beginSyncAttempt()
     await expect(collection.latestCardMaintenanceUndo()).resolves.toBeNull()
-    await expect(collection.undoLastCardMaintenance()).rejects.toThrow(/sync attempt/i)
+    await expect(collection.undo()).rejects.toThrow(/sync attempt/i)
     expect(await collection.cards.get(card.id)).toMatchObject({ flag: 1 })
   })
 

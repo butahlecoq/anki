@@ -51,7 +51,7 @@ test('invalidates local undo before an in-flight sync can capture review operati
     const card = (await collection.cards.where('noteId').equals(note.id).first())!
     await collection.answer(card.id, Rating.Good, now)
     const fetcher = vi.fn(async () => {
-      await expect(collection.undoLastReview()).rejects.toThrow(/sync attempt/i)
+      await expect(collection.undo()).rejects.toThrow(/sync attempt/i)
       throw new TypeError('network')
     })
     await expect(syncCollection(collection, fetcher)).resolves.toMatchObject({ state: 'unreachable' })
@@ -76,7 +76,7 @@ test('also invalidates undo for a review recorded during sync preflight', async 
         expect(await collection.latestReviewUndo()).not.toBeNull()
         return health()
       }
-      await expect(collection.undoLastReview()).rejects.toThrow(/sync attempt/i)
+      await expect(collection.undo()).rejects.toThrow(/sync attempt/i)
       return new Response(JSON.stringify({ accepted: 4, cursor: 4, changes: [] }), { status: 200 })
     })
     await expect(syncCollection(collection, fetcher)).resolves.toMatchObject({ state: 'complete' })

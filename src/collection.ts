@@ -5,6 +5,7 @@ import { answerWithSchedule, deserializeCard, eligibleForQueue, eligibleForStudy
 import { digestMedia, validateMedia, type AudioPlayback, type MediaKind, type MediaSide } from './media'
 import { clozeOrdinals, renderTemplate, tryRenderTemplate, validateTemplate } from './template-renderer'
 import { mergeRevisions, revisionHeads, type RevisionMerge } from './sync-revisions'
+import { undoBlocker, undoEpochMatches, undoOperationIds, undoOperationsPending, undoRowUnchanged, undoSubject, type CardMaintenanceUndo, type NoteDeletionUndo, type ReviewUndo, type UndoBlocker, type UndoRecord, type UndoRowBlocker } from './undo'
 
 export { Rating, State }
 export type { Grade }
@@ -192,33 +193,8 @@ export interface CardRecord {
   sourceModifiedAt?: string
 }
 
-type ReviewUndo = {
-  review: ReviewEntry
-  syncEpoch: number
-  operationIds: string[]
-  cards: Array<{ before: CardRecord; after: CardRecord }>
-  note?: { before: Note; after: Note }
-  customSession?: { before: CustomStudySession; after: CustomStudySession }
-}
-
-type NoteDeletionUndo = {
-  syncEpoch: number
-  operationId: string
-  occurredAt: string
-  note: Note
-  noteType: NoteType
-  cards: CardRecord[]
-  reviews: ReviewEntry[]
-  media: NoteMediaReference[]
-}
-
-type CardMaintenanceUndo = {
-  syncEpoch: number
-  operationId: string
-  action: 'suspend' | 'bury' | 'flag'
-  before: CardRecord
-  after: CardRecord
-}
+/** Undo lives in one module; these are re-exported so callers can name what they observe. */
+export type { CardMaintenanceUndo, NoteDeletionUndo, ReviewUndo, UndoKind, UndoRecord } from './undo'
 
 type LegacyNote = Omit<Note, 'typeId'> & { typeId?: string }
 type LegacyCard = Omit<CardRecord, 'templateId' | 'manualSuspended' | 'templateSuspended' | 'buriedUntil'> & {
@@ -324,6 +300,38 @@ function id() {
 }
 
 const tombstoneKey = (entityType: SyncOperation['entityType'], entityId: string) => `${entityType}:${entityId}`
+
+/** The single settings key holding the one undo record. */
+const UNDO_KEY = 'undo'
+
+/** How the learner is referred to in an undo refusal. */
+function undoLabel(record: UndoRecord) {
+  if (record.kind === 'review') return 'This review'
+  if (record.kind === 'note-deletion') return 'This deletion'
+  return 'This card action'
+}
+
+/**
+ * The message for a refusal. The guards are shared, but what the learner can be
+ * told depends on which kind failed and why, so the wording stays per-kind.
+ */
+function undoRefusal(record: UndoRecord, blocker: UndoBlocker, rows: UndoRowBlocker | null): string {
+  if (blocker === 'sync-attempt') return record.kind === 'review'
+    ? 'This review cannot be undone after a sync attempt'
+    : record.kind === 'note-deletion'
+      ? 'This deletion cannot be undone after a sync attempt'
+      : 'This card action cannot be undone after a sync attempt'
+  if (blocker === 'synchronised') return record.kind === 'review'
+    ? 'This review has already synchronized and cannot be undone'
+    : `${undoLabel(record)} has already synchronized and cannot be undone`
+  if (rows === 'original-deck-or-type-gone') return 'The original deck or note type was deleted; undo is unavailable'
+  if (rows === 'note-type-changed') return 'The note type changed since deletion; undo is unavailable'
+  if (record.kind === 'review') return record.note
+    ? 'The note changed since this review; undo is unavailable'
+    : 'A card changed since this review; undo is unavailable'
+  if (record.kind === 'note-deletion') return 'The deleted note changed; undo is unavailable'
+  return 'The card changed since this action; undo is unavailable'
+}
 function inboundDependencyOrder(change: SyncOperation) {
   if (change.entityType === 'deckOptionGroup') return change.action === 'delete' ? 7 : 0
   return ({ deck: 1, noteType: 2, note: 3, card: 4, review: 5, noteMedia: 6 } as const)[change.entityType]
@@ -1188,41 +1196,13 @@ export class Collection extends Dexie {
       const operationId = id()
       await this.enqueueOperation({ opId: operationId, entityType: 'note', entityId: noteId, action: 'delete', occurredAt, payload: { id: noteId } })
       const syncEpoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
-      await this.settings.put({ key: 'noteDeletionUndo', value: { syncEpoch, operationId, occurredAt, note, noteType, cards, reviews, media } satisfies NoteDeletionUndo })
+      await this.recordUndo({ kind: 'note-deletion', syncEpoch, operationIds: [operationId], occurredAt, note, noteType, cards, reviews, media })
     })
   }
 
   async latestNoteDeletionUndo(): Promise<NoteDeletionUndo | null> {
-    const undo = (await this.settings.get('noteDeletionUndo'))?.value as NoteDeletionUndo | undefined
-    const epoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
-    if (!undo || undo.syncEpoch !== epoch || !await this.outbox.get(undo.operationId) || await this.notes.get(undo.note.id)) return null
-    if (!await this.decks.get(undo.note.deckId) || !await this.noteTypes.get(undo.note.typeId)) return null
-    if (JSON.stringify(await this.noteTypes.get(undo.note.typeId)) !== JSON.stringify(undo.noteType)) return null
-    return undo
-  }
-
-  async undoLastNoteDeletion(): Promise<string> {
-    return this.transaction('rw', [this.decks, this.noteTypes, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.outbox, this.syncRevisions, this.deletedEntities, this.settings], async () => {
-      const undo = (await this.settings.get('noteDeletionUndo'))?.value as NoteDeletionUndo | undefined
-      if (!undo) throw new Error('No recent note deletion to undo')
-      const epoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
-      if (epoch !== undo.syncEpoch || !await this.outbox.get(undo.operationId)) throw new Error('This deletion cannot be undone after a sync attempt')
-      if (!await this.decks.get(undo.note.deckId) || !await this.noteTypes.get(undo.note.typeId)) throw new Error('The original deck or note type was deleted; undo is unavailable')
-      if (JSON.stringify(await this.noteTypes.get(undo.note.typeId)) !== JSON.stringify(undo.noteType)) throw new Error('The note type changed since deletion; undo is unavailable')
-      const keys = [tombstoneKey('note', undo.note.id), ...undo.cards.map((card) => tombstoneKey('card', card.id)), ...undo.reviews.map((review) => tombstoneKey('review', review.id)), ...undo.media.map((reference) => tombstoneKey('noteMedia', reference.id))]
-      const tombstones = await this.deletedEntities.bulkGet(keys)
-      if (tombstones.some((tombstone) => tombstone?.occurredAt !== undo.occurredAt)) throw new Error('The deleted note changed; undo is unavailable')
-      if (await this.notes.get(undo.note.id) || (await this.cards.bulkGet(undo.cards.map((card) => card.id))).some(Boolean) || (await this.reviewEntries.bulkGet(undo.reviews.map((review) => review.id))).some(Boolean) || (await this.noteMedia.bulkGet(undo.media.map((reference) => reference.id))).some(Boolean)) throw new Error('The deleted note changed; undo is unavailable')
-      await this.notes.add(undo.note)
-      if (undo.cards.length) await this.cards.bulkAdd(undo.cards)
-      if (undo.reviews.length) await this.reviewEntries.bulkAdd(undo.reviews)
-      if (undo.media.length) await this.noteMedia.bulkAdd(undo.media)
-      await this.deletedEntities.bulkDelete(keys)
-      await this.outbox.delete(undo.operationId)
-      await this.syncRevisions.delete(undo.operationId)
-      await this.settings.delete('noteDeletionUndo')
-      return undo.note.id
-    })
+    const record = await this.pendingUndo()
+    return record?.kind === 'note-deletion' ? record : null
   }
 
   async deleteDeck(deckId: string, options: DeleteDeckOptions, now = new Date()): Promise<void> {
@@ -1518,7 +1498,7 @@ export class Collection extends Dexie {
         const operation: SyncOperation = { opId: id(), entityType: 'review', entityId: review.id, action: 'create', occurredAt: review.reviewedAt, payload: review }
         await this.enqueueOperation(operation)
         const syncEpoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
-        await this.settings.put({ key: 'reviewUndo', value: { review, syncEpoch, operationIds: [operation.opId], cards: [{ before: existing, after: existing }] } satisfies ReviewUndo })
+        await this.recordUndo({ kind: 'review', review, syncEpoch, operationIds: [operation.opId], cards: [{ before: existing, after: existing }] })
         return review
       }
       const operations: SyncOperation[] = []
@@ -1561,52 +1541,146 @@ export class Collection extends Dexie {
       ]
       await this.enqueueOperations(outbound)
       const syncEpoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
-      await this.settings.put({ key: 'reviewUndo', value: { review, syncEpoch, operationIds: outbound.map((operation) => operation.opId), cards: changedCards, ...(changedNote ? { note: changedNote } : {}) } satisfies ReviewUndo })
+      await this.recordUndo({ kind: 'review', review, syncEpoch, operationIds: outbound.map((operation) => operation.opId), cards: changedCards, ...(changedNote ? { note: changedNote } : {}) })
       return review
     })
   }
 
-  async latestReviewUndo(): Promise<ReviewUndo | null> {
-    const undo = (await this.settings.get('reviewUndo'))?.value as ReviewUndo | undefined
+  /** The single undo slot. Exactly one record exists at a time, so the learner
+   * is offered one undo rather than three competing ones. */
+  private async recordUndo(record: UndoRecord): Promise<void> {
+    await this.settings.put({ key: UNDO_KEY, value: record })
+  }
+
+  /** Replaces the stored record, so a bulk deletion cannot leave an undo behind
+   * that would restore only part of what was removed. */
+  private async clearUndo(): Promise<void> {
+    await this.settings.delete(UNDO_KEY)
+  }
+
+  private async readUndo(): Promise<UndoRecord | null> {
+    return ((await this.settings.get(UNDO_KEY))?.value as UndoRecord | undefined) ?? null
+  }
+
+  /**
+   * What can be undone right now, or null when the last action is no longer
+   * undoable. This is the whole of the public undo read surface: one call, one
+   * discriminated record, no protocol knowledge required of the caller.
+   */
+  async pendingUndo(): Promise<UndoRecord | null> {
+    const record = await this.readUndo()
+    if (!record) return null
     const epoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
-    if (!undo || undo.syncEpoch !== epoch) return null
-    if (undo.customSession && JSON.stringify((await customStudySessions(this)).find((session) => session.id === undo.customSession!.after.id)) !== JSON.stringify(undo.customSession.after)) return null
-    if ((await this.outbox.bulkGet(undo.operationIds)).some((operation) => !operation)) return null
-    if ((await this.cards.bulkGet(undo.cards.map(({ after }) => after.id))).some((card, index) => JSON.stringify(card) !== JSON.stringify(undo.cards[index].after))) return null
-    if (undo.note && JSON.stringify(await this.notes.get(undo.note.after.id)) !== JSON.stringify(undo.note.after)) return null
-    if (JSON.stringify(await this.reviewEntries.get(undo.review.id)) !== JSON.stringify(undo.review)) return null
-    return undo
+    const guards = {
+      epochMatches: undoEpochMatches(epoch, record),
+      operationsPending: await undoOperationsPending(async (operationId) => Boolean(await this.outbox.get(operationId)), record),
+      rowsUnchanged: await this.undoRowsUnchanged(record),
+    }
+    return undoBlocker(guards) === null ? record : null
+  }
+
+  /**
+   * Drops the pending undo.
+   *
+   * A bulk deletion records one undo per item, so only the last would survive -
+   * and pressing it would restore a fraction of what was removed, which reads as
+   * a bug. Bulk maintenance calls this so no undo is offered at all.
+   */
+  async clearPendingUndo(): Promise<void> {
+    await this.clearUndo()
+  }
+
+  /**
+   * Attaches context to the pending undo without replacing it.
+   *
+   * Custom Study records which session an answer came from so the session can be
+   * rolled back with the answer. It used to read the undo and write it back into
+   * the Collection's private settings key, which is how a record could be
+   * reshaped behind the seam.
+   */
+  async attachUndoContext(customSession: { before: CustomStudySession; after: CustomStudySession }): Promise<void> {
+    await this.transaction('rw', this.settings, async () => {
+      const record = await this.readUndo()
+      if (!record || record.kind !== 'review') return
+      await this.recordUndo({ ...record, customSession })
+    })
+  }
+
+  /**
+   * Whether every row this record depends on still holds the value it captured.
+   * Returns the specific reason rather than a bare false, so a refusal can say
+   * what changed instead of a generic "unavailable".
+   */
+  private async undoRowsUnchanged(record: UndoRecord): Promise<UndoRowBlocker | null> {
+    if (record.kind === 'review') {
+      if (record.customSession && !undoRowUnchanged((await customStudySessions(this)).find((session) => session.id === record.customSession!.after.id), record.customSession.after)) return 'changed'
+      const cards = await this.cards.bulkGet(record.cards.map(({ after }) => after.id))
+      if (cards.some((card, index) => !undoRowUnchanged(card, record.cards[index].after))) return 'changed'
+      if (record.note && !undoRowUnchanged(await this.notes.get(record.note.after.id), record.note.after)) return 'changed'
+      return undoRowUnchanged(await this.reviewEntries.get(record.review.id), record.review) ? null : 'changed'
+    }
+    if (record.kind === 'note-deletion') {
+      if (!await this.decks.get(record.note.deckId) || !await this.noteTypes.get(record.note.typeId)) return 'original-deck-or-type-gone'
+      if (!undoRowUnchanged(await this.noteTypes.get(record.note.typeId), record.noteType)) return 'note-type-changed'
+      if (await this.notes.get(record.note.id)) return 'changed'
+      return (await this.cards.bulkGet(record.cards.map((card) => card.id))).every((card) => !card) ? null : 'changed'
+    }
+    return undoRowUnchanged(await this.cards.get(record.after.id), record.after) ? null : 'changed'
+  }
+
+  /**
+   * Undoes the last action and returns what it affected. Rejects when the
+   * action is no longer undoable, with the reason the guards give.
+   */
+  async undo(): Promise<string> {
+    return this.transaction('rw', [this.settings, this.cards, this.notes, this.noteTypes, this.decks, this.reviewEntries, this.noteMedia, this.outbox, this.syncRevisions, this.deletedEntities], async () => {
+      const record = await this.readUndo()
+      if (!record) throw new Error('There is nothing to undo.')
+      const epoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
+      const rows = await this.undoRowsUnchanged(record)
+      const blocker = undoBlocker({
+        epochMatches: undoEpochMatches(epoch, record),
+        operationsPending: await undoOperationsPending(async (operationId) => Boolean(await this.outbox.get(operationId)), record),
+        rowsUnchanged: rows,
+      })
+      if (blocker) throw new Error(undoRefusal(record, blocker, rows))
+      const subject = undoSubject(record)
+      const ids = undoOperationIds(record)
+      if (record.kind === 'review') {
+        const sessions = record.customSession ? await customStudySessions(this) : []
+        await this.cards.bulkPut(record.cards.map(({ before }) => before))
+        if (record.note) await this.notes.put(record.note.before)
+        await this.reviewEntries.delete(record.review.id)
+        if (record.customSession) await this.settings.put({ key: customStudyKey, value: sessions.map((session) => session.id === record.customSession!.after.id ? record.customSession!.before : session) })
+      } else if (record.kind === 'note-deletion') {
+        const keys = [tombstoneKey('note', record.note.id), ...record.cards.map((card) => tombstoneKey('card', card.id)), ...record.reviews.map((review) => tombstoneKey('review', review.id)), ...record.media.map((reference) => tombstoneKey('noteMedia', reference.id))]
+        const tombstones = await this.deletedEntities.bulkGet(keys)
+        if (tombstones.some((tombstone) => tombstone?.occurredAt !== record.occurredAt)) throw new Error('The deleted note changed; undo is unavailable')
+        if ((await this.cards.bulkGet(record.cards.map((card) => card.id))).some(Boolean) || (await this.reviewEntries.bulkGet(record.reviews.map((review) => review.id))).some(Boolean) || (await this.noteMedia.bulkGet(record.media.map((reference) => reference.id))).some(Boolean)) throw new Error('The deleted note changed; undo is unavailable')
+        await this.notes.add(record.note)
+        if (record.cards.length) await this.cards.bulkAdd(record.cards)
+        if (record.reviews.length) await this.reviewEntries.bulkAdd(record.reviews)
+        if (record.media.length) await this.noteMedia.bulkAdd(record.media)
+        await this.deletedEntities.bulkDelete(keys)
+      } else {
+        await this.cards.put(record.before)
+      }
+      await this.outbox.bulkDelete(ids)
+      await this.syncRevisions.bulkDelete(ids)
+      await this.clearUndo()
+      return subject
+    })
+  }
+
+  async latestReviewUndo(): Promise<ReviewUndo | null> {
+    const record = await this.pendingUndo()
+    return record?.kind === 'review' ? record : null
   }
 
   async beginSyncAttempt(): Promise<void> {
     await this.transaction('rw', this.settings, async () => {
       const epoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
       await this.settings.put({ key: 'syncEpoch', value: epoch + 1 })
-    })
-  }
-
-  async undoLastReview(): Promise<string> {
-    return this.transaction('rw', [this.settings, this.cards, this.notes, this.reviewEntries, this.outbox, this.syncRevisions], async () => {
-      const undo = (await this.settings.get('reviewUndo'))?.value as ReviewUndo | undefined
-      if (!undo) throw new Error('No recent review to undo')
-      const sessions = undo.customSession ? await customStudySessions(this) : []
-      if (undo.customSession && JSON.stringify(sessions.find((session) => session.id === undo.customSession!.after.id)) !== JSON.stringify(undo.customSession.after)) throw new Error('The custom session changed; undo is unavailable')
-      const epoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
-      if (epoch !== undo.syncEpoch) throw new Error('This review cannot be undone after a sync attempt')
-      const pending = await this.outbox.bulkGet(undo.operationIds)
-      if (pending.some((operation) => !operation)) throw new Error('This review has already synchronized and cannot be undone')
-      const currentCards = await this.cards.bulkGet(undo.cards.map(({ after }) => after.id))
-      if (currentCards.some((card, index) => JSON.stringify(card) !== JSON.stringify(undo.cards[index].after))) throw new Error('A card changed since this review; undo is unavailable')
-      if (undo.note && JSON.stringify(await this.notes.get(undo.note.after.id)) !== JSON.stringify(undo.note.after)) throw new Error('The note changed since this review; undo is unavailable')
-      if (JSON.stringify(await this.reviewEntries.get(undo.review.id)) !== JSON.stringify(undo.review)) throw new Error('The review log changed; undo is unavailable')
-      await this.cards.bulkPut(undo.cards.map(({ before }) => before))
-      if (undo.note) await this.notes.put(undo.note.before)
-      await this.reviewEntries.delete(undo.review.id)
-      if (undo.customSession) await this.settings.put({ key: customStudyKey, value: sessions.map((session) => session.id === undo.customSession!.after.id ? undo.customSession!.before : session) })
-      await this.outbox.bulkDelete(undo.operationIds)
-      await this.syncRevisions.bulkDelete(undo.operationIds)
-      await this.settings.delete('reviewUndo')
-      return undo.review.cardId
     })
   }
 
@@ -1669,31 +1743,13 @@ export class Collection extends Dexie {
       const operationId = id()
       await this.enqueueOperation({ opId: operationId, entityType: 'card', entityId: cardId, action: 'update', occurredAt: now.toISOString(), payload: updated })
       const syncEpoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
-      await this.settings.put({ key: 'cardMaintenanceUndo', value: { syncEpoch, operationId, action, before: card, after: updated } satisfies CardMaintenanceUndo })
+      await this.recordUndo({ kind: 'card-maintenance', syncEpoch, operationIds: [operationId], action, before: card, after: updated })
     })
   }
 
   async latestCardMaintenanceUndo(): Promise<CardMaintenanceUndo | null> {
-    const undo = (await this.settings.get('cardMaintenanceUndo'))?.value as CardMaintenanceUndo | undefined
-    const epoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
-    if (!undo || undo.syncEpoch !== epoch || !await this.outbox.get(undo.operationId)) return null
-    if (JSON.stringify(await this.cards.get(undo.after.id)) !== JSON.stringify(undo.after)) return null
-    return undo
-  }
-
-  async undoLastCardMaintenance(): Promise<string> {
-    return this.transaction('rw', [this.cards, this.outbox, this.syncRevisions, this.settings], async () => {
-      const undo = (await this.settings.get('cardMaintenanceUndo'))?.value as CardMaintenanceUndo | undefined
-      if (!undo) throw new Error('No recent card action to undo')
-      const epoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
-      if (epoch !== undo.syncEpoch || !await this.outbox.get(undo.operationId)) throw new Error('This card action cannot be undone after a sync attempt')
-      if (JSON.stringify(await this.cards.get(undo.after.id)) !== JSON.stringify(undo.after)) throw new Error('The card changed since this action; undo is unavailable')
-      await this.cards.put(undo.before)
-      await this.outbox.delete(undo.operationId)
-      await this.syncRevisions.delete(undo.operationId)
-      await this.settings.delete('cardMaintenanceUndo')
-      return undo.before.id
-    })
+    const record = await this.pendingUndo()
+    return record?.kind === 'card-maintenance' ? record : null
   }
 
   async pendingOperations(): Promise<SyncOperation[]> {
