@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { SyncCompatibilityError, type createSyncService } from './sync-service.js'
+import { SyncBackupError, SyncCompatibilityError, type createSyncService } from './sync-service.js'
 
 type Service = ReturnType<typeof createSyncService>
 
@@ -65,9 +65,11 @@ export function createSyncHttpHandler(service: Service, { allowedOrigin, jsonBod
         if (!authorization?.startsWith('Bearer ')) return reply(401, { error: 'Authentication required.' })
         const payload = await body(request, jsonBodyLimitBytes) as { protocolVersion?: unknown; collectionSchemaVersion?: unknown; cursor?: number; operations?: unknown[] }
         if (typeof payload.cursor !== 'number' || !Array.isArray(payload.operations)) return reply(400, { error: 'A cursor and operations array are required.' })
-        try { await service.backupBeforeSync(authorization.slice(7), payload as Parameters<Service['backupBeforeSync']>[1]) }
-        catch (error) { return reply(507, { code: 'backup-failed', error: error instanceof Error ? error.message : 'The automatic backup failed; no sync changes were accepted.' }) }
-        return reply(200, service.sync(authorization.slice(7), payload as Parameters<Service['sync']>[1]))
+        try { return reply(200, await service.syncWithBackup(authorization.slice(7), payload as Parameters<Service['sync']>[1])) }
+        catch (error) {
+          if (error instanceof SyncBackupError) return reply(507, { code: 'backup-failed', error: error.message })
+          throw error
+        }
       }
       if (request.method === 'GET' && request.url === '/api/backups') {
         const authorization = request.headers.authorization

@@ -1,5 +1,6 @@
 import type { Collection, SyncOperation, SyncSettings } from './collection'
 import { CLIENT_COLLECTION_SCHEMA_VERSION, SYNC_PROTOCOL_VERSION, type IncompatibleSync, type SyncHealth } from '../sync-capabilities.js'
+import { digestMedia } from './media'
 
 type Fetcher = typeof fetch
 type Change = { cursor: number; opId: string; entityType: string; entityId: string; action: string; occurredAt: string; payload: unknown }
@@ -37,8 +38,11 @@ export async function createAndDownloadPcBackup(settings: SyncSettings, fetcher:
   }
   const manifest = await response.json() as PcBackup
   const download = await fetcher(`${settings.endpoint.replace(/\/$/, '')}/api/backups/${manifest.id}/download`, { headers: { authorization: `Bearer ${settings.token}` } })
-  if (!download.ok || download.headers.get('x-content-sha256') !== manifest.archiveSha256) throw new Error('The verified PC backup could not be downloaded. It remains available in the PC backup list.')
-  return { manifest, bytes: await download.blob() }
+  if (!download.ok) throw new Error('The verified PC backup could not be downloaded. It remains available in the PC backup list.')
+  const bytes = await download.blob()
+  const actualDigest = await digestMedia(bytes)
+  if (bytes.size !== manifest.archiveBytes || actualDigest !== manifest.archiveSha256 || download.headers.get('x-content-sha256') !== manifest.archiveSha256) throw new Error('The downloaded PC backup failed its size or SHA-256 check. It remains available in the PC backup list; try downloading it again.')
+  return { manifest, bytes }
 }
 
 type BackupFailed = { state: 'backup-failed'; message: string }
