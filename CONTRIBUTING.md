@@ -2,6 +2,16 @@
 
 Kiroku uses GitHub Issues as an executable dependency graph. Issue #1 is the parent specification; Issues #2–#26 are vertical slices with native blocking relationships.
 
+## First, check for drift
+
+```sh
+npm run drift
+```
+
+Run this before picking up work. It reports branches that carry work no pull request can find, worktrees holding uncommitted changes, how far local `main` is behind `origin/main`, and whether the primary checkout is on `main`. It exits non-zero when it finds any, so read the code it prints: `1` is recoverable drift, `2` is possible loss.
+
+A finding is evidence, not a verdict. "Nothing is in it" means no running process named that path, which a session that never names its directory will not show; ask before you delete anything. See [the drift check guide](docs/agents/drift-check.md) for what each check does and how it survives squash merges.
+
 ## Claim work safely
 
 1. Find an open `ready-for-agent` issue whose native `blocked_by` count is zero.

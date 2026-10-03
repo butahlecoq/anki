@@ -15,6 +15,7 @@
     "typecheck": "tsc -b",
     "lint": "eslint .",
     "test": "vitest run",
+    "drift": "node scripts/drift-check.mjs",
     "server:build": "tsc -p tsconfig.server.json",
     "server:start": "npm run server:build && node --enable-source-maps dist-server/server/index.js",
     "server:pair": "npm run server:build && node --enable-source-maps dist-server/server/index.js --pairing-code",
