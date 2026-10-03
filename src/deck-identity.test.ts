@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto'
 import initSqlJs, { type SqlJsStatic } from 'sql.js'
 import { afterEach, beforeAll, expect, test } from 'vitest'
-import { createCollection, type Collection } from './collection'
+import { createCollection, DEFAULT_DECK_OPTION_GROUP_ID, type Collection } from './collection'
 import { exportAnkiPackage } from './anki-export'
 import { prepareAnkiDataImport, prepareAnkiImport } from './anki-import'
 import { nativeAnkiProjectionData } from './native-anki-projection'
@@ -95,4 +95,30 @@ test('a Deck Path with non-ASCII names survives an export and a re-import', asyn
   await (await prepareAnkiImport(await exportFile(source), restored, { SQL })).commit()
   expect(before.map(([path]) => path)).toEqual(['日本語', '日本語::語彙'])
   expect(await deckPaths(restored)).toEqual(before)
+})
+
+test('a collection holding a legacy path identity ends the import with one deck, rekeyed and told', async () => {
+  const data = await packageNaming(['JLPT::N5'])
+  const db = database()
+  // The state a collection is left in by an import made before the identity was
+  // derived: the Synthesised Deck under the legacy form, with its child on it.
+  const legacy = 'anki-deck-path:JLPT'
+  const now = new Date('2026-10-02T12:00:00Z').toISOString()
+  await db.decks.bulkPut([
+    { id: legacy, name: 'JLPT', parentId: null, optionGroupId: DEFAULT_DECK_OPTION_GROUP_ID, createdAt: now, updatedAt: now },
+    { id: 'anki-deck:1', name: 'N5', parentId: legacy, optionGroupId: DEFAULT_DECK_OPTION_GROUP_ID, createdAt: now, updatedAt: now },
+  ])
+
+  const prepared = await prepareAnkiDataImport(data, db, { SQL })
+  const derived = (await deckPaths(db)).find(([path]) => path === 'JLPT')?.[1]
+  expect(prepared.projectedEntities().decks.map(({ id, name, parentId }) => [name, id === legacy ? 'legacy' : id, parentId === legacy ? 'legacy' : parentId]))
+    .toEqual([['JLPT', expect.stringMatching(/^anki-deck:\d+$/), null], ['N5', 'anki-deck:1', expect.stringMatching(/^anki-deck:\d+$/)]])
+  expect(prepared.issues.filter((issue) => issue.code === 'deck-identity-normalised'))
+    .toEqual([expect.objectContaining({ severity: 'info', subject: 'JLPT' })])
+  expect(prepared.issues.filter((issue) => issue.severity === 'error')).toEqual([])
+
+  await prepared.commit()
+  expect(await deckPaths(db)).toEqual([['JLPT', derived === legacy ? expect.stringMatching(/^anki-deck:\d+$/) as unknown as string : derived!], ['JLPT::N5', 'anki-deck:1']])
+  expect(await db.decks.get(legacy)).toBeUndefined()
+  expect((await db.cards.toArray()).map(({ deckId }) => deckId)).toEqual(['anki-deck:1'])
 })

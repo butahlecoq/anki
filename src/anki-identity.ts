@@ -29,6 +29,15 @@ export function derivedNativeId(seed: string) {
 }
 
 /**
+ * The identity form a deck took before its identity was derived from its Deck
+ * Path. Still present in collections imported before ADR 0001, and reconciled
+ * at import time rather than by a migration.
+ */
+export function legacyDeckIdentity(identity: string) {
+  return identity.startsWith('anki-deck-path:')
+}
+
+/**
  * The Native Identity to write into a package: the number an identity already
  * carries, or one derived from the identity itself when it carries none.
  */
