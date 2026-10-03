@@ -47,7 +47,7 @@ Base commit: `60b5cbb5c0a09cfb63c2ce8f9e4cd52ed288206c` (current `origin/main`).
 
 ### [#87 Generate the status document from Git and the tracker](https://github.com/butahlecoq/anki/issues/87)
 
-- PR [#167](https://github.com/butahlecoq/anki/pull/167) (draft); head `ee5209b35d7e65a5406fcc7157eee71c802e0d42`; exact-head checks: no hosted checks reported; branch `feat/87-live-status-luna-night`; worktree: D:/work/anki-87-live-status-luna-night; deferred: This remains a draft. `npm run check` was not run because the #85 worker is actively using the shared verification suite; the runbook prohibits competing full browser/unit/oracle runs. Run the complete gate on the final PR head after #85 records its final evidence/checkpoint. No merge-readiness claim is made.
+- PR [#167](https://github.com/butahlecoq/anki/pull/167) (draft); head `c1a88f114c0d02f9a077ba924014df22888160dd`; exact-head checks: no hosted checks reported; branch `feat/87-live-status-luna-night`; worktree: D:/work/anki-87-live-status-luna-night; deferred: This remains a draft. `npm run check` was not run because the #85 worker is actively using the shared verification suite; the runbook prohibits competing full browser/unit/oracle runs. Run the complete gate on the final PR head after #85 records its final evidence/checkpoint. No merge-readiness claim is made.
 
 ### [#91 Preserve imported field HTML instead of normalising it to plain text](https://github.com/butahlecoq/anki/issues/91)
 
@@ -56,6 +56,10 @@ Base commit: `60b5cbb5c0a09cfb63c2ce8f9e4cd52ed288206c` (current `origin/main`).
 ### [#93 UI problems / Bad sizes / Fonts](https://github.com/butahlecoq/anki/issues/93)
 
 - PR [#137](https://github.com/butahlecoq/anki/pull/137) (draft); head `399ca48a01c49aa5029559d2d74384f218dca23a`; exact-head checks: no hosted checks reported; branch `fix/93-consistent-button-sizes`; worktree: D:/work/anki-issue-93; deferred: none stated in PR or checkpoint comments
+
+### [#94 Match Anki review scheduling, state updates, and queue order](https://github.com/butahlecoq/anki/issues/94)
+
+- PR [#168](https://github.com/butahlecoq/anki/pull/168) (draft); head `21388e23f3aff0c0fcee5be4f76129f1ce06bf8c`; exact-head checks: no hosted checks reported; branch `feat/94-official-scheduler-matrix`; worktree: D:/work/anki-94-scheduler-luna-night; deferred: The complete `npm run check` is deferred while the active #85 worker retains the shared full-suite verification capacity. Its latest checkpoint reports 83 Playwright passes, 6 iPhone WebKit failures, and 9 declared skips. This PR remains a draft until the complete gate runs on the final head.
 
 ### [#149 Record and handle the iOS Lockdown Mode limits](https://github.com/butahlecoq/anki/issues/149)
 
