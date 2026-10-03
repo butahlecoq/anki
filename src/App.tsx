@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { OFFLINE_READY_EVENT, OFFLINE_UNAVAILABLE_EVENT, UPDATE_READY_EVENT } from './appEvents'
 import { chooseAppearance, readAppearance, watchAppearance, type Appearance } from './appearance'
 import { CollectionWorkspace } from './CollectionWorkspace'
+import { activateAvailableUpdate } from './service-worker-update'
 
 function useOnlineStatus() {
   const [online, setOnline] = useState(() => navigator.onLine)
@@ -49,11 +50,28 @@ export function App() {
   const appearance = useAppearance()
   const offlineStatus = useOfflineShellStatus()
   const [updateReady, setUpdateReady] = useState(false)
+  const [updateError, setUpdateError] = useState('')
+  const [activatingUpdate, setActivatingUpdate] = useState(false)
   const [hash, setHash] = useState(() => window.location.hash)
   const onStatistics = hash === '#statistics'
   const onNoteTypes = hash === '#note-types'
   const onBrowse = hash === '#browse'
   const onStudy = hash === '#study' || hash.startsWith('#custom-review/')
+
+  async function activateUpdate() {
+    setActivatingUpdate(true)
+    setUpdateError('')
+    try {
+      const activated = await activateAvailableUpdate()
+      if (!activated) {
+        setUpdateError('The update is no longer waiting. Reload the app to check again.')
+        setActivatingUpdate(false)
+      }
+    } catch {
+      setUpdateError('The update could not be activated. Your saved collection remains on this device; try reloading when you are online.')
+      setActivatingUpdate(false)
+    }
+  }
   const connection = online
     ? offlineStatus === 'ready' ? 'Offline shell ready' : offlineStatus === 'checking' ? 'Preparing offline shell' : 'Offline cache unavailable'
     : offlineStatus === 'ready' ? 'Offline shell active' : 'Offline shell unavailable'
@@ -115,7 +133,7 @@ export function App() {
         <a className={onBrowse ? 'active' : ''} href="#browse" aria-label="Browse"><span>Browse</span></a>
         <a className={onStatistics ? 'active' : ''} href="#statistics" aria-label="Statistics"><span>Stats</span></a>
       </nav>
-      {updateReady && <div className="update-toast" role="status"><span>A new version is ready.</span><button type="button" onClick={() => window.location.reload()}>Reload</button></div>}
+      {updateReady && <div className="update-toast" role="status"><span>{updateError || (activatingUpdate ? 'Updating the app…' : 'A new version is ready.')}</span>{!activatingUpdate && <button type="button" onClick={() => void activateUpdate()}>{updateError ? 'Retry update' : 'Update app'}</button>}</div>}
     </div>
   )
 }

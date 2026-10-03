@@ -4,11 +4,14 @@ import { State } from 'ts-fsrs'
 import { App } from './App'
 import { collection } from './collection'
 import { CollectionWorkspace } from './CollectionWorkspace'
+import { setActivateWaitingWorker } from './service-worker-update'
+import { UPDATE_READY_EVENT } from './appEvents'
 
 const serviceWorkerDescriptor = Object.getOwnPropertyDescriptor(navigator, 'serviceWorker')
 
 afterEach(() => {
   cleanup()
+  setActivateWaitingWorker(undefined)
   window.location.hash = ''
   if (serviceWorkerDescriptor) Object.defineProperty(navigator, 'serviceWorker', serviceWorkerDescriptor)
   else Reflect.deleteProperty(navigator, 'serviceWorker')
@@ -37,6 +40,26 @@ describe('application shell', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Offline cache unavailable')
     expect(screen.getByRole('button', { name: /new deck/i })).toBeEnabled()
     expect(screen.getByRole('button', { name: 'Connect a PC' })).toBeEnabled()
+  })
+
+  test('activates a waiting service worker when the learner accepts an update', async () => {
+    const activate = vi.fn().mockResolvedValue(undefined)
+    setActivateWaitingWorker(activate)
+    render(<App />)
+    window.dispatchEvent(new CustomEvent(UPDATE_READY_EVENT))
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Update app' }))
+    await waitFor(() => expect(activate).toHaveBeenCalledWith(true))
+    expect(await screen.findByText('Updating the app…')).toBeVisible()
+  })
+
+  test('does not reload the page when the waiting update is unavailable', async () => {
+    render(<App />)
+    window.dispatchEvent(new CustomEvent(UPDATE_READY_EVENT))
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Update app' }))
+    expect(await screen.findByText(/The update is no longer waiting/)).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Retry update' })).toBeVisible()
   })
 })
 

@@ -33,7 +33,7 @@ import { CustomStudy } from './CustomStudy'
 import { answerCustomStudy, customStudyQueue, practiceChoices, undoCustomStudy } from './custom-study'
 import { customStudySessions } from './custom-study-state'
 import { isShortcutBlocked } from './keyboard-shortcuts'
-import { formatStorageBytes, requestPersistentStorage, type PersistenceResult } from './offline-storage'
+import { formatStorageBytes, requestPersistentStorage, userFacingStorageError, type PersistenceResult } from './offline-storage'
 import { TextCollectionDialog } from './TextCollectionDialog'
 import { SyncConflicts } from './SyncConflicts'
 import { loadSampleDeck, removeSampleDeck, SAMPLE_DECK_NAME } from './sample-deck'
@@ -101,7 +101,7 @@ function DeckDialog({ deck, parentId, onClose }: { deck?: Deck; parentId?: strin
       else await collection.createDeck(name, { parentId })
       onClose()
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to save deck')
+      setError(userFacingStorageError(reason, 'Unable to save deck'))
     }
   }
 
@@ -159,7 +159,7 @@ function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: Note; on
       setError('')
       requestAnimationFrame(() => { textarea.focus(); textarea.setSelectionRange(start, start + replacement.length) })
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to make cloze deletion')
+      setError(userFacingStorageError(reason, 'Unable to make cloze deletion'))
     }
   }
 
@@ -173,7 +173,7 @@ function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: Note; on
       setAttachments((current) => [...current, ...next])
       setError('')
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to attach media')
+      setError(userFacingStorageError(reason, 'Unable to attach media'))
     }
   }
 
@@ -188,7 +188,7 @@ function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: Note; on
       else await collection.createNote(deckId, typeId, fields)
       onClose()
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to save note')
+      setError(userFacingStorageError(reason, 'Unable to save note'))
     }
   }
 
@@ -245,7 +245,7 @@ function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: Note; on
 
 function ExistingMedia({ media }: { media: NoteMediaReference }) {
   const [error, setError] = useState('')
-  return <div className="media-attachment"><strong>{media.displayName}</strong><span>{media.side} · {media.kind}</span><button className="text-button" type="button" onClick={() => void collection.removeMedia(media.id).catch((reason) => setError(reason instanceof Error ? reason.message : 'Unable to remove media'))}>Remove</button>{error && <p className="form-error" role="alert">{error}</p>}</div>
+  return <div className="media-attachment"><strong>{media.displayName}</strong><span>{media.side} · {media.kind}</span><button className="text-button" type="button" onClick={() => void collection.removeMedia(media.id).catch((reason) => setError(userFacingStorageError(reason, 'Unable to remove media')))}>Remove</button>{error && <p className="form-error" role="alert">{error}</p>}</div>
 }
 
 function SyncControls() {
@@ -415,7 +415,7 @@ function ImportDialog({ onClose }: { onClose: () => void }) {
     try {
       setPrepared(await prepareAnkiImport(file, collection))
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to preview package')
+      setError(userFacingStorageError(reason, 'Unable to preview package'))
     } finally {
       setBusy(false)
     }
@@ -429,7 +429,7 @@ function ImportDialog({ onClose }: { onClose: () => void }) {
       await prepared.commit()
       onClose()
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to import package')
+      setError(userFacingStorageError(reason, 'Unable to import package'))
     } finally {
       setBusy(false)
     }
@@ -490,7 +490,7 @@ function EmptyCollection({ onNewDeck, onImport }: { onNewDeck: () => void; onImp
     setLoadingSample(true)
     setSampleError('')
     try { await loadSampleDeck() }
-    catch (reason) { setSampleError(reason instanceof Error ? reason.message : 'Unable to load the sample deck.') }
+    catch (reason) { setSampleError(userFacingStorageError(reason, 'Unable to load the sample deck.')) }
     finally { setLoadingSample(false) }
   }
   return (
@@ -591,7 +591,7 @@ function MoveDeckDialog({ deck, onClose }: { deck: Deck; onClose: () => void }) 
       await collection.moveDeck(deck.id, parentId || null)
       onClose()
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to move deck')
+      setError(userFacingStorageError(reason, 'Unable to move deck'))
     }
   }
 
@@ -623,7 +623,7 @@ function DeleteDeckDialog({ deck, onClose, onDeleted }: { deck: Deck; onClose: (
       else await collection.deleteDeck(deck.id, { mode })
       onDeleted()
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to delete deck')
+      setError(userFacingStorageError(reason, 'Unable to delete deck'))
     }
   }
 
@@ -650,7 +650,7 @@ function MoveNoteDialog({ note, onClose }: { note: Note; onClose: () => void }) 
       await collection.moveNote(note.id, destinationId)
       onClose()
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to move note')
+      setError(userFacingStorageError(reason, 'Unable to move note'))
     }
   }
   return <div className="dialog-backdrop"><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="move-note-title">
@@ -689,7 +689,7 @@ function DeckOptionsDialog({ deck, onClose }: { deck: Deck; onClose: () => void 
       await collection.assignDeckOptionGroup(deck.id, target.id)
       onClose()
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to save scheduling options')
+      setError(userFacingStorageError(reason, 'Unable to save scheduling options'))
     }
   }
 
@@ -755,7 +755,7 @@ function CardManagementDialog({ note, onClose }: { note: Note; onClose: () => vo
     try {
       await action()
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to update card')
+      setError(userFacingStorageError(reason, 'Unable to update card'))
     } finally {
       setBusyCardId(null)
     }
@@ -948,7 +948,7 @@ function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: string; se
       setReviewAnnouncement(`Recorded ${Rating[rating]}. ${reviewsRecorded + 1} rated this session.`)
       setShownAnswerCardId(null)
     } catch (reason) {
-      setActionError(reason instanceof Error && reason.message ? reason.message : 'Unable to update card')
+      setActionError(userFacingStorageError(reason, 'Unable to update card'))
     } finally {
       setIsAnswering(false)
     }
@@ -963,7 +963,7 @@ function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: string; se
       setReviewAnnouncement(message)
       setShownAnswerCardId(null)
     } catch (reason) {
-      setActionError(reason instanceof Error && reason.message ? reason.message : 'Unable to update card')
+      setActionError(userFacingStorageError(reason, 'Unable to update card'))
     } finally {
       setIsAnswering(false)
     }
@@ -995,7 +995,7 @@ function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: string; se
       setReviewAnnouncement('Last review undone. The card is back in the queue.')
       setShownAnswerCardId(null)
     } catch (reason) {
-      setActionError(reason instanceof Error && reason.message ? reason.message : 'Unable to undo review')
+      setActionError(userFacingStorageError(reason, 'Unable to undo review'))
     } finally {
       setIsAnswering(false)
     }
@@ -1011,7 +1011,7 @@ function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: string; se
       setDeletingNote(false)
       setShownAnswerCardId(null)
     } catch (reason) {
-      setActionError(reason instanceof Error && reason.message ? reason.message : 'Unable to delete note')
+      setActionError(userFacingStorageError(reason, 'Unable to delete note'))
     } finally {
       setIsAnswering(false)
     }
@@ -1025,7 +1025,7 @@ function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: string; se
       await collection.undoLastNoteDeletion()
       setReviewAnnouncement('Deletion undone. The note is back.')
     } catch (reason) {
-      setActionError(reason instanceof Error && reason.message ? reason.message : 'Unable to restore note')
+      setActionError(userFacingStorageError(reason, 'Unable to restore note'))
     } finally {
       setIsAnswering(false)
     }
@@ -1040,7 +1040,7 @@ function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: string; se
       setReviewAnnouncement('Card action undone.')
       setShownAnswerCardId(null)
     } catch (reason) {
-      setActionError(reason instanceof Error && reason.message ? reason.message : 'Unable to undo card action')
+      setActionError(userFacingStorageError(reason, 'Unable to undo card action'))
     } finally {
       setIsAnswering(false)
     }
@@ -1217,7 +1217,7 @@ function NoteTagsDialog({ note, onClose }: { note: Note; onClose: () => void }) 
       await collection.updateNoteTags(note.id, tags.split(','))
       onClose()
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to save tags')
+      setError(userFacingStorageError(reason, 'Unable to save tags'))
     }
   }
   return <div className="dialog-backdrop"><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="note-tags-title">
