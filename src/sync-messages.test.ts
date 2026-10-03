@@ -68,6 +68,11 @@ describe('a sync that did not complete', () => {
     expect(message).toMatch(/retry/i)
   })
 
+  test('a failed automatic backup displays the service explanation', () => {
+    expect(syncOutcomeMessage({ state: 'backup-failed', message: 'Verified backup unavailable; no sync changes were accepted.' }))
+      .toBe('Verified backup unavailable; no sync changes were accepted.')
+  })
+
   test('an unrecognised outcome still produces something the learner can read', () => {
     expect(syncOutcomeMessage({ state: 'error' })).toMatch(/could not be reached/i)
   })

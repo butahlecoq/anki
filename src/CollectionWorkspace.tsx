@@ -22,7 +22,7 @@ import { NoteTypeManager } from './NoteTypeManager'
 import { TemplatePreview } from './TemplatePreview'
 import { useReviewMedia } from './use-review-media'
 import { validateMedia } from './media'
-import { pairCollection, syncCollection } from './sync-client'
+import { createAndDownloadPcBackup, listPcBackups, pairCollection, previewPcBackupRestore, syncCollection, type PcBackup } from './sync-client'
 import { supportsServiceWorkers } from './browser-capabilities'
 import { clozeOrdinals } from './template-renderer'
 import { compareTypedAnswer } from './typed-answer'
@@ -225,6 +225,15 @@ function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: boolean 
   const [busy, setBusy] = useState(false)
   const offlineShellSupported = supportsServiceWorkers()
   const pairingKeyboard = useDialogKeyboard(() => setPairing(false), pairing)
+  const [backups, setBackups] = useState<PcBackup[]>([])
+  const [restorePreview, setRestorePreview] = useState('')
+
+  useEffect(() => {
+    if (!settings) return
+    let active = true
+    void listPcBackups(settings).then(({ backups: latest }) => { if (active) setBackups(latest) }).catch(() => { if (active) setBackups([]) })
+    return () => { active = false }
+  }, [settings])
 
   async function pair(event: FormEvent) {
     event.preventDefault()
@@ -253,8 +262,39 @@ function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: boolean 
     setBusy(true)
     setMessage('Syncing your collection:')
     const result = await syncCollection(collection)
+    if (result.state === 'complete' && settings) void listPcBackups(settings).then(({ backups: latest }) => setBackups(latest)).catch(() => {})
     setBusy(false)
     setMessage(syncOutcomeMessage(result))
+  }
+
+  async function backupPcCollection() {
+    if (!settings) return
+    setBusy(true)
+    try {
+      const { manifest, bytes } = await createAndDownloadPcBackup(settings)
+      const url = URL.createObjectURL(bytes)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `kiroku-backup-${manifest.createdAt.slice(0, 10)}.zip`
+      anchor.click()
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+      setBackups((current) => [manifest, ...current.filter((backup) => backup.id !== manifest.id)])
+      const mediaBytes = manifest.media.reduce((total, item) => total + item.byteLength, 0)
+      setMessage(`Verified backup downloaded · ${manifest.changeCount} sync changes · ${manifest.media.length} media files (${(mediaBytes / 1024 / 1024).toFixed(1)} MiB) · ${new Date(manifest.createdAt).toLocaleString()}.`)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'PC backup failed. The active collection was left unchanged.')
+    } finally { setBusy(false) }
+  }
+
+  async function previewPcRestore(backup: PcBackup) {
+    if (!settings) return
+    setBusy(true)
+    try {
+      const preview = await previewPcBackupRestore(settings, backup.id)
+      const mediaMiB = (preview.mediaBytes / 1024 / 1024).toFixed(1)
+      setRestorePreview(`${new Date(preview.manifest.createdAt).toLocaleString()} · ${preview.changeCount} sync changes through cursor ${preview.latestCursor} · ${preview.manifest.media.length} verified media files (${mediaMiB} MiB). ${preview.restoreBlocker}`)
+    } catch (error) { setRestorePreview(error instanceof Error ? error.message : 'Restore preview could not be verified.') }
+    finally { setBusy(false) }
   }
 
   return (
@@ -262,8 +302,11 @@ function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: boolean 
       <div><span className="section-code">SYNC // {settings ? 'PAIRED' : 'LOCAL ONLY'}</span><p aria-live="polite">{settings && !offlineSyncAvailable ? 'Sync is paused until Kiroku confirms its offline app shell is ready.' : message}</p></div>
       <div className="sync-actions">
         {settings && <button className="text-button" type="button" disabled={busy || !offlineSyncAvailable || !offlineShellSupported} onClick={() => void sync()}>{busy ? 'Syncing…' : 'Sync now'}</button>}
+        {settings && <button className="text-button" type="button" disabled={busy} onClick={() => void backupPcCollection()}>{busy ? 'Working…' : 'Download PC backup'}</button>}
         <button className="primary-action" type="button" disabled={busy} onClick={() => setPairing(true)}>{settings ? 'Pair another device' : 'Connect a PC'}</button>
       </div>
+      {settings && backups[0] && <p className="sync-help">Latest verified PC backup: {new Date(backups[0].createdAt).toLocaleString()} · {backups[0].changeCount} sync changes · {backups[0].media.length} media files · {backups[0].reason === 'manual' ? 'manual' : 'before sync'}.</p>}
+      {settings && backups[0] && <p className="sync-help"><button className="text-button" type="button" disabled={busy} onClick={() => void previewPcRestore(backups[0])}>Preview latest backup</button>{restorePreview && <span role="status"> {restorePreview}</span>}</p>}
       {pairing && (
         <div className="dialog-backdrop">
           <section {...pairingKeyboard} className="dialog" role="dialog" aria-modal="true" aria-labelledby="sync-dialog-title">

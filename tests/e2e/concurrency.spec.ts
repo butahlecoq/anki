@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:net'
 import { promisify } from 'node:util'
+import { readFile } from 'node:fs/promises'
+import { unzipSync } from 'fflate'
 
 const execFile = promisify(execFileCallback)
 const webURL = `http://127.0.0.1:${process.env.KIROKU_WEB_PORT ?? '4173'}`
@@ -197,4 +199,39 @@ test('independent offline clients merge fields, retain conflicts through reload,
     await Promise.allSettled([context.setOffline(false), phoneContext.close()])
     await syncService.close()
   }
+})
+
+test('learner downloads and previews a verified PC backup after sync', async ({ page }) => {
+  test.setTimeout(120_000)
+  const syncService = await isolatedSyncService()
+  const deckName = `Backup Japanese ${test.info().project.name} ${Date.now()}`
+  try {
+    await page.goto(webURL)
+    await page.getByRole('button', { name: 'New deck', exact: true }).click()
+    await page.getByLabel('Deck name').fill(deckName)
+    await page.getByRole('button', { name: 'Create deck', exact: true }).click()
+    await page.getByRole('button', { name: `Open ${deckName}`, exact: true }).click()
+    await page.getByRole('button', { name: 'Add note', exact: true }).click()
+    await page.getByLabel('Front', { exact: true }).fill('猫')
+    await page.getByLabel('Back', { exact: true }).fill('cat')
+    await page.getByRole('button', { name: 'Save note', exact: true }).click()
+    await pair(page, syncService.url, syncService.runtime)
+    await sync(page)
+
+    const downloadPromise = page.waitForEvent('download')
+    await page.getByRole('button', { name: 'Download PC backup', exact: true }).click()
+    const download = await downloadPromise
+    expect(download.suggestedFilename()).toMatch(/^kiroku-backup-\d{4}-\d{2}-\d{2}\.zip$/)
+    const archive = unzipSync(new Uint8Array(await readFile(await download.path())))
+    expect(archive['collection.sqlite']).toBeDefined()
+    expect(Object.keys(archive).some((name) => name.startsWith('media/'))).toBe(false)
+    await expect(page.getByText(/Verified backup downloaded · \d+ sync changes · 0 media files/)).toBeVisible()
+    await expect(page.getByText(/Latest verified PC backup:/)).toContainText(/manual/)
+
+    await page.getByRole('button', { name: 'Preview latest backup', exact: true }).click()
+    const preview = page.getByRole('status').filter({ hasText: /sync changes through cursor/ })
+    await expect(preview).toContainText(/verified media files/)
+    await expect(preview).toContainText(/preview does not change the active collection/)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= screen.width + 1)).toBe(true)
+  } finally { await syncService.close() }
 })

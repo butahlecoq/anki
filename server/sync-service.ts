@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { createBackupStore } from './backups.js'
 import { SERVER_MAX_COLLECTION_SCHEMA_VERSION, SYNC_PROTOCOL_VERSION, type IncompatibleSync, type SyncCapabilities, type SyncHealth } from '../sync-capabilities.js'
 import { schemaRequiredByPayload } from '../schema-ladder.js'
 import { isSupportedMediaType } from '../anki-interchange.js'
@@ -91,42 +92,51 @@ const token = () => randomBytes(32).toString('hex')
 export function createSyncService({ databasePath, mediaDirectory: configuredMediaDirectory }: ServiceOptions) {
   const mediaDirectory = configuredMediaDirectory ?? join(dirname(databasePath), 'media')
   const database = new DatabaseSync(databasePath, { enableForeignKeyConstraints: true })
-  database.exec(`
-    PRAGMA journal_mode=WAL;
-    PRAGMA synchronous=FULL;
-    PRAGMA busy_timeout=5000;
+  database.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; BEGIN IMMEDIATE')
+  let collectionSchemaVersion = 1
+  try {
+    database.exec(`
     CREATE TABLE IF NOT EXISTS pairing_codes (hash TEXT PRIMARY KEY, expires_at TEXT NOT NULL, consumed_at TEXT);
     CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, revoked_at TEXT);
     CREATE TABLE IF NOT EXISTS tokens (hash TEXT PRIMARY KEY, device_id TEXT NOT NULL, FOREIGN KEY(device_id) REFERENCES devices(id));
     CREATE TABLE IF NOT EXISTS changes (cursor INTEGER PRIMARY KEY AUTOINCREMENT, op_id TEXT UNIQUE NOT NULL, device_id TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, action TEXT NOT NULL, occurred_at TEXT NOT NULL, payload TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS media_blobs (digest TEXT PRIMARY KEY, byte_length INTEGER NOT NULL, mime_type TEXT NOT NULL, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS collection_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-  `)
-  const changeColumns = database.prepare('PRAGMA table_info(changes)').all() as Array<{ name: string }>
-  if (!changeColumns.some((column) => column.name === 'parents')) database.exec('ALTER TABLE changes ADD COLUMN parents TEXT')
-  if (!changeColumns.some((column) => column.name === 'review_id')) database.exec('ALTER TABLE changes ADD COLUMN review_id TEXT')
-  const storedWatermark = database.prepare("SELECT value FROM collection_metadata WHERE key = 'collection_schema_version'").get() as { value: string } | undefined
-  const persistedWatermark = storedWatermark && Number.parseInt(storedWatermark.value, 10)
-  const inferredWatermark = (database.prepare('SELECT entity_type, action, payload, parents, review_id FROM changes').all() as PersistedChange[]).reduce((maximum, change) => {
-    try {
-      return Math.max(maximum, schemaRequiredByOperation({
-        entityType: change.entity_type, action: change.action, payload: JSON.parse(change.payload),
-        ...(change.parents !== null ? { parents: JSON.parse(change.parents) as string[] } : {}),
-        ...(change.review_id !== null ? { reviewId: change.review_id } : {}),
-      }))
-    } catch {
-      // Corrupt historic payloads still require the newest service/client pair.
-      return SERVER_MAX_COLLECTION_SCHEMA_VERSION
-    }
-  }, 1)
-  let collectionSchemaVersion = Math.max(1, typeof persistedWatermark === 'number' && Number.isSafeInteger(persistedWatermark) ? persistedWatermark : 1, inferredWatermark)
-  if (!storedWatermark || collectionSchemaVersion !== persistedWatermark) database.prepare("INSERT INTO collection_metadata (key, value) VALUES ('collection_schema_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(collectionSchemaVersion))
+    `)
+    const changeColumns = database.prepare('PRAGMA table_info(changes)').all() as Array<{ name: string }>
+    if (!changeColumns.some((column) => column.name === 'parents')) database.exec('ALTER TABLE changes ADD COLUMN parents TEXT')
+    if (!changeColumns.some((column) => column.name === 'review_id')) database.exec('ALTER TABLE changes ADD COLUMN review_id TEXT')
+    const storedWatermark = database.prepare("SELECT value FROM collection_metadata WHERE key = 'collection_schema_version'").get() as { value: string } | undefined
+    const persistedWatermark = storedWatermark && Number.parseInt(storedWatermark.value, 10)
+    const inferredWatermark = (database.prepare('SELECT entity_type, action, payload, parents, review_id FROM changes').all() as PersistedChange[]).reduce((maximum, change) => {
+      try {
+        return Math.max(maximum, schemaRequiredByOperation({
+          entityType: change.entity_type, action: change.action, payload: JSON.parse(change.payload),
+          ...(change.parents !== null ? { parents: JSON.parse(change.parents) as string[] } : {}),
+          ...(change.review_id !== null ? { reviewId: change.review_id } : {}),
+        }))
+      } catch {
+        // Corrupt historic payloads still require the newest service/client pair.
+        return SERVER_MAX_COLLECTION_SCHEMA_VERSION
+      }
+    }, 1)
+    collectionSchemaVersion = Math.max(1, typeof persistedWatermark === 'number' && Number.isSafeInteger(persistedWatermark) ? persistedWatermark : 1, inferredWatermark)
+    if (!storedWatermark || collectionSchemaVersion !== persistedWatermark) database.prepare("INSERT INTO collection_metadata (key, value) VALUES ('collection_schema_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(collectionSchemaVersion))
+    database.exec('COMMIT')
+  } catch (error) {
+    try { database.exec('ROLLBACK') } catch { /* A failed begin leaves no transaction to roll back. */ }
+    database.close()
+    throw new Error(`Sync service schema migration failed safely; the previous database state was retained. ${error instanceof Error ? error.message : 'Unknown migration failure.'}`)
+  }
 
   const persistedCollectionSchemaVersion = () => {
     const metadata = database.prepare("SELECT value FROM collection_metadata WHERE key = 'collection_schema_version'").get() as { value: string } | undefined
     const value = metadata && Number.parseInt(metadata.value, 10)
     return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 ? value : 1
   }
+
+  const backups = createBackupStore({ database, mediaDirectory, backupDirectory: join(dirname(databasePath), 'backups'), collectionSchemaVersion: persistedCollectionSchemaVersion })
+  const authenticatedDevice = (accessToken: string) => database.prepare('SELECT devices.id FROM tokens JOIN devices ON devices.id = tokens.device_id WHERE tokens.hash = ? AND devices.revoked_at IS NULL').get(hash(accessToken)) as { id: string } | undefined
 
   const assertCapabilities = (request: SyncRequest, currentCollectionSchemaVersion: number) => {
     if (request.protocolVersion !== SYNC_PROTOCOL_VERSION) {
@@ -162,6 +172,31 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
       return code
     },
 
+    async createBackup(accessToken: string) {
+      if (!authenticatedDevice(accessToken)) throw new Error('Authentication required.')
+      return backups.create('manual')
+    },
+
+    async listBackups(accessToken: string) {
+      if (!authenticatedDevice(accessToken)) throw new Error('Authentication required.')
+      return backups.list()
+    },
+
+    async downloadBackup(accessToken: string, backupId: string) {
+      if (!authenticatedDevice(accessToken)) throw new Error('Authentication required.')
+      return backups.download(backupId)
+    },
+
+    async previewBackupRestore(accessToken: string, backupId: string) {
+      if (!authenticatedDevice(accessToken)) throw new Error('Authentication required.')
+      return backups.previewRestore(backupId)
+    },
+
+    async backupBeforeSync(accessToken: string, request: Pick<SyncRequest, 'operations'>) {
+      if (!authenticatedDevice(accessToken)) throw new Error('Authentication required.')
+      if (request.operations.length) await backups.create('before-sync')
+    },
+
     pair({ code, deviceId }: PairRequest, now = new Date()) {
       const pairing = database.prepare('SELECT expires_at, consumed_at FROM pairing_codes WHERE hash = ?').get(hash(code)) as { expires_at: string; consumed_at: string | null } | undefined
       if (!pairing || pairing.consumed_at || pairing.expires_at <= now.toISOString()) throw new Error('Pairing code is invalid or expired.')
@@ -180,7 +215,7 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
     },
 
     sync(accessToken: string, request: SyncRequest) {
-      const device = database.prepare('SELECT devices.id FROM tokens JOIN devices ON devices.id = tokens.device_id WHERE tokens.hash = ? AND devices.revoked_at IS NULL').get(hash(accessToken)) as { id: string } | undefined
+      const device = authenticatedDevice(accessToken)
       if (!device) throw new Error('Authentication required.')
       let accepted = 0
       database.exec('BEGIN IMMEDIATE')

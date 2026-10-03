@@ -12,6 +12,7 @@ export type SyncOutcome =
   | { state: 'complete'; accepted: number; media?: { uploaded: number; downloaded: number; pending: number; uploadError?: string; downloadError?: string } }
   | { state: 'authentication-required' }
   | { state: 'upgrade-required'; target: 'this-device' | 'pc-service' }
+  | { state: 'backup-failed'; message: string }
   | { state: 'unreachable' }
   | { state: 'error'; message?: string }
 
@@ -36,6 +37,7 @@ export function syncOutcomeMessage(result: SyncOutcome): string {
       ? 'This device needs a Kiroku update before it can sync this collection. Update the app, then try again. Your local changes remain on this device.'
       : 'Your PC sync service needs an update before this collection can sync. Update the PC service, then try again. Your local changes remain on this device.'
   }
+  if (result.state === 'backup-failed') return result.message
   return 'Your PC service could not be reached. Your changes remain on this device and will retry next time.'
 }
 

@@ -6,9 +6,42 @@ type Change = { cursor: number; opId: string; entityType: string; entityId: stri
 export type MediaSyncProgress = { uploaded: number; downloaded: number; pending: number; uploadError?: 'authentication-required' | 'unreachable'; downloadError?: 'authentication-required' | 'unreachable' }
 type Complete = { state: 'complete'; accepted: number; cursor: number; changes: Change[]; media?: MediaSyncProgress }
 type UpgradeRequired = { state: 'upgrade-required'; target: 'this-device' | 'pc-service'; message: string; requiredSchemaVersion?: number }
-type SyncResult = Complete | UpgradeRequired | { state: 'authentication-required' } | { state: 'unreachable' }
+type SyncResult = Complete | UpgradeRequired | BackupFailed | { state: 'authentication-required' } | { state: 'unreachable' }
 type PreflightResult = { state: 'ready' } | Exclude<SyncResult, Complete>
 export type PairingResult = { state: 'paired' } | { state: 'pairing-error' } | { state: 'unreachable' }
+export type PcBackup = { format: string; formatVersion: number; id: string; createdAt: string; reason: 'manual' | 'before-sync'; collectionSchemaVersion: number; changeCount: number; latestCursor: number; databaseBytes: number; databaseSha256: string; media: Array<{ digest: string; byteLength: number; mimeType: string }>; archiveSha256: string; archiveBytes: number }
+
+export async function listPcBackups(settings: SyncSettings, fetcher: Fetcher = fetch) {
+  const response = await fetcher(`${settings.endpoint.replace(/\/$/, '')}/api/backups`, { headers: { authorization: `Bearer ${settings.token}` } })
+  if (!response.ok) throw new Error(response.status === 401 ? 'This device needs to be paired again before it can view PC backups.' : 'PC backups could not be listed. Check the PC service and try again.')
+  const result = await response.json() as { backups: PcBackup[]; retention: { maximum: number; days: number } }
+  return result
+}
+
+export async function previewPcBackupRestore(settings: SyncSettings, id: string, fetcher: Fetcher = fetch) {
+  const response = await fetcher(`${settings.endpoint.replace(/\/$/, '')}/api/backups/${id}/restore-preview`, { method: 'POST', headers: { authorization: `Bearer ${settings.token}` } })
+  if (!response.ok) {
+    let message = 'The PC backup could not be verified for restore preview.'
+    try { message = (await response.json() as { error?: string }).error ?? message } catch { /* Keep the recovery instruction if the service returned no JSON. */ }
+    throw new Error(response.status === 401 ? 'This device needs to be paired again before it can preview a PC backup.' : message)
+  }
+  return response.json() as Promise<{ manifest: PcBackup; mediaBytes: number; changeCount: number; latestCursor: number; restoreAvailable: boolean; restoreBlocker: string }>
+}
+
+export async function createAndDownloadPcBackup(settings: SyncSettings, fetcher: Fetcher = fetch) {
+  const response = await fetcher(`${settings.endpoint.replace(/\/$/, '')}/api/backups`, { method: 'POST', headers: { authorization: `Bearer ${settings.token}` } })
+  if (!response.ok) {
+    let message = 'PC backup failed. The current PC collection was left unchanged.'
+    try { message = (await response.json() as { error?: string }).error ?? message } catch { /* Keep the safe fallback for malformed errors. */ }
+    throw new Error(response.status === 401 ? 'This device needs to be paired again before it can create a PC backup.' : message)
+  }
+  const manifest = await response.json() as PcBackup
+  const download = await fetcher(`${settings.endpoint.replace(/\/$/, '')}/api/backups/${manifest.id}/download`, { headers: { authorization: `Bearer ${settings.token}` } })
+  if (!download.ok || download.headers.get('x-content-sha256') !== manifest.archiveSha256) throw new Error('The verified PC backup could not be downloaded. It remains available in the PC backup list.')
+  return { manifest, bytes: await download.blob() }
+}
+
+type BackupFailed = { state: 'backup-failed'; message: string }
 
 class MediaTransferError extends Error {
   constructor(readonly state: 'authentication-required' | 'unreachable') {
@@ -101,6 +134,10 @@ export async function foregroundSync(settings: SyncSettings, operations: Partial
       let incompatibility: Partial<IncompatibleSync> = {}
       try { incompatibility = await response.json() as Partial<IncompatibleSync> } catch { /* Keep upgrade guidance useful for a malformed response. */ }
       return upgradeRequired(incompatibility, 'This collection cannot sync until Kiroku is updated.')
+    }
+    if (response.status === 507) {
+      const failure = await response.json() as { error?: string }
+      return { state: 'backup-failed', message: failure.error ?? 'The PC could not verify its automatic backup; no sync changes were accepted.' }
     }
     if (!response.ok) return { state: 'unreachable' }
     const payload = await response.json() as Omit<Complete, 'state'>
