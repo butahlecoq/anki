@@ -4,11 +4,12 @@ import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url'
 import type { Deck as NativeDeck, Notetype as NativeNotetype } from 'ankipack'
 import { State, type Collection, type CardRecord, type NoteType } from './collection'
 import { serializeAnkiImageOcclusion } from './image-occlusion-interchange'
-import { validateAnkiArchive } from './anki-archive'
+import { ANKI_ARCHIVE_LIMITS, validateAnkiArchive } from './anki-archive'
 import { nativeScheduleFingerprint, nativeReviewFingerprint } from './anki-scheduling-metadata'
 import { validateMediaBytes } from './anki-import'
 import { derivedNativeId, nativeNumberOf } from './anki-identity'
 import { readAnkiExportSnapshot } from './collection-queries'
+import { unzipSync, zipSync } from 'fflate'
 
 export interface AnkiExportOptions { deckId?: string; scheduling: boolean; history: boolean; media: boolean; SQL?: SqlJsStatic }
 let sqlPromise: Promise<SqlJsStatic> | undefined
@@ -27,6 +28,59 @@ function exportOrdinal(card: CardRecord, type: NoteType) {
 // A plain cloze template only hides the shape description, leaving the image
 // exposed; native mask rendering needs these runtime container identities.
 const nativeOcclusionBody = '{{Header}}<div hidden>{{cloze:Occlusion}}</div><div id="image-occlusion-container">{{Image}}<canvas id="image-occlusion-canvas"></canvas></div><p id="kiroku-occlusion-error"></p><script>try { anki.imageOcclusion.setup(); } catch (error) { document.getElementById("kiroku-occlusion-error").textContent = "Image occlusion requires a supported Anki version."; }</script>'
+
+const zstdMagic = [0x28, 0xb5, 0x2f, 0xfd]
+const exportZstdWindow = 1 << 14
+
+function rawZstdFrame(bytes: Uint8Array) {
+  const blocks = Math.max(1, Math.ceil(bytes.length / exportZstdWindow))
+  const frame = new Uint8Array(10 + blocks * 3 + bytes.length)
+  frame.set(zstdMagic)
+  frame[4] = 0x80 // Four-byte content size, no checksum or single-segment window.
+  frame[5] = 0x20 // A 16 KiB window keeps many-media Anki packages within our aggregate decoder budget.
+  new DataView(frame.buffer).setUint32(6, bytes.length, true)
+  let offset = 10
+  for (let index = 0; index < blocks; index += 1) {
+    const start = index * exportZstdWindow
+    const size = Math.min(exportZstdWindow, bytes.length - start)
+    const header = (size << 3) | Number(index === blocks - 1)
+    frame[offset++] = header & 0xff
+    frame[offset++] = (header >>> 8) & 0xff
+    frame[offset++] = (header >>> 16) & 0xff
+    frame.set(bytes.subarray(start, start + size), offset)
+    offset += size
+  }
+  return frame
+}
+
+/** Reframe ankipack's known raw-block frames with a smaller decoder window.
+ * It writes one 16 KiB window per media file; with thousands of files those
+ * independent windows exceeded our archive validator's cumulative budget. */
+function boundExportFrameWindows(bytes: Uint8Array) {
+  const files = unzipSync(bytes)
+  for (const [name, payload] of Object.entries(files)) {
+    if (payload.length < 10 || !zstdMagic.every((byte, index) => payload[index] === byte) || payload[4] !== 0x80 || payload[5] !== 0x38) continue
+    const expectedSize = new DataView(payload.buffer, payload.byteOffset, payload.byteLength).getUint32(6, true)
+    if (expectedSize > ANKI_ARCHIVE_LIMITS.entryBytes) continue
+    const content = new Uint8Array(expectedSize)
+    let sourceOffset = 10
+    let contentOffset = 0
+    let complete = false
+    while (!complete && sourceOffset + 3 <= payload.length) {
+      const header = payload[sourceOffset] | (payload[sourceOffset + 1] << 8) | (payload[sourceOffset + 2] << 16)
+      sourceOffset += 3
+      const size = header >>> 3
+      const kind = (header >>> 1) & 3
+      complete = Boolean(header & 1)
+      if (kind !== 0 || sourceOffset + size > payload.length || contentOffset + size > content.length) { contentOffset = -1; break }
+      content.set(payload.subarray(sourceOffset, sourceOffset + size), contentOffset)
+      sourceOffset += size
+      contentOffset += size
+    }
+    if (complete && sourceOffset === payload.length && contentOffset === expectedSize) files[name] = rawZstdFrame(content)
+  }
+  return zipSync(files, { level: 6 })
+}
 
 export async function exportAnkiPackage(collection: Collection, options: AnkiExportOptions) {
   const { Collection: AnkiCollection, Deck: AnkiDeck, Note: AnkiNote, Notetype, Package } = await import('ankipack')
@@ -94,8 +148,10 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
       const token = part.match(/^\[\[kiroku-media:([^\]]+)\]\]$/)
       if (!token) return escape(part)
       if (!options.media) return ''
-      const reference = referencesByNote.get(note.id)?.find((reference) => reference.displayName === token[1])
-      if (!reference) throw new Error(`Missing media reference: ${token[1]}`)
+      let displayName = token[1]
+      try { displayName = decodeURIComponent(displayName) } catch { /* malformed tokens remain unmatched */ }
+      const reference = referencesByNote.get(note.id)?.find((reference) => reference.displayName === displayName)
+      if (!reference) throw new Error(`Missing media reference: ${displayName}`)
       const name = names.get(reference.id)!
       return reference.kind === 'image' ? `<img src="${name}">` : `[sound:${name}]`
     }).join(''))
@@ -217,7 +273,7 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
     }
   }
   const SQL = options.SQL ?? await (sqlPromise ??= import('sql.js').then(({ default: init }) => init({ locateFile: () => sqlWasmUrl })))
-  const bytes = await AnkiCollection.fromData(data).toUint8Array(SQL)
+  const bytes = boundExportFrameWindows(await AnkiCollection.fromData(data).toUint8Array(SQL))
   validateAnkiArchive(bytes)
   return { bytes, filename: `${selectedPath ? 'kiroku-deck' : 'kiroku-collection'}-${new Date().toISOString().slice(0, 10)}.apkg`, notes: notes.length, cards: data.cards.length, media: media.size, reviews: data.revlog.length }
 }
