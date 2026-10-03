@@ -255,6 +255,9 @@ describe('Anki package import', () => {
       durationMs: 1200,
       due: '2024-09-01T12:00:00.000Z',
       scheduledDays: 5,
+      afterDue: '2024-09-13T12:00:00.000Z',
+      afterScheduledDays: 12,
+      afterState: State.Review,
       elapsedDays: 0,
     })])
     const media = await collection.mediaForNote('anki-note:stable-vocabulary-guid')

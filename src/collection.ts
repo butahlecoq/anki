@@ -3,8 +3,10 @@ import { customStudyKey, customStudyMembership, customStudySessions, type Custom
 import {
   Rating,
   State,
+  StrategyMode,
   createEmptyCard,
   fsrs,
+  type AbstractScheduler,
   type Card as FsrsCard,
   type Grade,
   type ReviewLog as FsrsReviewLog,
@@ -259,6 +261,14 @@ export interface ReviewEntry {
   rescheduled?: boolean
   /** Original schedule and policy make independently produced reviews replayable. */
   scheduling?: { before: CardRecord; options: DeckOptionGroup }
+  /** Resulting schedule after this answer. The fields above retain Anki's pre-answer review-log meaning. */
+  afterState?: State
+  afterDue?: string
+  afterStability?: number
+  afterDifficulty?: number
+  afterElapsedDays?: number
+  afterScheduledDays?: number
+  afterLearningSteps?: number
 }
 
 export interface DeckCounts {
@@ -472,14 +482,22 @@ function canonicalDeckOptionGroup(group: LegacyDeckOptionGroup): DeckOptionGroup
   }
 }
 
-function schedulerFor(group: DeckOptionGroup) {
-  return fsrs({
+function schedulerFor(group: DeckOptionGroup, cardId: string) {
+  const scheduler = fsrs({
     request_retention: group.desiredRetention,
     maximum_interval: 36500,
-    enable_fuzz: false,
+    // Anki has no fuzz toggle: review intervals of 2.5 days or more are always
+    // spread across a bounded range so cards due together do not clump forever.
+    enable_fuzz: true,
     enable_short_term: true,
     learning_steps: validateSteps(group.learningSteps, 'Learning steps'),
     relearning_steps: validateSteps(group.relearningSteps, 'Relearning steps'),
+  })
+  // Anki seeds fuzz from the card's identity, not the wall clock, so a replayed or
+  // synchronised review lands on the same interval and sibling cards get independent
+  // offsets. ts-fsrs would otherwise seed from review time, difficulty and stability.
+  return scheduler.useStrategy(StrategyMode.SEED, function (this: AbstractScheduler) {
+    return `${cardId}_${this.current.reps}`
   })
 }
 
@@ -544,6 +562,15 @@ function stableRank(value: string) {
     hash = Math.imul(hash, 16777619)
   }
   return hash >>> 0
+}
+
+/**
+ * A deliberately shuffled ordering key that is stable for the whole study day. Only
+ * the explicitly random card orders use this; Anki salts those by the day so a deck
+ * reshuffles between days without reshuffling mid-session.
+ */
+function dailyShuffleRank(card: Pick<CardRecord, 'deckId' | 'id'>, day: string) {
+  return String(stableRank(`${day}:${card.deckId}:${card.id}`)).padStart(10, '0')
 }
 
 async function mediaBytes(file: Blob) {
@@ -826,6 +853,7 @@ export class Collection extends Dexie {
     })
     this.version(14).stores({})
     this.version(15).stores({ syncRevisions: 'opId, key', syncConflicts: 'key, entityType, entityId' })
+    this.version(16).stores({})
     this.on('populate', (transaction) => {
       transaction.table('noteTypes').put(basicNoteType)
       transaction.table('noteTypes').put(imageOcclusionNoteType)
@@ -1611,18 +1639,34 @@ export class Collection extends Dexie {
         if (review.state === State.Review || ((review.state === State.Learning || review.state === State.Relearning) && review.scheduledDays >= 1)) totals.review += 1
         reviewedToday.set(review.deckId, totals)
       }
+      const day = studyDay(now)
       const orderKey = (card: CardRecord, group: DeckOptionGroup, kind: 'new' | 'review' | 'learning') => {
         const random = kind === 'new' ? group.newCardOrder === 'random' : kind === 'review' ? group.reviewCardOrder === 'random' : false
-        if (random) return String(stableRank(`${studyDay(now)}:${card.deckId}:${card.id}`)).padStart(10, '0')
+        if (random) return dailyShuffleRank(card, day)
         return kind === 'new' ? notesById.get(card.noteId)?.createdAt ?? card.due : card.due
       }
-      const sortWithinDeck = (candidates: CardRecord[], group: DeckOptionGroup, kind: 'new' | 'review' | 'learning') => candidates.sort((left, right) => orderKey(left, group, kind).localeCompare(orderKey(right, group, kind)) || left.id.localeCompare(right.id))
+      // Anki's "Due date" review order is really "due date, then random": it always
+      // breaks same-due ties with a salted hash, never with card identity. Without
+      // this the order is frozen for the life of the collection. Anki salts the
+      // review tiebreak with the card's own modification time, so the order holds
+      // still across local midnight and only moves when the card is answered. Only
+      // the explicitly random orders are day-seeded. New and learning cards keep
+      // identity ordering so daily-limit truncation stays predictable.
+      const tiebreakKey = (card: CardRecord, group: DeckOptionGroup, kind: 'new' | 'review' | 'learning') => {
+        if (kind !== 'review' || group.reviewCardOrder !== 'due') return card.id
+        return String(stableRank(`${card.lastReview ?? ''}:${card.reps}:${card.deckId}:${card.id}`)).padStart(10, '0')
+      }
+      const compareWithinDeck = (left: CardRecord, right: CardRecord, group: DeckOptionGroup, kind: 'new' | 'review' | 'learning') =>
+        orderKey(left, group, kind).localeCompare(orderKey(right, group, kind))
+        || tiebreakKey(left, group, kind).localeCompare(tiebreakKey(right, group, kind))
+        || left.id.localeCompare(right.id)
+      const sortWithinDeck = (candidates: CardRecord[], group: DeckOptionGroup, kind: 'new' | 'review' | 'learning') => candidates.sort((left, right) => compareWithinDeck(left, right, group, kind))
       const sortQueue = (candidates: CardRecord[], kind: 'new' | 'review' | 'learning') => candidates.sort((left, right) => {
         if (left.deckId !== right.deckId) return left.deckId.localeCompare(right.deckId)
         const deck = decks.get(left.deckId)!
         const group = groupsById.get(deck.optionGroupId)
         if (!group) throw new Error('Deck option group not found')
-        return orderKey(left, group, kind).localeCompare(orderKey(right, group, kind)) || left.id.localeCompare(right.id)
+        return compareWithinDeck(left, right, group, kind)
       })
       const selected: CardRecord[] = []
       for (const deck of subtree) {
@@ -1659,7 +1703,7 @@ export class Collection extends Dexie {
     const deck = await this.decks.get(card.deckId)
     const group = deck ? await this.deckOptionGroups.get(deck.optionGroupId) : undefined
     if (!deck || !group) throw new Error('Deck option group not found')
-    const preview = schedulerFor(group).repeat(deserializeCard(card), now)
+    const preview = schedulerFor(group, card.id).repeat(deserializeCard(card), now)
     const choices: Array<[Grade, ReviewChoice['label']]> = [
       [Rating.Again, 'Again'],
       [Rating.Hard, 'Hard'],
@@ -1703,7 +1747,7 @@ export class Collection extends Dexie {
       const deck = await this.decks.get(existing.deckId)
       const group = deck ? await this.deckOptionGroups.get(deck.optionGroupId) : undefined
       if (!deck || !group) throw new Error('Deck option group not found')
-      const result = schedulerFor(group).next(deserializeCard(existing), now, rating)
+      const result = schedulerFor(group, existing.id).next(deserializeCard(existing), now, rating)
       let card = withPolicyDefaults(serializeCard(result.card, existing))
       const review = serializeReview(result.log, {
         id: id(),
@@ -1713,7 +1757,7 @@ export class Collection extends Dexie {
       review.scheduling = { before: existing, options: group }
       if (durationMs !== undefined && Number.isFinite(durationMs) && durationMs >= 0) review.durationMs = Math.round(Math.min(60_000, durationMs))
       if (options?.reschedule === false) {
-        Object.assign(review, { rescheduled: false, due: existing.due, stability: existing.stability, difficulty: existing.difficulty, elapsedDays: existing.elapsedDays, scheduledDays: existing.scheduledDays, learningSteps: existing.learningSteps })
+        Object.assign(review, { rescheduled: false, due: existing.due, stability: existing.stability, difficulty: existing.difficulty, elapsedDays: existing.elapsedDays, scheduledDays: existing.scheduledDays, learningSteps: existing.learningSteps, afterState: existing.state, afterDue: existing.due, afterStability: existing.stability, afterDifficulty: existing.difficulty, afterElapsedDays: existing.elapsedDays, afterScheduledDays: existing.scheduledDays, afterLearningSteps: existing.learningSteps })
         await this.reviewEntries.add(review)
         const operation: SyncOperation = { opId: id(), entityType: 'review', entityId: review.id, action: 'create', occurredAt: review.reviewedAt, payload: review }
         await this.enqueueOperation(operation)
@@ -1736,6 +1780,7 @@ export class Collection extends Dexie {
         }
         if (group.leechAction === 'suspend') card = { ...card, manualSuspended: true }
       }
+      Object.assign(review, { afterState: card.state, afterDue: card.due, afterStability: card.stability, afterDifficulty: card.difficulty, afterElapsedDays: card.elapsedDays, afterScheduledDays: card.scheduledDays, afterLearningSteps: card.learningSteps })
       const buriedUntil = nextStudyBoundary(now).toISOString()
       const siblings = await this.cards.where('noteId').equals(card.noteId).toArray()
       for (const sibling of siblings) {
@@ -2268,7 +2313,7 @@ export class Collection extends Dexie {
           ...commands.map((command) => ({ at: command.occurredAt, id: command.opId, review: undefined as ReviewEntry | undefined, command })),
         ].sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id))
         for (const event of events) {
-          if (event.review) schedule = schedulerFor(event.review.scheduling!.options).next(schedule, new Date(event.at), event.review.rating as Grade).card
+          if (event.review) schedule = schedulerFor(event.review.scheduling!.options, event.review.cardId).next(schedule, new Date(event.at), event.review.rating as Grade).card
           else if (event.command) {
             const commanded = event.command.payload as CardRecord
             schedule = { ...schedule, due: new Date(commanded.due), state: commanded.state }

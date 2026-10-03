@@ -54,7 +54,7 @@ Open **Statistics** from the desktop sidebar or the iPhone navigation bar. The h
 
 Daily, weekly, monthly, and all-time views summarize recorded answers, distinct cards, measured review time, and observed recall. Study days start at local midnight; weeks start Monday and months follow the local calendar. Recall is the share of review-state answers rated Hard, Good, or Easy; learning steps are excluded. The heatmap opens a selected day's answers and card histories. Difficulty and interval distributions describe current active scheduled cards. The 30-day forecast uses their current due dates, counting overdue cards today; future answers, new cards, and daily limits can change that workload.
 
-New reviews measure active time while the card is visible, excluding background tabs and maintenance dialogs, capped at 60 seconds per answer. Imported Anki logs retain their recorded answer time. Older Kiroku logs without time remain unmeasured, and the view shows timing coverage. Statistics read the local database, update after offline answers and undo, and count each durable review identity once after synchronization.
+New reviews measure active time while the card is visible, excluding background tabs and maintenance dialogs, capped at 60 seconds per answer. Imported Anki logs retain their recorded answer time. Older Kiroku logs without time remain unmeasured, and the view shows timing coverage. Statistics read the local database, update after offline answers and undo, and count each durable review identity once after synchronization. In each review record, `state`, `due`, `stability`, `difficulty`, `elapsedDays`, `scheduledDays`, and `learningSteps` describe the card before the answer, matching Anki's revlog (`lastIvl` and answer `type`). The corresponding `afterState`, `afterDue`, `afterStability`, `afterDifficulty`, `afterElapsedDays`, `afterScheduledDays`, and `afterLearningSteps` fields describe the resulting card. History display and recall statistics use the resulting state; older imported records without `after*` fields fall back to their stored state.
 
 ## Offline media
 
@@ -141,6 +141,14 @@ Removing a field with saved values requires choosing **Keep as retired data** or
 Decks can be nested. A parent deck’s counts and study session include all of its descendants, while each deck still applies the daily limits from its own scheduling option group. Use **Create child deck** or **Move deck** to organize the tree. Moving a note moves its generated cards with the same IDs and scheduling data; recorded reviews stay intact.
 
 Open **Scheduling options** on a deck to reuse an existing group or create one. A group controls daily new and review limits, desired retention, learning and relearning steps, and new, review, and interday-learning order. It can bury new or review siblings until the next local study day after one of their note-mates is answered. Set a leech threshold, a tag, and whether crossing that threshold also suspends the card. The dialog lists every deck that uses the selected group. Saving changes affects future scheduling decisions only; it never rewrites cards or review history.
+
+### Anki scheduling parity
+
+Scheduling follows Anki 26.9.3. Kiroku uses FSRS-6 with the same 21 default weights Anki ships, a 36,500-day maximum interval, and 0.9 desired retention by default.
+
+As in Anki, review intervals are fuzzed: any interval of 2.5 days or more is spread across a bounded range so that cards in the same state do not all come due on the same day. The spread is seeded from the card itself, so replaying or synchronising a review reproduces the same interval, and sibling cards get independent offsets.
+
+The default **Due date** review order is really *due date, then random*. Cards sharing a due time are ordered by a hash of each card's own last answer rather than by card identity, so the order is deliberately shuffled, holds still across local midnight, and moves when a card is answered. Choosing **Random** instead orders by a hash salted with the study day, reshuffling between days. New-card order follows the same rule: **Added first** orders by note creation time, **Random** by the day-seeded hash. Learning and relearning cards are ordered by due time and are not shuffled.
 
 Use **Manage cards** beside a note to resume a manually suspended card, unbury it, or set its next due time. The reviewer also has **Suspend card** and **Bury card** actions; either one refreshes the session queue immediately. These lifecycle controls retain card identity, scheduler data, and review history. Cards suspended because their template no longer generates content remain unavailable until that content is restored.
 
