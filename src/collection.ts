@@ -1,7 +1,7 @@
 import Dexie, { type EntityTable } from 'dexie'
 import { customStudyKey, customStudyMembership, customStudySessions, type CustomStudySession } from './custom-study-state'
 import { createEmptyCard } from 'ts-fsrs'
-import { answerWithSchedule, deserializeCard, eligibleForQueue, eligibleForStudy, isBuried, isLearningCard, nextStudyBoundary, Rating, reviewChoices as previewReviewChoices, schedulerFor, selectDueCards, serializeCard, State, templateSuspended, validateSteps, type Grade } from './scheduler'
+import { answerWithSchedule, deserializeCard, eligibleForQueue, eligibleForStudy, isBuried, isInterdayLearning, isLearningCard, nextStudyBoundary, Rating, reviewChoices as previewReviewChoices, schedulerFor, selectDueCards, serializeCard, State, templateSuspended, validateSteps, type Grade } from './scheduler'
 import { digestMedia, validateMedia, type AudioPlayback, type MediaKind, type MediaSide } from './media'
 import { clozeOrdinals, renderTemplate, tryRenderTemplate, validateTemplate } from './template-renderer'
 import { mergeRevisions, revisionHeads, type RevisionMerge } from './sync-revisions'
@@ -40,6 +40,7 @@ export interface DeckOptionSettings {
   /** Omitted by pre-policy callers; the owning group retains its current policy. */
   buryNewSiblings?: boolean
   buryReviewSiblings?: boolean
+  buryInterdayLearningSiblings?: boolean
   leechThreshold?: number
   leechAction?: LeechAction
   leechTag?: string
@@ -62,6 +63,7 @@ export interface DeckOptionGroup {
   interdayLearningOrder: InterdayLearningOrder
   buryNewSiblings: boolean
   buryReviewSiblings: boolean
+  buryInterdayLearningSiblings: boolean
   leechThreshold: number
   leechAction: LeechAction
   leechTag: string
@@ -318,6 +320,7 @@ const defaultDeckOptionSettings: Required<DeckOptionSettings> = {
   interdayLearningOrder: 'mix',
   buryNewSiblings: false,
   buryReviewSiblings: false,
+  buryInterdayLearningSiblings: false,
   leechThreshold: 8,
   leechAction: 'suspend',
   leechTag: 'leech',
@@ -395,6 +398,7 @@ function copiedDeckOptionSettings(settings: DeckOptionSettings): Required<DeckOp
     interdayLearningOrder: settings.interdayLearningOrder ?? defaultDeckOptionSettings.interdayLearningOrder,
     buryNewSiblings: settings.buryNewSiblings ?? defaultDeckOptionSettings.buryNewSiblings,
     buryReviewSiblings: settings.buryReviewSiblings ?? defaultDeckOptionSettings.buryReviewSiblings,
+    buryInterdayLearningSiblings: settings.buryInterdayLearningSiblings ?? defaultDeckOptionSettings.buryInterdayLearningSiblings,
     leechThreshold: settings.leechThreshold ?? defaultDeckOptionSettings.leechThreshold,
     leechAction: settings.leechAction ?? defaultDeckOptionSettings.leechAction,
     leechTag: settings.leechTag ?? defaultDeckOptionSettings.leechTag,
@@ -428,7 +432,8 @@ function validateDeckOptionSettings(input: DeckOptionSettings): Required<DeckOpt
   if (interdayLearningOrder !== 'mix' && interdayLearningOrder !== 'before-reviews' && interdayLearningOrder !== 'after-reviews') throw new Error('Interday learning order is invalid')
   const buryNewSiblings = input.buryNewSiblings ?? defaultDeckOptionSettings.buryNewSiblings
   const buryReviewSiblings = input.buryReviewSiblings ?? defaultDeckOptionSettings.buryReviewSiblings
-  if (typeof buryNewSiblings !== 'boolean' || typeof buryReviewSiblings !== 'boolean') throw new Error('Sibling burying options are invalid')
+  const buryInterdayLearningSiblings = input.buryInterdayLearningSiblings ?? defaultDeckOptionSettings.buryInterdayLearningSiblings
+  if (typeof buryNewSiblings !== 'boolean' || typeof buryReviewSiblings !== 'boolean' || typeof buryInterdayLearningSiblings !== 'boolean') throw new Error('Sibling burying options are invalid')
   const leechAction = input.leechAction ?? defaultDeckOptionSettings.leechAction
   if (leechAction !== 'tag-only' && leechAction !== 'suspend') throw new Error('Leech action is invalid')
   return {
@@ -443,6 +448,7 @@ function validateDeckOptionSettings(input: DeckOptionSettings): Required<DeckOpt
     interdayLearningOrder,
     buryNewSiblings,
     buryReviewSiblings,
+    buryInterdayLearningSiblings,
     leechThreshold: validateLeechThreshold(input.leechThreshold ?? defaultDeckOptionSettings.leechThreshold),
     leechAction,
     leechTag: validateLeechTag(input.leechTag ?? defaultDeckOptionSettings.leechTag),
@@ -464,6 +470,7 @@ function canonicalDeckOptionGroup(group: LegacyDeckOptionGroup): DeckOptionGroup
       interdayLearningOrder: group.interdayLearningOrder ?? defaultDeckOptionSettings.interdayLearningOrder,
       buryNewSiblings: group.buryNewSiblings ?? defaultDeckOptionSettings.buryNewSiblings,
       buryReviewSiblings: group.buryReviewSiblings ?? defaultDeckOptionSettings.buryReviewSiblings,
+      buryInterdayLearningSiblings: group.buryInterdayLearningSiblings ?? defaultDeckOptionSettings.buryInterdayLearningSiblings,
       leechThreshold: group.leechThreshold ?? defaultDeckOptionSettings.leechThreshold,
       leechAction: group.leechAction ?? defaultDeckOptionSettings.leechAction,
       leechTag: group.leechTag ?? defaultDeckOptionSettings.leechTag,
@@ -578,6 +585,14 @@ function canonicalCard(card: LegacyCard): CardRecord {
   const buriedUntil = card.buriedUntil ?? null
   if (buriedUntil !== null && (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(buriedUntil) || Number.isNaN(new Date(buriedUntil).getTime()))) throw new Error('Card burial time is invalid')
   return withPolicyDefaults({ ...card, templateId: card.templateId ?? BASIC_TEMPLATE_ID, buriedUntil })
+}
+
+/** Anki gathers siblings in intraday, interday, review, then new-card order. */
+function queueGatherPriority(card: CardRecord) {
+  if (isLearningCard(card) && !isInterdayLearning(card)) return 0
+  if (isInterdayLearning(card)) return 1
+  if (card.state === State.Review) return 2
+  return 3
 }
 
 function canonicalNoteType(noteType: LegacyNoteType): NoteType {
@@ -702,6 +717,9 @@ export class Collection extends Dexie {
     this.version(15).stores({ syncRevisions: 'opId, key', syncConflicts: 'key, entityType, entityId' })
     this.version(16).stores({})
     this.version(17).stores({}).upgrade(async (transaction) => {
+      await transaction.table('deckOptionGroups').toCollection().modify((group: LegacyDeckOptionGroup) => Object.assign(group, canonicalDeckOptionGroup(group)))
+    })
+    this.version(18).stores({}).upgrade(async (transaction) => {
       await transaction.table('deckOptionGroups').toCollection().modify((group: LegacyDeckOptionGroup) => Object.assign(group, canonicalDeckOptionGroup(group)))
     })
     this.on('populate', (transaction) => {
@@ -1553,10 +1571,13 @@ export class Collection extends Dexie {
       const siblings = await this.cards.where('noteId').equals(card.noteId).toArray()
       for (const sibling of siblings) {
         if (sibling.id === card.id || isBuried(sibling, now)) continue
-        // Learning and relearning cards carry scheduled material from prior study, so
-        // they share the review-sibling policy. This includes interday learning steps.
-        const bury = (sibling.state === State.New && group.buryNewSiblings)
-          || ((sibling.state === State.Review || isLearningCard(sibling)) && group.buryReviewSiblings)
+        const siblingComesLater = queueGatherPriority(sibling) >= queueGatherPriority(existing)
+        if (!siblingComesLater) continue
+        const bury = sibling.state === State.New
+          ? group.buryNewSiblings
+          : sibling.state === State.Review
+            ? group.buryReviewSiblings
+            : isInterdayLearning(sibling) && group.buryInterdayLearningSiblings
         if (!bury) continue
         const revised = withPolicyDefaults({ ...sibling, buriedUntil })
         await this.cards.put(revised)

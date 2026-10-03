@@ -382,6 +382,7 @@ test('learner saves scheduling policies and manages a card lifecycle', async ({ 
   await options.getByLabel('Interday learning order').selectOption('after-reviews')
   await options.getByLabel('Bury new siblings').check()
   await options.getByLabel('Bury review siblings').check()
+  await options.getByLabel('Bury interday learning siblings').check()
   await options.getByLabel('Leech threshold').fill('3')
   await options.getByLabel('Leech action').selectOption('tag-only')
   await options.getByLabel('Leech tag').fill('needs-attention')
@@ -391,6 +392,7 @@ test('learner saves scheduling policies and manages a card lifecycle', async ({ 
   const savedOptions = page.getByRole('dialog', { name: 'Scheduling options' })
   await expect(savedOptions.getByLabel('New/review order')).toHaveValue('before-reviews')
   await expect(savedOptions.getByLabel('Interday learning order')).toHaveValue('after-reviews')
+  await expect(savedOptions.getByLabel('Bury interday learning siblings')).toBeChecked()
   await savedOptions.getByRole('button', { name: 'Cancel' }).click()
 
   await page.getByRole('button', { name: 'Add note' }).click()

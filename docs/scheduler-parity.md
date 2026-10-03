@@ -51,6 +51,13 @@ and again across the selected subtree. The pinned oracle also confirms that a
 selected parent with a review limit of two gathers two new cards from a child
 with a higher own limit, while directly selecting that child gathers three.
 
+Sibling burial now has separate new, review, and interday-learning controls.
+The app follows Anki's gather precedence (intraday learning, interday learning,
+reviews, then new cards): only siblings at the same or a later queue stage can
+be buried. Intraday learning siblings are never buried. The pinned oracle checks
+that same-stage review and interday-learning siblings are buried when enabled,
+while two intraday-learning siblings remain available.
+
 The app now uses the same 4:00 a.m. local rollover for daily limits, daily shuffle
 seeds, sibling burial, and statistics. The broader grade/state matrix, review
 sort modes, more complex gather priority, sibling-bury behavior,

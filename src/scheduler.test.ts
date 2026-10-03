@@ -21,7 +21,7 @@ const options: DeckOptionGroup = {
   id: 'options', name: 'Options', protected: false, dailyNewLimit: 20, dailyReviewLimit: 200,
   desiredRetention: 0.9, learningSteps: ['1m', '10m'], relearningSteps: ['10m'],
   newCardOrder: 'added', reviewCardOrder: 'due', newReviewOrder: 'mix', interdayLearningOrder: 'mix',
-  buryNewSiblings: false, buryReviewSiblings: false, leechThreshold: 8,
+  buryNewSiblings: false, buryReviewSiblings: false, buryInterdayLearningSiblings: false, leechThreshold: 8,
   leechAction: 'suspend', leechTag: 'leech', createdAt: '2026-01-01', updatedAt: '2026-01-01',
 }
 

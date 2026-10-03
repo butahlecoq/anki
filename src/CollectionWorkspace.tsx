@@ -496,6 +496,7 @@ function settingsFromGroup(group: DeckOptionGroup): DeckOptionSettings {
     interdayLearningOrder: group.interdayLearningOrder,
     buryNewSiblings: group.buryNewSiblings,
     buryReviewSiblings: group.buryReviewSiblings,
+    buryInterdayLearningSiblings: group.buryInterdayLearningSiblings,
     leechThreshold: group.leechThreshold,
     leechAction: group.leechAction,
     leechTag: group.leechTag,
@@ -641,7 +642,8 @@ function DeckOptionsDialog({ deck, onClose }: { deck: Deck; onClose: () => void 
         <fieldset className="policy-settings"><legend>Sibling burial</legend>
           <label className="choice"><input aria-label="Bury new siblings" type="checkbox" checked={Boolean(selectedSettings.buryNewSiblings)} onChange={(event) => update('buryNewSiblings', event.target.checked)} />Bury new siblings</label>
           <label className="choice"><input aria-label="Bury review siblings" type="checkbox" checked={Boolean(selectedSettings.buryReviewSiblings)} onChange={(event) => update('buryReviewSiblings', event.target.checked)} />Bury review siblings</label>
-          <p className="options-note">After you answer a card, matching siblings stay out of the queue until the next local study day.</p>
+          <label className="choice"><input aria-label="Bury interday learning siblings" type="checkbox" checked={Boolean(selectedSettings.buryInterdayLearningSiblings)} onChange={(event) => update('buryInterdayLearningSiblings', event.target.checked)} />Bury interday learning siblings</label>
+          <p className="options-note">Later siblings stay out of the queue until the next local study day. Intraday learning steps keep their place.</p>
         </fieldset>
         <fieldset className="policy-settings"><legend>Leeches</legend>
           <label>Leech threshold<input aria-label="Leech threshold" type="number" min="1" max="9999" value={selectedSettings.leechThreshold} onChange={(event) => update('leechThreshold', Number(event.target.value))} /></label>

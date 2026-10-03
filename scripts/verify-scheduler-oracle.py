@@ -9,6 +9,7 @@ from importlib.metadata import version
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import time
 
 from anki.collection import Collection
 from anki.deck_config_pb2 import UpdateDeckConfigsRequest, UpdateDeckConfigsMode
@@ -188,6 +189,50 @@ def verify_selected_parent_review_limit(path: Path) -> dict[str, int]:
         collection.close()
 
 
+def verify_sibling_bury_categories(path: Path) -> dict[str, int]:
+    collection = Collection(str(path))
+    try:
+        note = collection.new_note(collection.models.by_name("Cloze"))
+        note.fields = ["{{c1::one}} {{c2::two}}", ""]
+        collection.add_note(note, 1)
+        card_ids = [int(row[0]) for row in collection.db.all("select id from cards where nid = ? order by ord", note.id)]
+        assert len(card_ids) == 2, card_ids
+        today = collection.sched.today
+        config = collection.decks.config_dict_for_deck_id(1)
+
+        config["rev"]["bury"] = True
+        config["buryInterdayLearning"] = False
+        collection.decks.update_config(config)
+        for card_id in card_ids:
+            collection.db.execute("update cards set type=2, queue=2, due=?, ivl=10 where id=?", today, card_id)
+        review_queue = collection.sched.get_queued_cards(fetch_limit=100)
+        assert review_queue.review_count == 1, review_queue.review_count
+
+        config["rev"]["bury"] = False
+        config["buryInterdayLearning"] = True
+        collection.decks.update_config(config)
+        for card_id in card_ids:
+            collection.db.execute("update cards set type=1, queue=3, due=? where id=?", today, card_id)
+        interday_queue = collection.sched.get_queued_cards(fetch_limit=100)
+        assert interday_queue.learning_count == 1, interday_queue.learning_count
+
+        config["rev"]["bury"] = True
+        collection.decks.update_config(config)
+        due_seconds = int(time.time()) - 60
+        for card_id in card_ids:
+            collection.db.execute("update cards set type=1, queue=1, due=? where id=?", due_seconds, card_id)
+        intraday_queue = collection.sched.get_queued_cards(fetch_limit=100)
+        assert intraday_queue.learning_count == 2, intraday_queue.learning_count
+
+        return {
+            "buriedReviewSiblings": 2 - review_queue.review_count,
+            "buriedInterdayLearningSiblings": 2 - interday_queue.learning_count,
+            "intradayLearningSiblingsKept": intraday_queue.learning_count,
+        }
+    finally:
+        collection.close()
+
+
 def main() -> None:
     actual_version = version("anki")
     assert actual_version == ANKI_VERSION, (actual_version, ANKI_VERSION)
@@ -276,6 +321,7 @@ def main() -> None:
             default_queue_mixing = verify_default_queue_mixing(Path(directory) / "mixing-oracle.anki2")
             review_limit_sharing = verify_review_limit_shares_capacity_with_new(Path(directory) / "limit-sharing-oracle.anki2")
             selected_parent_review_limit = verify_selected_parent_review_limit(Path(directory) / "parent-review-limit-oracle.anki2")
+            sibling_bury_categories = verify_sibling_bury_categories(Path(directory) / "sibling-bury-oracle.anki2")
             print(json.dumps({
                 "ankiVersion": actual_version,
                 "scheduler": "V3",
@@ -298,6 +344,7 @@ def main() -> None:
                 "nativeDefaultQueueMixing": default_queue_mixing,
                 "nativeReviewLimitSharing": review_limit_sharing,
                 "nativeSelectedParentReviewLimit": selected_parent_review_limit,
+                "nativeSiblingBuryCategories": sibling_bury_categories,
             }, indent=2))
         finally:
             collection.close()
