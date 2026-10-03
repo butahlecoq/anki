@@ -142,6 +142,7 @@ function collect() {
   if (issues.length >= 500 || prs.length >= 500) throw new Error('Tracker result reached the 500 item limit; paginate before generating status.')
   const facts = collectGitFacts({ repo })
   if (!facts.pullRequests) throw new Error('Could not read all pull request states; status would be incomplete.')
+  if (facts.pullRequests.length >= 500) throw new Error('Pull request history reached the 500 item limit; paginate before generating status.')
   const report = analyseDrift({ ...facts, commandLines: runningCommandLines(), cwd: root })
   const worktrees = facts.worktrees.map((tree) => ({
     ...tree,
