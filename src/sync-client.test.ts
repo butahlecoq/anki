@@ -344,6 +344,55 @@ test('reports a media upload failure separately while syncing card changes', asy
   await collection.delete()
 })
 
+test('retries a media upload after the server stored it but the response was lost', async () => {
+  const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+  await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 })
+  const deck = await collection.createDeck('Japanese foundations')
+  const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
+  await collection.attachMedia(note.id, { file: new File(['image bytes'], 'cat.png', { type: 'image/png' }), side: 'front' })
+  const objects = new Map<string, Uint8Array>()
+  const putDigests: string[] = []
+  let loseFirstPutResponse = true
+  const fetcher = vi.fn(async (url: string) => {
+    if (url.endsWith('/api/health')) return health()
+    if (url.includes('/api/media/')) {
+      const digest = url.split('/').pop()!
+      putDigests.push(digest)
+      const alreadyStored = objects.has(digest)
+      objects.set(digest, new Uint8Array(10))
+      if (loseFirstPutResponse) { loseFirstPutResponse = false; throw new TypeError('response lost after object commit') }
+      return new Response(JSON.stringify({ digest, byteLength: 10, mimeType: 'image/png', deduplicated: alreadyStored }), { status: 200 })
+    }
+    return new Response(JSON.stringify({ accepted: 3, cursor: 3, changes: [], hasMore: false }), { status: 200 })
+  })
+
+  await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'complete', media: { uploaded: 0, pending: 1, uploadError: 'unreachable' } })
+  const retryResult = await syncCollection(collection, fetcher as typeof fetch)
+  expect(retryResult).toMatchObject({ state: 'complete', media: { uploaded: 1, pending: 0 } })
+  expect(objects.size).toBe(1)
+  expect(putDigests).toHaveLength(2)
+  expect(new Set(putDigests).size).toBe(1)
+  await collection.delete()
+})
+
+test('does not expose downloaded media when its content digest fails verification', async () => {
+  const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+  await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 })
+  const deck = await collection.createDeck('Japanese foundations')
+  const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
+  const expectedDigest = await digestMedia(new Blob(['expected image'], { type: 'image/png' }))
+  const reference = { id: 'remote-media', noteId: note.id, digest: expectedDigest, kind: 'image' as const, mimeType: 'image/png', displayName: 'remote.png', side: 'front' as const, playback: 'manual' as const, createdAt: '2026-10-01T12:00:00.000Z', updatedAt: '2026-10-01T12:00:00.000Z' }
+  const fetcher = vi.fn((url: string) => {
+    if (url.endsWith('/api/health')) return Promise.resolve(health())
+    if (url.endsWith(`/api/media/${expectedDigest}`)) return Promise.resolve(new Response('tampered image', { status: 200, headers: { 'x-content-sha256': expectedDigest, 'content-type': 'image/png' } }))
+    return Promise.resolve(new Response(JSON.stringify({ accepted: 0, cursor: 1, changes: [{ opId: 'remote-media-op', entityType: 'noteMedia', entityId: reference.id, action: 'create', occurredAt: reference.createdAt, payload: reference }] }), { status: 200 }))
+  })
+
+  await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'complete', media: { downloaded: 0, pending: 1, downloadError: 'unreachable' } })
+  await expect(collection.verifiedMediaBlob(expectedDigest)).resolves.toBeUndefined()
+  await collection.delete()
+})
+
 test('downloads remote media even when an unrelated local upload fails', async () => {
   const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
   await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 })
