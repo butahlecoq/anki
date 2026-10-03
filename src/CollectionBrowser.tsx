@@ -6,7 +6,7 @@ import { applyBulkAction, applyFieldChanges, previewFieldChanges, selectionSumma
 import { customStudyMembership } from './custom-study-state'
 import { unavailableReason } from './scheduler'
 import { ImageOcclusionEditor } from './ImageOcclusion'
-import { isRenderedCardEmpty, renderNoteCard } from './card-rendering'
+import { isRenderedCardDisplayable, renderNoteCard } from './card-rendering'
 
 type View = 'cards' | 'notes'
 type Sort = { key: string; descending: boolean }
@@ -158,7 +158,7 @@ export function CollectionBrowser() {
       const template = row.noteType?.templates.find((candidate) => candidate.id === row.card?.templateId)
       if (!template || !row.noteType) return true
       if (row.noteType.kind === 'image-occlusion') return false
-      return isRenderedCardEmpty(renderNoteCard(row.noteType, template, row.note.fields, row.card.clozeOrdinal))
+      return !isRenderedCardDisplayable(renderNoteCard(row.noteType, template, row.note.fields, row.card.clozeOrdinal), row.noteType.kind)
     })
     if (view === 'notes') matches = [...new Map(matches.map((row) => [row.note.id, row])).values()]
     const cardCounts = new Map<string, number>()

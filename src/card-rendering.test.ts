@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from 'vitest'
 import * as templateRenderer from './template-renderer'
-import { isRenderedCardEmpty, renderCard, renderNoteCard } from './card-rendering'
+import { isRenderedCardDisplayable, renderCard, renderNoteCard } from './card-rendering'
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -22,25 +22,44 @@ test('renders the front and back once each and returns the shared card result', 
   })
 })
 
-test('maps field IDs once and shares the same empty-card rule', () => {
+test('maps field IDs once and shares the same displayable rule', () => {
   const type = { kind: 'standard' as const, fields: [{ id: 'expression', name: 'Expression' }, { id: 'meaning', name: 'Meaning' }] }
   const empty = renderNoteCard(type, { front: '{{Expression}}', back: '{{FrontSide}}<hr>{{Meaning}}', css: '' }, { expression: ' ', meaning: 'cat' })
   const filled = renderNoteCard(type, { front: '{{Expression}}', back: '{{FrontSide}}<hr>{{Meaning}}', css: '' }, { expression: '猫', meaning: 'cat' })
 
-  expect(isRenderedCardEmpty(empty)).toBe(true)
-  expect(isRenderedCardEmpty(filled)).toBe(false)
+  expect(isRenderedCardDisplayable(empty, type.kind)).toBe(false)
+  expect(isRenderedCardDisplayable(filled, type.kind)).toBe(true)
   expect(filled.front?.html).toBe('猫')
   expect(filled.back?.html).toBe('猫<hr>cat')
 })
 
-test('a rendering error has one shared non-empty fallback', () => {
-  const card = renderCard({ front: '{{Missing', back: '', css: '' }, {})
-  expect(card.error).toMatch(/unmatched template delimiter/i)
-  expect(isRenderedCardEmpty(card)).toBe(false)
+test('an image occlusion card is displayable with an empty front', () => {
+  // An occlusion note has no front template; an empty front is expected rather
+  // than a fault, and this exemption was previously restated by four callers.
+  const type = { kind: 'image-occlusion' as const, fields: [{ id: 'occlusion', name: 'Occlusion' }] }
+  const card = renderNoteCard(type, { front: '{{Occlusion}}', back: '{{FrontSide}}', css: '' }, { occlusion: ' ' })
+  expect(card.isEmpty).toBe(true)
+  expect(isRenderedCardDisplayable(card, type.kind)).toBe(true)
+  expect(isRenderedCardDisplayable(card, 'standard')).toBe(false)
 })
 
-test('a back-side error does not change whether the front is empty', () => {
-  const card = renderCard({ front: '{{Expression}}', back: '{{Missing', css: '' }, { Expression: ' ' })
-  expect(card.error).toMatch(/unmatched template delimiter/i)
-  expect(isRenderedCardEmpty(card)).toBe(true)
+test('a front failure suppresses the card but a back failure does not', () => {
+  const frontBroken = renderCard({ front: '{{Missing', back: '', css: '' }, {})
+  expect(frontBroken.error).toMatch(/unmatched template delimiter/i)
+  // Nothing can be shown, but the card must not become permanently unanswerable.
+  expect(isRenderedCardDisplayable(frontBroken, 'standard')).toBe(true)
+
+  const backBroken = renderCard({ front: '{{Expression}}', back: '{{Missing', css: '' }, { Expression: '猫' })
+  expect(backBroken.error).toBeUndefined()
+  expect(backBroken.backError).toMatch(/unmatched template delimiter/i)
+  // The question still renders, so the card stays displayable.
+  expect(backBroken.front?.html).toBe('猫')
+  expect(isRenderedCardDisplayable(backBroken, 'standard')).toBe(true)
+})
+
+test('an empty front with an intact back is still not displayable', () => {
+  const card = renderCard({ front: '{{Expression}}', back: '{{FrontSide}}', css: '' }, { Expression: ' ' })
+  expect(card.isEmpty).toBe(true)
+  expect(card.backError).toBeUndefined()
+  expect(isRenderedCardDisplayable(card, 'standard')).toBe(false)
 })

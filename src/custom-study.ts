@@ -1,5 +1,5 @@
 import type { CardRecord, Collection, Grade } from './collection'
-import { isRenderedCardEmpty, renderNoteCard } from './card-rendering'
+import { isRenderedCardDisplayable, renderNoteCard } from './card-rendering'
 import { collectionSearchRows, compileCollectionSearch, type SearchRow } from './collection-search'
 import { customStudyKey, customStudySessions, type CustomStudySession } from './custom-study-state'
 import { eligibleForQueue } from './scheduler'
@@ -9,8 +9,10 @@ function renderable(row: SearchRow, now: Date) {
   if (!row.card || !row.noteType || !eligibleForQueue(row.card, now)) return false
   const template = row.noteType.templates.find((entry) => entry.id === row.card!.templateId)
   if (!template) return false
+  // An occlusion note always has something to show, so skip the render. The rule
+// itself lives in `isRenderedCardDisplayable`; this is only a short-circuit.
   if (row.noteType.kind === 'image-occlusion') return true
-  return !isRenderedCardEmpty(renderNoteCard(row.noteType, template, row.note.fields, row.card.clozeOrdinal))
+  return isRenderedCardDisplayable(renderNoteCard(row.noteType, template, row.note.fields, row.card.clozeOrdinal), row.noteType.kind)
 }
 function rank(value: string) {
   let hash = 2166136261

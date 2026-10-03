@@ -6,9 +6,9 @@ export interface CardMediaDescription {
   kind: NoteMediaReference['kind']
   displayName: string
   side: NoteMediaReference['side']
+  /** 'automatic' audio plays on its own; 'manual' waits for the learner. */
   playback: NoteMediaReference['playback']
   url?: string
-  automatic: boolean
 }
 
 export interface RenderedCard {
@@ -18,14 +18,19 @@ export interface RenderedCard {
   isEmpty: boolean
   css: string
   media: CardMediaDescription[]
+  /** A failure on the front alone. It suppresses the card, because there is
+   * nothing to show. */
   error?: string
+  /** A failure on the back alone. The question is still worth showing, so this
+   * is reported beside the card rather than in place of it. */
+  backError?: string
 }
 
 export function fieldsByName(fields: readonly { id: string; name: string }[], valuesById: Record<string, string>) {
   return Object.fromEntries(fields.map((field) => [field.name, valuesById[field.id] ?? '']))
 }
 
-export function describeCardMedia(reference: NoteMediaReference, url?: string, automatic = false): CardMediaDescription {
+export function describeCardMedia(reference: NoteMediaReference, url?: string): CardMediaDescription {
   return {
     id: reference.id,
     kind: reference.kind,
@@ -33,7 +38,6 @@ export function describeCardMedia(reference: NoteMediaReference, url?: string, a
     side: reference.side,
     playback: reference.playback,
     ...(url ? { url } : {}),
-    automatic,
   }
 }
 
@@ -48,12 +52,11 @@ export function renderCard(
   const back = tryRenderTemplate(template.back, fields, front.value.html, { ...options, side: 'back' })
   return {
     front: front.value,
-    ...(back.ok ? { back: back.value } : {}),
+    ...(back.ok ? { back: back.value } : { backError: back.error }),
     ...(front.value.typedAnswer !== undefined ? { typedAnswer: front.value.typedAnswer } : {}),
     isEmpty: front.value.isEmpty,
     css: template.css,
     media: attachments,
-    ...(!back.ok ? { error: back.error } : {}),
   }
 }
 
@@ -72,7 +75,17 @@ export function renderNoteCard(
   }, attachments)
 }
 
-/** A side error is reported separately; only the front's rendered emptiness controls card eligibility. */
-export function isRenderedCardEmpty(card: Pick<RenderedCard, 'isEmpty'>) {
-  return card.isEmpty
+/**
+ * Whether this card can be shown to a learner.
+ *
+ * A card is displayable unless its front renders to nothing. An image occlusion
+ * note has no front template at all, so an empty front is expected rather than a
+ * fault and the card is still displayable. A front that failed to render is
+ * displayable too: the error is reported, but the card must not become
+ * permanently unanswerable because of it.
+ */
+export function isRenderedCardDisplayable(card: Pick<RenderedCard, 'isEmpty' | 'error'>, kind?: NoteType['kind']) {
+  if (card.error) return true
+  if (kind === 'image-occlusion') return true
+  return !card.isEmpty
 }

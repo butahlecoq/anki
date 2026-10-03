@@ -12,13 +12,18 @@ const reference: NoteMediaReference = {
 }
 
 test('renders the exported media description with the prepared source and playback policy', () => {
-  const description = describeCardMedia(reference, '/media/cat.wav', true)
+  const description = describeCardMedia(reference, '/media/cat.wav')
   const { container } = render(<MediaRenderer description={description} />)
   const audio = container.querySelector('audio')
 
   expect(audio).toHaveAttribute('src', '/media/cat.wav')
   expect(audio).toHaveAttribute('autoplay')
   expect(screen.getByText('Audio: cat.wav')).toBeInTheDocument()
+})
+
+test('manual audio waits for the learner rather than playing on its own', () => {
+  const { container } = render(<MediaRenderer description={describeCardMedia({ ...reference, playback: 'manual' }, '/media/cat.wav')} />)
+  expect(container.querySelector('audio')).not.toHaveAttribute('autoplay')
 })
 
 test('reports a missing source from the exported media description', () => {

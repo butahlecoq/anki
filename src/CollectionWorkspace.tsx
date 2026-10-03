@@ -28,7 +28,7 @@ import { prepareAnkiImport, type PreparedAnkiImport } from './anki-import'
 import { CardHistory, Statistics, TodayWorkload } from './Statistics'
 import { CollectionBrowser } from './CollectionBrowser'
 import { unavailableReason } from './scheduler'
-import { describeCardMedia, isRenderedCardEmpty, renderNoteCard } from './card-rendering'
+import { describeCardMedia, isRenderedCardDisplayable, renderNoteCard } from './card-rendering'
 import { ExportDialog } from './ExportDialog'
 import { CustomStudy } from './CustomStudy'
 import { answerCustomStudy, customStudyQueue, practiceChoices, undoCustomStudy } from './custom-study'
@@ -830,7 +830,6 @@ function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: string; se
   const attachments = activeMedia.filter((reference) => !reference.inline).map((reference) => describeCardMedia(
     reference,
     preparedMedia.sources.byReference[reference.id]?.url,
-    true,
   ))
   const renderedCard = template && noteType && note && card
     ? renderNoteCard(noteType, template, note.fields, card.clozeOrdinal, preparedMedia.sources.byName, attachments)
@@ -845,7 +844,7 @@ function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: string; se
   const unavailable = card === null || note === null || noteType === null ||
     Boolean(card && unavailableReason(card, new Date()) !== null) ||
     (Boolean(noteType && card) && !template) ||
-    Boolean(renderedCard && isRenderedCardEmpty(renderedCard) && !imageOcclusion)
+    Boolean(renderedCard && !isRenderedCardDisplayable(renderedCard, noteType?.kind))
 
   useEffect(() => {
     if (showAnswer && typedAnswer !== undefined) typedResultRef.current?.focus()

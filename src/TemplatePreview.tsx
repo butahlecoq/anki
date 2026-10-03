@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useCallback } from 'react'
 import { useTemplateNavigation } from './use-template-navigation'
 import { renderedNavigationActions } from './template-navigation'
-import { isRenderedCardEmpty, type RenderedCard } from './card-rendering'
+import { isRenderedCardDisplayable, type RenderedCard } from './card-rendering'
 
 interface TemplatePreviewProps {
   rendering: RenderedCard
@@ -22,8 +22,10 @@ export function TemplatePreview({ rendering, side, title = 'Card preview', templ
   useEffect(() => {
     if (title === 'Review card') frame.current?.scrollIntoView?.({ block: 'center' })
   }, [title, side])
-  const error = rendering.error ?? ''
-  const empty = isRenderedCardEmpty(rendering)
+  // A front failure suppresses the card; a back failure does not, because the
+  // question is still worth showing. The answer side reports its own failure.
+  const sideError = (side === 'front' ? rendering.error : rendering.backError) ?? ''
+  const error = sideError
   const html = (side === 'front' ? rendering.front : rendering.back)?.html ?? ''
   const srcDoc = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:"><style>body{font-family:system-ui,sans-serif;color:#202a22;background:#fff;padding:24px;overflow-wrap:anywhere}.card-image{display:block;max-width:100%;max-height:290px;object-fit:contain}.card-audio{width:min(100%,400px)}a[data-kiroku-href]{color:#175fa6;text-decoration:underline;cursor:pointer}${rendering.css}</style></head><body class="card card${templateOrdinal}">${html}</body></html>`
   const navigationActions = renderedNavigationActions(html)
@@ -113,7 +115,7 @@ export function TemplatePreview({ rendering, side, title = 'Card preview', templ
   return (
     <div className="template-preview">
       {error && <p role="alert">{error}</p>}
-      {!error && empty && <p className="form-warning" role="status">No card will be created: front has no visible field content.</p>}
+      {!error && !isRenderedCardDisplayable(rendering) && <p className="form-warning" role="status">No card will be created: front has no visible field content.</p>}
       {!error && <iframe ref={combinedFrameRef} title={title} sandbox="allow-same-origin" srcDoc={srcDoc} />}
       {!error && navigationActions.length > 0 && <section className="external-card-links" aria-label="External card links">
         <p>Links from this card are also available here. Preview the destination before opening another tab.</p>
