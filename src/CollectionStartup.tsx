@@ -1,8 +1,14 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { collection } from './collection'
+import { requestPersistentStorage } from './offline-storage'
+import { snapshotBeforeCollectionUpgrade } from './upgrade-recovery'
 
 type StartupState = { status: 'opening' } | { status: 'ready' } | { status: 'failed'; reason: string; blocked?: boolean }
-const openCollectionByDefault = () => collection.open()
+const openCollectionByDefault = async () => {
+  await requestPersistentStorage()
+  await snapshotBeforeCollectionUpgrade(collection.name, collection.verno)
+  return collection.open()
+}
 
 export function CollectionStartup({
   children,
