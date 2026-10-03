@@ -246,11 +246,15 @@ describe('Anki package import', () => {
       expect.objectContaining({ displayName: 'cat.wav', kind: 'audio', side: 'front', playback: 'automatic' }),
     ]))
     await expect(collection.mediaBlobs.count()).resolves.toBe(2)
-    await expect(collection.pendingOperations()).resolves.toEqual(expect.arrayContaining([
+    const pending = await collection.pendingOperations()
+    expect(pending).toEqual(expect.arrayContaining([
       expect.objectContaining({ entityType: 'noteType', action: 'create' }),
       expect.objectContaining({ entityType: 'review', action: 'create' }),
       expect.objectContaining({ entityType: 'noteMedia', action: 'create' }),
     ]))
+    for (const operation of pending) {
+      expect(await collection.syncRevisions.get(operation.opId)).toMatchObject({ ...operation, key: `${operation.entityType}:${operation.entityId}` })
+    }
   })
 
   test('keeps a newer local edit when the same stable Anki note is imported again', async () => {
