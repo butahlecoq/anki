@@ -47,7 +47,7 @@ Base commit: `60b5cbb5c0a09cfb63c2ce8f9e4cd52ed288206c` (current `origin/main`).
 
 ### [#87 Generate the status document from Git and the tracker](https://github.com/butahlecoq/anki/issues/87)
 
-- No open PR; exact-head checks: not applicable; branch `feat/87-live-status-luna-night`; worktree: D:/work/anki-87-live-status-luna-night; local commits ahead of origin/main: 0; deferred: none stated in checkpoint comments
+- No open PR; exact-head checks: not applicable; branch `feat/87-live-status-luna-night`; worktree: D:/work/anki-87-live-status-luna-night; local commits ahead of origin/main: 1; deferred: none stated in checkpoint comments
 
 ### [#91 Preserve imported field HTML instead of normalising it to plain text](https://github.com/butahlecoq/anki/issues/91)
 
@@ -73,7 +73,6 @@ Base commit: `60b5cbb5c0a09cfb63c2ce8f9e4cd52ed288206c` (current `origin/main`).
 
 - `D:/work/anki` (main): docs/research/why-not-reuse-upstream-anki-clients.md
 - `D:/work/anki-85-luna` (fix/85-local-gate): src/TemplatePreview.tsx, src/design-tokens.test.ts, src/hint-compatibility.test.ts, src/mobile-layout.test.tsx, src/styles.css, src/template-renderer.test.ts, src/template-renderer.ts, tests/e2e/browser.spec.ts, tests/e2e/hint.spec.ts
-- `D:/work/anki-87-live-status-luna-night` (feat/87-live-status-luna-night): AGENTS.md, CONTRIBUTING.md, docs/development-handoff.md, docs/superpowers/plans/2026-10-01-cloze-and-japanese-rendering.md, docs/superpowers/plans/2026-10-01-image-occlusion.md, docs/superpowers/plans/2026-10-01-nested-decks-and-options.md, docs/superpowers/plans/2026-10-01-note-types.md, docs/superpowers/plans/2026-10-01-scheduling-policies.md, package.json, scripts/status-report.mjs, scripts/status-report.test.mjs
 - `D:/work/anki-issue-85` (feat/85-local-browser-verification): .runtime/hint-webkit/kiroku-sync.sqlite-shm, .runtime/hint-webkit/kiroku-sync.sqlite-wal, .runtime/sync-shell/kiroku-sync.sqlite-shm, .runtime/sync-shell/kiroku-sync.sqlite-wal, .runtime/sync/kiroku-sync.sqlite-shm, .runtime/sync/kiroku-sync.sqlite-wal, .runtime/sync/media/2e/2eeb55e08e1a51af2003fabdfc8572539de6c3f0fa1c182a5b3d3a4806b84db5, .runtime/sync/media/5f/5fd4d7e331e0d162bd059c7573860f239ea9340d569f8b037de797c7abbf1b9d
 
 ## Branches with work beyond their pull request merge point
