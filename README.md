@@ -50,6 +50,8 @@ Enter the service’s `https://` address and the one-time code in **Connect a PC
 
 After pairing, use **Download PC backup** to create and download a verified snapshot of the PC sync history and media. The service retains up to 14 automatic and manual backups for 30 days. See [PC service backups and recovery](docs/server-backups.md) for contents, verification, and restore limits.
 
+After this browser downloads a backup and checks its size and SHA-256, it saves a small receipt in the local collection. That receipt remains visible offline; the current list of backups on the PC is shown separately and requires a connection.
+
 ## Progress statistics
 
 Open **Statistics** from the desktop sidebar or the iPhone navigation bar. The home dashboard counts cards available now using the same queue as the reviewer, including daily limits, suspended cards, buried siblings, and renderable templates. **Studied** counts answers today, including repeated learning steps.

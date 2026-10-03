@@ -15,6 +15,7 @@ import {
   type Grade,
   type Note,
   type NoteMediaReference,
+  type SyncSettings,
 } from './collection'
 import { MediaRenderer } from './MediaRenderer'
 import { ImageOcclusionEditor, ImageOcclusionReview } from './ImageOcclusion'
@@ -37,6 +38,7 @@ import { formatStorageBytes, requestPersistentStorage, userFacingStorageError, t
 import { TextCollectionDialog } from './TextCollectionDialog'
 import { SyncConflicts } from './SyncConflicts'
 import { loadSampleDeck, removeSampleDeck, SAMPLE_DECK_NAME } from './sample-deck'
+import type { VerifiedPcBackupReceipt } from './pc-backup-receipt'
 
 type Route =
   | { view: 'decks' }
@@ -269,8 +271,14 @@ function SyncControls() {
   const [code, setCode] = useState('')
   const [message, setMessage] = useState('This collection stays on this device until you connect a PC.')
   const [busy, setBusy] = useState(false)
-  const [backups, setBackups] = useState<PcBackup[]>([])
+  const [pcBackupList, setPcBackupList] = useState<{ settings: SyncSettings; status: 'available' | 'empty' | 'unreachable' | 'authentication-required'; backups: PcBackup[] }>()
+  const [backupReceipt, setBackupReceipt] = useState<VerifiedPcBackupReceipt>()
+  const [backupReceiptLoaded, setBackupReceiptLoaded] = useState(false)
+  const [backupReceiptUnavailable, setBackupReceiptUnavailable] = useState(false)
   const [restorePreview, setRestorePreview] = useState('')
+  const currentPcBackupList = settings && pcBackupList?.settings === settings ? pcBackupList : undefined
+  const backups = currentPcBackupList?.backups ?? []
+  const backupListStatus = !settings ? 'unpaired' : currentPcBackupList?.status ?? 'checking'
 
   async function refreshStorageEstimate() {
     try {
@@ -294,9 +302,27 @@ function SyncControls() {
   }, [])
 
   useEffect(() => {
+    let active = true
+    void collection.lastVerifiedPcBackup().then((receipt) => {
+      if (active) setBackupReceipt(receipt)
+    }).catch(() => {
+      if (active) setBackupReceiptUnavailable(true)
+    }).finally(() => {
+      if (active) setBackupReceiptLoaded(true)
+    })
+    return () => { active = false }
+  }, [])
+
+  useEffect(() => {
     if (!settings) return
     let active = true
-    void listPcBackups(settings).then(({ backups: latest }) => { if (active) setBackups(latest) }).catch(() => { if (active) setBackups([]) })
+    void listPcBackups(settings).then(({ backups: latest }) => {
+      if (!active) return
+      setPcBackupList({ settings, backups: latest, status: latest.length ? 'available' : 'empty' })
+    }).catch((error) => {
+      if (!active) return
+      setPcBackupList({ settings, backups: [], status: error instanceof Error && error.message.includes('paired again') ? 'authentication-required' : 'unreachable' })
+    })
     return () => { active = false }
   }, [settings])
 
@@ -322,7 +348,9 @@ function SyncControls() {
     setMessage('Syncing your collection…')
     try {
       const result = await syncCollection(collection)
-      if (result.state === 'complete' && settings) void listPcBackups(settings).then(({ backups: latest }) => setBackups(latest)).catch(() => {})
+      if (result.state === 'complete' && settings) void listPcBackups(settings).then(({ backups: latest }) => {
+        setPcBackupList({ settings, backups: latest, status: latest.length ? 'available' : 'empty' })
+      }).catch(() => setPcBackupList({ settings, backups: [], status: 'unreachable' }))
       if (result.state === 'complete') {
         const media = result.media
         const mediaError = media?.uploadError ?? media?.downloadError
@@ -348,15 +376,32 @@ function SyncControls() {
     setBusy(true)
     try {
       const { manifest, bytes } = await createAndDownloadPcBackup(settings)
+      let receiptSaved = true
+      const mediaBytes = manifest.media.reduce((total, item) => total + item.byteLength, 0)
+      const receipt = {
+        backupId: manifest.id,
+        createdAt: manifest.createdAt,
+        verifiedAt: new Date().toISOString(),
+        reason: manifest.reason,
+        changeCount: manifest.changeCount,
+        mediaFiles: manifest.media.length,
+        mediaBytes,
+        archiveBytes: bytes.size,
+        archiveSha256: manifest.archiveSha256,
+      }
+      try {
+        await collection.recordVerifiedPcBackup(receipt)
+        setBackupReceipt(receipt)
+        setBackupReceiptUnavailable(false)
+      } catch { receiptSaved = false }
       const url = URL.createObjectURL(bytes)
       const anchor = document.createElement('a')
       anchor.href = url
       anchor.download = `kiroku-backup-${manifest.createdAt.slice(0, 10)}.zip`
       anchor.click()
       window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
-      setBackups((current) => [manifest, ...current.filter((backup) => backup.id !== manifest.id)])
-      const mediaBytes = manifest.media.reduce((total, item) => total + item.byteLength, 0)
-      setMessage(`Verified backup downloaded · ${manifest.changeCount} sync changes · ${manifest.media.length} media files (${(mediaBytes / 1024 / 1024).toFixed(1)} MiB) · ${new Date(manifest.createdAt).toLocaleString()}.`)
+      setPcBackupList((current) => ({ settings, status: 'available', backups: [manifest, ...(current?.settings === settings ? current.backups : []).filter((backup) => backup.id !== manifest.id)] }))
+      setMessage(`Verified backup downloaded · ${manifest.changeCount} sync changes · ${manifest.media.length} media files (${(mediaBytes / 1024 / 1024).toFixed(1)} MiB) · ${new Date(manifest.createdAt).toLocaleString()}.${receiptSaved ? '' : ' Its verification status could not be saved for offline viewing.'}`)
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'PC backup failed. The active collection was left unchanged.')
     } finally { setBusy(false) }
@@ -390,8 +435,18 @@ function SyncControls() {
         {settings && <button className="text-button" type="button" disabled={busy} onClick={() => void backupPcCollection()}>{busy ? 'Working…' : 'Download PC backup'}</button>}
         <button className="primary-action" type="button" disabled={busy} onClick={() => setPairing(true)}>{settings ? 'Pair another device' : 'Connect a PC'}</button>
       </div>
-      {settings && backups[0] && <p className="sync-help">Latest verified PC backup: {new Date(backups[0].createdAt).toLocaleString()} · {backups[0].changeCount} sync changes · {backups[0].media.length} media files · {backups[0].reason === 'manual' ? 'manual' : 'before sync'}.</p>}
-      {settings && backups[0] && <p className="sync-help"><button className="text-button" type="button" disabled={busy} onClick={() => void previewPcRestore(backups[0])}>Preview latest backup</button>{restorePreview && <span role="status"> {restorePreview}</span>}</p>}
+      <p className="sync-help" aria-live="polite" data-testid="backup-receipt">
+        {!backupReceiptLoaded ? 'Loading saved backup verification status…'
+          : backupReceiptUnavailable ? 'Saved backup verification status could not be read on this device.'
+            : backupReceipt ? `Last PC backup received and verified on this device: ${new Date(backupReceipt.createdAt).toLocaleString()} · ${backupReceipt.changeCount} sync changes · ${backupReceipt.mediaFiles} media files (${formatStorageBytes(backupReceipt.mediaBytes)}) · archive ${formatStorageBytes(backupReceipt.archiveBytes)} · checked ${new Date(backupReceipt.verifiedAt).toLocaleString()}.`
+              : 'No PC backup has been received and verified on this device yet.'}
+      </p>
+      {settings && backupListStatus === 'checking' && <p className="sync-help" aria-live="polite">Checking the PC backup list…</p>}
+      {settings && backupListStatus === 'available' && backups[0] && <p className="sync-help">Latest backup currently listed by the PC: {new Date(backups[0].createdAt).toLocaleString()} · {backups[0].changeCount} sync changes · {backups[0].media.length} media files · {backups[0].reason === 'manual' ? 'manual' : 'before sync'}.</p>}
+      {settings && backupListStatus === 'empty' && <p className="sync-help">The PC does not currently list a saved backup. This device’s saved verification status remains available offline.</p>}
+      {settings && backupListStatus === 'unreachable' && <p className="sync-help">The PC backup list is unavailable. This device’s saved verification status remains available offline.</p>}
+      {settings && backupListStatus === 'authentication-required' && <p className="sync-help">Pair this device again to view current PC backups. Its saved verification status remains available offline.</p>}
+      {settings && backupListStatus === 'available' && backups[0] && <p className="sync-help"><button className="text-button" type="button" disabled={busy} onClick={() => void previewPcRestore(backups[0])}>Preview latest backup</button>{restorePreview && <span role="status"> {restorePreview}</span>}</p>}
       {pairing && (
         <div className="dialog-backdrop">
           <section className="dialog" role="dialog" aria-modal="true" aria-labelledby="sync-dialog-title">

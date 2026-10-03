@@ -14,6 +14,7 @@ import {
 import { digestMedia, validateMedia, type AudioPlayback, type MediaKind, type MediaSide } from './media'
 import { clozeOrdinals, renderTemplate, tryRenderTemplate, validateTemplate } from './template-renderer'
 import { mergeRevisions, revisionHeads, type RevisionMerge } from './sync-revisions'
+import { isVerifiedPcBackupReceipt, type VerifiedPcBackupReceipt } from './pc-backup-receipt'
 
 export { Rating, State }
 export type { Grade }
@@ -2038,6 +2039,18 @@ export class Collection extends Dexie {
 
   async syncSettings(): Promise<SyncSettings | undefined> {
     return (await this.settings.get('sync'))?.value as SyncSettings | undefined
+  }
+
+  async recordVerifiedPcBackup(receipt: VerifiedPcBackupReceipt) {
+    if (!isVerifiedPcBackupReceipt(receipt)) throw new Error('Verified PC backup receipt is invalid.')
+    await this.settings.put({ key: 'lastVerifiedPcBackup', value: structuredClone(receipt) })
+  }
+
+  async lastVerifiedPcBackup(): Promise<VerifiedPcBackupReceipt | undefined> {
+    const value = (await this.settings.get('lastVerifiedPcBackup'))?.value
+    if (value === undefined) return undefined
+    if (!isVerifiedPcBackupReceipt(value)) throw new Error('Saved PC backup verification receipt is invalid.')
+    return value
   }
 
   async applyRemoteChanges(changes: SyncOperation[], cursor: number) {

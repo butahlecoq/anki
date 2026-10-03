@@ -5,6 +5,7 @@ test('learner can inspect offline storage protection and local completeness', as
   await page.getByTestId('offline-storage-summary').click()
   await expect(page.getByText(/Persistent storage is enabled|The browser may clear this app’s local data|cannot protect local storage/)).toBeVisible()
   await expect(page.getByText(/notes · .* cards · .* media files/)).toBeVisible()
+  await expect(page.getByTestId('backup-receipt')).toContainText('No PC backup has been received and verified on this device yet.')
 })
 
 test('learner can prepare a deck and review its saved card offline', async ({ context, page }) => {

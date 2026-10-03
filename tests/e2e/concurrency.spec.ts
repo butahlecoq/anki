@@ -200,7 +200,7 @@ test('independent offline clients merge fields, retain conflicts through reload,
   }
 })
 
-test('learner downloads and previews a verified PC backup after sync', async ({ page }) => {
+test('learner downloads and previews a verified PC backup that remains known after going offline', async ({ page, context }) => {
   test.setTimeout(120_000)
   const syncService = await isolatedSyncService()
   const deckName = `Backup Japanese ${test.info().project.name} ${Date.now()}`
@@ -225,7 +225,12 @@ test('learner downloads and previews a verified PC backup after sync', async ({ 
     expect(archive['collection.sqlite']).toBeDefined()
     expect(Object.keys(archive).some((name) => name.startsWith('media/'))).toBe(false)
     await expect(page.getByText(/Verified backup downloaded · \d+ sync changes · 0 media files/)).toBeVisible()
-    await expect(page.getByText(/Latest verified PC backup:/)).toContainText(/manual/)
+    const receipt = page.getByTestId('backup-receipt')
+    await expect(receipt).toContainText(/Last PC backup received and verified on this device:/)
+    await context.setOffline(true)
+    await expect(receipt).toContainText(/Last PC backup received and verified on this device:/)
+    await context.setOffline(false)
+    await expect(page.getByText(/Latest backup currently listed by the PC:/)).toContainText(/manual/)
 
     await page.getByRole('button', { name: 'Preview latest backup', exact: true }).click()
     const preview = page.getByRole('status').filter({ hasText: /sync changes through cursor/ })
