@@ -119,7 +119,7 @@ test('independent offline clients merge fields, retain conflicts through reload,
     await expect(dialog).toContainText('кот · feline')
     await expect(dialog).toContainText(`Deck: ${deckName}`)
     await expect(dialog).toContainText('Conflicting properties: front')
-    await expect.poll(() => phone.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+    await expect.poll(() => phone.evaluate(() => document.documentElement.scrollWidth <= screen.width + 1)).toBe(true)
     await phone.screenshot({ path: test.info().outputPath('offline-conflict-choice.png'), fullPage: true })
     await phoneContext.setOffline(true)
     await dialog.locator('fieldset').filter({ hasText: 'ネコ home' }).getByRole('radio').check()

@@ -73,7 +73,7 @@ export function SyncConflicts() {
     <div><h2>Review conflicting changes</h2><p>{conflicts.length} record{conflicts.length === 1 ? '' : 's'} need a choice. Both versions are saved on this device.</p></div>
     {savedChoice && !selected && <p role="status">Choice saved. It will sync to your other devices.</p>}
     {conflicts.map((conflict) => <button className="text-button" key={conflict.key} onClick={(event) => { openerRef.current = event.currentTarget; setSelected(conflict); setChoice(''); setError('') }}>Review {conflict.entityType === 'noteMedia' ? 'attachment' : conflict.entityType === 'deckOptionGroup' ? 'deck options' : conflict.entityType} conflict</button>)}
-    {selected && <div className="dialog-backdrop"><section ref={dialogRef} className="dialog" role="dialog" aria-modal="true" aria-labelledby="conflict-title" onKeyDown={containDialogFocus}>
+    {selected && <div className="dialog-backdrop sync-conflict-backdrop"><section ref={dialogRef} className="dialog sync-conflict-dialog" role="dialog" aria-modal="true" aria-labelledby="conflict-title" onKeyDown={containDialogFocus}>
       <h2 id="conflict-title">Choose the saved version</h2>
       {context && <p>Record: <strong>{context.name}</strong>{context.type && <> · {context.type}</>}{context.deck && <> · Deck: {context.deck}</>}</p>}
       <p>Conflicting properties: {selected.conflicts.map((path) => path.startsWith('fields.') ? context?.fieldNames[path.slice(7)] ?? path.slice(7) : path === '$deleted' ? 'Deletion' : path === '$' ? 'Whole record' : path.replace(/^\$schedule\.?/, 'Schedule ')).join(', ')}.</p>
