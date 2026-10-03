@@ -97,7 +97,15 @@ test('independent offline clients merge fields, retain conflicts through reload,
     await pc.getByRole('button', { name: 'Save note', exact: true }).click()
     await pair(pc, syncService.url, syncService.runtime); await pair(phone, syncService.url, syncService.runtime)
     await sync(pc); await sync(phone)
-    await phone.getByRole('button', { name: `Open ${deckName}`, exact: true }).click()
+    const phoneDeckAction = phone.getByRole('button', { name: `Open ${deckName}`, exact: true })
+    await phoneDeckAction.evaluate((element) => element.scrollIntoView({ block: 'center' }))
+    await expect.poll(() => phone.evaluate(() => {
+      const deckAction = document.querySelector<HTMLButtonElement>('.tile-action')
+      const mobileNav = document.querySelector<HTMLElement>('.mobile-nav')
+      if (!deckAction || !mobileNav) return false
+      return deckAction.getBoundingClientRect().bottom <= mobileNav.getBoundingClientRect().top - 8
+    })).toBe(true)
+    await phoneDeckAction.click()
     await context.setOffline(true); await phoneContext.setOffline(true)
     await edit(pc, 'ねこ', 'cat'); await edit(phone, '猫', 'кот')
     await context.setOffline(false); await phoneContext.setOffline(false)
