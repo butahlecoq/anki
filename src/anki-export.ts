@@ -6,20 +6,11 @@ import { serializeAnkiImageOcclusion } from './image-occlusion-interchange'
 import { validateAnkiArchive } from './anki-archive'
 import { nativeScheduleFingerprint, nativeReviewFingerprint } from './anki-scheduling-metadata'
 import { validateMediaBytes } from './anki-import'
+import { derivedNativeId, nativeNumberOf } from './anki-identity'
 
 export interface AnkiExportOptions { deckId?: string; scheduling: boolean; history: boolean; media: boolean; SQL?: SqlJsStatic }
 let sqlPromise: Promise<SqlJsStatic> | undefined
 const day = 86_400_000
-// Deterministic safe integer IDs retain relationships across repeated exports.
-function numericId(value: string) {
-  let hash = 0xcbf29ce484222325n
-  for (const byte of new TextEncoder().encode(value)) hash = BigInt.asUintN(64, (hash ^ BigInt(byte)) * 0x100000001b3n)
-  return Number(hash % 700_000_000_000n) + 1_000_000_000_000
-}
-function sourceId(value: string, prefix: string) {
-  const native = value.startsWith(prefix) ? Number(value.slice(prefix.length)) : NaN
-  return Number.isSafeInteger(native) && native > 0 ? native : numericId(value)
-}
 function escape(value: string) { return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;') }
 function guid(value: string) { return value.startsWith('anki-note:') ? value.slice(10) : value }
 // Independently written template invoking the official image occlusion runtime.
@@ -69,14 +60,14 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
   for (const local of snapshot.types.filter((type) => notes.some((note) => note.typeId === type.id))) {
     if (new Set(local.templates.map((template) => template.css)).size > 1) throw new Error(`Note type ${local.name} uses different CSS per template, which Anki cannot represent. Use shared CSS before exporting.`)
     const occlusion = local.kind === 'image-occlusion'
-    exportedTypes.set(local.id, new Notetype({ id: sourceId(local.id, 'anki-note-type:'), name: local.name, type: local.kind === 'standard' ? 'normal' : 'cloze', css: local.templates[0]?.css ?? '',
+    exportedTypes.set(local.id, new Notetype({ id: nativeNumberOf(local.id, 'note-type'), name: local.name, type: local.kind === 'standard' ? 'normal' : 'cloze', css: local.templates[0]?.css ?? '',
       fields: occlusion ? ['Occlusion', 'Image', 'Header', 'Back Extra', 'Comments'].map((name) => ({ name })) : local.fields.map((field) => ({ name: field.name })),
       templates: occlusion ? [{ name: 'Hide one, reveal one', questionFormat: nativeOcclusionBody, answerFormat: `${nativeOcclusionBody}<hr>{{Back Extra}}` }] : local.templates.map((template) => ({ name: template.name, questionFormat: template.front, answerFormat: template.back })),
     }))
   }
   const exportedDecks = new Map<string, NativeDeck>()
   for (const id of selected) {
-    const deck = new AnkiDeck({ id: sourceId(id, 'anki-deck:'), name: path(id) })
+    const deck = new AnkiDeck({ id: nativeNumberOf(id, 'deck'), name: path(id) })
     exportedDecks.set(id, deck)
     packageFile.addDeck(deck)
   }
@@ -113,7 +104,7 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
   }
   for (const [name, bytes] of media) packageFile.addMedia(name, bytes)
   const data = await packageFile.toCollection()
-  for (const row of data.notetypes) if (snapshot.types.find((type) => sourceId(type.id, 'anki-note-type:') === row.id)?.kind === 'image-occlusion') {
+  for (const row of data.notetypes) if (snapshot.types.find((type) => nativeNumberOf(type.id, 'note-type') === row.id)?.kind === 'image-occlusion') {
     // Native Notetype.Config original_stock_kind is protobuf field 9, enum 6.
     // The final occurrence overrides an existing default emitted by ankipack.
     row.config = new Uint8Array([...row.config, 0x48, 0x06])
@@ -135,7 +126,7 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
     for (const card of snapshot.cards.filter((card) => card.noteId === note.id)) {
       const ord = type.kind === 'standard' ? type.templates.findIndex((template) => template.id === card.templateId) : (card.clozeOrdinal ?? card.occlusionOrdinal ?? 0) - 1
       if (ord < 0) throw new Error(`Card ${card.id} has no exportable template or ordinal.`)
-      if (!data.cards.some((row) => row.nid === nativeNote.id && row.ord === ord)) data.cards.push({ id: numericId(`card:${card.id}`), nid: nativeNote.id, did: sourceId(card.deckId, 'anki-deck:'), ord, mod: Math.floor(Date.now() / 1000), usn: -1, type: 0, queue: 0, due: 0, ivl: 0, factor: 0, reps: 0, lapses: 0, left: 0, odue: 0, odid: 0, flags: 0, data: '' })
+      if (!data.cards.some((row) => row.nid === nativeNote.id && row.ord === ord)) data.cards.push({ id: derivedNativeId(`card:${card.id}`), nid: nativeNote.id, did: nativeNumberOf(card.deckId, 'deck'), ord, mod: Math.floor(Date.now() / 1000), usn: -1, type: 0, queue: 0, due: 0, ivl: 0, factor: 0, reps: 0, lapses: 0, left: 0, odue: 0, odid: 0, flags: 0, data: '' })
     }
   }
   const cardsByExport = new Map<number, CardRecord>()
@@ -145,8 +136,8 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
     const type = snapshot.types.find((type) => type.id === localNote.typeId)!
     const card = snapshot.cards.find((card) => card.noteId === localNote.id && (type.kind === 'standard' ? card.templateId === type.templates[row.ord]?.id : (card.clozeOrdinal ?? card.occlusionOrdinal) === row.ord + 1))
     if (!card) return false
-    row.id = card.ankiId ?? numericId(`card:${card.id}`)
-    row.did = sourceId(card.deckId, 'anki-deck:')
+    row.id = card.ankiId ?? derivedNativeId(`card:${card.id}`)
+    row.did = nativeNumberOf(card.deckId, 'deck')
     cardsByExport.set(row.id, card)
     row.flags = card.flag ?? 0
     if (options.scheduling) {
@@ -160,7 +151,7 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
     return true
   })
   if (data.cards.length !== snapshot.cards.filter((card) => noteIds.has(card.noteId)).length) throw new Error('Some card relationships cannot be represented in this package.')
-  const noteMapping = new Map(data.notes.map((row) => [row.id, localByGuid.get(row.guid)!.ankiId ?? numericId(`note:${row.guid}`)]))
+  const noteMapping = new Map(data.notes.map((row) => [row.id, localByGuid.get(row.guid)!.ankiId ?? derivedNativeId(`note:${row.guid}`)]))
   for (const row of data.cards) row.nid = noteMapping.get(row.nid)!
   for (const row of data.notes) row.id = noteMapping.get(row.id)!
   for (const [subject, values] of [['notes', data.notes], ['cards', data.cards]] as const) {
@@ -175,7 +166,8 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
       while (used.has(id)) id += 1
       used.add(id)
       const next = historyEntries[index + 1] ?? card
-      const interval = next.scheduledDays || -Math.max(1, Math.round((Date.parse(next.due) - Date.parse(review.reviewedAt)) / 1000))
+      const resultingInterval = review.afterScheduledDays ?? next.scheduledDays
+      const interval = resultingInterval || -Math.max(1, Math.round((Date.parse(review.afterDue ?? next.due) - Date.parse(review.reviewedAt)) / 1000))
       const previous = historyEntries[index - 1]
       const lastInterval = review.scheduledDays || (previous ? -Math.max(1, Math.round((Date.parse(review.due) - Date.parse(previous.reviewedAt)) / 1000)) : 0)
       const practice = 'rescheduled' in review && review.rescheduled === false
@@ -184,7 +176,7 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
       const metadata = JSON.parse(row.data || '{}') as Record<string, unknown>
       const history = (metadata.kirokuReviews ?? {}) as Record<string, unknown>
       const { rating, state, due, stability, difficulty, elapsedDays, lastElapsedDays, scheduledDays, learningSteps, reviewedAt, durationMs } = review
-      history[id] = { native: nativeReviewFingerprint(data.revlog.at(-1)!), rating, state, due, stability, difficulty, elapsedDays, lastElapsedDays, scheduledDays, learningSteps, reviewedAt, durationMs, ...(practice ? { rescheduled: false } : {}) }
+      history[id] = { native: nativeReviewFingerprint(data.revlog.at(-1)!), rating, state, due, stability, difficulty, elapsedDays, lastElapsedDays, scheduledDays, learningSteps, reviewedAt, durationMs, afterState: review.afterState, afterDue: review.afterDue, afterStability: review.afterStability, afterDifficulty: review.afterDifficulty, afterElapsedDays: review.afterElapsedDays, afterScheduledDays: review.afterScheduledDays, afterLearningSteps: review.afterLearningSteps, ...(practice ? { rescheduled: false } : {}) }
       row.data = JSON.stringify({ ...metadata, kirokuReviews: history })
       }
     }

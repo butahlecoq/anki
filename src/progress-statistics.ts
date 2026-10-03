@@ -25,7 +25,7 @@ export function reviewStatistics(entries: ReviewEntry[], period: StatisticsPerio
     .filter((entry) => { const time = Date.parse(entry.reviewedAt); return Number.isFinite(time) && time >= start && time < end })
     .sort((a, b) => Date.parse(a.reviewedAt) - Date.parse(b.reviewedAt) || a.id.localeCompare(b.id))
   const timed = reviews.filter((entry) => Number.isFinite(entry.durationMs) && entry.durationMs! >= 0)
-  const recall = reviews.filter((entry) => entry.state === State.Review && entry.rescheduled !== false)
+  const recall = reviews.filter((entry) => (entry.afterState ?? entry.state) === State.Review && entry.rescheduled !== false)
   return {
     reviews, count: reviews.length, cards: new Set(reviews.map((entry) => entry.cardId)).size,
     durationMs: timed.reduce((sum, entry) => sum + entry.durationMs!, 0), timedCount: timed.length,
