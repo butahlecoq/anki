@@ -222,6 +222,25 @@ describe('Anki package import', () => {
     })
     expect(prepared.plan).not.toHaveProperty('collection')
     expect(prepared.plan.writes.blobs.every((blob) => !('blob' in blob))).toBe(true)
+    // Every row commit() writes must appear in the plan, or the learner approves
+    // an incomplete description of what the import will do. This asserts the
+    // plan's shape directly rather than trusting a hand-maintained list.
+    expect(Object.keys(prepared.plan.writes).sort()).toEqual([
+      'blobs', 'cards', 'decks', 'deletedDecks', 'deletedReferences',
+      'noteTypes', 'notes', 'references', 'reviews', 'undoSettings', 'updatedReviews',
+    ])
+    // Every planned row carries a matching decision, so nothing is written
+    // without having been inspected first.
+    const planned = [
+      ...prepared.plan.writes.decks, ...prepared.plan.writes.noteTypes,
+      ...prepared.plan.writes.notes, ...prepared.plan.writes.cards,
+      ...prepared.plan.writes.reviews, ...prepared.plan.writes.updatedReviews,
+      ...prepared.plan.writes.references,
+    ].map((write) => write.value.id)
+    for (const id of planned) expect(prepared.plan.decisions.some((decision) => decision.id === id)).toBe(true)
+    for (const id of prepared.plan.writes.deletedDecks.map((deck) => deck.id)) {
+      expect(prepared.plan.decisions).toContainEqual({ entity: 'deck', id, action: 'delete' })
+    }
     expect(prepared.issues.filter((issue) => issue.severity === 'error')).toEqual([])
     expect(prepared.issues).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'deck-hierarchy', detail: expect.stringContaining('Japanese::Core') }),
