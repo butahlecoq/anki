@@ -60,6 +60,11 @@ export function createSyncHttpHandler(service: Service, { allowedOrigin, jsonBod
         if (!payload.code || !payload.deviceId) return reply(400, { error: 'Pairing code and device ID are required.' })
         return reply(201, service.pair({ code: payload.code, deviceId: payload.deviceId }))
       }
+      if (request.method === 'POST' && request.url === '/api/credential/rotate') {
+        const authorization = request.headers.authorization
+        if (!authorization?.startsWith('Bearer ')) return reply(401, { error: 'Authentication required.' })
+        return reply(200, service.rotateCredential(authorization.slice(7)))
+      }
       if (request.method === 'POST' && request.url === '/api/sync') {
         const authorization = request.headers.authorization
         if (!authorization?.startsWith('Bearer ')) return reply(401, { error: 'Authentication required.' })

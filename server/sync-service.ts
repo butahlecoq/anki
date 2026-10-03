@@ -231,6 +231,22 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
       return { deviceId, token: issuedToken }
     },
 
+    rotateCredential(accessToken: string) {
+      const issuedToken = token()
+      database.exec('BEGIN IMMEDIATE')
+      try {
+        const device = database.prepare('SELECT devices.id FROM tokens JOIN devices ON devices.id = tokens.device_id WHERE tokens.hash = ? AND devices.revoked_at IS NULL').get(hash(accessToken)) as { id: string } | undefined
+        if (!device) throw new Error('Authentication required.')
+        database.prepare('DELETE FROM tokens WHERE device_id = ?').run(device.id)
+        database.prepare('INSERT INTO tokens (hash, device_id) VALUES (?, ?)').run(hash(issuedToken), device.id)
+        database.exec('COMMIT')
+      } catch (error) {
+        database.exec('ROLLBACK')
+        throw error
+      }
+      return { token: issuedToken }
+    },
+
     sync(accessToken: string, request: SyncRequest) {
       const device = authenticatedDevice(accessToken)
       if (!device) throw new Error('Authentication required.')

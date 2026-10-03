@@ -35,6 +35,20 @@ test('reports a ready durable store and accepts a pairing code only once', async
   service.close()
 })
 
+test('rotates a device credential atomically and rejects its previous token', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
+  const service = createSyncService({ databasePath: join(runtimeDirectory, 'collection.sqlite') })
+  const { token: previousToken } = service.pair({ code: service.createPairingCode(), deviceId: 'phone-1' })
+  const rotated = service.rotateCredential(previousToken)
+
+  assert.match(rotated.token, /^[a-f0-9]{64}$/)
+  assert.notEqual(rotated.token, previousToken)
+  assert.throws(() => service.sync(previousToken, { protocolVersion: 2, collectionSchemaVersion: 16, cursor: 0, operations: [] }), /authentication required/i)
+  assert.equal(service.sync(rotated.token, { protocolVersion: 2, collectionSchemaVersion: 16, cursor: 0, operations: [] }).accepted, 0)
+  assert.throws(() => service.rotateCredential(previousToken), /authentication required/i)
+  service.close()
+})
+
 test('accepts a review mutation once when the request is delivered twice', async () => {
   runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
   const service = createSyncService({ databasePath: join(runtimeDirectory, 'collection.sqlite') })
@@ -444,6 +458,17 @@ test('serves health, pairing, and authenticated sync over HTTP', async () => {
   assert.equal(downloaded.headers.get('x-content-sha256'), mediaDigest)
   assert.match(downloaded.headers.get('access-control-expose-headers') ?? '', /x-content-sha256/)
   assert.deepEqual(new Uint8Array(await downloaded.arrayBuffer()), mediaBytes)
+
+  const rotated = await fetch(`${origin}/api/credential/rotate`, { method: 'POST', headers: { authorization: `Bearer ${credential.token}` } })
+  assert.equal(rotated.status, 200)
+  const nextCredential = await rotated.json() as { token: string }
+  assert.match(nextCredential.token, /^[a-f0-9]{64}$/)
+  const oldCredentialDenied = await fetch(`${origin}/api/sync`, { method: 'POST', headers: { authorization: `Bearer ${credential.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, collectionSchemaVersion: 16, cursor: 0, operations: [] }) })
+  assert.equal(oldCredentialDenied.status, 401)
+  const newCredentialAccepted = await fetch(`${origin}/api/sync`, { method: 'POST', headers: { authorization: `Bearer ${nextCredential.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, collectionSchemaVersion: 16, cursor: 0, operations: [] }) })
+  assert.equal(newCredentialAccepted.status, 200)
+  const unauthenticatedRotation = await fetch(`${origin}/api/credential/rotate`, { method: 'POST' })
+  assert.equal(unauthenticatedRotation.status, 401)
 
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))

@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest'
-import { createAndDownloadPcBackup, foregroundSync, pairCollection, preflightSync, syncCollection } from './sync-client'
+import { createAndDownloadPcBackup, foregroundSync, pairCollection, preflightSync, rotateCredential, syncCollection } from './sync-client'
 import { createCollection, Rating } from './collection'
 import { digestMedia } from './media'
 import { CLIENT_COLLECTION_SCHEMA_VERSION } from '../sync-capabilities'
@@ -61,6 +61,18 @@ for (const [kind, responseBytes] of [
     await expect(createAndDownloadPcBackup({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 }, fetcher)).rejects.toThrow(/failed its size or SHA-256 check/i)
   })
 }
+
+test('rotates credentials only through a safe authenticated service endpoint', async () => {
+  const settings = { endpoint: 'https://pc.example.test/', token: 'old-token', cursor: 8 }
+  const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ token: 'new-token' }), { status: 200 }))
+
+  await expect(rotateCredential(settings, fetcher)).resolves.toEqual({ state: 'rotated', token: 'new-token' })
+  expect(fetcher).toHaveBeenCalledWith('https://pc.example.test/api/credential/rotate', expect.objectContaining({ method: 'POST', headers: { authorization: 'Bearer old-token' } }))
+  await expect(rotateCredential(settings, vi.fn().mockResolvedValue(new Response('', { status: 401 })))).resolves.toEqual({ state: 'authentication-required' })
+  const insecureFetcher = vi.fn()
+  await expect(rotateCredential({ ...settings, endpoint: 'http://192.168.1.2' }, insecureFetcher)).resolves.toEqual({ state: 'unreachable' })
+  expect(insecureFetcher).not.toHaveBeenCalled()
+})
 
 test('invalidates local undo before an in-flight sync can capture review operations', async () => {
   const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
