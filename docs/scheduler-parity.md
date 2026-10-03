@@ -7,6 +7,15 @@ with **FSRS-6** enabled. The oracle uses Anki's built-in 21 default FSRS paramet
 review cards. These settings come from the fresh official Anki 26.9.3 profile.
 The profile's study day rolls over at 4:00 a.m. local time (Anki's default).
 
+Review fuzz uses Anki's deterministic card-ID-plus-review-count seed and the
+`rand 0.9.4` `StdRng` draw (ChaCha12). A persisted New card with ID
+`1234567890000`, zero prior reviews, and the matching default profile previews
+and persists an 8-day Easy interval in both Anki and the app. This checks the
+exact native draw as well as the broader native interval bands below. The oracle
+emits all 64 Easy intervals for IDs `1234567890000`–`1234567890063`; the app test
+uses those same IDs and compares every preview, persisted card interval, and
+persisted review after-state with the native result.
+
 Run the isolated official scheduler oracle with:
 
 ```powershell

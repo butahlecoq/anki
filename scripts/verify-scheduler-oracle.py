@@ -453,6 +453,7 @@ def main() -> None:
                 "nativeCardId": CARD_ID,
                 "newCardChoices": labels,
                 "easyScheduledDays": easy_days,
+                "nativeEasyIntervalsForFirst64CardIds": [easy_days_by_id[CARD_ID + offset] for offset in range(64)],
                 "nativeEasyIntervalRangeFor64CardIds": easy_range,
                 "firstGraduatedCardReviewChoices": first_review_labels,
                 "firstGraduatedCardReviewScheduledDays": first_review_days,
