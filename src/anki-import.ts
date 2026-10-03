@@ -732,7 +732,10 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
         continue
       }
       const deck = deckBySource.get(sourceCard.odid || sourceCard.did)
-      if (!deck) continue
+      if (!deck) {
+        issues.push({ severity: 'error', code: 'card-deck-missing', subject: String(sourceCard.id), detail: `Card references deck ${sourceCard.odid || sourceCard.did}, which has no supported row in the package.` })
+        continue
+      }
       const isOcclusion = Boolean(imageOcclusion)
       const template = isOcclusion ? { id: 'image-occlusion' } : sourceType.kind === 'cloze' ? sourceType.templates[0] : sourceType.templates[sourceCard.ord]
       if (!template) {
