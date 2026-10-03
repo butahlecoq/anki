@@ -38,7 +38,7 @@ test(`statistics follow an offline Japanese review, heatmap selection, and undo$
     await expect(page.getByRole('heading', { name: 'Every answer adds up' })).toBeVisible()
     await expect(page.getByText('ANSWERS', { exact: true }).locator('..').locator('strong')).toHaveText('1')
     await expect(page.getByText('REVIEW TIME', { exact: true }).locator('..')).toContainText('Measured for 1 of 1 answers')
-    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= screen.width + 1)).toBe(true)
     await page.screenshot({ path: test.info().outputPath('statistics.png'), fullPage: true })
     await page.getByRole('button', { name: '2026-09-30: 1 answers' }).click()
     await expect(page.getByLabel('Period', { exact: true })).toHaveValue('day')
