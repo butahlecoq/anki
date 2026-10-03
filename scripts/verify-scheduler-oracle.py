@@ -18,6 +18,77 @@ from anki.scheduler_pb2 import CardAnswer
 
 ANKI_VERSION = "26.9.3"
 CARD_ID = 1234567890000
+MATRIX_CARD_ID = CARD_ID + 10_000
+
+
+def verify_persisted_state_grade_matrix(collection: Collection) -> list[dict[str, object]]:
+    """Answer deterministic synthetic cards in each FSRS state and report durable rows."""
+    base_answer_at = datetime.now(timezone.utc).replace(microsecond=0)
+    answer_at = base_answer_at
+    answer_millis = int(answer_at.timestamp() * 1000)
+    today = collection.sched.today
+    state_setup = {
+        "New": (0, 0, 1, 0, 0, 0, 0),
+        "Learning": (1, 1, int(answer_at.timestamp()) - 60, 0, 0, 0, 1001),
+        "Review": (2, 2, today - 8, 8, 2, 0, 0),
+        "Relearning": (3, 1, int(answer_at.timestamp()) - 60, 8, 2, 1, 1001),
+    }
+    grades = {
+        "Again": CardAnswer.AGAIN,
+        "Hard": CardAnswer.HARD,
+        "Good": CardAnswer.GOOD,
+        "Easy": CardAnswer.EASY,
+    }
+    outcomes: list[dict[str, object]] = []
+
+    for state_name, (card_type, queue, due, interval, reps, lapses, left) in state_setup.items():
+        for grade_name, grade in grades.items():
+            answer_at = base_answer_at + timedelta(milliseconds=len(outcomes))
+            answer_millis = int(answer_at.timestamp() * 1000)
+            note = collection.new_note(collection.models.by_name("Basic"))
+            note.fields = [f"matrix {state_name} {grade_name}", "synthetic"]
+            collection.add_note(note, 1)
+            generated_id = collection.db.scalar("select id from cards where nid = ?", note.id)
+            card_id = MATRIX_CARD_ID + len(outcomes)
+            collection.db.execute(
+                "update cards set id=?, type=?, queue=?, due=?, ivl=?, reps=?, lapses=?, left=?, usn=-1 where id=?",
+                card_id, card_type, queue, due, interval, reps, lapses, left, generated_id,
+            )
+            native_card = collection.get_card(card_id)
+            native_card.start_timer()
+            states = collection._backend.get_scheduling_states(card_id)
+            preview_labels = [
+                label.replace("\u2068", "").replace("\u2069", "")
+                for label in collection.sched.describe_next_states(states)
+            ]
+            answer = collection.sched.build_answer(card=native_card, states=states, rating=grade)
+            answer.answered_at_millis = answer_millis
+            collection.sched.answer_card(answer)
+
+            persisted = collection.db.first(
+                "select type, queue, due, ivl, reps, lapses, data from cards where id = ?", card_id
+            )
+            review = collection.db.first(
+                "select ease, ivl, lastIvl, type from revlog where cid = ? order by id desc limit 1", card_id
+            )
+            assert persisted is not None and review is not None, (state_name, grade_name)
+            outcomes.append({
+                "before": state_name,
+                "grade": grade_name,
+                "answeredAt": answer_at.isoformat(),
+                "previewLabels": preview_labels,
+                "card": {
+                    "type": persisted[0], "queue": persisted[1], "due": persisted[2],
+                    "intervalDays": persisted[3], "reps": persisted[4], "lapses": persisted[5],
+                    "data": persisted[6],
+                },
+                "review": {
+                    "grade": review[0], "intervalDays": review[1],
+                    "previousIntervalDays": review[2], "type": review[3],
+                },
+            })
+    assert len(outcomes) == 16
+    return outcomes
 
 
 def verify_selected_deck_limits(path: Path) -> dict[str, int]:
@@ -367,6 +438,7 @@ def main() -> None:
             selected_parent_review_limit = verify_selected_parent_review_limit(Path(directory) / "parent-review-limit-oracle.anki2")
             sibling_bury_categories = verify_sibling_bury_categories(Path(directory) / "sibling-bury-oracle.anki2")
             mixed_sibling_bury_precedence = verify_mixed_sibling_bury_precedence(Path(directory) / "mixed-sibling-bury-oracle.anki2")
+            persisted_state_grade_matrix = verify_persisted_state_grade_matrix(collection)
             print(json.dumps({
                 "ankiVersion": actual_version,
                 "scheduler": "V3",
@@ -391,6 +463,7 @@ def main() -> None:
                 "nativeSelectedParentReviewLimit": selected_parent_review_limit,
                 "nativeSiblingBuryCategories": sibling_bury_categories,
                 "nativeMixedSiblingBuryPrecedence": mixed_sibling_bury_precedence,
+                "nativePersistedStateGradeMatrix": persisted_state_grade_matrix,
             }, indent=2))
         finally:
             collection.close()

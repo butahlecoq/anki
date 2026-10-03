@@ -63,7 +63,12 @@ seeds, sibling burial, and statistics. App tests cover all 16 state/grade
 transitions, preview-to-answer agreement, persistence after reload, review sort
 modes, gather modes, and cross-type bury precedence. The pinned native oracle
 checks the default review and new-card schedules plus the queue, limit, and
-burial cases above. It still does not compare all 16 persisted state/grade
-outcomes or every alternate sort/gather mode directly against Anki, so #94 stays
-open for that remaining parity evidence. A user-configured Anki rollover hour is
-not yet a setting in the app; this target currently matches Anki's default.
+burial cases above. It also emits the official persisted card rows (including the
+native card data field) and review-log rows for all 16 state/grade combinations.
+Each outcome also includes the native four-grade preview labels from that same
+pre-answer state.
+Those native outcomes still need to be run,
+compared with the app's persisted outputs, and extended to every alternate
+sort/gather mode directly against Anki, so #94 stays open for that remaining
+parity evidence. A user-configured Anki rollover hour is not yet a setting in
+the app; this target currently matches Anki's default.
