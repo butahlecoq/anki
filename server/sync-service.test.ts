@@ -179,6 +179,16 @@ test('serializes automatic backup plus sync so each later backup contains the pr
   const backups = await service.listBackups(token)
   assert.equal(backups.length, 2)
   assert.deepEqual(backups.map(({ changeCount }) => changeCount).sort(), [0, 1])
+  const laterBackup = backups.find(({ changeCount }) => changeCount === 1)!
+  const { bytes } = await service.downloadBackup(token, laterBackup.id)
+  const sqliteImage = unzipSync(bytes)['collection.sqlite']
+  assert.ok(sqliteImage)
+  const capturedPath = join(runtimeDirectory, 'captured-later-backup.sqlite')
+  await writeFile(capturedPath, sqliteImage)
+  const captured = new DatabaseSync(capturedPath, { readOnly: true })
+  try {
+    assert.deepEqual((captured.prepare('SELECT op_id FROM changes ORDER BY op_id').all() as Array<{ op_id: string }>).map(({ op_id }) => op_id), ['first-write'])
+  } finally { captured.close() }
   service.close()
 })
 
