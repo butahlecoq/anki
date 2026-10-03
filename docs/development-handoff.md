@@ -3,7 +3,7 @@
 > Checked on 2026-10-02: every verifiable claim in this file was found wrong. The
 > worktree paths listed here (`C:/work/anki*`) do not exist on this machine, `gh`
 > is installed, and no part of this file reflects live Git state. It was rewritten
-> 23 times by an agent that never queried the tracker.
+> 24 times by an agent that never queried the tracker.
 >
 > Run `git worktree list` and `git fetch origin` before acting on anything below.
 > `origin/main` and the tracker are the only authoritative sources. What follows is
