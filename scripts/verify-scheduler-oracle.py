@@ -233,6 +233,50 @@ def verify_sibling_bury_categories(path: Path) -> dict[str, int]:
         collection.close()
 
 
+def verify_mixed_sibling_bury_precedence(path: Path) -> list[str]:
+    collection = Collection(str(path))
+    try:
+        note = collection.new_note(collection.models.by_name("Cloze"))
+        note.fields = ["{{c1::one}} {{c2::two}} {{c3::three}} {{c4::four}}", ""]
+        collection.add_note(note, 1)
+        card_ids = [int(row[0]) for row in collection.db.all("select id from cards where nid = ? order by ord", note.id)]
+        assert len(card_ids) == 4, card_ids
+        config = collection.decks.config_dict_for_deck_id(1)
+        config["new"]["bury"] = True
+        config["rev"]["bury"] = True
+        config["buryInterdayLearning"] = True
+        collection.decks.update_config(config)
+        today = collection.sched.today
+        due_seconds = int(time.time()) - 60
+        categories = ["intraday", "interday", "review", "new"]
+        winners = []
+
+        for winner_index, winner in enumerate(categories):
+            for index, card_id in enumerate(card_ids):
+                category = categories[index]
+                if category == "intraday":
+                    collection.db.execute("update cards set type=1, queue=1, due=? where id=?", due_seconds, card_id)
+                elif category == "interday":
+                    collection.db.execute("update cards set type=1, queue=3, due=? where id=?", today, card_id)
+                elif category == "review":
+                    collection.db.execute("update cards set type=2, queue=2, due=?, ivl=10 where id=?", today, card_id)
+                else:
+                    collection.db.execute("update cards set type=0, queue=0, due=? where id=?", index + 1, card_id)
+                if index < winner_index:
+                    collection.db.execute("update cards set queue=-1 where id=?", card_id)
+
+            queue = collection.sched.get_queued_cards(fetch_limit=100)
+            total = queue.learning_count + queue.review_count + queue.new_count
+            assert total == 1 and len(queue.cards) == 1, (winner, queue.learning_count, queue.review_count, queue.new_count, queue.cards)
+            queued_card_id = int(queue.cards[0].card.id)
+            assert queued_card_id == card_ids[winner_index], (winner, queued_card_id, card_ids[winner_index])
+            winners.append(winner)
+
+        return winners
+    finally:
+        collection.close()
+
+
 def main() -> None:
     actual_version = version("anki")
     assert actual_version == ANKI_VERSION, (actual_version, ANKI_VERSION)
@@ -322,6 +366,7 @@ def main() -> None:
             review_limit_sharing = verify_review_limit_shares_capacity_with_new(Path(directory) / "limit-sharing-oracle.anki2")
             selected_parent_review_limit = verify_selected_parent_review_limit(Path(directory) / "parent-review-limit-oracle.anki2")
             sibling_bury_categories = verify_sibling_bury_categories(Path(directory) / "sibling-bury-oracle.anki2")
+            mixed_sibling_bury_precedence = verify_mixed_sibling_bury_precedence(Path(directory) / "mixed-sibling-bury-oracle.anki2")
             print(json.dumps({
                 "ankiVersion": actual_version,
                 "scheduler": "V3",
@@ -345,6 +390,7 @@ def main() -> None:
                 "nativeReviewLimitSharing": review_limit_sharing,
                 "nativeSelectedParentReviewLimit": selected_parent_review_limit,
                 "nativeSiblingBuryCategories": sibling_bury_categories,
+                "nativeMixedSiblingBuryPrecedence": mixed_sibling_bury_precedence,
             }, indent=2))
         finally:
             collection.close()

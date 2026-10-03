@@ -310,6 +310,48 @@ describe('local collection', () => {
     await expect(collection.cards.get(interdaySibling.id)).resolves.toMatchObject({ buriedUntil: nextBoundary })
   })
 
+  test('matches Anki sibling bury precedence for every answering card stage', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const group = await collection.createDeckOptionGroup('Complete sibling precedence')
+    await collection.updateDeckOptionGroup(group.id, { ...group, buryNewSiblings: true, buryReviewSiblings: true, buryInterdayLearningSiblings: true })
+    const deck = await collection.createDeck('Bury precedence', { optionGroupId: group.id })
+    const now = new Date('2026-10-01T12:00:00.000Z')
+    const nextBoundary = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 4).toISOString()
+    const stages = [
+      { name: 'intraday', state: State.Learning, scheduledDays: 0, learningSteps: 1, stability: 1, difficulty: 5, reps: 1 },
+      { name: 'interday', state: State.Relearning, scheduledDays: 1, learningSteps: 0, stability: 2, difficulty: 5, reps: 2 },
+      { name: 'review', state: State.Review, scheduledDays: 5, learningSteps: 0, stability: 5, difficulty: 5, reps: 3 },
+      { name: 'new', state: State.New, scheduledDays: 0, learningSteps: 0, stability: 0, difficulty: 0, reps: 0 },
+    ] as const
+    const priority = (name: string) => stages.findIndex((stage) => stage.name === name)
+
+    for (const answeringStage of stages) {
+      const note = await collection.createBasicNote(deck.id, { front: answeringStage.name, back: 'sibling test' })
+      const [created] = await collection.cards.where('noteId').equals(note.id).toArray()
+      const due = new Date(now.getTime() - 60_000).toISOString()
+      const source = { ...created, ...answeringStage, due, lastReview: answeringStage.state === State.New ? null : due }
+      await collection.cards.put(source)
+      const siblings = stages.flatMap((stage) => [0, 1].map((copy) => ({
+        ...directCard(`${answeringStage.name}-${stage.name}-${copy}`, deck.id, note.id, stage.state, due),
+        ...stage,
+        due,
+        lastReview: stage.state === State.New ? null : due,
+        manualSuspended: false,
+        templateSuspended: false,
+        suspended: false,
+        buriedUntil: null,
+      })))
+      await collection.cards.bulkAdd(siblings)
+
+      await collection.answer(source.id, Rating.Good, now)
+
+      for (const sibling of siblings) {
+        const shouldBury = priority(sibling.name) >= priority(answeringStage.name) && sibling.name !== 'intraday'
+        await expect(collection.cards.get(sibling.id)).resolves.toMatchObject({ buriedUntil: shouldBury ? nextBoundary : null })
+      }
+    }
+  })
+
   test('keeps interval previews and persisted states aligned for every rating', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const deck = await collection.createDeck('Ratings')
