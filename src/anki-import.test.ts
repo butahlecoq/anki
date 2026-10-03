@@ -3,7 +3,7 @@ import initSqlJs, { type SqlJsStatic } from 'sql.js'
 import { Collection as AnkiCollection, Deck, Note as AnkiNote, Notetype, Package } from 'ankipack'
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest'
 import { DEFAULT_DECK_OPTION_GROUP_ID, createCollection, State, type Collection } from './collection'
-import { prepareAnkiImport } from './anki-import'
+import { prepareAnkiDataImport, prepareAnkiImport } from './anki-import'
 import { zipSync } from 'fflate'
 import { ANKI_ARCHIVE_LIMITS } from './anki-archive'
 
@@ -348,6 +348,27 @@ describe('Anki package import', () => {
     expect(plan.plan.decisions).toContainEqual({ entity: 'mediaReference', id: dropped.id, action: 'delete' })
     expect(plan.plan.decisions).toContainEqual(expect.objectContaining({ entity: 'mediaReference', id: retained.id, action: 'update' }))
     expect(plan.plan.writes.deletedReferences).not.toContainEqual(expect.objectContaining({ id: retained.id }))
+  })
+
+  test('blocks a package card whose referenced deck has no row', async () => {
+    collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
+    const source = AnkiCollection.open(await fileBytes(await japanesePackage()), SQL)
+    const data = structuredClone(source.data)
+    const sourceNote = data.notes.find((candidate) => candidate.guid === 'stable-vocabulary-guid')
+    const orphanedCard = data.cards.find((card) => card.nid === sourceNote?.id && card.ord === 1)
+    if (!sourceNote || !orphanedCard) throw new Error('Expected the second vocabulary card')
+    orphanedCard.did = 1_700_000_000_999
+
+    const plan = await prepareAnkiDataImport(data, collection)
+
+    expect(plan.plan.blocksImport).toBe(true)
+    expect(plan.issues).toContainEqual(expect.objectContaining({
+      severity: 'error',
+      code: 'card-deck-missing',
+      subject: String(orphanedCard.id),
+      detail: expect.stringContaining('1700000000999'),
+    }))
+    expect(plan.plan.writes.cards).not.toContainEqual(expect.objectContaining({ value: expect.objectContaining({ ankiId: orphanedCard.id }) }))
   })
 
   test('keeps card-generation failures distinct from templates that are simply ineligible', async () => {
