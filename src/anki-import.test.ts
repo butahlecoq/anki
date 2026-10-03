@@ -330,18 +330,11 @@ describe('Anki package import', () => {
     syncReplica = createCollection(`kiroku-import-replica-${crypto.randomUUID()}`)
     await (await prepareAnkiImport(file, syncReplica, { SQL })).commit()
     await plan.commit()
-    const reconciled = plan.plan.writes.cards.find(({ value }) => value.id === missingCard.id)?.value
-    if (!reconciled) throw new Error('Expected the missing card reconciliation write')
     await expect(collection.cards.get(missingCard.id)).resolves.toMatchObject({ suspended: true, templateSuspended: true, manualSuspended: true })
-    await syncReplica.applyRemoteChanges([{
-      opId: `import-card-reconciliation:${missingCard.id}`,
-      entityType: 'card',
-      entityId: missingCard.id,
-      action: 'update',
-      occurredAt: '2026-10-02T12:00:00.000Z',
-      payload: reconciled,
-    }], 1)
-    await expect(syncReplica.receivedOperations.get(`import-card-reconciliation:${missingCard.id}`)).resolves.toBeDefined()
+    const reconciliationOperation = (await collection.pendingOperations()).find((operation) => operation.entityType === 'card' && operation.entityId === missingCard.id && operation.action === 'update')
+    if (!reconciliationOperation) throw new Error('Expected the committed card reconciliation operation in the outbox')
+    await syncReplica.applyRemoteChanges([reconciliationOperation], 1)
+    await expect(syncReplica.receivedOperations.get(reconciliationOperation.opId)).resolves.toBeDefined()
     await collection.cards.update(missingCard.id, { manualSuspended: false })
     await expect(collection.dueCards(missingCard.deckId, new Date('2026-10-02T12:00:00.000Z'))).resolves.not.toContainEqual(expect.objectContaining({ id: missingCard.id }))
   })
