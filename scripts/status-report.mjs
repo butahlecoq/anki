@@ -34,9 +34,14 @@ function linkedIssue(pr) {
 
 export function deferredLines(pr, comments = []) {
   const markers = /defer|remains? open|does not close|doesn't close|not yet|still required|blocked|pending/i
-  const fromPr = (pr.body ?? '').split('\n').map((line) => line.trim()).filter((line) => line && markers.test(line))
+  const prLines = (pr.body ?? '').split('\n')
+  const prHeading = prLines.findIndex((line) => /^#{1,4}\s+.*(?:defer|remaining acceptance)/i.test(line.trim()))
+  const prTail = prHeading >= 0 ? prLines.slice(prHeading + 1) : prLines
+  const nextHeading = prTail.findIndex((line) => /^#{1,4}\s/.test(line.trim()))
+  const fromPr = (prHeading >= 0 ? prTail.slice(0, nextHeading < 0 ? undefined : nextHeading) : prTail.filter((line) => markers.test(line)))
+    .map((line) => line.trim()).filter(Boolean).slice(0, 6)
   const fromComments = []
-  for (const comment of comments) {
+  for (const comment of [...comments].reverse()) {
     const lines = (comment.body ?? '').split('\n')
     const heading = lines.findIndex((line) => /^#{1,4}\s+(?:deferred|remaining acceptance)/i.test(line.trim()))
     if (heading < 0) continue

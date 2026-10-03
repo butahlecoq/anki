@@ -86,6 +86,7 @@ test('deferred work is limited to explicit PR evidence and checkpoint comment se
     '- Verify a real device journey.',
     '- Obtain independent review.',
   ])
+  assert.deepEqual(deferredLines({ body: 'A summary mentions deferred acceptance comments.\n\n## Deferred acceptance\n- Run the final local gate.\n\n## Verification\n- focused checks passed.' }), ['- Run the final local gate.'])
 })
 
 test('a branch is called disposable only when a closed or merged PR is accounted for on main and its worktree is clean', () => {
