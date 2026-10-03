@@ -2,10 +2,15 @@
  * Sync protocol v2 makes the collection format an explicit part of every
  * sync request. The service keeps the highest accepted collection schema as
  * a watermark, so an old client cannot acknowledge data it cannot preserve.
+ *
+ * Both versions are derived from the schema ladder rather than written out, so
+ * a client cannot advertise a store version it does not have.
  */
+import { CLIENT_COLLECTION_SCHEMA_VERSION, SERVER_MAX_COLLECTION_SCHEMA_VERSION } from './schema-ladder.js'
+
+export { CLIENT_COLLECTION_SCHEMA_VERSION, SERVER_MAX_COLLECTION_SCHEMA_VERSION }
+
 export const SYNC_PROTOCOL_VERSION = 2
-export const CLIENT_COLLECTION_SCHEMA_VERSION = 16
-export const SERVER_MAX_COLLECTION_SCHEMA_VERSION = 16
 
 export interface SyncCapabilities {
   protocolVersion: number

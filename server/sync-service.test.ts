@@ -9,9 +9,10 @@ import { DatabaseSync } from 'node:sqlite'
 import { createPairingCode, startSyncServer } from './index.js'
 import { createSyncService } from './sync-service.js'
 import { createSyncHttpHandler } from './sync-http.js'
+import { SERVER_MAX_COLLECTION_SCHEMA_VERSION } from '../sync-capabilities.js'
 
 let runtimeDirectory: string | undefined
-const serviceHealth = (collectionSchemaVersion = 1) => ({ ready: true, schemaVersion: 1, protocolVersion: 2, collectionSchemaVersion, maximumCollectionSchemaVersion: 16, store: 'sqlite' as const })
+const serviceHealth = (collectionSchemaVersion = 1) => ({ ready: true, schemaVersion: 1, protocolVersion: 2, collectionSchemaVersion, maximumCollectionSchemaVersion: SERVER_MAX_COLLECTION_SCHEMA_VERSION, store: 'sqlite' as const })
 
 afterEach(async () => {
   if (runtimeDirectory) await rm(runtimeDirectory, { recursive: true, force: true })
@@ -71,7 +72,7 @@ test('persists a collection schema watermark and rejects an incompatible client 
   assert.equal(service.changeCount(), 0)
   assert.equal(service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 12, cursor: 0, operations: [] }).accepted, 0)
   assert.equal(service.health().collectionSchemaVersion, 12)
-  assert.throws(() => service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 17, cursor: 0, operations: [] }), /supports collection schemas through 16/i)
+  assert.throws(() => service.sync(token, { protocolVersion: 2, collectionSchemaVersion: SERVER_MAX_COLLECTION_SCHEMA_VERSION + 1, cursor: 0, operations: [] }), new RegExp(`supports collection schemas through ${SERVER_MAX_COLLECTION_SCHEMA_VERSION}`, 'i'))
   assert.equal(service.changeCount(), 0)
   service.close()
 

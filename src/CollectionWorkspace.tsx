@@ -29,6 +29,7 @@ import { CardHistory, Statistics, TodayWorkload } from './Statistics'
 import { CollectionBrowser } from './CollectionBrowser'
 import { unavailableReason } from './scheduler'
 import { describeCardMedia, isRenderedCardDisplayable, renderNoteCard } from './card-rendering'
+import { undoAnnouncement, undoLabel } from './undo'
 import { ExportDialog } from './ExportDialog'
 import { CustomStudy } from './CustomStudy'
 import { answerCustomStudy, customStudyQueue, practiceChoices, undoCustomStudy } from './custom-study'
@@ -817,9 +818,12 @@ function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: string; se
   // identities keep the review timer effect and prepared media sources from restarting.
   const media = useMemo(() => mediaQuery ?? [], [mediaQuery])
   const reviewCount = useLiveQuery(() => card ? collection.reviewEntries.where('cardId').equals(card.id).count() : 0, [card?.id], 0)
-  const recentReview = useLiveQuery(async () => { const undo = await collection.latestReviewUndo(); return sessionId && undo?.customSession?.after.id !== sessionId ? null : undo }, [sessionId])
-  const recentDeletion = useLiveQuery(() => collection.latestNoteDeletionUndo(), [])
-  const recentCardAction = useLiveQuery(() => collection.latestCardMaintenanceUndo(), [])
+  // One subscription for one undo. A review belonging to another custom session
+  // is not this session's to offer.
+  const pendingUndo = useLiveQuery(async () => {
+    const record = await collection.pendingUndo()
+    return sessionId && record?.kind === 'review' && record.customSession?.after.id !== sessionId ? null : record
+  }, [sessionId])
   const choices = useLiveQuery(() => card ? sessionId && customSession?.reschedule === false ? practiceChoices : collection.reviewChoices(card.id, new Date(), Boolean(sessionId)) : [], [card?.id, sessionId, customSession?.reschedule], [])
   const template = noteType?.templates.find((candidate) => candidate.id === card?.templateId)
   const imageOcclusion = noteType?.kind === 'image-occlusion'
@@ -920,23 +924,6 @@ function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: string; se
     setAudioMessage(results.some((result) => result.status === 'fulfilled') ? 'Audio replayed.' : 'Audio could not play on this device.')
   }, [])
 
-  const undoReview = useCallback(async () => {
-    if (isAnswering) return
-    setIsAnswering(true)
-    setActionError('')
-    try {
-      if (sessionId) await undoCustomStudy(collection, sessionId)
-      else await collection.undoLastReview()
-      setReviewsRecorded((count) => Math.max(0, count - 1))
-      setReviewAnnouncement('Last review undone. The card is back in the queue.')
-      setShownAnswerCardId(null)
-    } catch (reason) {
-      setActionError(reason instanceof Error && reason.message ? reason.message : 'Unable to undo review')
-    } finally {
-      setIsAnswering(false)
-    }
-  }, [isAnswering, sessionId])
-
   const deleteCurrentNote = useCallback(async () => {
     if (!note || isAnswering) return
     setIsAnswering(true)
@@ -953,34 +940,23 @@ function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: string; se
     }
   }, [note, isAnswering])
 
-  const undoDeletion = useCallback(async () => {
+  /** One affordance for the one undo record, whatever produced it. */
+  const undoLastAction = useCallback(async () => {
     if (isAnswering) return
     setIsAnswering(true)
     setActionError('')
     try {
-      await collection.undoLastNoteDeletion()
-      setReviewAnnouncement('Deletion undone. The note is back.')
-    } catch (reason) {
-      setActionError(reason instanceof Error && reason.message ? reason.message : 'Unable to restore note')
-    } finally {
-      setIsAnswering(false)
-    }
-  }, [isAnswering])
-
-  const undoCardAction = useCallback(async () => {
-    if (isAnswering) return
-    setIsAnswering(true)
-    setActionError('')
-    try {
-      await collection.undoLastCardMaintenance()
-      setReviewAnnouncement('Card action undone.')
+      if (pendingUndo?.kind === 'review' && sessionId) await undoCustomStudy(collection, sessionId)
+      else await collection.undo()
+      setReviewAnnouncement(undoAnnouncement(pendingUndo ?? null))
       setShownAnswerCardId(null)
+      setReviewsRecorded((count) => (pendingUndo?.kind === 'review' ? Math.max(0, count - 1) : count))
     } catch (reason) {
-      setActionError(reason instanceof Error && reason.message ? reason.message : 'Unable to undo card action')
+      setActionError(reason instanceof Error && reason.message ? reason.message : 'Unable to undo')
     } finally {
       setIsAnswering(false)
     }
-  }, [isAnswering])
+  }, [isAnswering, pendingUndo, sessionId])
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -988,9 +964,7 @@ function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: string; se
       if (isShortcutBlocked(event)) return
       const key = event.key.toLowerCase()
       const buttonFocused = event.target instanceof Element && Boolean(event.target.closest('button'))
-      if (key === 'u' && recentReview) { event.preventDefault(); void undoReview(); return }
-      if (key === 'v' && recentCardAction) { event.preventDefault(); void undoCardAction(); return }
-      if (key === 'x' && recentDeletion) { event.preventDefault(); void undoDeletion(); return }
+      if ((key === 'u' || key === 'v' || key === 'x') && pendingUndo) { event.preventDefault(); void undoLastAction(); return }
       if (!cardId) return
       if ((key === ' ' || key === 'spacebar') && !showAnswer && !buttonFocused) {
         // Media that is still loading, or that failed to prepare, must not be
@@ -1015,7 +989,7 @@ function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: string; se
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [cardId, card?.flag, note, isAnswering, editingNote, movingNote, editingTags, deletingNote, showCardInfo, showAnswer, choices, media, answer, replayAudio, updateCurrentCard, recentReview, undoReview, recentCardAction, undoCardAction, recentDeletion, undoDeletion, mediaBlocked])
+  }, [cardId, card?.flag, note, isAnswering, editingNote, movingNote, editingTags, deletingNote, showCardInfo, showAnswer, choices, media, answer, replayAudio, updateCurrentCard, pendingUndo, undoLastAction, mediaBlocked])
 
   /*
    * Card actions move the card out of view without moving focus, so a learner
@@ -1034,9 +1008,7 @@ function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: string; se
         <span className="section-code">SESSION // COMPLETE</span>
         <h1>Session complete</h1>
         <p>{reviewsRecorded} {reviewsRecorded === 1 ? 'review' : 'reviews'} recorded</p>
-        {recentReview && <button className="text-button" type="button" disabled={isAnswering} onClick={() => void undoReview()}>Undo last review</button>}
-        {recentDeletion && <button className="text-button" type="button" disabled={isAnswering} onClick={() => void undoDeletion()}>Undo note deletion</button>}
-        {recentCardAction && <button className="text-button" type="button" disabled={isAnswering} onClick={() => void undoCardAction()}>Undo card action</button>}
+        {pendingUndo && <button className="text-button" type="button" disabled={isAnswering} onClick={() => void undoLastAction()}>{undoLabel(pendingUndo)}</button>}
         {actionError && <p className="form-error" role="alert">{actionError}</p>}
         {/* The last action is usually the one that emptied the queue, so its
             announcement has to outlive the card it was about. */}
@@ -1059,9 +1031,7 @@ function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: string; se
     <button className="text-button" type="button" disabled={isAnswering} onClick={() => setEditingTags(true)}>Edit tags</button>
     <button className="text-button" type="button" disabled={isAnswering} onClick={() => void updateCurrentCard(async () => collection.updateNoteTags(note.id, note.tags?.includes('marked') ? (note.tags ?? []).filter((tag) => tag !== 'marked') : [...(note.tags ?? []), 'marked']), note.tags?.includes('marked') ? 'Mark removed.' : 'Marked.')}>{note.tags?.includes('marked') ? 'Unmark note' : 'Mark note'}</button>
     <button className="text-button" type="button" onClick={() => setShowCardInfo(true)}>Card info</button>
-    {recentReview && <button className="text-button" type="button" disabled={isAnswering} onClick={() => void undoReview()}>Undo last review</button>}
-    {recentDeletion && <button className="text-button" type="button" disabled={isAnswering} onClick={() => void undoDeletion()}>Undo note deletion</button>}
-    {recentCardAction && <button className="text-button" type="button" disabled={isAnswering} onClick={() => void undoCardAction()}>Undo card action</button>}
+    {pendingUndo && <button className="text-button" type="button" disabled={isAnswering} onClick={() => void undoLastAction()}>{undoLabel(pendingUndo)}</button>}
     <label className="review-flag-control">Flag <select aria-label="Card flag" value={card.flag ?? 0} disabled={isAnswering} onChange={(event) => void updateCurrentCard((id) => collection.setCardFlag(id, Number(event.target.value)), `Flag set to ${event.target.value}.`)}>
       <option value={0}>None</option><option value={1}>Red</option><option value={2}>Orange</option><option value={3}>Green</option><option value={4}>Blue</option><option value={5}>Pink</option><option value={6}>Turquoise</option><option value={7}>Purple</option>
     </select></label>

@@ -67,7 +67,7 @@ test('offline answers, undo, and replayed synchronization retain exactly one tim
     const answer = await source.answer(card.id, Rating.Good, now, 90_000)
     expect(answer.durationMs).toBe(60_000)
     expect(reviewStatistics(await source.reviewEntries.toArray(), 'day', now).count).toBe(1)
-    await source.undoLastReview()
+    await source.undo()
     expect(reviewStatistics(await source.reviewEntries.toArray(), 'day', now).count).toBe(0)
     await source.answer(card.id, Rating.Easy, now, 1234)
     const changes = await source.pendingOperations()

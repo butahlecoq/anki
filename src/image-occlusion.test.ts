@@ -3,6 +3,7 @@ import Dexie from 'dexie'
 import { afterEach, expect, test } from 'vitest'
 import { createCollection, IMAGE_OCCLUSION_NOTE_TYPE_ID, IMAGE_OCCLUSION_TEMPLATE_ID, Rating, type Collection } from './collection'
 import { digestMedia } from './media'
+import { SERVER_MAX_COLLECTION_SCHEMA_VERSION } from '../sync-capabilities'
 import { syncCollection } from './sync-client'
 
 let collection: Collection | undefined
@@ -246,7 +247,7 @@ test('foreground sync requests the source digest and sends linked mask cards', a
   let uploadedDigest = ''
   let sentOperations: Array<{ entityType: string; entityId: string; payload: unknown }> = []
   const fetcher = async (url: string | URL | Request, options?: RequestInit) => {
-    if (String(url).endsWith('/api/health')) return new Response(JSON.stringify({ ready: true, schemaVersion: 1, protocolVersion: 2, collectionSchemaVersion: 10, maximumCollectionSchemaVersion: 16, store: 'sqlite' }), { status: 200 })
+    if (String(url).endsWith('/api/health')) return new Response(JSON.stringify({ ready: true, schemaVersion: 1, protocolVersion: 2, collectionSchemaVersion: 10, maximumCollectionSchemaVersion: SERVER_MAX_COLLECTION_SCHEMA_VERSION, store: 'sqlite' }), { status: 200 })
     if (String(url).endsWith(`/api/media/${digest}`)) {
       uploadedDigest = String(url).split('/').at(-1) ?? ''
       return new Response(JSON.stringify({ digest, byteLength: file.size, mimeType: file.type, deduplicated: false }), { status: 200 })

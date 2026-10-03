@@ -79,8 +79,7 @@ export async function answerCustomStudy(db: Collection, sessionId: string, cardI
     const review = await db.answer(cardId, rating, now, durationMs, { allowEarly: true, reschedule: session.reschedule })
     const updated = { ...session, cardIds: session.cardIds.filter((id) => id !== cardId), completed: [...session.completed, { cardId, reviewId: review.id }] }
     await db.settings.put({ key: customStudyKey, value: sessions.map((item) => item.id === sessionId ? updated : item) })
-    const undo = await db.latestReviewUndo()
-    if (undo) await db.settings.put({ key: 'reviewUndo', value: { ...undo, customSession: { before: session, after: updated } } })
+    await db.attachUndoContext({ before: session, after: updated })
     return review
   })
 }
@@ -90,7 +89,7 @@ export async function undoCustomStudy(db: Collection, sessionId: string) {
     const undo = await db.latestReviewUndo()
     const completed = undo && session?.completed.find((item) => item.reviewId === undo.review.id)
     if (!session || !completed || !undo) throw new Error('No recent review from this session can be undone.')
-    await db.undoLastReview()
+    await db.undo()
   })
 }
 export const practiceChoices = [1, 2, 3, 4].map((rating, index) => ({ rating: rating as Grade, label: ['Again', 'Hard', 'Good', 'Easy'][index] as 'Again' | 'Hard' | 'Good' | 'Easy', interval: 'No schedule change' }))
