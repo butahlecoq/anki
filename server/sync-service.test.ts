@@ -7,7 +7,7 @@ import { afterEach, test } from 'node:test'
 import { createServer, request as httpRequest } from 'node:http'
 import { DatabaseSync } from 'node:sqlite'
 import { unzipSync } from 'fflate'
-import { createPairingCode, startSyncServer } from './index.js'
+import { createPairingCode, listPairedDevices, revokePairedDevice, startSyncServer } from './index.js'
 import { createSyncService } from './sync-service.js'
 import { createSyncHttpHandler } from './sync-http.js'
 import { SERVER_MAX_COLLECTION_SCHEMA_VERSION } from '../sync-capabilities.js'
@@ -47,6 +47,34 @@ test('rotates a device credential atomically and rejects its previous token', as
   assert.equal(service.sync(rotated.token, { protocolVersion: 2, collectionSchemaVersion: 16, cursor: 0, operations: [] }).accepted, 0)
   assert.throws(() => service.rotateCredential(previousToken), /authentication required/i)
   service.close()
+})
+
+test('revokes a lost device through local administration without listing credentials', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
+  const service = createSyncService({ databasePath: join(runtimeDirectory, 'collection.sqlite') })
+  const { token } = service.pair({ code: service.createPairingCode(), deviceId: 'lost-phone' })
+
+  assert.deepEqual(service.listDevices(), [{ id: 'lost-phone', status: 'active' }])
+  assert.deepEqual(service.revokeDevice('lost-phone', new Date('2026-10-03T12:00:00.000Z')), { deviceId: 'lost-phone', status: 'revoked' })
+  assert.deepEqual(service.listDevices(), [{ id: 'lost-phone', status: 'revoked' }])
+  assert.throws(() => service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 16, cursor: 0, operations: [] }), /authentication required/i)
+  assert.throws(() => service.revokeDevice('unknown-phone'), /device was not found/i)
+  service.close()
+})
+
+test('local device-management commands persist a revocation across service restart', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
+  const databasePath = join(runtimeDirectory, 'kiroku-sync.sqlite')
+  const service = createSyncService({ databasePath })
+  const { token } = service.pair({ code: service.createPairingCode(), deviceId: 'phone-to-remove' })
+  service.close()
+
+  assert.deepEqual(await listPairedDevices({ runtimeDirectory }), [{ id: 'phone-to-remove', status: 'active' }])
+  assert.deepEqual(await revokePairedDevice({ runtimeDirectory, deviceId: 'phone-to-remove' }), { deviceId: 'phone-to-remove', status: 'revoked' })
+  assert.deepEqual(await listPairedDevices({ runtimeDirectory }), [{ id: 'phone-to-remove', status: 'revoked' }])
+  const reopened = createSyncService({ databasePath })
+  assert.throws(() => reopened.sync(token, { protocolVersion: 2, collectionSchemaVersion: 16, cursor: 0, operations: [] }), /authentication required/i)
+  reopened.close()
 })
 
 test('accepts a review mutation once when the request is delivered twice', async () => {

@@ -15,6 +15,26 @@ export async function createPairingCode({ runtimeDirectory }: { runtimeDirectory
   }
 }
 
+export async function listPairedDevices({ runtimeDirectory }: { runtimeDirectory: string }) {
+  await mkdir(runtimeDirectory, { recursive: true })
+  const service = createSyncService({ databasePath: join(runtimeDirectory, 'kiroku-sync.sqlite'), mediaDirectory: join(runtimeDirectory, 'media') })
+  try {
+    return service.listDevices()
+  } finally {
+    service.close()
+  }
+}
+
+export async function revokePairedDevice({ runtimeDirectory, deviceId }: { runtimeDirectory: string; deviceId: string }) {
+  await mkdir(runtimeDirectory, { recursive: true })
+  const service = createSyncService({ databasePath: join(runtimeDirectory, 'kiroku-sync.sqlite'), mediaDirectory: join(runtimeDirectory, 'media') })
+  try {
+    return service.revokeDevice(deviceId)
+  } finally {
+    service.close()
+  }
+}
+
 type TlsOptions = { keyPath: string; certificatePath: string }
 type StartOptions = { runtimeDirectory: string; host: string; port: number; allowedOrigin?: string; tls?: TlsOptions }
 
@@ -44,6 +64,19 @@ async function runCommand() {
   const runtimeDirectory = process.env.KIROKU_RUNTIME_DIRECTORY ?? join(process.cwd(), 'runtime')
   if (process.argv.includes('--pairing-code')) {
     process.stdout.write(`${await createPairingCode({ runtimeDirectory })}\n`)
+    return
+  }
+  if (process.argv.includes('--devices')) {
+    const devices = await listPairedDevices({ runtimeDirectory })
+    process.stdout.write(devices.length ? `${devices.map(({ id, status }) => `${id}\t${status}`).join('\n')}\n` : 'No paired devices.\n')
+    return
+  }
+  const revokeFlag = process.argv.indexOf('--revoke-device')
+  if (revokeFlag >= 0) {
+    const deviceId = process.argv[revokeFlag + 1]
+    if (!deviceId || deviceId.startsWith('--')) throw new Error('Usage: npm run server:revoke -- <device-id>')
+    const result = await revokePairedDevice({ runtimeDirectory, deviceId })
+    process.stdout.write(`Revoked device ${result.deviceId}. Its credentials no longer work.\n`)
     return
   }
   const port = Number(process.env.PORT ?? '4174')
