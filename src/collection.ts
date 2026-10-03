@@ -501,6 +501,21 @@ function schedulerFor(group: DeckOptionGroup, cardId: string) {
   })
 }
 
+function nextSchedule(scheduler: ReturnType<typeof schedulerFor>, card: FsrsCard, now: Date, grade: Grade) {
+  const result = scheduler.next(card, now, grade)
+  if (card.state !== State.Review || grade === Rating.Again) return result
+
+  // Anki keeps a successful review from becoming due before the interval it was
+  // already scheduled for. ts-fsrs only knows elapsed_days, so apply Anki's
+  // scheduled-days floor when fuzz would otherwise move the card backwards.
+  const baseInterval = Math.min(scheduler.parameters.maximum_interval, Math.max(1, Math.round(result.card.stability * scheduler.interval_modifier)))
+  if (baseInterval > card.scheduled_days && result.card.scheduled_days <= card.scheduled_days) {
+    result.card.scheduled_days = card.scheduled_days + 1
+    result.card.due = new Date(now.getTime() + result.card.scheduled_days * 86_400_000)
+  }
+  return result
+}
+
 function studyDay(value: Date) {
   return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`
 }
@@ -1703,18 +1718,15 @@ export class Collection extends Dexie {
     const deck = await this.decks.get(card.deckId)
     const group = deck ? await this.deckOptionGroups.get(deck.optionGroupId) : undefined
     if (!deck || !group) throw new Error('Deck option group not found')
-    const preview = schedulerFor(group, card.id).repeat(deserializeCard(card), now)
+    const scheduler = schedulerFor(group, card.id)
+    const fsrsCard = deserializeCard(card)
     const choices: Array<[Grade, ReviewChoice['label']]> = [
       [Rating.Again, 'Again'],
       [Rating.Hard, 'Hard'],
       [Rating.Good, 'Good'],
       [Rating.Easy, 'Easy'],
     ]
-    return choices.map(([rating, label]) => ({
-      rating,
-      label,
-      interval: intervalLabel(preview[rating].card.due, now),
-    }))
+    return choices.map(([rating, label]) => ({ rating, label, interval: intervalLabel(nextSchedule(scheduler, fsrsCard, now, rating).card.due, now) }))
   }
 
   /** The renderable queue shared by the reviewer and today's workload. */
@@ -1747,7 +1759,7 @@ export class Collection extends Dexie {
       const deck = await this.decks.get(existing.deckId)
       const group = deck ? await this.deckOptionGroups.get(deck.optionGroupId) : undefined
       if (!deck || !group) throw new Error('Deck option group not found')
-      const result = schedulerFor(group, existing.id).next(deserializeCard(existing), now, rating)
+      const result = nextSchedule(schedulerFor(group, existing.id), deserializeCard(existing), now, rating)
       let card = withPolicyDefaults(serializeCard(result.card, existing))
       const review = serializeReview(result.log, {
         id: id(),
@@ -2313,7 +2325,7 @@ export class Collection extends Dexie {
           ...commands.map((command) => ({ at: command.occurredAt, id: command.opId, review: undefined as ReviewEntry | undefined, command })),
         ].sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id))
         for (const event of events) {
-          if (event.review) schedule = schedulerFor(event.review.scheduling!.options, event.review.cardId).next(schedule, new Date(event.at), event.review.rating as Grade).card
+          if (event.review) schedule = nextSchedule(schedulerFor(event.review.scheduling!.options, event.review.cardId), schedule, new Date(event.at), event.review.rating as Grade).card
           else if (event.command) {
             const commanded = event.command.payload as CardRecord
             schedule = { ...schedule, due: new Date(commanded.due), state: commanded.state }

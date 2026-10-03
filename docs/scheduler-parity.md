@@ -13,14 +13,19 @@ uv run --with anki==26.9.3 python scripts/verify-scheduler-oracle.py
 ```
 
 It creates and removes a temporary collection, enables FSRS-6 using the official
-profile defaults, and schedules one synthetic New card with native ID
+profile defaults, and schedules a synthetic New card with native ID
 `1234567890000`. The official scheduler reports Again `<1m`, Hard `<6m`, Good
-`<10m`, and Easy `8d` for that fixed card identity. For the 64 deterministic
-card IDs `1234567890000` through `1234567890063`, Easy intervals span 6–10 days.
-The application uses stable card-specific fuzz seeds, so a different identity
-may choose another day inside the same band; the parity test requires the app's
-FSRS-6 range to match the official 6–10 day range and checks a native sample
-within it while requiring the short learning previews to match exactly.
+`<10m`, and Easy `8d` for that fixed card identity. For 64 deterministic new-card
+IDs, Easy intervals span 6–10 days.
+
+The oracle also graduates 512 synthetic cards to Review, with their Easy answer
+time fixed eight days before the preview check so they are being reviewed at the
+scheduled interval. For the fixed first card, native Hard/Good/Easy previews are
+28/41/68 days. Across the 512 identities, the native
+scheduled-day bands are Hard 23–30, Good 35–43, and Easy 60–71 days. App tests
+compare 64 stable card identities against those wider native bands, avoiding a
+false mismatch from comparing short-term previews immediately after graduation
+with due-time review previews.
 
 The broader grade/state matrix, review ordering, gather limits, sibling-bury
 behavior, and full persisted log parity still require comparison against this

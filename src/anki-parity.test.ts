@@ -146,6 +146,76 @@ describe('Anki scheduling parity', () => {
     expect(officialAnkiEasyDays).toBeLessThanOrEqual(nativeFuzzBand.max_ivl)
   })
 
+  test('keeps graduated review previews inside Anki 26.9.3 interval bands', async () => {
+    await freshCollection('anki-26-9-3-review-oracle')
+    const deck = await ensureDeck()
+    const now = new Date('2026-10-03T12:00:00.000Z')
+    const reviewedAt = new Date(now.getTime() - 8 * DAY)
+    const nativeBands = { Hard: [23, 30], Good: [35, 43], Easy: [60, 71] } as const
+    const observed: Record<keyof typeof nativeBands, number[]> = { Hard: [], Good: [], Easy: [] }
+
+    // The official oracle graduates 512 fixed card identities in
+    // scripts/verify-scheduler-oracle.py. App identities intentionally differ in
+    // representation, so compare the resulting scheduler bands rather than
+    // requiring matching fuzz draws.
+    for (let offset = 0; offset < 64; offset += 1) {
+      const generated = await seedNote(deck.id, `Anki review oracle ${offset}`)
+      await collection!.cards.delete(generated.id)
+      const cardId = `anki-review-oracle-${offset}`
+      await collection!.cards.add({ ...generated, due: reviewedAt.toISOString(), id: cardId })
+      await collection!.answer(cardId, Rating.Easy, reviewedAt)
+      const graduated = (await collection!.cards.get(cardId))!
+      const choices = await collection!.reviewChoices(cardId, now, true)
+      const unfuzzed = fsrs({ request_retention: 0.9, maximum_interval: 36500, enable_fuzz: false, enable_short_term: true, learning_steps: ['1m', '10m'], relearning_steps: ['10m'] })
+
+      for (const [grade, rating] of [['Hard', Rating.Hard], ['Good', Rating.Good], ['Easy', Rating.Easy]] as const) {
+        const choice = choices.find(({ label }) => label === grade)!
+        const days = Number(choice.interval.match(/^(\d+)d$/)?.[1])
+        expect(Number.isFinite(days), `${grade} preview should be in days: ${choice.interval}`).toBe(true)
+        observed[grade].push(days)
+        const rawDays = unfuzzed.next(toFsrs(graduated), now, rating).card.scheduled_days
+        if (rawDays > graduated.scheduledDays) {
+          expect(days, `${grade} should not be fuzzed below the previous ${graduated.scheduledDays}d schedule`).toBeGreaterThan(graduated.scheduledDays)
+        }
+      }
+    }
+
+    for (const grade of ['Hard', 'Good', 'Easy'] as const) {
+      for (const days of observed[grade]) {
+        expect(days, `${grade} ${days}d should fit Anki’s native band`).toBeGreaterThanOrEqual(nativeBands[grade][0])
+        expect(days, `${grade} ${days}d should fit Anki’s native band`).toBeLessThanOrEqual(nativeBands[grade][1])
+      }
+    }
+  })
+
+  test('does not fuzz an early review below its previous scheduled interval', async () => {
+    await freshCollection('anki-review-scheduled-floor')
+    const deck = await ensureDeck()
+    const now = new Date('2026-10-03T12:00:00.000Z')
+    const generated = await seedNote(deck.id, 'Early review scheduled interval floor')
+    await collection!.cards.delete(generated.id)
+    const cardId = 'candidate-11'
+    await collection!.cards.add({
+      ...generated,
+      id: cardId,
+      state: State.Review,
+      due: new Date(now.getTime() + 30 * DAY).toISOString(),
+      stability: 32,
+      difficulty: 5,
+      elapsedDays: 0,
+      scheduledDays: 30,
+      learningSteps: 0,
+      reps: 4,
+      lapses: 0,
+      lastReview: now.toISOString(),
+    })
+
+    const good = (await collection!.reviewChoices(cardId, now, true)).find(({ label }) => label === 'Good')!
+    expect(good.interval).toBe('31d')
+    const review = await collection!.answer(cardId, Rating.Good, now, undefined, { allowEarly: true, reschedule: true })
+    expect(review.afterScheduledDays).toBe(31)
+  })
+
   test('leaves short intervals unfuzzed', async () => {
     const now = new Date('2026-10-01T09:00:00.000Z')
     await freshCollection('parity')

@@ -4,6 +4,7 @@ Run with: uv run --with anki==26.9.3 python scripts/verify-scheduler-oracle.py
 This uses only a temporary collection and synthetic note; no account or network.
 """
 
+from datetime import datetime, timedelta, timezone
 from importlib.metadata import version
 import json
 from pathlib import Path
@@ -11,6 +12,7 @@ from tempfile import TemporaryDirectory
 
 from anki.collection import Collection
 from anki.deck_config_pb2 import UpdateDeckConfigsRequest, UpdateDeckConfigsMode
+from anki.scheduler_pb2 import CardAnswer
 
 
 ANKI_VERSION = "26.9.3"
@@ -55,7 +57,10 @@ def main() -> None:
 
             easy_days_by_id = {}
             labels = []
-            for offset in range(64):
+            review_days_by_grade = {"Again": [], "Hard": [], "Good": [], "Easy": []}
+            first_review_labels = []
+            first_review_days = {}
+            for offset in range(512):
                 note = collection.new_note(collection.models.by_name("Basic"))
                 note.fields = [f"猫{offset}", "cat"]
                 collection.add_note(note, 1)
@@ -68,12 +73,34 @@ def main() -> None:
                     labels = current_labels
                 easy_days_by_id[card_id] = states.easy.normal.review.scheduled_days
 
+                card = collection.get_card(card_id)
+                card.start_timer()
+                answer = collection.sched.build_answer(card=card, states=states, rating=CardAnswer.EASY)
+                answer.answered_at_millis = int((datetime.now(timezone.utc) - timedelta(days=8)).timestamp() * 1000)
+                collection.sched.answer_card(answer)
+                review_states = collection._backend.get_scheduling_states(card_id)
+                review_labels = [label.replace("\u2068", "").replace("\u2069", "") for label in collection.sched.describe_next_states(review_states)]
+                if offset == 0:
+                    first_review_labels = review_labels
+                for grade in review_days_by_grade:
+                    choice_state = getattr(review_states, grade.lower()).normal.review
+                    review_days_by_grade[grade].append(choice_state.scheduled_days)
+                    if offset == 0:
+                        first_review_days[grade] = choice_state.scheduled_days
+
+            review_ranges = {
+                grade: {"min": min(days), "max": max(days)}
+                for grade, days in review_days_by_grade.items()
+                if days
+            }
+
             easy_days = easy_days_by_id[CARD_ID]
             easy_range = {"min": min(easy_days_by_id.values()), "max": max(easy_days_by_id.values())}
 
             assert labels[:3] == ["<1m", "<6m", "<10m"], labels
             assert easy_days == 8, easy_days
             assert easy_range == {"min": 6, "max": 10}, easy_range
+            assert first_review_labels == ["<10m", "28d", "1.3mo", "2.2mo"], first_review_labels
             print(json.dumps({
                 "ankiVersion": actual_version,
                 "scheduler": "V3",
@@ -88,6 +115,9 @@ def main() -> None:
                 "newCardChoices": labels,
                 "easyScheduledDays": easy_days,
                 "nativeEasyIntervalRangeFor64CardIds": easy_range,
+                "firstGraduatedCardReviewChoices": first_review_labels,
+                "firstGraduatedCardReviewScheduledDays": first_review_days,
+                "nativeReviewIntervalRangesFor512CardIds": review_ranges,
             }, indent=2))
         finally:
             collection.close()
