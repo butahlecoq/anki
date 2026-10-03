@@ -59,6 +59,12 @@ export class SyncCompatibilityError extends Error {
   }
 }
 
+export class SyncBackupError extends Error {
+  constructor(readonly originalError: unknown) {
+    super(originalError instanceof Error ? originalError.message : 'The automatic backup failed; no sync changes were accepted.')
+  }
+}
+
 /** Check causal edges before storing any row so a malformed batch cannot poison future syncs. */
 function validateRevisionParents(operations: SyncOperation[], database: DatabaseSync) {
   const batch = new Map<string, SyncOperation>()
@@ -152,6 +158,7 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
 
   const backups = createBackupStore({ database, mediaDirectory, backupDirectory: join(dirname(databasePath), 'backups'), collectionSchemaVersion: persistedCollectionSchemaVersion })
   const authenticatedDevice = (accessToken: string) => database.prepare('SELECT devices.id FROM tokens JOIN devices ON devices.id = tokens.device_id WHERE tokens.hash = ? AND devices.revoked_at IS NULL').get(hash(accessToken)) as { id: string } | undefined
+  let syncQueue: Promise<void> = Promise.resolve()
 
   const assertCapabilities = (request: SyncRequest, currentCollectionSchemaVersion: number) => {
     if (request.protocolVersion !== SYNC_PROTOCOL_VERSION) {
@@ -207,9 +214,19 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
       return backups.previewRestore(backupId)
     },
 
-    async backupBeforeSync(accessToken: string, request: Pick<SyncRequest, 'operations'>) {
-      if (!authenticatedDevice(accessToken)) throw new Error('Authentication required.')
-      if (request.operations.length) await backups.create('before-sync')
+    async syncWithBackup(accessToken: string, request: SyncRequest) {
+      let release!: () => void
+      const previous = syncQueue
+      syncQueue = new Promise<void>((resolve) => { release = resolve })
+      await previous
+      try {
+        if (!authenticatedDevice(accessToken)) throw new Error('Authentication required.')
+        if (request.operations.length) {
+          try { await backups.create('before-sync') }
+          catch (error) { throw new SyncBackupError(error) }
+        }
+        return this.sync(accessToken, request)
+      } finally { release() }
     },
 
     pair({ code, deviceId }: PairRequest, now = new Date()) {

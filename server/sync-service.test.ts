@@ -155,9 +155,30 @@ test('failed backup verification creates no artifact and blocks automatic backup
   await service.putMedia(token, mediaDigest, 'image/png', content)
   await rm(join(mediaDirectory, mediaDigest.slice(0, 2), mediaDigest))
 
-  await assert.rejects(service.backupBeforeSync(token, { operations: [{ opId: 'risky-write', entityType: 'note', entityId: 'note-1', action: 'update', occurredAt: '2026-10-03T10:00:00.000Z', payload: { id: 'note-1' } }] }), /backup before syncing/i)
+  await assert.rejects(service.syncWithBackup(token, { protocolVersion: 2, collectionSchemaVersion: 16, cursor: 0, operations: [{ opId: 'risky-write', entityType: 'note', entityId: 'note-1', action: 'update', occurredAt: '2026-10-03T10:00:00.000Z', payload: { id: 'note-1' } }] }), /backup before syncing/i)
   assert.equal(service.changeCount(), 0)
   assert.deepEqual(await service.listBackups(token), [])
+  service.close()
+})
+
+test('serializes automatic backup plus sync so each later backup contains the prior accepted write', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-backup-serial-'))
+  const service = createSyncService({ databasePath: join(runtimeDirectory, 'collection.sqlite') })
+  const { token } = service.pair({ code: service.createPairingCode(), deviceId: 'backup-phone' })
+  const media = new Uint8Array(16 * 1024 * 1024).fill(42)
+  const mediaDigest = createHash('sha256').update(media).digest('hex')
+  await service.putMedia(token, mediaDigest, 'image/png', media)
+  const request = (id: string) => ({
+    protocolVersion: 2, collectionSchemaVersion: 16, cursor: 0,
+    operations: [{ opId: id, entityType: 'note', entityId: id, action: 'create', occurredAt: '2026-10-03T10:00:00.000Z', payload: { id } }],
+  })
+
+  const results = await Promise.all([service.syncWithBackup(token, request('first-write')), service.syncWithBackup(token, request('second-write'))])
+  assert.deepEqual(results.map(({ accepted }) => accepted), [1, 1])
+  assert.equal(service.changeCount(), 2)
+  const backups = await service.listBackups(token)
+  assert.equal(backups.length, 2)
+  assert.deepEqual(backups.map(({ changeCount }) => changeCount).sort(), [0, 1])
   service.close()
 })
 
