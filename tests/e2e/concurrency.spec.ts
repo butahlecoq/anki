@@ -72,7 +72,7 @@ async function edit(page: Page, front: string, back: string) {
   await dialog.getByRole('textbox').nth(0).fill(front)
   await dialog.getByRole('textbox').nth(1).fill(back)
   await dialog.getByRole('button', { name: 'Save changes', exact: true }).click()
-  await expect(page.locator('.note-row strong')).toHaveText(front)
+  await expect(page.getByTestId('note-front')).toHaveText(front)
 }
 
 test('independent offline clients merge fields, retain conflicts through reload, and converge after an offline choice', async ({ page: pc, context, browser }) => {
@@ -106,8 +106,8 @@ test('independent offline clients merge fields, retain conflicts through reload,
     await context.setOffline(false); await phoneContext.setOffline(false)
     await sync(pc); await sync(phone); await sync(pc)
     for (const page of [pc, phone]) {
-      await expect(page.locator('.note-row strong')).toHaveText('ねこ')
-      await expect(page.locator('.note-row p')).toHaveText('кот')
+      await expect(page.getByTestId('note-front')).toHaveText('ねこ')
+      await expect(page.getByTestId('note-back')).toHaveText('кот')
       await expect(page.getByRole('button', { name: 'Review note conflict', exact: true })).toHaveCount(0)
     }
     await context.setOffline(true); await phoneContext.setOffline(true)
@@ -130,11 +130,11 @@ test('independent offline clients merge fields, retain conflicts through reload,
     await dialog.getByRole('button', { name: 'Save choice', exact: true }).click()
     await expect(dialog).toHaveCount(0)
     // Choosing the conflicting front must preserve the independently merged back.
-    await expect(phone.locator('.note-row strong')).toHaveText('ネコ home')
-    await expect(phone.locator('.note-row p')).toHaveText('кот · feline')
+    await expect(phone.getByTestId('note-front')).toHaveText('ネコ home')
+    await expect(phone.getByTestId('note-back')).toHaveText('кот · feline')
     await phoneContext.setOffline(false)
     await phone.reload()
-    await expect(phone.locator('.note-row strong')).toHaveText('ネコ home')
+    await expect(phone.getByTestId('note-front')).toHaveText('ネコ home')
     // Leave the durable offline choice unsent while the PC creates a newer edit.
     await context.setOffline(true)
     await pc.getByRole('button', { name: 'Review note conflict', exact: true }).click()
@@ -155,12 +155,12 @@ test('independent offline clients merge fields, retain conflicts through reload,
     await resumedDialog.locator('fieldset').filter({ hasText: 'ねこ peer after choice' }).getByRole('radio').check()
     await resumedDialog.getByRole('button', { name: 'Save choice', exact: true }).click()
     await expect(resumedDialog).toHaveCount(0)
-    await expect(phone.locator('.note-row strong')).toHaveText('ねこ peer after choice')
+    await expect(phone.getByTestId('note-front')).toHaveText('ねこ peer after choice')
     await phoneContext.setOffline(false)
     await sync(phone); await sync(pc); await sync(phone)
     for (const page of [pc, phone]) {
-      await expect(page.locator('.note-row strong')).toHaveText('ねこ peer after choice')
-      await expect(page.locator('.note-row p')).toHaveText('кот · feline')
+      await expect(page.getByTestId('note-front')).toHaveText('ねこ peer after choice')
+      await expect(page.getByTestId('note-back')).toHaveText('кот · feline')
       await expect(page.getByRole('button', { name: 'Review note conflict', exact: true })).toHaveCount(0)
     }
     // Both clients now review the same previously-new card independently.

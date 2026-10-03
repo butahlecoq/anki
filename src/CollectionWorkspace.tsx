@@ -736,8 +736,8 @@ function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () =>
         ) : notes.map((note) => {
           const type = noteTypes.find((candidate) => candidate.id === note.typeId)
           return <article className="note-row" key={note.id}>
-            <div><span>{type?.fields[0]?.name.toUpperCase() ?? 'FIELD'}</span><strong lang="ja">{note.fields[type?.fields[0]?.id ?? 'front']}</strong></div>
-            <div><span>{type?.fields[1]?.name.toUpperCase() ?? type?.name.toUpperCase() ?? 'NOTE'}</span><p lang="ja">{note.fields[type?.fields[1]?.id ?? 'back']}</p></div>
+            <div><span>{type?.fields[0]?.name.toUpperCase() ?? 'FIELD'}</span><strong data-testid="note-front" lang="ja">{note.fields[type?.fields[0]?.id ?? 'front']}</strong></div>
+            <div><span>{type?.fields[1]?.name.toUpperCase() ?? type?.name.toUpperCase() ?? 'NOTE'}</span><p data-testid="note-back" lang="ja">{note.fields[type?.fields[1]?.id ?? 'back']}</p></div>
             <div className="note-row-actions"><button className="text-button" type="button" onClick={() => setNoteDialog({ note })}>Edit note</button><button className="text-button" type="button" onClick={() => setMoveNote(note)}>Move note</button><button className="text-button" type="button" onClick={() => setManageCardsNote(note)}>Manage cards</button></div>
           </article>
         })}

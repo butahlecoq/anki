@@ -136,12 +136,11 @@ for (const reverse of [false, true]) {
   })
 
   test(`a media-reference tombstone rejects a stale create retry after reopen (${reverse ? 'delete first' : 'retry first'})`, async () => {
-    const { a, b, note } = await clients()
+    const { a, b, note, seed } = await clients()
+    const unseen = createCollection(`concurrent-unseen-${crypto.randomUUID()}`); collections.push(unseen)
+    await unseen.applyRemoteChanges(structuredClone(seed), seed.length)
     const reference = await a.attachMedia(note.id, { file: new File(['shared image'], 'cat.png', { type: 'image/png' }), side: 'front' }, new Date('2026-10-02T12:00:00Z'))
     const create = (await a.pendingOperations()).find((operation) => operation.entityType === 'noteMedia' && operation.entityId === reference.id)!
-    await b.applyRemoteChanges([structuredClone(create)], 1)
-    const blob = await a.verifiedMediaBlob(reference.digest)
-    await b.storeDownloadedMedia(reference.digest, blob!.blob)
     await a.acknowledgeOperations([create.opId])
     await a.removeMedia(reference.id, new Date('2026-10-02T12:01:00Z'))
     const deletion = (await a.pendingOperations()).find((operation) => operation.entityType === 'noteMedia' && operation.entityId === reference.id)!
@@ -152,11 +151,15 @@ for (const reverse of [false, true]) {
       expect(await client.noteMedia.get(reference.id)).toBeUndefined()
       expect(await client.deletedEntities.get(`noteMedia:${reference.id}`)).toBeDefined()
     }
-    const name = b.name
-    b.close()
+    await unseen.applyRemoteChanges([structuredClone(deletion)], 1)
+    expect(await unseen.receivedOperations.get(create.opId)).toBeUndefined()
+    expect(await unseen.deletedEntities.get(`noteMedia:${reference.id}`)).toBeDefined()
+    const name = unseen.name
+    unseen.close()
     const reopened = createCollection(name)
     collections.push(reopened)
     await reopened.open()
+    expect(await reopened.receivedOperations.get(create.opId)).toBeUndefined()
     await reopened.applyRemoteChanges([structuredClone(create)], 1)
     expect(await reopened.noteMedia.get(reference.id)).toBeUndefined()
     expect(await reopened.deletedEntities.get(`noteMedia:${reference.id}`)).toBeDefined()
