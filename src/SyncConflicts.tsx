@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { collection, type SyncConflict } from './collection'
+import { userFacingStorageError } from './offline-storage'
 
 const recordValue = (value: unknown): Record<string, unknown> | undefined => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
 
@@ -49,7 +50,7 @@ export function SyncConflicts() {
     try {
       await collection.resolveSyncConflict(selected.key, choice, selected.heads)
       setSavedChoice(true); setSelected(null); setChoice('')
-    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to save your choice.') }
+    } catch (reason) { setError(userFacingStorageError(reason, 'Unable to save your choice.')) }
     finally { setBusy(false) }
   }
   function containDialogFocus(event: KeyboardEvent<HTMLElement>) {

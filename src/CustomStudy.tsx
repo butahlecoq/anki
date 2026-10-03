@@ -5,6 +5,7 @@ import { collectionDeckPaths, SearchSyntaxError } from './collection-search'
 import { changeCustomStudy, createCustomStudy, customPreset, customStudyQueue, previewCustomStudy, type CustomStudyDefinition } from './custom-study'
 import { customStudySessions, type CustomStudyOrder, type CustomStudySession } from './custom-study-state'
 import { useDialogKeyboard } from './use-dialog-keyboard'
+import { userFacingStorageError } from './offline-storage'
 
 export function CustomStudy({ onStudy }: { onStudy: (id: string) => void }) {
   const [preset, setPreset] = useState('catch-up')
@@ -38,14 +39,14 @@ export function CustomStudy({ onStudy }: { onStudy: (id: string) => void }) {
   async function create() {
     setBusy(true); setError('')
     try { const session = await createCustomStudy(collection, definition); setMessage(`Created ${session.name} with ${session.cardIds.length} temporary cards.`); setPreview(null); setDefinition((current) => ({ ...current, name: '' })) }
-    catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to create this session.') }
+    catch (reason) { setError(userFacingStorageError(reason, 'Unable to create this session.')) }
     finally { setBusy(false) }
   }
   async function apply() {
     if (!confirmation) return
     setBusy(true); setError('')
     try { await changeCustomStudy(collection, confirmation.session.id, confirmation.action); setMessage(`${confirmation.session.name}: ${confirmation.action === 'rebuild' ? 'rebuilt from its search' : confirmation.action === 'empty' ? 'emptied; cards available in their home decks' : 'deleted; cards available in their home decks'}. Scheduling and review history were preserved.`); setConfirmation(null) }
-    catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to update this session.') }
+    catch (reason) { setError(userFacingStorageError(reason, 'Unable to update this session.')) }
     finally { setBusy(false) }
   }
   const paths = collectionDeckPaths(data?.decks ?? [])
