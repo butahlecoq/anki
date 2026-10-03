@@ -22,7 +22,7 @@ test('validated search reserves membership without changing home identity; empty
   expect((await customStudyQueue(db, session.id, now)).map(c => c.id)).toEqual([card.id])
   expect(await db.reviewQueue(deck.id, now)).toEqual([])
   expect(await db.cards.get(card.id)).toEqual(card)
-  expect((await db.summaries())[0].temporaryCount).toBe(1)
+  expect((await db.summaries())[0].sessionCount).toBe(1)
   expect((await previewCustomStudy(db, { ...definition, name: 'Other' }, now)).cards).toEqual([])
   await changeCustomStudy(db, session.id, 'empty', now)
   expect((await db.reviewQueue(deck.id, now))[0].id).toBe(card.id)
