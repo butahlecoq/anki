@@ -852,7 +852,7 @@ export class Collection extends Dexie {
       await transaction.table('cards').toCollection().modify((card: CardRecord) => { if (card.flag === undefined) card.flag = 0 })
     })
     this.version(14).stores({})
-  this.version(15).stores({ syncRevisions: 'opId, key', syncConflicts: 'key, entityType, entityId' })
+    this.version(15).stores({ syncRevisions: 'opId, key', syncConflicts: 'key, entityType, entityId' })
     this.version(16).stores({})
     this.on('populate', (transaction) => {
       transaction.table('noteTypes').put(basicNoteType)
