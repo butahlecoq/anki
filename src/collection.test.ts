@@ -1708,6 +1708,22 @@ describe('local collection', () => {
     await expect(collection.syncSettings()).resolves.toEqual({ endpoint: 'https://pc.example.test', token: 'device-token', cursor: 4 })
   })
 
+  test('persists a validated local receipt for the latest PC backup downloaded and verified on this device', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const receipt = {
+      backupId: 'backup-verified-1', createdAt: '2026-10-03T11:00:00.000Z', verifiedAt: '2026-10-03T12:00:00.000Z',
+      reason: 'manual' as const, changeCount: 42, mediaFiles: 3, mediaBytes: 768, archiveBytes: 2048, archiveSha256: 'a'.repeat(64),
+    }
+
+    await collection.recordVerifiedPcBackup(receipt)
+
+    await expect(collection.lastVerifiedPcBackup()).resolves.toEqual(receipt)
+    await expect(collection.recordVerifiedPcBackup({ ...receipt, archiveSha256: 'invalid' })).rejects.toThrow(/receipt is invalid/i)
+    await expect(collection.lastVerifiedPcBackup()).resolves.toEqual(receipt)
+    await collection.settings.put({ key: 'lastVerifiedPcBackup', value: { ...receipt, archiveSha256: 'corrupt' } })
+    await expect(collection.lastVerifiedPcBackup()).rejects.toThrow(/saved pc backup verification receipt is invalid/i)
+  })
+
   test('applies a remote review only once', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const deck = await collection.createDeck('Remote')
