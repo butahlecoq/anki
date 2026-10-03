@@ -4,30 +4,32 @@
 
 This section supersedes stale head IDs and progress statements below where they
 conflict. Current `main` is `483958129c58f0f28aaa53f571176ce112f0115f`.
-The clean active worktree is `C:/work/anki-18`, branch
-The office branch is being rebased onto current `origin/main` in a separate
-worktree. The original `feat/18-safe-concurrency` branch and draft PR #73 are
-preserved until the rebased work passes validation and is pushed.
+The #18 work is being integrated in a separate worktree on top of current
+`origin/main`. PR #73 is already merged; this follow-up branch carries only
+integration fixes and refreshed acceptance evidence. Keep issue #18 open until
+the outstanding race and recovery cases below are demonstrated.
 
 The #18 branch now includes schema-watermark and durable metadata-inference
 regressions, a visible two-context offline conflict/choice/convergence journey,
 deletion-undo revision cleanup, both-order deck-deletion/review and manual
 rescheduling/review races, contextual conflict UI with stale-choice rejection,
 and server rejection of cyclic, dangling, and cross-entity revision parents.
-The conflict dialog now moves focus into the choice, traps Tab/Shift+Tab,
+The conflict dialog now fits narrow phone viewports, moves focus into the choice, traps Tab/Shift+Tab,
 supports Escape, restores focus after dismissal, and reports a saved choice
 accessibly. Its focused component test passes. The known load-sensitive nested
 midnight test now has a 20-second timeout for its child Vitest process; its
-assertions are unchanged. The full client suite passes all 275 tests. The
+assertions are unchanged. The full client suite passes all 360 tests. The
 30-test server suite, typecheck, lint, and production build pass; lint has the
 existing ImageOcclusion fast-refresh warning. The Windows full gate still
 terminates with Playwright `spawn UNKNOWN`, so it provides no browser
 acceptance.
 
-Check the newest exact-head Linux CI run on PR #73 and inspect its browser
-artifact before claiming acceptance. Older runs target prior heads and are not
-authoritative. Do not merge or close #18 until the latest CI, visible browser
-journey, and remaining review/acceptance gaps are resolved.
+The focused independent-client concurrency journey passes in desktop Chromium
+and iPhone WebKit on isolated ports. The full local browser gate passed 72,
+skipped 9, and failed 17 phone-sync and WebKit cases under Windows; inspect
+their reports and obtain exact-head hosted CI before claiming broad acceptance.
+Do not close #18 until deletion/media races and interrupted-choice recovery are
+independently reviewed and evidenced.
 
 Current worktree inventory is six folders: main plus branches #10, #11, #12,
 #14, #18, and #45. These are separate Git worktrees, not nested copies required
