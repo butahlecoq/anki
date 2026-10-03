@@ -8,6 +8,7 @@ import { validateTemplate } from './template-renderer'
 import { supportedNavigationTemplate } from './template-navigation'
 import { ANKI_ARCHIVE_LIMITS, validateAnkiArchive } from './anki-archive'
 import { readKirokuSchedule, readKirokuReview } from './anki-scheduling-metadata'
+import { nativeIdentity as stableId } from './anki-identity'
 
 export interface AnkiImportIssue {
   severity: 'info' | 'warning' | 'error'
@@ -61,10 +62,6 @@ function browserSql() {
 const textDecoder = new TextDecoder()
 const fieldSeparator = '\u001f'
 const day = 86_400_000
-
-function stableId(kind: string, source: string | number) {
-  return `anki-${kind}:${source}`
-}
 
 function isoFromSeconds(seconds: number, fallback: Date) {
   const date = new Date(seconds * 1000)
