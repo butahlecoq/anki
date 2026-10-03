@@ -9,6 +9,7 @@ import { ANKI_ARCHIVE_LIMITS } from './anki-archive'
 
 let SQL: SqlJsStatic
 let collection: Collection | undefined
+let syncReplica: Collection | undefined
 
 beforeAll(async () => {
   SQL = await initSqlJs({ locateFile: () => './node_modules/sql.js/dist/sql-wasm.wasm' })
@@ -16,7 +17,9 @@ beforeAll(async () => {
 
 afterEach(async () => {
   await collection?.delete()
+  await syncReplica?.delete()
   collection = undefined
+  syncReplica = undefined
 })
 
 afterAll(() => {
@@ -328,6 +331,7 @@ describe('Anki package import', () => {
     const missingCard = localCards.find((card) => card.templateId === 'anki-template:1700000000001:1')
     const presentCard = localCards.find((card) => card.templateId === 'anki-template:1700000000001:0')
     if (!missingCard || !presentCard) throw new Error('Expected both generated vocabulary cards')
+    await collection.cards.put({ ...missingCard, suspended: false, templateSuspended: false, manualSuspended: true })
     await collection.cards.put({ ...presentCard, suspended: true, manualSuspended: true })
 
     const source = AnkiCollection.open(await fileBytes(file), SQL)
@@ -339,11 +343,29 @@ describe('Anki package import', () => {
 
     expect(plan.plan.writes.cards).toContainEqual(expect.objectContaining({
       action: 'update',
-      value: expect.objectContaining({ id: missingCard.id, suspended: true }),
+      value: expect.objectContaining({ id: missingCard.id, suspended: true, templateSuspended: true, manualSuspended: true }),
     }))
     expect(plan.plan.decisions).toContainEqual({ entity: 'card', id: missingCard.id, action: 'update' })
     expect(plan.plan.decisions).toContainEqual({ entity: 'card', id: presentCard.id, action: 'keepLocal' })
     expect(plan.plan.writes.cards).not.toContainEqual(expect.objectContaining({ value: expect.objectContaining({ id: presentCard.id }) }))
+
+    syncReplica = createCollection(`kiroku-import-replica-${crypto.randomUUID()}`)
+    await (await prepareAnkiImport(file, syncReplica, { SQL })).commit()
+    await plan.commit()
+    const reconciled = plan.plan.writes.cards.find(({ value }) => value.id === missingCard.id)?.value
+    if (!reconciled) throw new Error('Expected the missing card reconciliation write')
+    await expect(collection.cards.get(missingCard.id)).resolves.toMatchObject({ suspended: true, templateSuspended: true, manualSuspended: true })
+    await syncReplica.applyRemoteChanges([{
+      opId: `import-card-reconciliation:${missingCard.id}`,
+      entityType: 'card',
+      entityId: missingCard.id,
+      action: 'update',
+      occurredAt: '2026-10-02T12:00:00.000Z',
+      payload: reconciled,
+    }], 1)
+    await expect(syncReplica.receivedOperations.get(`import-card-reconciliation:${missingCard.id}`)).resolves.toBeDefined()
+    await collection.cards.update(missingCard.id, { manualSuspended: false })
+    await expect(collection.dueCards(missingCard.deckId, new Date('2026-10-02T12:00:00.000Z'))).resolves.not.toContainEqual(expect.objectContaining({ id: missingCard.id }))
   })
 
   test('plans removal of dropped media references while retaining references still present in the package', async () => {
