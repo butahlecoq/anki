@@ -19,6 +19,52 @@ ANKI_VERSION = "26.9.3"
 CARD_ID = 1234567890000
 
 
+def verify_selected_deck_limits(path: Path) -> dict[str, int]:
+    collection = Collection(str(path))
+    try:
+        parent_config = collection.decks.config_dict_for_deck_id(1)
+        parent_config["new"]["perDay"] = 1
+        collection.decks.update_config(parent_config)
+
+        child = collection.decks.add_normal_deck_with_name("Default::Child")
+        child_config_id = collection.decks.add_config_returning_id(
+            "Child limit", clone_from=collection.decks.config_dict_for_deck_id(1)
+        )
+        child_config = collection.decks.get_config(child_config_id)
+        child_config["new"]["perDay"] = 2
+        collection.decks.update_config(child_config)
+        child_deck = collection.decks.get(child.id)
+        collection.decks.set_config_id_for_deck_dict(child_deck, child_config_id)
+        collection.decks.save(child_deck)
+
+        for offset in range(3):
+            note = collection.new_note(collection.models.by_name("Basic"))
+            note.fields = [f"child {offset}", f"子{offset}"]
+            collection.add_note(note, child.id)
+
+        collection.decks.select(1)
+        parent_queue = collection.sched.get_queued_cards(fetch_limit=100)
+        # Select the child explicitly for the second gather; Anki ignores the
+        # parent cap unless Limits Start From The Top is enabled.
+        collection.decks.select(child.id)
+        child_queue = collection.sched.get_queued_cards(fetch_limit=100)
+        result = {
+            "selectedParentNewCount": parent_queue.new_count,
+            "selectedParentGatheredCards": len(parent_queue.cards),
+            "selectedChildNewCount": child_queue.new_count,
+            "selectedChildGatheredCards": len(child_queue.cards),
+        }
+        assert result == {
+            "selectedParentNewCount": 1,
+            "selectedParentGatheredCards": 1,
+            "selectedChildNewCount": 2,
+            "selectedChildGatheredCards": 2,
+        }, result
+        return result
+    finally:
+        collection.close()
+
+
 def main() -> None:
     actual_version = version("anki")
     assert actual_version == ANKI_VERSION, (actual_version, ANKI_VERSION)
@@ -103,6 +149,7 @@ def main() -> None:
             assert easy_days == 8, easy_days
             assert easy_range == {"min": 6, "max": 10}, easy_range
             assert first_review_labels == ["<10m", "28d", "1.3mo", "2.2mo"], first_review_labels
+            selected_deck_limits = verify_selected_deck_limits(Path(directory) / "queue-oracle.anki2")
             print(json.dumps({
                 "ankiVersion": actual_version,
                 "scheduler": "V3",
@@ -121,6 +168,7 @@ def main() -> None:
                 "firstGraduatedCardReviewChoices": first_review_labels,
                 "firstGraduatedCardReviewScheduledDays": first_review_days,
                 "nativeReviewIntervalRangesFor512CardIds": review_ranges,
+                "nativeSelectedDeckLimits": selected_deck_limits,
             }, indent=2))
         finally:
             collection.close()

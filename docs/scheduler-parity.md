@@ -28,9 +28,16 @@ compare 64 stable card identities against those wider native bands, avoiding a
 false mismatch from comparing short-term previews immediately after graduation
 with due-time review previews.
 
+The queue oracle also gives the selected parent a one-new-card limit and its child
+a two-card gather limit. Anki gathers one card when the parent is selected and two
+when the child is selected directly; the app now applies child gather caps first,
+then the selected deck's total limit across its subtree. The app currently uses
+Anki's default behavior; the optional “Limits Start From The Top” preference is
+not configurable.
+
 The app now uses the same 4:00 a.m. local rollover for daily limits, daily shuffle
 seeds, sibling burial, and statistics. The broader grade/state matrix, review
-ordering, gather limits, sibling-bury behavior, and full persisted log parity
-still require comparison against this pinned target before #94 can close. A
-user-configured Anki rollover hour is not yet a setting in the app; this target
-currently matches Anki's default.
+ordering and display mix, more complex gather priority, sibling-bury behavior,
+and full persisted log parity still require comparison against this pinned target
+before #94 can close. A user-configured Anki rollover hour is not yet a setting
+in the app; this target currently matches Anki's default.

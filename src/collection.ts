@@ -1637,6 +1637,16 @@ export class Collection extends Dexie {
       const decks = new Map(subtree.map((deck) => [deck.id, deck]))
       const groupsById = new Map(groups.map((group) => [group.id, group]))
       const notesById = new Map(notes.map((note) => [note.id, note]))
+      const deckPath = (deck: Deck) => {
+        const names = [deck.name]
+        let parent = deck.parentId ? decks.get(deck.parentId) : undefined
+        while (parent) {
+          names.unshift(parent.name)
+          parent = parent.parentId ? decks.get(parent.parentId) : undefined
+        }
+        return names.join('\u0000')
+      }
+      const orderedSubtree = [...subtree].sort((left, right) => deckPath(left).localeCompare(deckPath(right)))
       const selectedDeck = decks.get(deckId)
       const selectedGroup = selectedDeck && groupsById.get(selectedDeck.optionGroupId)
       if (!selectedGroup) throw new Error('Deck option group not found')
@@ -1673,22 +1683,19 @@ export class Collection extends Dexie {
         || left.id.localeCompare(right.id)
       const sortWithinDeck = (candidates: CardRecord[], group: DeckOptionGroup, kind: 'new' | 'review' | 'learning') => candidates.sort((left, right) => compareWithinDeck(left, right, group, kind))
       const sortQueue = (candidates: CardRecord[], kind: 'new' | 'review' | 'learning') => candidates.sort((left, right) => {
-        if (left.deckId !== right.deckId) return left.deckId.localeCompare(right.deckId)
-        const deck = decks.get(left.deckId)!
-        const group = groupsById.get(deck.optionGroupId)
-        if (!group) throw new Error('Deck option group not found')
-        return compareWithinDeck(left, right, group, kind)
+        if (left.deckId !== right.deckId) return deckPath(decks.get(left.deckId)!).localeCompare(deckPath(decks.get(right.deckId)!))
+        return compareWithinDeck(left, right, selectedGroup, kind)
       })
       const selected: CardRecord[] = []
-      for (const deck of subtree) {
+      for (const deck of orderedSubtree) {
         const group = groupsById.get(deck.optionGroupId)
         if (!group) throw new Error('Deck option group not found')
         const own = cards.filter((card) => card.deckId === deck.id && !temporary.has(card.id) && isReviewEligible(card, now))
-        const learning = sortWithinDeck(own.filter(isLearningCard), group, 'learning')
+        const learning = sortWithinDeck(own.filter(isLearningCard), selectedGroup, 'learning')
         const intradayLearning = learning.filter((card) => !isInterdayLearning(card))
         const interdayLearning = learning.filter(isInterdayLearning)
-        const reviewsDue = sortWithinDeck(own.filter((card) => card.state === State.Review), group, 'review')
-        const newCards = sortWithinDeck(own.filter((card) => card.state === State.New), group, 'new')
+        const reviewsDue = sortWithinDeck(own.filter((card) => card.state === State.Review), selectedGroup, 'review')
+        const newCards = sortWithinDeck(own.filter((card) => card.state === State.New), selectedGroup, 'new')
         const totals = reviewedToday.get(deck.id) ?? { new: 0, review: 0 }
         // Each owning deck applies its own policy while gathering from its daily review budget.
         const limited = group.interdayLearningOrder === 'before-reviews'
@@ -1699,12 +1706,20 @@ export class Collection extends Dexie {
       const intradayLearning = sortQueue(selected.filter((card) => isLearningCard(card) && !isInterdayLearning(card)), 'learning')
       const interdayLearning = sortQueue(selected.filter(isInterdayLearning), 'learning')
       const orderedReviews = sortQueue(selected.filter((card) => card.state === State.Review), 'review')
-      const newCards = sortQueue(selected.filter((card) => card.state === State.New), 'new')
-      // The selected deck then provides one stable display policy when its subtree is merged.
-      const reviewQueue = selectedGroup.interdayLearningOrder === 'before-reviews'
+      const orderedLimited = selectedGroup.interdayLearningOrder === 'before-reviews'
         ? [...interdayLearning, ...orderedReviews]
         : [...orderedReviews, ...interdayLearning]
-      return [...intradayLearning, ...reviewQueue, ...newCards]
+      const totalsAcrossSubtree = deckIds.reduce((sum, id) => {
+        const totals = reviewedToday.get(id)
+        return { new: sum.new + (totals?.new ?? 0), review: sum.review + (totals?.review ?? 0) }
+      }, { new: 0, review: 0 })
+      // Anki applies each subdeck's limit while gathering, then the selected
+      // deck's limits to the whole gathered subtree. Intraday learning is exempt
+      // from the daily review cap, while interday learning shares its budget.
+      const gatheredLimited = orderedLimited.slice(0, Math.max(0, selectedGroup.dailyReviewLimit - totalsAcrossSubtree.review))
+      const newCards = sortQueue(selected.filter((card) => card.state === State.New), 'new')
+        .slice(0, Math.max(0, selectedGroup.dailyNewLimit - totalsAcrossSubtree.new))
+      return [...intradayLearning, ...gatheredLimited, ...newCards]
     })
   }
 
