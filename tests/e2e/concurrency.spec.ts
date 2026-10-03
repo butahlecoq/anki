@@ -60,8 +60,10 @@ async function pair(page: Page, syncURL: string, runtime: string) {
 }
 
 async function sync(page: Page) {
-  await page.getByRole('button', { name: 'Sync now', exact: true }).click()
-  await expect(page.getByRole('region', { name: 'PC sync', exact: true })).toContainText('Sync complete.', { timeout: 20_000 })
+  const region = page.getByRole('region', { name: 'PC sync', exact: true })
+  await region.getByRole('button', { name: 'Sync now', exact: true }).click()
+  await expect(region).toContainText('Syncing your collection…', { timeout: 5000 })
+  await expect(region).toContainText('Sync complete.', { timeout: 20_000 })
 }
 
 async function edit(page: Page, front: string, back: string) {
@@ -106,7 +108,7 @@ test('independent offline clients merge fields, retain conflicts through reload,
     for (const page of [pc, phone]) {
       await expect(page.locator('.note-row strong')).toHaveText('ねこ')
       await expect(page.locator('.note-row p')).toHaveText('кот')
-      await expect(page.getByRole('region', { name: 'Sync conflicts' })).toHaveCount(0)
+      await expect(page.getByRole('button', { name: 'Review note conflict', exact: true })).toHaveCount(0)
     }
     await context.setOffline(true); await phoneContext.setOffline(true)
     await edit(pc, 'ねこ office', 'кот · feline'); await edit(phone, 'ネコ home', 'кот')
@@ -133,11 +135,33 @@ test('independent offline clients merge fields, retain conflicts through reload,
     await phoneContext.setOffline(false)
     await phone.reload()
     await expect(phone.locator('.note-row strong')).toHaveText('ネコ home')
+    // Leave the durable offline choice unsent while the PC creates a newer edit.
+    await context.setOffline(true)
+    await pc.getByRole('button', { name: 'Review note conflict', exact: true }).click()
+    const pcDialog = pc.getByRole('dialog', { name: 'Choose the saved version' })
+    await pcDialog.locator('fieldset').filter({ hasText: 'ねこ office' }).getByRole('radio').check()
+    await pcDialog.getByRole('button', { name: 'Save choice', exact: true }).click()
+    await expect(pcDialog).toHaveCount(0)
+    await edit(pc, 'ねこ peer after choice', 'кот · feline')
+    await phoneContext.setOffline(false)
+    await context.setOffline(false)
+    await sync(pc)
+    await sync(phone)
+    await phone.getByRole('button', { name: 'Review note conflict', exact: true }).click()
+    const resumedDialog = phone.getByRole('dialog', { name: 'Choose the saved version' })
+    await expect(resumedDialog).toContainText('ねこ peer after choice')
+    await expect(resumedDialog).toContainText('ネコ home')
+    await phoneContext.setOffline(true)
+    await resumedDialog.locator('fieldset').filter({ hasText: 'ねこ peer after choice' }).getByRole('radio').check()
+    await resumedDialog.getByRole('button', { name: 'Save choice', exact: true }).click()
+    await expect(resumedDialog).toHaveCount(0)
+    await expect(phone.locator('.note-row strong')).toHaveText('ねこ peer after choice')
+    await phoneContext.setOffline(false)
     await sync(phone); await sync(pc); await sync(phone)
     for (const page of [pc, phone]) {
-      await expect(page.locator('.note-row strong')).toHaveText('ネコ home')
+      await expect(page.locator('.note-row strong')).toHaveText('ねこ peer after choice')
       await expect(page.locator('.note-row p')).toHaveText('кот · feline')
-      await expect(page.getByRole('region', { name: 'Sync conflicts' })).toHaveCount(0)
+      await expect(page.getByRole('button', { name: 'Review note conflict', exact: true })).toHaveCount(0)
     }
     // Both clients now review the same previously-new card independently.
     await pc.clock.setFixedTime(new Date('2026-10-02T12:00:10Z'))

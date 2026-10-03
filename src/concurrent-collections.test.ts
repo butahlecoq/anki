@@ -60,6 +60,38 @@ test('conflicting edits survive reopening and an explicit revision choice conver
   await expect(b.resolveSyncConflict(conflict.key, conflict.heads[1], conflict.heads)).rejects.toThrow(/changed/i)
 })
 
+test('a newer peer edit cannot be replaced by an interrupted offline conflict choice', async () => {
+  const { a, b, note } = await clients()
+  await a.updateBasicNote(note.id, { front: 'ねこ', back: 'cat' }, new Date('2026-10-02T12:00:00Z'))
+  await b.updateBasicNote(note.id, { front: '猫', back: 'кот' }, new Date('2026-10-02T12:00:01Z'))
+  await exchange(a, b)
+  await a.updateBasicNote(note.id, { front: 'ねこ office', back: 'кот · feline' }, new Date('2026-10-02T12:01:00Z'))
+  await b.updateBasicNote(note.id, { front: 'ネコ home', back: 'кот' }, new Date('2026-10-02T12:01:01Z'))
+  await exchange(a, b)
+  const conflict = (await a.syncConflicts.toArray())[0]
+  const chooseA = conflict.versions.find((version) => (version.value as { fields: { front: string } }).fields.front === 'ねこ office')!
+  const chooseB = conflict.versions.find((version) => (version.value as { fields: { front: string } }).fields.front === 'ネコ home')!
+  await a.resolveSyncConflict(conflict.key, chooseA.opId, conflict.heads)
+  await b.resolveSyncConflict(conflict.key, chooseB.opId, conflict.heads)
+  const name = b.name
+  b.close()
+  const reopened = createCollection(name); collections.push(reopened)
+  await reopened.open()
+  await a.updateBasicNote(note.id, { front: 'ねこ peer after choice', back: 'кот · feline' }, new Date('2026-10-02T12:02:00Z'))
+  await exchange(a, reopened)
+  const resumed = (await reopened.syncConflicts.toArray())[0]
+  expect(resumed).toBeDefined()
+  expect(resumed.conflicts).toContain('fields.front')
+  expect(resumed.versions.map((version) => (version.value as { fields: { front: string } }).fields.front)).toEqual(expect.arrayContaining(['ねこ peer after choice', 'ネコ home']))
+  const newer = resumed.versions.find((version) => (version.value as { fields: { front: string } }).fields.front === 'ねこ peer after choice')!
+  await reopened.resolveSyncConflict(resumed.key, newer.opId, resumed.heads)
+  await exchange(reopened, a)
+  expect(await a.notes.get(note.id)).toEqual(await reopened.notes.get(note.id))
+  expect(await a.notes.get(note.id)).toMatchObject({ fields: { front: 'ねこ peer after choice', back: 'кот · feline' } })
+  expect(await a.syncConflicts.count()).toBe(0)
+  expect(await reopened.syncConflicts.count()).toBe(0)
+})
+
 test('offline reviews merge once and produce the same chronological FSRS schedule', async () => {
   const { a, b, card } = await clients()
   await a.answer(card.id, Rating.Good, new Date('2026-10-01T12:00:10Z'))
@@ -83,6 +115,53 @@ test('a deletion remains effective when an offline client uploads a stale edit',
   expect(await b.cards.get(card.id)).toBeUndefined()
   expect((await b.syncConflicts.toArray()).some((conflict) => conflict.deleted)).toBe(true)
 })
+
+for (const reverse of [false, true]) {
+  test(`a deleted note suppresses an offline edit and media attachment in ${reverse ? 'reverse' : 'forward'} delivery order`, async () => {
+    const { a, b, deck, note, card } = await clients()
+    await a.deleteNote(note.id, new Date('2026-10-02T12:00:00Z'))
+    await b.updateBasicNote(note.id, { front: 'ねこ', back: 'cat' }, new Date('2026-10-02T12:00:01Z'))
+    await b.attachMedia(note.id, { file: new File(['cat image'], 'cat.png', { type: 'image/png' }), side: 'front' }, new Date('2026-10-02T12:00:02Z'))
+    const outgoingA = await a.pendingOperations(), outgoingB = await b.pendingOperations()
+    const batch = reverse ? [...outgoingB, ...outgoingA] : [...outgoingA, ...outgoingB]
+    await a.applyRemoteChanges(structuredClone(batch), batch.length)
+    await b.applyRemoteChanges(structuredClone(batch), batch.length)
+    for (const client of [a, b]) {
+      expect(await client.decks.get(deck.id)).toBeDefined()
+      expect(await client.notes.get(note.id)).toBeUndefined()
+      expect(await client.cards.get(card.id)).toBeUndefined()
+      expect(await client.noteMedia.where('noteId').equals(note.id).count()).toBe(0)
+      expect(await client.deletedEntities.get(`note:${note.id}`)).toBeDefined()
+    }
+  })
+
+  test(`a media-reference tombstone rejects a stale create retry after reopen (${reverse ? 'delete first' : 'retry first'})`, async () => {
+    const { a, b, note } = await clients()
+    const reference = await a.attachMedia(note.id, { file: new File(['shared image'], 'cat.png', { type: 'image/png' }), side: 'front' }, new Date('2026-10-02T12:00:00Z'))
+    const create = (await a.pendingOperations()).find((operation) => operation.entityType === 'noteMedia' && operation.entityId === reference.id)!
+    await b.applyRemoteChanges([structuredClone(create)], 1)
+    const blob = await a.verifiedMediaBlob(reference.digest)
+    await b.storeDownloadedMedia(reference.digest, blob!.blob)
+    await a.acknowledgeOperations([create.opId])
+    await a.removeMedia(reference.id, new Date('2026-10-02T12:01:00Z'))
+    const deletion = (await a.pendingOperations()).find((operation) => operation.entityType === 'noteMedia' && operation.entityId === reference.id)!
+    const batch = reverse ? [deletion, create] : [create, deletion]
+    await a.applyRemoteChanges(structuredClone(batch), batch.length)
+    await b.applyRemoteChanges(structuredClone(batch), batch.length)
+    for (const client of [a, b]) {
+      expect(await client.noteMedia.get(reference.id)).toBeUndefined()
+      expect(await client.deletedEntities.get(`noteMedia:${reference.id}`)).toBeDefined()
+    }
+    const name = b.name
+    b.close()
+    const reopened = createCollection(name)
+    collections.push(reopened)
+    await reopened.open()
+    await reopened.applyRemoteChanges([structuredClone(create)], 1)
+    expect(await reopened.noteMedia.get(reference.id)).toBeUndefined()
+    expect(await reopened.deletedEntities.get(`noteMedia:${reference.id}`)).toBeDefined()
+  })
+}
 
 test('undoing an unpublished deletion removes its causal revision before later synchronization', async () => {
   const { a, b, note } = await clients()
