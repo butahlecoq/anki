@@ -58,6 +58,10 @@ export interface AnkiImportSummary {
 
 export interface AnkiDuplicateSummary { create: number; update: number; keepLocal: number; unchanged: number }
 
+export type AnkiImportDecisionAction = 'create' | 'update' | 'keepLocal' | 'unchanged' | 'delete'
+export type AnkiImportEntity = 'deck' | 'noteType' | 'note' | 'card' | 'review' | 'mediaReference'
+export interface AnkiImportDecision { entity: AnkiImportEntity; id: string; action: AnkiImportDecisionAction }
+
 export interface AnkiImportProjection {
   decks: Deck[]
   noteTypes: NoteType[]
@@ -82,6 +86,28 @@ interface ImportWrites {
   /** Undo records whose snapshot names a deck this import superseded. */
   undoSettings: Array<{ key: string; value: unknown }>
   blobs: StoredMedia[]
+}
+
+export interface AnkiImportPlan {
+  summary: AnkiImportSummary
+  duplicates: AnkiDuplicateSummary
+  issues: AnkiImportIssue[]
+  blocksImport: boolean
+  decisions: AnkiImportDecision[]
+  writes: {
+    decks: ImportWrites['decks']
+    noteTypes: ImportWrites['noteTypes']
+    notes: ImportWrites['notes']
+    cards: ImportWrites['cards']
+    reviews: Array<{ value: ReviewEntry; action: 'create' }>
+    updatedReviews: Array<{ value: ReviewEntry; action: 'update' }>
+    references: ImportWrites['references']
+    deletedReferences: NoteMediaReference[]
+    deletedDecks: ImportWrites['deletedDecks']
+    /** Undo records this import would rewrite, named by their settings key. */
+    undoSettings: Array<{ key: string }>
+    blobs: Array<Omit<StoredMedia, 'blob'>>
+  }
 }
 
 type Snapshot = { table: 'decks' | 'noteTypes' | 'notes' | 'cards' | 'reviewEntries' | 'noteMedia' | 'mediaBlobs'; id: string; value: string }
@@ -437,6 +463,9 @@ export class PreparedAnkiImport {
   readonly duplicates: AnkiDuplicateSummary
   readonly issues: readonly AnkiImportIssue[]
   readonly filename: string
+  /** A detached description of the proposed changes. It deliberately contains
+   * no collection handle and omits binary media payloads. */
+  readonly plan: AnkiImportPlan
   private committed = false
 
   constructor(
@@ -449,11 +478,32 @@ export class PreparedAnkiImport {
     private readonly snapshots: Snapshot[],
     private readonly importedAt: string,
     private readonly projection: AnkiImportProjection,
+    decisions: AnkiImportDecision[],
   ) {
     this.filename = filename
     this.summary = summary
     this.duplicates = duplicates
     this.issues = issues
+    this.plan = structuredClone({
+      summary,
+      duplicates,
+      issues,
+      blocksImport: issues.some((issue) => issue.severity === 'error'),
+      decisions,
+      writes: {
+        decks: writes.decks,
+        noteTypes: writes.noteTypes,
+        notes: writes.notes,
+        cards: writes.cards,
+        reviews: writes.reviews.map((value) => ({ value, action: 'create' as const })),
+        updatedReviews: writes.updatedReviews.map((value) => ({ value, action: 'update' as const })),
+        references: writes.references,
+        deletedReferences: writes.deletedReferences,
+        deletedDecks: writes.deletedDecks,
+        undoSettings: writes.undoSettings.map(({ key }) => ({ key })),
+        blobs: writes.blobs.map(({ digest, byteLength, mimeType, verifiedAt }) => ({ digest, byteLength, mimeType, verifiedAt })),
+      },
+    })
   }
 
   /** Returns the normalized app projection without applying it to the target
@@ -837,6 +887,8 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
   const localReviews = await collection.reviewEntries.toArray()
   const writes: ImportWrites = { decks: [], noteTypes: [], notes: [], cards: [], reviews: [], updatedReviews: [], references: [], deletedReferences: [], deletedDecks: [], undoSettings: [], blobs: [] }
   const snapshots: Snapshot[] = []
+const decisions: AnkiImportDecision[] = []
+  const recordDecision = (entity: AnkiImportEntity, id: string, action: AnkiImportDecisionAction) => decisions.push({ entity, id, action })
   // A deck reconciled away leaves its row behind, and everything pointing at it
   // still does. References move whatever the local timestamps say, because a
   // reference to a row about to be deleted is not a conflict the learner could
@@ -847,12 +899,14 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
     if (existing) {
       snapshots.push({ table: 'decks', id: from, value: fingerprint(existing) })
       writes.deletedDecks.push(existing)
+      recordDecision('deck', from, 'delete')
     }
     for (const child of localDecks.filter((deck) => deck.parentId === from && !superseded.has(deck.id))) {
       snapshots.push({ table: 'decks', id: child.id, value: fingerprint(child) })
       const incoming = deckRecords.get(child.id)
       const value = { ...(incoming ?? child), parentId: to, updatedAt: now.toISOString() }
       writes.decks.push({ value, action: 'update' })
+      recordDecision('deck', child.id, 'update')
       deckRecords.set(child.id, value)
     }
     // A Synthesised Deck is an empty container, but a deck reconciled away for
@@ -861,14 +915,17 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
     for (const note of localNotes.filter((note) => note.deckId === from)) {
       snapshots.push({ table: 'notes', id: note.id, value: fingerprint(note) })
       writes.notes.push({ value: { ...note, deckId: to, updatedAt: now.toISOString() }, action: 'update' })
+      recordDecision('note', note.id, 'update')
     }
     for (const card of localCards.filter((card) => card.deckId === from)) {
       snapshots.push({ table: 'cards', id: card.id, value: fingerprint(card) })
       writes.cards.push({ value: { ...card, deckId: to }, action: 'update' })
+      recordDecision('card', card.id, 'update')
     }
     for (const review of localReviews.filter((review) => review.deckId === from)) {
       snapshots.push({ table: 'reviewEntries', id: review.id, value: fingerprint(review) })
       writes.updatedReviews.push({ ...review, deckId: to })
+      recordDecision('review', review.id, 'update')
     }
     // An undo record holds a copy of the note it deleted, deck reference and
     // all, and restoring it insists that deck still exists. Left pointing at a
@@ -903,11 +960,13 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
   for (const value of decks) {
     if (reparented.has(value.id)) continue
     const action = await decide('decks', value)
+    recordDecision('deck', value.id, action)
     if (action === 'create' || action === 'update') writes.decks.push({ value, action })
   }
   const noteTypeDecisions = new Map<string, 'create' | 'update' | 'keepLocal' | 'unchanged'>()
   for (const value of noteTypes) {
     const action = await decide('noteTypes', value)
+    recordDecision('noteType', value.id, action)
     noteTypeDecisions.set(value.id, action)
     if (action === 'create' || action === 'update') writes.noteTypes.push({ value, action })
   }
@@ -928,21 +987,25 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
       })
     }
     noteDecisions.set(value.id, action)
+    recordDecision('note', value.id, action)
     duplicates[action] += 1
     if (action === 'create' || action === 'update') writes.notes.push({ value, action })
   }
   for (const value of cards) {
-    if (keptAggregateNoteIds.has(value.noteId)) continue
+    if (keptAggregateNoteIds.has(value.noteId)) { recordDecision('card', value.id, 'keepLocal'); continue }
     const existing = await collection.cards.get(value.id)
     snapshots.push({ table: 'cards', id: value.id, value: fingerprint(existing) })
-    if (!existing) writes.cards.push({ value, action: 'create' })
+    if (!existing) { writes.cards.push({ value, action: 'create' }); recordDecision('card', value.id, 'create') }
     else {
       const incomingModified = Date.parse(value.sourceModifiedAt ?? '')
       const previousSourceModified = Date.parse(existing.sourceModifiedAt ?? '')
       const localReview = Date.parse(existing.lastReview ?? '')
       const sourceIsNewer = Number.isFinite(incomingModified) && (!Number.isFinite(previousSourceModified) || incomingModified > previousSourceModified)
       const localScheduleIsNotNewer = !Number.isFinite(localReview) || localReview <= incomingModified
-      if ((sourceIsNewer && localScheduleIsNotNewer) || (!existing.lastReview && value.lastReview)) writes.cards.push({ value, action: 'update' })
+      if ((sourceIsNewer && localScheduleIsNotNewer) || (!existing.lastReview && value.lastReview)) {
+        writes.cards.push({ value, action: 'update' })
+        recordDecision('card', value.id, 'update')
+      } else recordDecision('card', value.id, 'keepLocal')
     }
   }
   const incomingCardIds = new Set(cards.map(({ id }) => id))
@@ -952,14 +1015,16 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
       if (incomingCardIds.has(existing.id) || existing.suspended) continue
       snapshots.push({ table: 'cards', id: existing.id, value: fingerprint(existing) })
       writes.cards.push({ value: { ...existing, suspended: true }, action: 'update' })
+      recordDecision('card', existing.id, 'update')
     }
   }
   for (const value of reviews) {
     const importedCard = cards.find((card) => card.id === value.cardId)
-    if (importedCard && keptAggregateNoteIds.has(importedCard.noteId)) continue
+    if (importedCard && keptAggregateNoteIds.has(importedCard.noteId)) { recordDecision('review', value.id, 'keepLocal'); continue }
     const existing = await collection.reviewEntries.get(value.id)
     snapshots.push({ table: 'reviewEntries', id: value.id, value: fingerprint(existing) })
-    if (!existing) writes.reviews.push(value)
+    if (!existing) { writes.reviews.push(value); recordDecision('review', value.id, 'create') }
+    else recordDecision('review', value.id, 'unchanged')
   }
   const mediaReconcileNoteIds = new Set(notes.filter((note) => {
     const noteAction = noteDecisions.get(note.id)
@@ -967,8 +1032,9 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
   }).map(({ id }) => id))
   for (const value of references) {
     const noteAction = noteDecisions.get(value.noteId)
-    if (!mediaReconcileNoteIds.has(value.noteId) || noteAction === 'keepLocal') continue
+    if (!mediaReconcileNoteIds.has(value.noteId) || noteAction === 'keepLocal') { recordDecision('mediaReference', value.id, 'keepLocal'); continue }
     const action = await decide('noteMedia', value)
+    recordDecision('mediaReference', value.id, action)
     if (action === 'create' || action === 'update') writes.references.push({ value, action })
   }
   const incomingReferenceIds = new Set(references.map(({ id }) => id))
@@ -978,6 +1044,7 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
       if (!importedReference || incomingReferenceIds.has(existing.id)) continue
       snapshots.push({ table: 'noteMedia', id: existing.id, value: fingerprint(existing) })
       writes.deletedReferences.push(existing)
+      recordDecision('mediaReference', existing.id, 'delete')
     }
   }
   const eligibleMediaDigests = new Set(references.filter((reference) => !keptAggregateNoteIds.has(reference.noteId)).map((reference) => reference.digest))
@@ -995,7 +1062,7 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
     cards: cards.length,
     reviews: reviews.length,
     media: data.media.length,
-  }, duplicates, issues, collection, writes, snapshots, importedAt, { decks, noteTypes, notes, cards, reviews, references })
+  }, duplicates, issues, collection, writes, snapshots, importedAt, { decks, noteTypes, notes, cards, reviews, references }, decisions)
 }
 
 export function prepareAnkiImport(file: File, collection: Collection, options: PrepareAnkiImportOptions = {}) {
