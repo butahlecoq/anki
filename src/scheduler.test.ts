@@ -20,7 +20,7 @@ const deck: Deck = { id: 'deck', name: 'Deck', parentId: null, optionGroupId: 'o
 const options: DeckOptionGroup = {
   id: 'options', name: 'Options', protected: false, dailyNewLimit: 20, dailyReviewLimit: 200,
   desiredRetention: 0.9, learningSteps: ['1m', '10m'], relearningSteps: ['10m'],
-  newCardOrder: 'added', reviewCardOrder: 'due', newReviewOrder: 'mix', interdayLearningOrder: 'mix',
+  newCardOrder: 'added', newCardGatherOrder: 'deck', newCardSortOrder: 'template', reviewCardOrder: 'due', newReviewOrder: 'mix', interdayLearningOrder: 'mix',
   buryNewSiblings: false, buryReviewSiblings: false, buryInterdayLearningSiblings: false, leechThreshold: 8,
   leechAction: 'suspend', leechTag: 'leech', createdAt: '2026-01-01', updatedAt: '2026-01-01',
 }
@@ -72,6 +72,49 @@ describe('pure scheduling rules', () => {
     expect(select('interval-descending')).toEqual(['long', 'child-due-first', 'short'])
     expect(select('retrievability-ascending')[0]).toBe('long')
     expect(select('retrievability-descending')[0]).toBe('short')
+  })
+
+  test('new-card gathering applies deck quotas before sorting the gathered cards', () => {
+    const child: Deck = { ...deck, id: 'child', name: 'Child', parentId: deck.id }
+    const childCard = (id: string, newPosition: number, templateOrdinal: number, noteId = `note-${id}`) => card(id, State.New, {
+      deckId: child.id, noteId, newPosition, templateOrdinal, due: '2026-10-03T12:00:00.000Z',
+    })
+    const parentCard = (id: string, newPosition: number, templateOrdinal: number, noteId = `note-${id}`) => card(id, State.New, {
+      noteId, newPosition, templateOrdinal, due: '2026-10-03T12:00:00.000Z',
+    })
+    const cards = [
+      parentCard('parent-2', 2, 1), parentCard('parent-9', 9, 0),
+      childCard('child-1', 1, 0), childCard('child-4', 4, 1),
+    ]
+    const select = (newCardGatherOrder: DeckOptionGroup['newCardGatherOrder'], newCardSortOrder: DeckOptionGroup['newCardSortOrder'] = 'gathered', dailyNewLimit = 20) => selectDueCards({
+      deckId: deck.id, now, decks: [deck, child],
+      groups: [{ ...options, dailyNewLimit, newCardGatherOrder, newCardSortOrder }],
+      notes: [], cards, reviews: [], sessionCardIds: new Set<string>(),
+    }).map((entry) => entry.id)
+
+    expect(select('deck')).toEqual(['parent-2', 'parent-9', 'child-1', 'child-4'])
+    expect(select('ascending-position')).toEqual(['child-1', 'parent-2', 'child-4', 'parent-9'])
+    expect(select('descending-position')).toEqual(['parent-9', 'child-4', 'parent-2', 'child-1'])
+    expect(select('deck', 'template')).toEqual(['parent-9', 'child-1', 'parent-2', 'child-4'])
+    expect(select('ascending-position', 'gathered', 2)).toEqual(['child-1', 'parent-2'])
+    expect(select('deck', 'template-random').sort()).toEqual(['child-1', 'child-4', 'parent-2', 'parent-9'])
+
+    const siblingCards = [
+      parentCard('sibling-a-0', 5, 0, 'sibling-a'), parentCard('sibling-a-1', 5, 1, 'sibling-a'),
+      childCard('sibling-b-0', 6, 0, 'sibling-b'), childCard('sibling-b-1', 6, 1, 'sibling-b'),
+    ]
+    const selectSiblings = (gather: DeckOptionGroup['newCardGatherOrder'], sort: DeckOptionGroup['newCardSortOrder']) => selectDueCards({
+      deckId: deck.id, now, decks: [deck, child], groups: [{ ...options, newCardGatherOrder: gather, newCardSortOrder: sort }],
+      notes: [], cards: siblingCards, reviews: [], sessionCardIds: new Set<string>(),
+    }).map((entry) => entry.id)
+    const gatheredByRandomNotes = selectSiblings('random-notes', 'gathered')
+    const gatheredByDeckRandomNotes = selectSiblings('deck-random-notes', 'gathered')
+    expect(new Set(gatheredByRandomNotes.slice(0, 2).map((id) => id.slice(0, 10))).size).toBe(1)
+    expect(new Set(gatheredByRandomNotes.slice(2).map((id) => id.slice(0, 10))).size).toBe(1)
+    expect(gatheredByRandomNotes.slice(0, 2).map((id) => id.slice(0, 10))).not.toEqual(gatheredByRandomNotes.slice(2).map((id) => id.slice(0, 10)))
+    expect(gatheredByDeckRandomNotes).toEqual(['sibling-a-0', 'sibling-a-1', 'sibling-b-0', 'sibling-b-1'])
+    expect(selectSiblings('random-notes', 'random-note-template')).toEqual(gatheredByRandomNotes)
+    expect(selectSiblings('random-cards', 'random')).toEqual(selectSiblings('random-cards', 'random'))
   })
 
   test('the review limit also caps new cards after reviews and interday learning are gathered', () => {

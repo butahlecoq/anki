@@ -287,6 +287,10 @@ export function selectDueCards(input: DueSelectionInput): CardRecord[] {
     if (order === 'retrievability-descending') return retrievability(right) - retrievability(left) || due || left.id.localeCompare(right.id)
     return dailyShuffleRank(left, day).localeCompare(dailyShuffleRank(right, day)) || left.id.localeCompare(right.id)
   }
+  const templateOrdinal = (card: CardRecord) => card.templateOrdinal ?? 0
+  const noteShuffleRank = (card: CardRecord) => String(stableRank(`${day}:${card.deckId}:${card.noteId}`)).padStart(10, '0')
+  const gatheredNew: CardRecord[] = []
+  const newBudgetByDeck = new Map<string, number>()
   const selected: CardRecord[] = []
   for (const deck of orderedDecks) {
     const group = groupsById.get(deck.optionGroupId)
@@ -296,7 +300,6 @@ export function selectDueCards(input: DueSelectionInput): CardRecord[] {
     const intradayLearning = learning.filter((card) => !isInterdayLearning(card))
     const interdayLearning = learning.filter(isInterdayLearning)
     const reviewsDue = own.filter((card) => card.state === State.Review).sort(compareReviews)
-    const newCards = sortWithinDeck(own.filter((card) => card.state === State.New), selectedGroup, 'new')
     const totals = reviewedToday.get(deck.id) ?? { new: 0, review: 0 }
     const limited = [...interdayLearning, ...reviewsDue]
     const reviewBudget = Math.max(0, group.dailyReviewLimit - totals.review)
@@ -305,8 +308,56 @@ export function selectDueCards(input: DueSelectionInput): CardRecord[] {
       Math.max(0, group.dailyNewLimit - totals.new),
       Math.max(0, reviewBudget - gatheredLimited.length),
     )
-    selected.push(...intradayLearning, ...gatheredLimited, ...newCards.slice(0, newBudget))
+    newBudgetByDeck.set(deck.id, newBudget)
+    selected.push(...intradayLearning, ...gatheredLimited)
   }
+  const dueNewByDeck = new Map(orderedDecks.map((deck) => [deck.id, cards.filter((card) => card.deckId === deck.id && card.state === State.New && !sessionCardIds.has(card.id) && eligibleForStudy(card, now))]))
+  const gatherOrder = selectedGroup.newCardGatherOrder ?? 'deck'
+  const positionOrder = (left: CardRecord, right: CardRecord) => {
+    const position = left.newPosition !== undefined && right.newPosition !== undefined
+      ? left.newPosition - right.newPosition
+      : (notesById.get(left.noteId)?.createdAt ?? left.due).localeCompare(notesById.get(right.noteId)?.createdAt ?? right.due)
+    return position
+      || deckPath(decksById.get(left.deckId)!).localeCompare(deckPath(decksById.get(right.deckId)!))
+      || templateOrdinal(left) - templateOrdinal(right)
+      || left.id.localeCompare(right.id)
+  }
+  const gatherNewDeckOrder = (candidates: CardRecord[]) => candidates.sort((left, right) => {
+    if (gatherOrder === 'deck-random-notes') return noteShuffleRank(left).localeCompare(noteShuffleRank(right)) || templateOrdinal(left) - templateOrdinal(right) || left.id.localeCompare(right.id)
+    return positionOrder(left, right)
+  })
+  const ownerRemaining = new Map(newBudgetByDeck)
+  const takeNew = (card: CardRecord) => {
+    const remaining = ownerRemaining.get(card.deckId) ?? 0
+    if (remaining <= 0) return
+    gatheredNew.push(card)
+    ownerRemaining.set(card.deckId, remaining - 1)
+  }
+  if (gatherOrder === 'deck' || gatherOrder === 'deck-random-notes') {
+    for (const deck of orderedDecks) {
+      const due = dueNewByDeck.get(deck.id) ?? []
+      for (const card of gatherNewDeckOrder(due)) takeNew(card)
+    }
+  } else {
+    const due = [...dueNewByDeck.values()].flat()
+    due.sort((left, right) => {
+      if (gatherOrder === 'ascending-position') return positionOrder(left, right)
+      if (gatherOrder === 'descending-position') return -positionOrder(left, right) || left.id.localeCompare(right.id)
+      if (gatherOrder === 'random-notes') return noteShuffleRank(left).localeCompare(noteShuffleRank(right)) || templateOrdinal(left) - templateOrdinal(right) || left.id.localeCompare(right.id)
+      return dailyShuffleRank(left, day).localeCompare(dailyShuffleRank(right, day)) || left.id.localeCompare(right.id)
+    })
+    for (const card of due) takeNew(card)
+  }
+  const gatherRank = new Map(gatheredNew.map((card, index) => [card.id, index]))
+  const orderedNewCards = [...gatheredNew].sort((left, right) => {
+    const order = selectedGroup.newCardSortOrder ?? (selectedGroup.newCardOrder === 'random' ? 'random' : 'template')
+    const gathered = (gatherRank.get(left.id) ?? 0) - (gatherRank.get(right.id) ?? 0)
+    if (order === 'gathered') return gathered || left.id.localeCompare(right.id)
+    if (order === 'template') return templateOrdinal(left) - templateOrdinal(right) || gathered || left.id.localeCompare(right.id)
+    if (order === 'template-random') return templateOrdinal(left) - templateOrdinal(right) || dailyShuffleRank(left, day).localeCompare(dailyShuffleRank(right, day)) || left.id.localeCompare(right.id)
+    if (order === 'random-note-template') return noteShuffleRank(left).localeCompare(noteShuffleRank(right)) || templateOrdinal(left) - templateOrdinal(right) || left.id.localeCompare(right.id)
+    return dailyShuffleRank(left, day).localeCompare(dailyShuffleRank(right, day)) || left.id.localeCompare(right.id)
+  })
   const intradayLearning = sortQueue(selected.filter((card) => isLearningCard(card) && !isInterdayLearning(card)), 'learning')
   const interdayLearning = sortQueue(selected.filter(isInterdayLearning), 'learning')
   const orderedReviews = selected.filter((card) => card.state === State.Review).sort(compareReviews)
@@ -323,7 +374,7 @@ export function selectDueCards(input: DueSelectionInput): CardRecord[] {
     : selectedGroup.interdayLearningOrder === 'after-reviews'
       ? [...gatheredReviews, ...gatheredInterdayLearning]
       : mixQueues(gatheredReviews, gatheredInterdayLearning)
-  const newCards = sortQueue(selected.filter((card) => card.state === State.New), 'new')
+  const newCards = orderedNewCards
     .slice(0, Math.min(
       Math.max(0, selectedGroup.dailyNewLimit - totalsAcrossSubtree.new),
       Math.max(0, reviewBudget - gatheredLimited.length),

@@ -143,7 +143,7 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
     if (options.scheduling) {
       row.type = card.state === State.New ? 0 : card.state === State.Learning ? 1 : card.state === State.Review ? 2 : 3
       row.queue = card.manualSuspended || card.templateSuspended || card.suspended ? -1 : row.type === 3 ? 1 : row.type
-      row.due = row.type === 0 ? row.due : row.type === 1 || row.type === 3 ? Math.floor(Date.parse(card.due) / 1000) : Math.floor((Date.parse(card.due) - data.col.crt * 1000) / day)
+      row.due = row.type === 0 ? (card.newPosition ?? row.due) : row.type === 1 || row.type === 3 ? Math.floor(Date.parse(card.due) / 1000) : Math.floor((Date.parse(card.due) - data.col.crt * 1000) / day)
       row.ivl = card.scheduledDays; row.reps = card.reps; row.lapses = card.lapses; row.left = card.learningSteps; row.factor = Math.round(card.difficulty * 100)
       const { due, stability, difficulty, elapsedDays, scheduledDays, learningSteps, reps, lapses, state, lastReview, manualSuspended, templateSuspended, buriedUntil } = card
       row.data = JSON.stringify({ s: stability, d: difficulty, kiroku: { version: 1, native: nativeScheduleFingerprint(row), due, stability, difficulty, elapsedDays, scheduledDays, learningSteps, reps, lapses, state, lastReview, manualSuspended, templateSuspended, buriedUntil } })

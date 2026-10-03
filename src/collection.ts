@@ -24,6 +24,8 @@ export const DEFAULT_DECK_OPTION_GROUP_ID = 'default'
 
 /** Reusable scheduling settings are introduced independently of any individual deck. */
 export type NewCardOrder = 'added' | 'random'
+export type NewCardGatherOrder = 'deck' | 'deck-random-notes' | 'ascending-position' | 'descending-position' | 'random-notes' | 'random-cards'
+export type NewCardSortOrder = 'template' | 'gathered' | 'template-random' | 'random-note-template' | 'random'
 export type ReviewCardOrder = 'due' | 'due-then-deck' | 'deck-then-due' | 'interval-ascending' | 'interval-descending' | 'retrievability-ascending' | 'retrievability-descending' | 'random'
 export type ReviewMixOrder = 'mix' | 'before-reviews' | 'after-reviews'
 export type InterdayLearningOrder = ReviewMixOrder
@@ -35,6 +37,8 @@ export interface DeckOptionSettings {
   learningSteps: readonly string[]
   relearningSteps: readonly string[]
   newCardOrder: NewCardOrder
+  newCardGatherOrder?: NewCardGatherOrder
+  newCardSortOrder?: NewCardSortOrder
   reviewCardOrder: ReviewCardOrder
   newReviewOrder?: ReviewMixOrder
   /** Controls where day-crossing learning cards appear relative to review cards. */
@@ -60,6 +64,8 @@ export interface DeckOptionGroup {
   learningSteps: readonly string[]
   relearningSteps: readonly string[]
   newCardOrder: NewCardOrder
+  newCardGatherOrder: NewCardGatherOrder
+  newCardSortOrder: NewCardSortOrder
   reviewCardOrder: ReviewCardOrder
   newReviewOrder: ReviewMixOrder
   interdayLearningOrder: InterdayLearningOrder
@@ -180,6 +186,10 @@ export interface CardRecord {
   buriedUntil?: string | null
   /** Anki-compatible card flag: 0 is none, 1–7 are the standard colors. */
   flag?: number
+  /** Anki's insertion position for new-card gathering; siblings share one position. */
+  newPosition?: number
+  /** Anki card ordinal used when sorting gathered new cards by template. */
+  templateOrdinal?: number
   due: string
   stability: number
   difficulty: number
@@ -287,6 +297,8 @@ const defaultDeckOptionSettings: Required<DeckOptionSettings> = {
   learningSteps: ['1m', '10m'],
   relearningSteps: ['10m'],
   newCardOrder: 'added',
+  newCardGatherOrder: 'deck',
+  newCardSortOrder: 'template',
   reviewCardOrder: 'due',
   newReviewOrder: 'mix',
   interdayLearningOrder: 'mix',
@@ -398,6 +410,8 @@ function copiedDeckOptionSettings(settings: DeckOptionSettings): Required<DeckOp
     ...settings,
     learningSteps: [...settings.learningSteps],
     relearningSteps: [...settings.relearningSteps],
+    newCardGatherOrder: settings.newCardGatherOrder ?? defaultDeckOptionSettings.newCardGatherOrder,
+    newCardSortOrder: settings.newCardSortOrder ?? (settings.newCardOrder === 'random' ? 'random' : defaultDeckOptionSettings.newCardSortOrder),
     newReviewOrder: settings.newReviewOrder ?? defaultDeckOptionSettings.newReviewOrder,
     interdayLearningOrder: settings.interdayLearningOrder ?? defaultDeckOptionSettings.interdayLearningOrder,
     buryNewSiblings: settings.buryNewSiblings ?? defaultDeckOptionSettings.buryNewSiblings,
@@ -429,6 +443,10 @@ function validateDeckOptionSettings(input: DeckOptionSettings): Required<DeckOpt
   if (!input || typeof input !== 'object') throw new Error('Deck option settings are invalid')
   if (!Number.isFinite(input.desiredRetention) || input.desiredRetention <= 0 || input.desiredRetention > 1) throw new Error('Desired retention must be greater than 0 and at most 1')
   if (input.newCardOrder !== 'added' && input.newCardOrder !== 'random') throw new Error('New card order is invalid')
+  const newCardGatherOrder = input.newCardGatherOrder ?? defaultDeckOptionSettings.newCardGatherOrder
+  if (!['deck', 'deck-random-notes', 'ascending-position', 'descending-position', 'random-notes', 'random-cards'].includes(newCardGatherOrder)) throw new Error('New card gather order is invalid')
+  const newCardSortOrder = input.newCardSortOrder ?? (input.newCardOrder === 'random' ? 'random' : defaultDeckOptionSettings.newCardSortOrder)
+  if (!['template', 'gathered', 'template-random', 'random-note-template', 'random'].includes(newCardSortOrder)) throw new Error('New card sort order is invalid')
   if (!['due', 'due-then-deck', 'deck-then-due', 'interval-ascending', 'interval-descending', 'retrievability-ascending', 'retrievability-descending', 'random'].includes(input.reviewCardOrder)) throw new Error('Review card order is invalid')
   const newReviewOrder = input.newReviewOrder ?? defaultDeckOptionSettings.newReviewOrder
   if (newReviewOrder !== 'mix' && newReviewOrder !== 'before-reviews' && newReviewOrder !== 'after-reviews') throw new Error('New/review order is invalid')
@@ -447,6 +465,8 @@ function validateDeckOptionSettings(input: DeckOptionSettings): Required<DeckOpt
     learningSteps: validateSteps(input.learningSteps, 'Learning steps'),
     relearningSteps: validateSteps(input.relearningSteps, 'Relearning steps'),
     newCardOrder: input.newCardOrder,
+    newCardGatherOrder,
+    newCardSortOrder,
     reviewCardOrder: input.reviewCardOrder,
     newReviewOrder,
     interdayLearningOrder,
@@ -469,6 +489,8 @@ function canonicalDeckOptionGroup(group: LegacyDeckOptionGroup): DeckOptionGroup
       learningSteps: group.learningSteps ?? defaultDeckOptionSettings.learningSteps,
       relearningSteps: group.relearningSteps ?? defaultDeckOptionSettings.relearningSteps,
       newCardOrder: group.newCardOrder ?? defaultDeckOptionSettings.newCardOrder,
+      newCardGatherOrder: group.newCardGatherOrder ?? defaultDeckOptionSettings.newCardGatherOrder,
+      newCardSortOrder: group.newCardSortOrder ?? (group.newCardOrder === 'random' ? 'random' : defaultDeckOptionSettings.newCardSortOrder),
       reviewCardOrder: group.reviewCardOrder ?? defaultDeckOptionSettings.reviewCardOrder,
       newReviewOrder: group.newReviewOrder ?? defaultDeckOptionSettings.newReviewOrder,
       interdayLearningOrder: group.interdayLearningOrder ?? defaultDeckOptionSettings.interdayLearningOrder,
@@ -586,6 +608,8 @@ function canonicalCard(card: LegacyCard): CardRecord {
   if (card.templateSuspended !== undefined && card.suspended !== undefined && card.templateSuspended !== card.suspended) throw new Error('Card suspension fields conflict')
   if (card.buriedUntil !== undefined && card.buriedUntil !== null && typeof card.buriedUntil !== 'string') throw new Error('Card burial time is invalid')
   if (card.flag !== undefined && (!Number.isSafeInteger(card.flag) || card.flag < 0 || card.flag > 7)) throw new Error('Card flag is invalid')
+  if (card.newPosition !== undefined && (!Number.isSafeInteger(card.newPosition) || card.newPosition < 0)) throw new Error('New card position is invalid')
+  if (card.templateOrdinal !== undefined && (!Number.isSafeInteger(card.templateOrdinal) || card.templateOrdinal < 0)) throw new Error('Card template ordinal is invalid')
   const buriedUntil = card.buriedUntil ?? null
   if (buriedUntil !== null && (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(buriedUntil) || Number.isNaN(new Date(buriedUntil).getTime()))) throw new Error('Card burial time is invalid')
   return withPolicyDefaults({ ...card, templateId: card.templateId ?? BASIC_TEMPLATE_ID, buriedUntil })
@@ -726,6 +750,33 @@ export class Collection extends Dexie {
     this.version(18).stores({}).upgrade(async (transaction) => {
       await transaction.table('deckOptionGroups').toCollection().modify((group: LegacyDeckOptionGroup) => Object.assign(group, canonicalDeckOptionGroup(group)))
     })
+    this.version(19).stores({
+      decks: 'id, parentId, optionGroupId, name, createdAt', notes: 'id, deckId, typeId, updatedAt', cards: 'id, deckId, noteId, templateId, due, state, newPosition', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId', deletedEntities: 'key, entityType, entityId, occurredAt', noteMedia: 'id, noteId, digest, side, kind, updatedAt', mediaBlobs: 'digest, verifiedAt', noteTypes: 'id, name, updatedAt', deckOptionGroups: 'id, name, updatedAt',
+    }).upgrade(async (transaction) => {
+      const notes = new Map((await transaction.table('notes').toArray()).map((note: Note) => [note.id, note]))
+      const noteTypes = new Map((await transaction.table('noteTypes').toArray()).map((noteType: NoteType) => [noteType.id, noteType]))
+      const cards = await transaction.table('cards').toArray() as CardRecord[]
+      const maxPosition = cards.reduce((max, card) => Math.max(max, card.newPosition ?? -1), -1)
+      const newNotes = [...new Set(cards.filter((card) => card.state === State.New && card.newPosition === undefined).map((card) => card.noteId))]
+        .sort((left, right) => (notes.get(left)?.createdAt ?? '').localeCompare(notes.get(right)?.createdAt ?? '') || left.localeCompare(right))
+      const positions = new Map(newNotes.map((noteId, index) => [noteId, maxPosition + index + 1]))
+      await transaction.table('cards').toCollection().modify((card: CardRecord) => {
+        const note = notes.get(card.noteId)
+        const noteType = note ? noteTypes.get(note.typeId) : undefined
+        card.newPosition ??= card.state === State.New ? positions.get(card.noteId) ?? 0 : undefined
+        card.templateOrdinal ??= noteType?.kind === 'cloze'
+          ? Math.max(0, (card.clozeOrdinal ?? 1) - 1)
+          : noteType?.kind === 'image-occlusion'
+            ? Math.max(0, (card.occlusionOrdinal ?? 1) - 1)
+            : Math.max(0, noteType?.templates.findIndex((template) => template.id === card.templateId) ?? 0)
+      })
+    })
+    this.version(20).stores({}).upgrade(async (transaction) => {
+      await transaction.table('deckOptionGroups').toCollection().modify((group: LegacyDeckOptionGroup) => Object.assign(group, canonicalDeckOptionGroup(group)))
+    })
+    this.version(21).stores({}).upgrade(async (transaction) => {
+      await transaction.table('deckOptionGroups').toCollection().modify((group: LegacyDeckOptionGroup) => Object.assign(group, canonicalDeckOptionGroup(group)))
+    })
     this.on('populate', (transaction) => {
       transaction.table('noteTypes').put(basicNoteType)
       transaction.table('noteTypes').put(imageOcclusionNoteType)
@@ -773,6 +824,17 @@ export class Collection extends Dexie {
     })
   }
 
+  private async nextNewPosition() {
+    const last = await this.cards.orderBy('newPosition').last()
+    return (last?.newPosition ?? -1) + 1
+  }
+
+  private cardTemplateOrdinal(noteType: NoteType, template: { id: string; clozeOrdinal?: number; occlusionOrdinal?: number }) {
+    if (template.clozeOrdinal !== undefined) return Math.max(0, template.clozeOrdinal - 1)
+    if (template.occlusionOrdinal !== undefined) return Math.max(0, template.occlusionOrdinal - 1)
+    return Math.max(0, noteType.templates.findIndex((candidate) => candidate.id === template.id))
+  }
+
   private async reconcileCards(note: Note, noteType: NoteType, now: Date, operations: SyncOperation[]) {
     const existing = await this.cards.where('noteId').equals(note.id).toArray()
     const eligible = this.cardGenerationStatus(noteType, note.fields, note.imageOcclusion).eligible
@@ -785,9 +847,13 @@ export class Collection extends Dexie {
       operations.push({ opId: id(), entityType: 'card', entityId: card.id, action: 'update', occurredAt: now.toISOString(), payload: revised })
     }
     const existingIds = new Set(existing.map(cardKey))
+    const existingNewPosition = existing.find((card) => card.state === State.New)?.newPosition
+    const newPosition = existingNewPosition ?? await this.nextNewPosition()
     for (const template of eligible) {
       if (existingIds.has(cardKey({ templateId: template.id, clozeOrdinal: template.clozeOrdinal, occlusionId: template.occlusionId }))) continue
       const card = serializeCard(createEmptyCard(now), { id: `${note.id}:${template.id}${template.clozeOrdinal ? `:c${template.clozeOrdinal}` : template.occlusionId ? `:m${template.occlusionId}` : ''}`, deckId: note.deckId, noteId: note.id, templateId: template.id, ...(template.clozeOrdinal ? { clozeOrdinal: template.clozeOrdinal } : {}), ...(template.occlusionId ? { occlusionId: template.occlusionId, occlusionOrdinal: template.occlusionOrdinal } : {}) })
+      card.newPosition = newPosition
+      card.templateOrdinal = this.cardTemplateOrdinal(noteType, template)
       await this.cards.add(card)
       operations.push({ opId: id(), entityType: 'card', entityId: card.id, action: 'create', occurredAt: now.toISOString(), payload: card })
     }
@@ -1013,7 +1079,13 @@ export class Collection extends Dexie {
       if (noteType.kind === 'image-occlusion') throw new Error('Use the image occlusion editor to create this note')
       const values = Object.fromEntries(noteType.fields.map((field) => [field.id, fields[field.id] ?? '']))
       const note: Note = { id: stableId ?? id(), deckId, type: typeId === BASIC_NOTE_TYPE_ID ? 'basic' : 'custom', typeId, fields: values, createdAt: now.toISOString(), updatedAt: now.toISOString() }
-      const cards = this.cardGenerationStatus(noteType, values).eligible.map((template) => serializeCard(createEmptyCard(now), { id: `${note.id}:${template.id}${template.clozeOrdinal ? `:c${template.clozeOrdinal}` : ''}`, deckId, noteId: note.id, templateId: template.id, ...(template.clozeOrdinal ? { clozeOrdinal: template.clozeOrdinal } : {}) }))
+      const newPosition = await this.nextNewPosition()
+      const cards = this.cardGenerationStatus(noteType, values).eligible.map((template) => {
+        const card = serializeCard(createEmptyCard(now), { id: `${note.id}:${template.id}${template.clozeOrdinal ? `:c${template.clozeOrdinal}` : ''}`, deckId, noteId: note.id, templateId: template.id, ...(template.clozeOrdinal ? { clozeOrdinal: template.clozeOrdinal } : {}) })
+        card.newPosition = newPosition
+        card.templateOrdinal = this.cardTemplateOrdinal(noteType, template)
+        return card
+      })
       await this.notes.add(note)
       if (cards.length) await this.cards.bulkAdd(cards)
       await this.enqueueOperations([
