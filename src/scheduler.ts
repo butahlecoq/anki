@@ -276,7 +276,13 @@ export function selectDueCards(input: DueSelectionInput): CardRecord[] {
     const newCards = sortWithinDeck(own.filter((card) => card.state === State.New), selectedGroup, 'new')
     const totals = reviewedToday.get(deck.id) ?? { new: 0, review: 0 }
     const limited = [...interdayLearning, ...reviewsDue]
-    selected.push(...intradayLearning, ...limited.slice(0, Math.max(0, group.dailyReviewLimit - totals.review)), ...newCards.slice(0, Math.max(0, group.dailyNewLimit - totals.new)))
+    const reviewBudget = Math.max(0, group.dailyReviewLimit - totals.review)
+    const gatheredLimited = limited.slice(0, reviewBudget)
+    const newBudget = Math.min(
+      Math.max(0, group.dailyNewLimit - totals.new),
+      Math.max(0, reviewBudget - gatheredLimited.length),
+    )
+    selected.push(...intradayLearning, ...gatheredLimited, ...newCards.slice(0, newBudget))
   }
   const intradayLearning = sortQueue(selected.filter((card) => isLearningCard(card) && !isInterdayLearning(card)), 'learning')
   const interdayLearning = sortQueue(selected.filter(isInterdayLearning), 'learning')
@@ -285,8 +291,8 @@ export function selectDueCards(input: DueSelectionInput): CardRecord[] {
     const totals = reviewedToday.get(deck.id)
     return { new: sum.new + (totals?.new ?? 0), review: sum.review + (totals?.review ?? 0) }
   }, { new: 0, review: 0 })
-  const gatheredLimited = [...interdayLearning, ...orderedReviews]
-    .slice(0, Math.max(0, selectedGroup.dailyReviewLimit - totalsAcrossSubtree.review))
+  const reviewBudget = Math.max(0, selectedGroup.dailyReviewLimit - totalsAcrossSubtree.review)
+  const gatheredLimited = [...interdayLearning, ...orderedReviews].slice(0, reviewBudget)
   const gatheredInterdayLearning = gatheredLimited.filter(isInterdayLearning)
   const gatheredReviews = gatheredLimited.filter((card) => card.state === State.Review)
   const reviewQueue = selectedGroup.interdayLearningOrder === 'before-reviews'
@@ -295,7 +301,10 @@ export function selectDueCards(input: DueSelectionInput): CardRecord[] {
       ? [...gatheredReviews, ...gatheredInterdayLearning]
       : mixQueues(gatheredReviews, gatheredInterdayLearning)
   const newCards = sortQueue(selected.filter((card) => card.state === State.New), 'new')
-    .slice(0, Math.max(0, selectedGroup.dailyNewLimit - totalsAcrossSubtree.new))
+    .slice(0, Math.min(
+      Math.max(0, selectedGroup.dailyNewLimit - totalsAcrossSubtree.new),
+      Math.max(0, reviewBudget - gatheredLimited.length),
+    ))
   const mainQueue = selectedGroup.newReviewOrder === 'before-reviews'
     ? [...newCards, ...reviewQueue]
     : selectedGroup.newReviewOrder === 'after-reviews'

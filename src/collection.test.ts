@@ -669,7 +669,7 @@ describe('local collection', () => {
     const queue = await collection.dueCards(root.id, new Date('2026-10-01T12:00:00.000Z'))
 
     expect(queue.map((card) => card.id)).toEqual(expect.arrayContaining([(await collection.cards.where('noteId').equals(rootNote.id).first())!.id]))
-    expect(queue.filter((card) => card.deckId === child.id && card.state === State.New)).toHaveLength(1)
+    expect(queue.filter((card) => card.deckId === child.id && card.state === State.New)).toHaveLength(0)
     expect(queue).toEqual(expect.arrayContaining([reviewed]))
     expect(queue.find((card) => card.id === reviewDue.id)).toBeUndefined()
   })
@@ -692,12 +692,11 @@ describe('local collection', () => {
       expect.objectContaining({ id: intradayFirst.id }),
       expect.objectContaining({ id: intradaySecond.id }),
       expect.objectContaining({ id: interday.id }),
-      expect.objectContaining({ id: firstNew.id }),
     ])
 
     await collection.updateDeckOptionGroup(group.id, { ...group, dailyNewLimit: 1, dailyReviewLimit: 1, interdayLearningOrder: 'after-reviews' })
     const reviewFirst = await collection.dueCards(deck.id, now)
-    expect(reviewFirst.map((card) => card.id)).toEqual([intradayFirst.id, intradaySecond.id, interday.id, firstNew.id])
+    expect(reviewFirst.map((card) => card.id)).toEqual([intradayFirst.id, intradaySecond.id, interday.id])
 
     await collection.updateDeckOptionGroup(group.id, { ...group, dailyNewLimit: 0, dailyReviewLimit: 5, interdayLearningOrder: 'mix' })
     expect((await collection.dueCards(deck.id, now)).map((card) => card.id)).toEqual([intradayFirst.id, intradaySecond.id, review.id, interday.id])
@@ -705,7 +704,7 @@ describe('local collection', () => {
     await collection.reviewEntries.add({ id: 'already-interday', cardId: interday.id, deckId: deck.id, rating: Rating.Good, state: State.Learning, due: interday.due, stability: 1, difficulty: 5, elapsedDays: 0, lastElapsedDays: 0, scheduledDays: 1, learningSteps: 1, reviewedAt: now.toISOString() })
     await collection.updateDeckOptionGroup(group.id, { ...group, dailyNewLimit: 1, dailyReviewLimit: 1, interdayLearningOrder: 'after-reviews' })
     const capped = await collection.dueCards(deck.id, now)
-    expect(capped.map((card) => card.id)).toEqual([intradayFirst.id, intradaySecond.id, firstNew.id])
+    expect(capped.map((card) => card.id)).toEqual([intradayFirst.id, intradaySecond.id])
   })
 
   test('uses child gathering caps and the selected parent total review cap', async () => {
@@ -734,7 +733,7 @@ describe('local collection', () => {
   test('mixes reviews and new cards evenly using the selected deck display policy', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const group = await collection.createDeckOptionGroup('Mixed queue')
-    await collection.updateDeckOptionGroup(group.id, { ...group, dailyNewLimit: 2, dailyReviewLimit: 5 })
+    await collection.updateDeckOptionGroup(group.id, { ...group, dailyNewLimit: 2, dailyReviewLimit: 10 })
     const deck = await collection.createDeck('Mixed', { optionGroupId: group.id })
     const now = new Date('2026-10-01T12:00:00.000Z')
     const reviews = [1, 2, 3, 4, 5].map((index) => directCard(`review-${index}`, deck.id, `review-note-${index}`, State.Review, `2026-10-01T0${index}:00:00.000Z`))
@@ -766,6 +765,21 @@ describe('local collection', () => {
 
     await expect(collection.dueCards(root.id, now)).resolves.toHaveLength(1)
     await expect(collection.dueCards(child.id, now)).resolves.toHaveLength(2)
+  })
+
+  test('the selected parent review cap also limits new cards gathered from subdecks', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const rootGroup = await collection.createDeckOptionGroup('Parent shared cap')
+    const childGroup = await collection.createDeckOptionGroup('Child gather capacity')
+    await collection.updateDeckOptionGroup(rootGroup.id, { ...rootGroup, dailyNewLimit: 10, dailyReviewLimit: 2 })
+    await collection.updateDeckOptionGroup(childGroup.id, { ...childGroup, dailyNewLimit: 10, dailyReviewLimit: 10 })
+    const root = await collection.createDeck('Root', { optionGroupId: rootGroup.id })
+    const child = await collection.createDeck('Child', { parentId: root.id, optionGroupId: childGroup.id })
+    for (const front of ['a', 'b', 'c']) await collection.createBasicNote(child.id, { front, back: front })
+    const now = new Date('2026-10-01T12:00:00.000Z')
+
+    await expect(collection.dueCards(root.id, now)).resolves.toHaveLength(2)
+    await expect(collection.dueCards(child.id, now)).resolves.toHaveLength(3)
   })
 
   test('summaries aggregate a parent deck with every descendant', async () => {

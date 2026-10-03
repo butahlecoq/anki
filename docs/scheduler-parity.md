@@ -43,6 +43,14 @@ separate mix/before/after settings for both queue types. Intraday learning remai
 ahead of the main queue, while daily caps gather interday learning before reviews
 as Anki does.
 
+The default review limit is shared by due reviews, interday learning, and new
+cards. With a daily limit of two, Anki gathers one due review plus one new card;
+two due reviews leave no room for new cards, and a zero review limit suppresses
+all new cards. The app applies this budget both within each deck's gather limit
+and again across the selected subtree. The pinned oracle also confirms that a
+selected parent with a review limit of two gathers two new cards from a child
+with a higher own limit, while directly selecting that child gathers three.
+
 The app now uses the same 4:00 a.m. local rollover for daily limits, daily shuffle
 seeds, sibling burial, and statistics. The broader grade/state matrix, review
 sort modes, more complex gather priority, sibling-bury behavior,

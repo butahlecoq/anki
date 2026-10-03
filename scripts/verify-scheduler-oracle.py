@@ -94,6 +94,100 @@ def verify_default_queue_mixing(path: Path) -> dict[str, object]:
         collection.close()
 
 
+def verify_review_limit_shares_capacity_with_new(path: Path) -> dict[str, object]:
+    collection = Collection(str(path))
+    try:
+        config = collection.decks.config_dict_for_deck_id(1)
+        config["rev"]["perDay"] = 2
+        config["new"]["perDay"] = 20
+        collection.decks.update_config(config)
+        update = collection.decks.get_deck_configs_for_update(1)
+        assert update.new_cards_ignore_review_limit is False
+
+        card_ids = []
+        for offset in range(4):
+            note = collection.new_note(collection.models.by_name("Basic"))
+            note.fields = [f"limit {offset}", f"上限{offset}"]
+            collection.add_note(note, 1)
+            card_ids.append(int(collection.db.scalar("select id from cards where nid = ?", note.id)))
+
+        today = collection.sched.today
+        collection.db.execute(
+            "update cards set type=2, queue=2, due=?, ivl=10 where id=?",
+            today,
+            card_ids[0],
+        )
+        partial = collection.sched.get_queued_cards(fetch_limit=100)
+        assert (partial.review_count, partial.new_count) == (1, 1), (partial.review_count, partial.new_count)
+
+        collection.db.execute(
+            "update cards set type=2, queue=2, due=?, ivl=10 where id=?",
+            today,
+            card_ids[1],
+        )
+        full = collection.sched.get_queued_cards(fetch_limit=100)
+        assert (full.review_count, full.new_count) == (2, 0), (full.review_count, full.new_count)
+
+        config["rev"]["perDay"] = 0
+        collection.decks.update_config(config)
+        zero = collection.sched.get_queued_cards(fetch_limit=100)
+        assert (zero.review_count, zero.new_count, len(zero.cards)) == (0, 0, 0)
+        return {
+            "reviewLimit": 2,
+            "oneDueReview": {"reviews": partial.review_count, "new": partial.new_count},
+            "limitReached": {"reviews": full.review_count, "new": full.new_count},
+            "zeroReviewLimit": {"reviews": zero.review_count, "new": zero.new_count},
+        }
+    finally:
+        collection.close()
+
+
+def verify_selected_parent_review_limit(path: Path) -> dict[str, int]:
+    collection = Collection(str(path))
+    try:
+        parent_config = collection.decks.config_dict_for_deck_id(1)
+        parent_config["new"]["perDay"] = 20
+        parent_config["rev"]["perDay"] = 2
+        collection.decks.update_config(parent_config)
+
+        child = collection.decks.add_normal_deck_with_name("Default::Child")
+        child_config_id = collection.decks.add_config_returning_id(
+            "Child capacity", clone_from=collection.decks.config_dict_for_deck_id(1)
+        )
+        child_config = collection.decks.get_config(child_config_id)
+        child_config["new"]["perDay"] = 10
+        child_config["rev"]["perDay"] = 10
+        collection.decks.update_config(child_config)
+        child_deck = collection.decks.get(child.id)
+        collection.decks.set_config_id_for_deck_dict(child_deck, child_config_id)
+        collection.decks.save(child_deck)
+
+        for offset in range(3):
+            note = collection.new_note(collection.models.by_name("Basic"))
+            note.fields = [f"nested {offset}", f"親{offset}"]
+            collection.add_note(note, child.id)
+
+        collection.decks.select(1)
+        parent_queue = collection.sched.get_queued_cards(fetch_limit=100)
+        collection.decks.select(child.id)
+        child_queue = collection.sched.get_queued_cards(fetch_limit=100)
+        result = {
+            "selectedParentNewCount": parent_queue.new_count,
+            "selectedParentReviewCount": parent_queue.review_count,
+            "selectedChildNewCount": child_queue.new_count,
+            "selectedChildReviewCount": child_queue.review_count,
+        }
+        assert result == {
+            "selectedParentNewCount": 2,
+            "selectedParentReviewCount": 0,
+            "selectedChildNewCount": 3,
+            "selectedChildReviewCount": 0,
+        }, result
+        return result
+    finally:
+        collection.close()
+
+
 def main() -> None:
     actual_version = version("anki")
     assert actual_version == ANKI_VERSION, (actual_version, ANKI_VERSION)
@@ -180,6 +274,8 @@ def main() -> None:
             assert first_review_labels == ["<10m", "28d", "1.3mo", "2.2mo"], first_review_labels
             selected_deck_limits = verify_selected_deck_limits(Path(directory) / "queue-oracle.anki2")
             default_queue_mixing = verify_default_queue_mixing(Path(directory) / "mixing-oracle.anki2")
+            review_limit_sharing = verify_review_limit_shares_capacity_with_new(Path(directory) / "limit-sharing-oracle.anki2")
+            selected_parent_review_limit = verify_selected_parent_review_limit(Path(directory) / "parent-review-limit-oracle.anki2")
             print(json.dumps({
                 "ankiVersion": actual_version,
                 "scheduler": "V3",
@@ -200,6 +296,8 @@ def main() -> None:
                 "nativeReviewIntervalRangesFor512CardIds": review_ranges,
                 "nativeSelectedDeckLimits": selected_deck_limits,
                 "nativeDefaultQueueMixing": default_queue_mixing,
+                "nativeReviewLimitSharing": review_limit_sharing,
+                "nativeSelectedParentReviewLimit": selected_parent_review_limit,
             }, indent=2))
         finally:
             collection.close()

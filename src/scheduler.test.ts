@@ -53,6 +53,31 @@ describe('pure scheduling rules', () => {
     expect(result.map((entry) => entry.id)).toEqual(['review-due', 'new-b'])
   })
 
+  test('the review limit also caps new cards after reviews and interday learning are gathered', () => {
+    const cards = [
+      card('review', State.Review),
+      card('interday', State.Learning, { scheduledDays: 1 }),
+      card('new-a', State.New),
+      card('new-b', State.New, { due: '2026-10-03T12:01:00.000Z' }),
+      card('new-c', State.New, { due: '2026-10-03T12:02:00.000Z' }),
+    ]
+    const select = (dueCards: CardRecord[], reviews: ReviewEntry[] = []) => selectDueCards({
+      deckId: deck.id, now, decks: [deck], groups: [{ ...options, dailyNewLimit: 5, dailyReviewLimit: 2 }],
+      notes: [], cards: dueCards, reviews, sessionCardIds: new Set<string>(),
+    })
+
+    expect(select(cards.filter((entry) => entry.id !== 'interday')).map((entry) => entry.id)).toEqual(['review', 'new-a'])
+    expect(select(cards).map((entry) => entry.id)).toEqual(['review', 'interday'])
+    expect(select(cards.filter((entry) => entry.id !== 'review' && entry.id !== 'interday')).map((entry) => entry.id)).toEqual(['new-a', 'new-b'])
+
+    const reviewedToday: ReviewEntry = {
+      id: 'today-review', cardId: 'older-card', deckId: deck.id, rating: Rating.Good, state: State.Review,
+      due: now.toISOString(), stability: 10, difficulty: 5, elapsedDays: 1, lastElapsedDays: 1,
+      scheduledDays: 1, learningSteps: 0, reviewedAt: now.toISOString(),
+    }
+    expect(select(cards.filter((entry) => entry.state === State.New), [reviewedToday]).map((entry) => entry.id)).toEqual(['new-a'])
+  })
+
   test('answering is a pure, deterministic schedule transition with an explicit review identity', () => {
     const source = card('answer-me', State.Review)
     const first = answerWithSchedule(source, options, Rating.Good, now, 'review-1')
