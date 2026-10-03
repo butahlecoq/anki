@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { collection, type NoteType, type NoteTypeField } from './collection'
+import { userFacingStorageError } from './offline-storage'
 import { TemplatePreview } from './TemplatePreview'
 import { clozeOrdinals } from './template-renderer'
 import { fieldsByName, renderCard } from './card-rendering'
@@ -73,7 +74,7 @@ function TypeEditor({ noteType, onClose }: { noteType?: NoteType; onClose: () =>
       }
       onClose()
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to save note type')
+      setError(userFacingStorageError(reason, 'Unable to save note type'))
     }
   }
 
@@ -164,7 +165,7 @@ function DeleteTypeDialog({ noteType, types, onClose }: { noteType: NoteType; ty
       await collection.deleteNoteType(noteType.id, count ? { replacementTypeId: replacementId, fieldMapping: mapping } : undefined)
       onClose()
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to delete note type')
+      setError(userFacingStorageError(reason, 'Unable to delete note type'))
     }
   }
 
@@ -190,7 +191,7 @@ export function NoteTypeManager({ onNewDeck }: { onNewDeck: () => void }) {
 
   async function clone(type: NoteType) {
     try { await collection.cloneNoteType(type.id) }
-    catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to clone note type') }
+    catch (reason) { setError(userFacingStorageError(reason, 'Unable to clone note type')) }
   }
 
   return <>

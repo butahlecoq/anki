@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { collection, State, type Note } from './collection'
+import { collection, State, tryRenderNoteTemplate, type Note } from './collection'
+import { userFacingStorageError } from './offline-storage'
 import { collectionDeckPaths, collectionSearchRows, compileCollectionSearch, plainField, SearchSyntaxError, type SearchRow } from './collection-search'
 import { applyBulkAction, applyFieldChanges, previewFieldChanges, selectionSummary, type BrowserSelection, type BulkAction, type FieldChange, type FieldOperation } from './browser-maintenance'
 import { customStudyMembership } from './custom-study-state'
@@ -59,7 +60,7 @@ function BulkDialog({ selection, kind, onClose, onApplied }: { selection: Browse
     setBusy(true); setError('')
     const action: BulkAction = kind === 'tags' ? { kind, mode: tagMode, tags: tags.split(',') } : kind === 'move' ? { kind, deckId: destination } : kind === 'flag' ? { kind, flag } : kind === 'suspend' ? { kind, suspended } : { kind: 'delete' }
     try { const result = await applyBulkAction(collection, selection, action, new Date(), summary ?? undefined); onApplied(`Applied ${kind} to ${kind === 'flag' || kind === 'suspend' ? `${result.cards} cards` : `${result.notes} notes`}.`); onClose() }
-    catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to apply this action.') }
+    catch (reason) { setError(userFacingStorageError(reason, 'Unable to apply this action.')) }
     finally { setBusy(false) }
   }
   return <div className="dialog-backdrop"><section {...dialogKeyboard} className="dialog" role="dialog" aria-modal="true" aria-labelledby="browser-bulk-title"><span className="section-code">BROWSER // SELECTED RECORDS</span><h2 id="browser-bulk-title">{kind === 'delete' ? 'Delete selected notes' : kind === 'tags' ? 'Bulk tags' : kind === 'move' ? 'Move selected notes' : kind === 'flag' ? 'Flag selected cards' : 'Suspend selected cards'}</h2>
@@ -106,7 +107,7 @@ function FieldDialog({ selection, onClose, onApplied }: { selection: BrowserSele
     if (!preview?.length || !confirmed) return
     setBusy(true); setError('')
     try { const count = await applyFieldChanges(collection, preview); onApplied(`Updated fields in ${count} notes.`); onClose() }
-    catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to apply the preview.'); setPreview(null); setConfirmed(false) }
+    catch (reason) { setError(userFacingStorageError(reason, 'Unable to apply the preview.')); setPreview(null); setConfirmed(false) }
     finally { setBusy(false) }
   }
   return <div className="dialog-backdrop"><section {...dialogKeyboard} className="dialog type-dialog" role="dialog" aria-modal="true" aria-labelledby="browser-field-title"><h2 id="browser-field-title">Find, replace, or edit fields</h2><p>{data?.notes.length ?? '…'} selected notes. Choose one note type and field; other types remain unchanged. Image occlusion uses its own editor.</p>

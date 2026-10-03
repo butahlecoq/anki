@@ -21,3 +21,19 @@ export function formatStorageBytes(bytes: number): string {
   }
   return `${value.toFixed(1)} ${unit}`
 }
+
+function hasQuotaExceededName(error: unknown, seen = new Set<unknown>()): boolean {
+  if (!error || typeof error !== 'object' || seen.has(error)) return false
+  seen.add(error)
+  const candidate = error as { name?: unknown; cause?: unknown; inner?: unknown }
+  return candidate.name === 'QuotaExceededError'
+    || hasQuotaExceededName(candidate.cause, seen)
+    || hasQuotaExceededName(candidate.inner, seen)
+}
+
+export function userFacingStorageError(error: unknown, fallback: string): string {
+  if (hasQuotaExceededName(error)) {
+    return 'This change could not be saved because device storage is full. The incomplete database write was rolled back. Free space, then export an Anki package or make a verified PC backup before continuing.'
+  }
+  return error instanceof Error ? error.message : fallback
+}
