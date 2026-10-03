@@ -1,7 +1,8 @@
 import { expect, test, vi } from 'vitest'
 import { foregroundSync, pairCollection, preflightSync, syncCollection } from './sync-client'
-import { createCollection, Rating } from './collection'
+import { createCollection, DEFAULT_DECK_OPTION_GROUP_ID, Rating } from './collection'
 import { digestMedia } from './media'
+import { SYNC_OPERATION_BATCH_SIZE, SYNC_REQUESTS_PER_ATTEMPT } from '../sync-capabilities.js'
 
 const health = (collectionSchemaVersion = 16, maximumCollectionSchemaVersion = 16) => new Response(JSON.stringify({ ready: true, schemaVersion: 1, protocolVersion: 2, collectionSchemaVersion, maximumCollectionSchemaVersion, store: 'sqlite' }), { status: 200 })
 
@@ -127,6 +128,167 @@ test('syncs a configured collection, applies remote reviews, and clears acknowle
   await expect(collection.reviewEntries.count()).resolves.toBe(1)
   await expect(collection.pendingOperations()).resolves.toHaveLength(0)
   await collection.delete()
+})
+
+test('sends pending collection changes in bounded batches and acknowledges each durable response', async () => {
+  const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+  try {
+    await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 })
+    await collection.outbox.bulkAdd(Array.from({ length: SYNC_OPERATION_BATCH_SIZE * 2 + 5 }, (_, index) => ({
+      opId: `batch-${index}`, entityType: 'note', entityId: `note-${index}`, action: 'update',
+      occurredAt: new Date(1_800_000_000_000 + index).toISOString(), payload: { id: `note-${index}`, value: index },
+    })))
+    let cursor = 0
+    const requests: { cursor: number; operationCount: number }[] = []
+    const fetcher = vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/health')) return Promise.resolve(health())
+      const request = JSON.parse(String(init?.body)) as { cursor: number; operations: { opId: string }[] }
+      requests.push({ cursor: request.cursor, operationCount: request.operations.length })
+      cursor += request.operations.length
+      return Promise.resolve(new Response(JSON.stringify({ accepted: request.operations.length, cursor, changes: [], hasMore: false }), { status: 200 }))
+    })
+
+    await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'complete', accepted: SYNC_OPERATION_BATCH_SIZE * 2 + 5, cursor: SYNC_OPERATION_BATCH_SIZE * 2 + 5 })
+    expect(requests.map((request) => request.operationCount)).toEqual([SYNC_OPERATION_BATCH_SIZE, SYNC_OPERATION_BATCH_SIZE, 5])
+    expect(requests.map((request) => request.cursor)).toEqual([0, SYNC_OPERATION_BATCH_SIZE, SYNC_OPERATION_BATCH_SIZE * 2])
+    await expect(collection.pendingOperations()).resolves.toHaveLength(0)
+    await expect(collection.syncSettings()).resolves.toMatchObject({ cursor: SYNC_OPERATION_BATCH_SIZE * 2 + 5 })
+  } finally { await collection.delete() }
+})
+
+test('replays a batch with stable operation IDs after the server commits but its response is lost', async () => {
+  const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+  try {
+    await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 })
+    await collection.outbox.add({ opId: 'lost-response-op', entityType: 'note', entityId: 'note-1', action: 'update', occurredAt: '2026-10-01T12:00:00.000Z', payload: { id: 'note-1', value: true } })
+    const committed = new Set<string>()
+    const fetcher = vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/health')) return Promise.resolve(health())
+      const request = JSON.parse(String(init?.body)) as { operations: { opId: string }[] }
+      const accepted = request.operations.filter((operation) => {
+        if (committed.has(operation.opId)) return false
+        committed.add(operation.opId)
+        return true
+      }).length
+      if (fetcher.mock.calls.filter(([calledURL]) => String(calledURL).endsWith('/api/sync')).length === 1) return Promise.reject(new TypeError('connection dropped after server commit'))
+      return Promise.resolve(new Response(JSON.stringify({ accepted, cursor: committed.size, changes: [], hasMore: false }), { status: 200 }))
+    })
+
+    await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'unreachable' })
+    await expect(collection.pendingOperations()).resolves.toHaveLength(1)
+    await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'complete', accepted: 0, cursor: 1 })
+    expect(committed).toEqual(new Set(['lost-response-op']))
+    await expect(collection.pendingOperations()).resolves.toHaveLength(0)
+  } finally { await collection.delete() }
+})
+
+test('resumes at the acknowledged batch when a later committed batch loses its response', async () => {
+  const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+  try {
+    await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 })
+    await collection.outbox.bulkAdd(Array.from({ length: SYNC_OPERATION_BATCH_SIZE * 2 + 5 }, (_, index) => ({
+      opId: `resume-${index}`, entityType: 'note' as const, entityId: `note-${index}`, action: 'update' as const,
+      occurredAt: new Date(1_800_000_000_000 + index).toISOString(), payload: { id: `note-${index}`, value: index },
+    })))
+    const committed = new Set<string>()
+    let syncRequests = 0
+    const fetcher = vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/health')) return Promise.resolve(health())
+      const request = JSON.parse(String(init?.body)) as { operations: { opId: string }[] }
+      syncRequests += 1
+      const accepted = request.operations.filter((operation) => {
+        if (committed.has(operation.opId)) return false
+        committed.add(operation.opId)
+        return true
+      }).length
+      if (syncRequests === 2) return Promise.reject(new TypeError('response lost after durable batch commit'))
+      return Promise.resolve(new Response(JSON.stringify({ accepted, cursor: 0, changes: [], hasMore: false }), { status: 200 }))
+    })
+
+    await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'unreachable' })
+    await expect(collection.pendingOperations()).resolves.toHaveLength(SYNC_OPERATION_BATCH_SIZE + 5)
+    await expect(collection.syncSettings()).resolves.toMatchObject({ cursor: 0 })
+    await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'complete', accepted: 5 })
+    expect(committed.size).toBe(SYNC_OPERATION_BATCH_SIZE * 2 + 5)
+    await expect(collection.pendingOperations()).resolves.toHaveLength(0)
+  } finally { await collection.delete() }
+})
+
+test('does not split an unsent revision parent from its child at a batch boundary', async () => {
+  const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+  try {
+    await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 })
+    const occurredAt = '2026-10-01T12:00:00.000Z'
+    await collection.outbox.bulkAdd([
+      { opId: 'a-child', entityType: 'note', entityId: 'note-chain', action: 'update', occurredAt, payload: { id: 'note-chain', front: 'child' }, parents: ['z-parent'] },
+      ...Array.from({ length: SYNC_OPERATION_BATCH_SIZE - 1 }, (_, index) => ({ opId: `b-filler-${index.toString().padStart(3, '0')}`, entityType: 'note' as const, entityId: `note-${index}`, action: 'update' as const, occurredAt, payload: { id: `note-${index}` } })),
+      { opId: 'z-parent', entityType: 'note', entityId: 'note-chain', action: 'update', occurredAt, payload: { id: 'note-chain', front: 'parent' } },
+    ])
+    const committed = new Set<string>()
+    const fetcher = vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/health')) return Promise.resolve(health())
+      const request = JSON.parse(String(init?.body)) as { operations: { opId: string; parents?: string[] }[] }
+      for (const operation of request.operations) {
+        if (operation.parents?.some((parent) => !committed.has(parent) && !request.operations.some((item) => item.opId === parent))) return Promise.resolve(new Response('', { status: 400 }))
+      }
+      for (const operation of request.operations) committed.add(operation.opId)
+      return Promise.resolve(new Response(JSON.stringify({ accepted: request.operations.length, cursor: committed.size, changes: [], hasMore: false }), { status: 200 }))
+    })
+
+    await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'complete', accepted: SYNC_OPERATION_BATCH_SIZE + 1 })
+    const requests = fetcher.mock.calls.filter(([url]) => String(url).endsWith('/api/sync')).map(([, init]) => (JSON.parse(String(init?.body)) as { operations: { opId: string }[] }).operations)
+    expect(requests).toHaveLength(2)
+    expect(requests[0].map((operation) => operation.opId)).toContain('z-parent')
+    expect(requests[0].map((operation) => operation.opId)).not.toContain('a-child')
+    expect(requests[1].map((operation) => operation.opId)).toEqual(['a-child'])
+  } finally { await collection.delete() }
+})
+
+test('follows paginated remote changes and durably advances the cursor after each page', async () => {
+  const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+  try {
+    await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 })
+    const change = (id: string, name: string, cursor: number) => ({ cursor, opId: `remote-${id}`, entityType: 'deck', entityId: id, action: 'create', occurredAt: '2026-10-01T12:00:00.000Z', payload: { id, name, parentId: null, optionGroupId: DEFAULT_DECK_OPTION_GROUP_ID, createdAt: '2026-10-01T12:00:00.000Z', updatedAt: '2026-10-01T12:00:00.000Z' } })
+    const syncCursors: number[] = []
+    let page = 0
+    const fetcher = vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/health')) return Promise.resolve(health())
+      syncCursors.push((JSON.parse(String(init?.body)) as { cursor: number }).cursor)
+      page += 1
+      return Promise.resolve(new Response(JSON.stringify({
+        accepted: 0,
+        cursor: page,
+        changes: [change(`remote-${page}`, `Remote ${page}`, page)],
+        hasMore: page === 1,
+      }), { status: 200 }))
+    })
+
+    await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'complete', cursor: 2 })
+    expect(syncCursors).toEqual([0, 1])
+    await expect(collection.decks.get('remote-1')).resolves.toMatchObject({ name: 'Remote 1' })
+    await expect(collection.decks.get('remote-2')).resolves.toMatchObject({ name: 'Remote 2' })
+    await expect(collection.syncSettings()).resolves.toMatchObject({ cursor: 2 })
+  } finally { await collection.delete() }
+})
+
+test('caps one sync attempt and reports remote work that must resume on the next attempt', async () => {
+  const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+  try {
+    await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 })
+    let keepPaging = true
+    let requests = 0
+    const fetcher = vi.fn((url: string) => {
+      if (url.endsWith('/api/health')) return Promise.resolve(health())
+      requests += 1
+      return Promise.resolve(new Response(JSON.stringify({ accepted: 0, cursor: 0, changes: [], hasMore: keepPaging }), { status: 200 }))
+    })
+
+    await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'incomplete', pendingOperations: 0, remoteChangesPending: true })
+    expect(requests).toBe(SYNC_REQUESTS_PER_ATTEMPT)
+    keepPaging = false
+    await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'complete', cursor: 0 })
+    expect(requests).toBe(SYNC_REQUESTS_PER_ATTEMPT + 1)
+  } finally { await collection.delete() }
 })
 
 test('reports a media upload failure separately while syncing card changes', async () => {

@@ -275,22 +275,36 @@ function SyncControls() {
     }
     setBusy(true)
     setMessage('Syncing your collection…')
-    const result = await syncCollection(collection)
-    setBusy(false)
-    if (result.state === 'complete') {
-      const media = result.media
-      const mediaError = media?.uploadError ?? media?.downloadError
-      if (mediaError === 'authentication-required') setMessage(`Card sync complete. ${media?.pending ?? 0} media file${media?.pending === 1 ? '' : 's'} still need pairing.`)
-      else if (mediaError) setMessage(`Card sync complete. ${media?.pending ?? 0} media file${media?.pending === 1 ? '' : 's'} will retry when the PC is reachable.`)
-      else setMessage(`Sync complete. ${result.accepted} local change${result.accepted === 1 ? '' : 's'} sent; ${media?.uploaded ?? 0} uploaded and ${media?.downloaded ?? 0} downloaded.`)
-    }
-    else if (result.state === 'authentication-required') setMessage('This device needs to be paired again before it can sync.')
-    else if (result.state === 'upgrade-required') {
-      setMessage(result.target === 'this-device'
-        ? 'This device needs a Kiroku update before it can sync this collection. Update the app, then try again. Your local changes remain on this device.'
-        : 'Your PC sync service needs an update before this collection can sync. Update the PC service, then try again. Your local changes remain on this device.')
-    }
-    else setMessage('Your PC service could not be reached. Your changes remain on this device and will retry next time.')
+    try {
+      const result = await syncCollection(collection, fetch.bind(window), (progress) => {
+        if (progress.phase === 'records') setMessage(`Syncing records · ${progress.completed} accepted · ${progress.pending} local changes remain · cursor ${progress.cursor}.${progress.remoteChangesPending ? ' More PC records are queued.' : ''}`)
+        else if (progress.phase === 'upload') setMessage(`Uploading media · ${progress.completed} sent · ${progress.pending} waiting.`)
+        else setMessage(`Downloading media · ${progress.completed} saved · ${progress.pending} waiting.`)
+      })
+      if (result.state === 'complete') {
+        const media = result.media
+        const mediaError = media?.uploadError ?? media?.downloadError
+        if (mediaError === 'authentication-required') setMessage(`Card sync complete. ${media?.pending ?? 0} media file${media?.pending === 1 ? '' : 's'} still need pairing.`)
+        else if (mediaError) setMessage(`Card sync complete. ${media?.pending ?? 0} media file${media?.pending === 1 ? '' : 's'} will retry when the PC is reachable.`)
+        else {
+          const conflicts = await collection.syncConflicts.count()
+          setMessage(`Sync complete. ${result.accepted} local change${result.accepted === 1 ? '' : 's'} sent; ${media?.uploaded ?? 0} uploaded and ${media?.downloaded ?? 0} downloaded.${conflicts ? ` ${conflicts} conflict${conflicts === 1 ? '' : 's'} need review.` : ''}`)
+        }
+      }
+      else if (result.state === 'incomplete') {
+        const remote = result.remoteChangesPending ? ' More changes are waiting from the PC.' : ''
+        setMessage(`Sync saved progress after sending ${result.accepted} local change${result.accepted === 1 ? '' : 's'}. ${result.pendingOperations} local change${result.pendingOperations === 1 ? '' : 's'} remain; tap Sync now to continue.${remote}`)
+      }
+      else if (result.state === 'authentication-required') setMessage('This device needs to be paired again before it can sync.')
+      else if (result.state === 'upgrade-required') {
+        setMessage(result.target === 'this-device'
+          ? 'This device needs a Kiroku update before it can sync this collection. Update the app, then try again. Your local changes remain on this device.'
+          : 'Your PC sync service needs an update before this collection can sync. Update the PC service, then try again. Your local changes remain on this device.')
+      }
+      else setMessage('Your PC service could not be reached. Unsynced changes and the saved cursor are preserved; reconnect and tap Sync now to resume.')
+    } catch (error) {
+      setMessage(error instanceof Error ? `Sync stopped safely. ${error.message} Your local changes remain on this device; reconnect and retry.` : 'Sync stopped safely. Your local changes remain on this device; reconnect and retry.')
+    } finally { setBusy(false) }
   }
 
   return (

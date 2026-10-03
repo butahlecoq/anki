@@ -2,7 +2,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { SERVER_MAX_COLLECTION_SCHEMA_VERSION, SYNC_PROTOCOL_VERSION, type IncompatibleSync, type SyncCapabilities, type SyncHealth } from '../sync-capabilities.js'
+import { SERVER_MAX_COLLECTION_SCHEMA_VERSION, SYNC_CHANGE_PAGE_SIZE, SYNC_PROTOCOL_VERSION, type IncompatibleSync, type SyncCapabilities, type SyncHealth } from '../sync-capabilities.js'
 
 type ServiceOptions = { databasePath: string; mediaDirectory?: string }
 type PairRequest = { code: string; deviceId: string }
@@ -222,13 +222,16 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
         database.exec('ROLLBACK')
         throw error
       }
-      const changes = database.prepare('SELECT cursor, op_id, device_id, entity_type, entity_id, action, occurred_at, payload, parents, review_id FROM changes WHERE cursor > ? ORDER BY cursor').all(request.cursor) as Array<{ cursor: number; op_id: string; device_id: string; entity_type: string; entity_id: string; action: string; occurred_at: string; payload: string; parents: string | null; review_id: string | null }>
+      const rows = database.prepare('SELECT cursor, op_id, device_id, entity_type, entity_id, action, occurred_at, payload, parents, review_id FROM changes WHERE cursor > ? ORDER BY cursor LIMIT ?').all(request.cursor, SYNC_CHANGE_PAGE_SIZE + 1) as Array<{ cursor: number; op_id: string; device_id: string; entity_type: string; entity_id: string; action: string; occurred_at: string; payload: string; parents: string | null; review_id: string | null }>
+      const hasMore = rows.length > SYNC_CHANGE_PAGE_SIZE
+      const changes = hasMore ? rows.slice(0, SYNC_CHANGE_PAGE_SIZE) : rows
       const cursor = changes.at(-1)?.cursor ?? request.cursor
       return {
         protocolVersion: SYNC_PROTOCOL_VERSION,
         collectionSchemaVersion,
         accepted,
         cursor,
+        hasMore,
         changes: changes.map((change) => ({
           cursor: change.cursor,
           opId: change.op_id,

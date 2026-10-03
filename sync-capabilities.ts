@@ -6,6 +6,9 @@
 export const SYNC_PROTOCOL_VERSION = 2
 export const CLIENT_COLLECTION_SCHEMA_VERSION = 16
 export const SERVER_MAX_COLLECTION_SCHEMA_VERSION = 16
+export const SYNC_OPERATION_BATCH_SIZE = 100
+export const SYNC_CHANGE_PAGE_SIZE = 250
+export const SYNC_REQUESTS_PER_ATTEMPT = 100
 
 export interface SyncCapabilities {
   protocolVersion: number

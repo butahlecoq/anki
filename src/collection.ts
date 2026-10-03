@@ -2018,13 +2018,46 @@ export class Collection extends Dexie {
     })
   }
 
-  async captureSyncOperations(): Promise<SyncOperation[]> {
+  async captureSyncOperations(limit?: number): Promise<SyncOperation[]> {
     return this.transaction('rw', [this.outbox, this.syncRevisions, this.settings], async () => {
       // Reviews can be recorded while preflight or media upload is running.
       // Invalidate their undo in the same transaction that captures the batch.
       const epoch = (await this.settings.get('syncEpoch'))?.value as number | undefined ?? 0
       await this.settings.put({ key: 'syncEpoch', value: epoch + 1 })
-      return this.outbox.orderBy('occurredAt').toArray()
+      const ordered = this.outbox.orderBy('occurredAt')
+      const pending = await ordered.toArray()
+      if (limit === undefined) return pending
+
+      // A page boundary must never split a local revision from its unsent
+      // parent. Topological selection yields every ready ancestor first, even
+      // when timestamps and operation IDs would otherwise sort a child first.
+      const pendingIds = new Set(pending.map((operation) => operation.opId))
+      const byId = new Map(pending.map((operation) => [operation.opId, operation]))
+      const waitingFor = new Map<string, number>()
+      const childrenByParent = new Map<string, string[]>()
+      const ready: SyncOperation[] = []
+      for (const operation of pending) {
+        const unsentParents = [...new Set(operation.parents ?? [])].filter((parentId) => pendingIds.has(parentId))
+        waitingFor.set(operation.opId, unsentParents.length)
+        if (!unsentParents.length) ready.push(operation)
+        for (const parentId of unsentParents) {
+          let children = childrenByParent.get(parentId)
+          if (!children) { children = []; childrenByParent.set(parentId, children) }
+          children.push(operation.opId)
+        }
+      }
+
+      const selected: SyncOperation[] = []
+      for (let index = 0; index < ready.length && selected.length < limit; index += 1) {
+        const operation = ready[index]
+        selected.push(operation)
+        for (const childId of childrenByParent.get(operation.opId) ?? []) {
+          const remaining = waitingFor.get(childId)! - 1
+          waitingFor.set(childId, remaining)
+          if (remaining === 0) ready.push(byId.get(childId)!)
+        }
+      }
+      return selected
     })
   }
 
