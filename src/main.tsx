@@ -4,14 +4,14 @@ import { registerSW } from 'virtual:pwa-register'
 import '@fontsource-variable/jetbrains-mono'
 import { App } from './App'
 import { CollectionStartup } from './CollectionStartup'
-import { OFFLINE_READY_EVENT, OFFLINE_UNAVAILABLE_EVENT, UPDATE_READY_EVENT } from './appEvents'
+import { announceUpdateReady, OFFLINE_READY_EVENT, OFFLINE_UNAVAILABLE_EVENT } from './appEvents'
 import { setActivateWaitingWorker } from './service-worker-update'
 import './styles.css'
 
 const updateServiceWorker = registerSW({
   immediate: true,
   onNeedRefresh() {
-    window.dispatchEvent(new CustomEvent(UPDATE_READY_EVENT))
+    announceUpdateReady()
   },
   onOfflineReady() {
     window.dispatchEvent(new CustomEvent(OFFLINE_READY_EVENT))
