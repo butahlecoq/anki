@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { registerSW } from 'virtual:pwa-register'
 import '@fontsource-variable/jetbrains-mono'
 import { App } from './App'
+import { CollectionStartup } from './CollectionStartup'
 import { OFFLINE_READY_EVENT, OFFLINE_UNAVAILABLE_EVENT, UPDATE_READY_EVENT } from './appEvents'
 import { setActivateWaitingWorker } from './service-worker-update'
 import './styles.css'
@@ -27,6 +28,6 @@ if (!root) throw new Error('Application root is missing')
 
 createRoot(root).render(
   <StrictMode>
-    <App />
+    <CollectionStartup><App /></CollectionStartup>
   </StrictMode>,
 )
