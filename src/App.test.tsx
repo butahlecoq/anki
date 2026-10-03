@@ -5,12 +5,13 @@ import { App } from './App'
 import { collection } from './collection'
 import { CollectionWorkspace } from './CollectionWorkspace'
 import { setActivateWaitingWorker } from './service-worker-update'
-import { UPDATE_READY_EVENT } from './appEvents'
+import { announceUpdateReady, clearUpdateWaiting } from './appEvents'
 
 const serviceWorkerDescriptor = Object.getOwnPropertyDescriptor(navigator, 'serviceWorker')
 
 afterEach(() => {
   cleanup()
+  clearUpdateWaiting()
   setActivateWaitingWorker(undefined)
   window.location.hash = ''
   if (serviceWorkerDescriptor) Object.defineProperty(navigator, 'serviceWorker', serviceWorkerDescriptor)
@@ -46,7 +47,7 @@ describe('application shell', () => {
     const activate = vi.fn().mockResolvedValue(undefined)
     setActivateWaitingWorker(activate)
     render(<App />)
-    window.dispatchEvent(new CustomEvent(UPDATE_READY_EVENT))
+    announceUpdateReady()
 
     fireEvent.click(await screen.findByRole('button', { name: 'Update app' }))
     await waitFor(() => expect(activate).toHaveBeenCalledWith(true))
@@ -55,11 +56,17 @@ describe('application shell', () => {
 
   test('does not reload the page when the waiting update is unavailable', async () => {
     render(<App />)
-    window.dispatchEvent(new CustomEvent(UPDATE_READY_EVENT))
+    announceUpdateReady()
 
     fireEvent.click(await screen.findByRole('button', { name: 'Update app' }))
     expect(await screen.findByText(/This update is no longer waiting/)).toBeVisible()
     expect(screen.getByRole('button', { name: 'Reload to check' })).toBeVisible()
+  })
+
+  test('shows an update announced before the workspace mounts', () => {
+    announceUpdateReady()
+    render(<App />)
+    expect(screen.getByRole('button', { name: 'Update app' })).toBeVisible()
   })
 })
 

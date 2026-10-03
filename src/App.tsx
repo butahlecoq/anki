@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { OFFLINE_READY_EVENT, OFFLINE_UNAVAILABLE_EVENT, UPDATE_READY_EVENT } from './appEvents'
+import { clearUpdateWaiting, isUpdateWaiting, OFFLINE_READY_EVENT, OFFLINE_UNAVAILABLE_EVENT, UPDATE_READY_EVENT } from './appEvents'
 import { chooseAppearance, readAppearance, watchAppearance, type Appearance } from './appearance'
 import { CollectionWorkspace } from './CollectionWorkspace'
 import { activateAvailableUpdate } from './service-worker-update'
@@ -49,7 +49,7 @@ export function App() {
   const online = useOnlineStatus()
   const appearance = useAppearance()
   const offlineStatus = useOfflineShellStatus()
-  const [updateReady, setUpdateReady] = useState(false)
+  const [updateReady, setUpdateReady] = useState(isUpdateWaiting)
   const [updateError, setUpdateError] = useState('')
   const [activatingUpdate, setActivatingUpdate] = useState(false)
   const [hash, setHash] = useState(() => window.location.hash)
@@ -67,6 +67,7 @@ export function App() {
         setUpdateError('This update is no longer waiting. Reload to check for the current version.')
         setActivatingUpdate(false)
       }
+      clearUpdateWaiting()
     } catch {
       setUpdateError('The update could not be activated. Your saved collection remains on this device; try reloading when you are online.')
       setActivatingUpdate(false)
