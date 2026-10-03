@@ -23,7 +23,7 @@ export const DEFAULT_DECK_OPTION_GROUP_ID = 'default'
 
 /** Reusable scheduling settings are introduced independently of any individual deck. */
 export type NewCardOrder = 'added' | 'random'
-export type ReviewCardOrder = 'due' | 'random'
+export type ReviewCardOrder = 'due' | 'due-then-deck' | 'deck-then-due' | 'interval-ascending' | 'interval-descending' | 'retrievability-ascending' | 'retrievability-descending' | 'random'
 export type ReviewMixOrder = 'mix' | 'before-reviews' | 'after-reviews'
 export type InterdayLearningOrder = ReviewMixOrder
 
@@ -421,7 +421,7 @@ function validateDeckOptionSettings(input: DeckOptionSettings): Required<DeckOpt
   if (!input || typeof input !== 'object') throw new Error('Deck option settings are invalid')
   if (!Number.isFinite(input.desiredRetention) || input.desiredRetention <= 0 || input.desiredRetention > 1) throw new Error('Desired retention must be greater than 0 and at most 1')
   if (input.newCardOrder !== 'added' && input.newCardOrder !== 'random') throw new Error('New card order is invalid')
-  if (input.reviewCardOrder !== 'due' && input.reviewCardOrder !== 'random') throw new Error('Review card order is invalid')
+  if (!['due', 'due-then-deck', 'deck-then-due', 'interval-ascending', 'interval-descending', 'retrievability-ascending', 'retrievability-descending', 'random'].includes(input.reviewCardOrder)) throw new Error('Review card order is invalid')
   const newReviewOrder = input.newReviewOrder ?? defaultDeckOptionSettings.newReviewOrder
   if (newReviewOrder !== 'mix' && newReviewOrder !== 'before-reviews' && newReviewOrder !== 'after-reviews') throw new Error('New/review order is invalid')
   const interdayLearningOrder = input.interdayLearningOrder ?? defaultDeckOptionSettings.interdayLearningOrder

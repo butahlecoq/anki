@@ -53,6 +53,27 @@ describe('pure scheduling rules', () => {
     expect(result.map((entry) => entry.id)).toEqual(['review-due', 'new-b'])
   })
 
+  test('review sort modes order gathered cards by due, deck, interval, or retrievability', () => {
+    const child: Deck = { ...deck, id: 'child', name: 'Child', parentId: deck.id, createdAt: '2026-01-01', updatedAt: '2026-01-01' }
+    const optionsFor = (reviewCardOrder: DeckOptionGroup['reviewCardOrder']) => ({ ...options, reviewCardOrder })
+    const cards = [
+      card('long', State.Review, { scheduledDays: 30, due: '2026-10-02T12:00:00.000Z', stability: 3, lastReview: '2026-09-03T12:00:00.000Z' }),
+      card('short', State.Review, { scheduledDays: 3, due: '2026-10-02T12:00:00.000Z', stability: 30, lastReview: '2026-10-01T12:00:00.000Z' }),
+      card('child-due-first', State.Review, { id: 'child-due-first', noteId: 'child-note', deckId: child.id, due: '2026-10-01T12:00:00.000Z', scheduledDays: 5 }),
+    ]
+    const select = (order: DeckOptionGroup['reviewCardOrder'], selectedDeck = deck) => selectDueCards({
+      deckId: selectedDeck.id, now, decks: [deck, child], groups: [optionsFor(order)], notes: [], cards,
+      reviews: [], sessionCardIds: new Set<string>(),
+    }).map((entry) => entry.id)
+
+    expect(select('due-then-deck')).toEqual(['child-due-first', 'long', 'short'])
+    expect(select('deck-then-due', deck)).toEqual(['long', 'short', 'child-due-first'])
+    expect(select('interval-ascending')).toEqual(['short', 'child-due-first', 'long'])
+    expect(select('interval-descending')).toEqual(['long', 'child-due-first', 'short'])
+    expect(select('retrievability-ascending')[0]).toBe('long')
+    expect(select('retrievability-descending')[0]).toBe('short')
+  })
+
   test('the review limit also caps new cards after reviews and interday learning are gathered', () => {
     const cards = [
       card('review', State.Review),

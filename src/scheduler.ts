@@ -264,6 +264,29 @@ export function selectDueCards(input: DueSelectionInput): CardRecord[] {
     if (left.deckId !== right.deckId) return deckPath(decksById.get(left.deckId)!).localeCompare(deckPath(decksById.get(right.deckId)!))
     return compareWithinDeck(left, right, selectedGroup, kind)
   })
+  const reviewRetrievability = new Map<string, number>()
+  const retrievability = (card: CardRecord) => {
+    let value = reviewRetrievability.get(card.id)
+    if (value === undefined) {
+      value = schedulerFor(selectedGroup, card.id).get_retrievability(deserializeCard(card), now, false)
+      reviewRetrievability.set(card.id, value)
+    }
+    return value
+  }
+  const compareReviews = (left: CardRecord, right: CardRecord) => {
+    const order = selectedGroup.reviewCardOrder
+    const due = left.due.localeCompare(right.due)
+    const deck = deckPath(decksById.get(left.deckId)!).localeCompare(deckPath(decksById.get(right.deckId)!))
+    const interval = left.scheduledDays - right.scheduledDays
+    if (order === 'due') return due || String(stableRank(`${left.lastReview ?? ''}:${left.reps}:${left.deckId}:${left.id}`)).padStart(10, '0').localeCompare(String(stableRank(`${right.lastReview ?? ''}:${right.reps}:${right.deckId}:${right.id}`)).padStart(10, '0'))
+    if (order === 'due-then-deck') return due || deck || left.id.localeCompare(right.id)
+    if (order === 'deck-then-due') return deck || due || left.id.localeCompare(right.id)
+    if (order === 'interval-ascending') return interval || due || left.id.localeCompare(right.id)
+    if (order === 'interval-descending') return -interval || due || left.id.localeCompare(right.id)
+    if (order === 'retrievability-ascending') return retrievability(left) - retrievability(right) || due || left.id.localeCompare(right.id)
+    if (order === 'retrievability-descending') return retrievability(right) - retrievability(left) || due || left.id.localeCompare(right.id)
+    return dailyShuffleRank(left, day).localeCompare(dailyShuffleRank(right, day)) || left.id.localeCompare(right.id)
+  }
   const selected: CardRecord[] = []
   for (const deck of orderedDecks) {
     const group = groupsById.get(deck.optionGroupId)
@@ -272,7 +295,7 @@ export function selectDueCards(input: DueSelectionInput): CardRecord[] {
     const learning = sortWithinDeck(own.filter(isLearningCard), selectedGroup, 'learning')
     const intradayLearning = learning.filter((card) => !isInterdayLearning(card))
     const interdayLearning = learning.filter(isInterdayLearning)
-    const reviewsDue = sortWithinDeck(own.filter((card) => card.state === State.Review), selectedGroup, 'review')
+    const reviewsDue = own.filter((card) => card.state === State.Review).sort(compareReviews)
     const newCards = sortWithinDeck(own.filter((card) => card.state === State.New), selectedGroup, 'new')
     const totals = reviewedToday.get(deck.id) ?? { new: 0, review: 0 }
     const limited = [...interdayLearning, ...reviewsDue]
@@ -286,7 +309,7 @@ export function selectDueCards(input: DueSelectionInput): CardRecord[] {
   }
   const intradayLearning = sortQueue(selected.filter((card) => isLearningCard(card) && !isInterdayLearning(card)), 'learning')
   const interdayLearning = sortQueue(selected.filter(isInterdayLearning), 'learning')
-  const orderedReviews = sortQueue(selected.filter((card) => card.state === State.Review), 'review')
+  const orderedReviews = selected.filter((card) => card.state === State.Review).sort(compareReviews)
   const totalsAcrossSubtree = orderedDecks.reduce((sum, deck) => {
     const totals = reviewedToday.get(deck.id)
     return { new: sum.new + (totals?.new ?? 0), review: sum.review + (totals?.review ?? 0) }
