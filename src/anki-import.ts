@@ -1,7 +1,8 @@
 import type { SqlJsStatic } from 'sql.js'
 import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url'
 import type { CardRow, CollectionData, RevlogRow } from 'ankipack'
-import { DEFAULT_DECK_OPTION_GROUP_ID, State, type CardRecord, type Collection, type Deck, type Note, type NoteMediaReference, type NoteType, type ReviewEntry, type SyncOperation } from './collection'
+import { DEFAULT_DECK_OPTION_GROUP_ID, State, type CardRecord, type Collection, type Deck, type Note, type NoteMediaReference, type NoteType, type ReviewEntry } from './collection'
+import { rowFingerprint as fingerprint } from './import-contract'
 import { parseAnkiImageOcclusion, type AnkiImageOcclusionFields } from './image-occlusion-interchange'
 import { digestMedia, validateMedia, type MediaKind, type MediaSide } from './media'
 import { validateTemplate } from './template-renderer'
@@ -428,15 +429,6 @@ function resultingReviewState(next: RevlogRow | undefined, card: CardRecord): St
   return next ? reviewState(next) : card.state
 }
 
-function fingerprint(value: unknown) {
-  if (value === undefined) return 'missing'
-  if (value && typeof value === 'object' && 'blob' in value) {
-    const media = value as { digest?: unknown; byteLength?: unknown; mimeType?: unknown }
-    return JSON.stringify({ digest: media.digest, byteLength: media.byteLength, mimeType: media.mimeType })
-  }
-  return JSON.stringify(value)
-}
-
 function ownedBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.slice().buffer as ArrayBuffer
 }
@@ -449,13 +441,6 @@ async function blobBytes(blob: Blob): Promise<ArrayBuffer> {
     reader.onload = () => resolve(reader.result as ArrayBuffer)
     reader.readAsArrayBuffer(blob)
   })
-}
-
-function operation(entityType: SyncOperation['entityType'], entityId: string, action: 'create' | 'update', payload: unknown, occurredAt: string): SyncOperation {
-  return { opId: crypto.randomUUID(), entityType, entityId, action, payload, occurredAt }
-}
-function deletion(entityType: SyncOperation['entityType'], entityId: string, occurredAt: string): SyncOperation {
-  return { opId: crypto.randomUUID(), entityType, entityId, action: 'delete', payload: { id: entityId }, occurredAt }
 }
 
 export class PreparedAnkiImport {
@@ -515,36 +500,10 @@ export class PreparedAnkiImport {
   async commit(): Promise<void> {
     if (this.committed) throw new Error('This package has already been imported')
     if (this.issues.some((issue) => issue.severity === 'error')) throw new Error('Resolve package errors before importing')
-    const collection = this.collection
-    await collection.transaction('rw', [collection.decks, collection.noteTypes, collection.notes, collection.cards, collection.reviewEntries, collection.noteMedia, collection.mediaBlobs, collection.outbox, collection.syncRevisions, collection.settings], async () => {
-      for (const snapshot of this.snapshots) {
-        const current = await collection[snapshot.table].get(snapshot.id as never)
-        if (fingerprint(current) !== snapshot.value) throw new Error('The collection changed after this preview. Please preview again before importing.')
-      }
-      if (this.writes.decks.length) await collection.decks.bulkPut(this.writes.decks.map(({ value }) => value))
-      if (this.writes.deletedDecks.length) await collection.decks.bulkDelete(this.writes.deletedDecks.map(({ id }) => id))
-      for (const { key, value } of this.writes.undoSettings) await collection.settings.put({ key, value })
-      if (this.writes.noteTypes.length) await collection.noteTypes.bulkPut(this.writes.noteTypes.map(({ value }) => value))
-      if (this.writes.notes.length) await collection.notes.bulkPut(this.writes.notes.map(({ value }) => value))
-      if (this.writes.cards.length) await collection.cards.bulkPut(this.writes.cards.map(({ value }) => value))
-      if (this.writes.reviews.length) await collection.reviewEntries.bulkAdd(this.writes.reviews)
-      if (this.writes.updatedReviews.length) await collection.reviewEntries.bulkPut(this.writes.updatedReviews)
-      if (this.writes.references.length) await collection.noteMedia.bulkPut(this.writes.references.map(({ value }) => value))
-      if (this.writes.deletedReferences.length) await collection.noteMedia.bulkDelete(this.writes.deletedReferences.map(({ id }) => id))
-      if (this.writes.blobs.length) await collection.mediaBlobs.bulkPut(this.writes.blobs)
-      const operations: SyncOperation[] = [
-        ...this.writes.decks.map(({ value, action }) => operation('deck', value.id, action, value, this.importedAt)),
-        ...this.writes.deletedDecks.map((value) => deletion('deck', value.id, this.importedAt)),
-        ...this.writes.noteTypes.map(({ value, action }) => operation('noteType', value.id, action, value, this.importedAt)),
-        ...this.writes.notes.map(({ value, action }) => operation('note', value.id, action, value, this.importedAt)),
-        ...this.writes.cards.map(({ value, action }) => operation('card', value.id, action, value, this.importedAt)),
-        ...this.writes.reviews.map((value) => operation('review', value.id, 'create', value, this.importedAt)),
-        ...this.writes.updatedReviews.map((value) => operation('review', value.id, 'update', value, this.importedAt)),
-        ...this.writes.references.map(({ value, action }) => operation('noteMedia', value.id, action, value, this.importedAt)),
-        ...this.writes.deletedReferences.map((value) => deletion('noteMedia', value.id, this.importedAt)),
-      ]
-      if (operations.length) await collection.enqueueOperations(operations)
-    })
+    // The Collection owns the whole write: the stale-preview check, the
+    // invariant checks and the multi-table write share one transaction, so a row
+    // cannot move between the check and the write. Import names no table.
+    await this.collection.applyImportedPackage(this.writes, this.importedAt, this.snapshots)
     this.committed = true
   }
 }
