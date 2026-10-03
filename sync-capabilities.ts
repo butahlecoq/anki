@@ -4,8 +4,8 @@
  * a watermark, so an old client cannot acknowledge data it cannot preserve.
  */
 export const SYNC_PROTOCOL_VERSION = 2
-export const CLIENT_COLLECTION_SCHEMA_VERSION = 15
-export const SERVER_MAX_COLLECTION_SCHEMA_VERSION = 15
+export const CLIENT_COLLECTION_SCHEMA_VERSION = 16
+export const SERVER_MAX_COLLECTION_SCHEMA_VERSION = 16
 
 export interface SyncCapabilities {
   protocolVersion: number

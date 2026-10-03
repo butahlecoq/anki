@@ -21,13 +21,14 @@ export function readKirokuReview(data: string, row: RevlogRow): Partial<ReviewEn
     if (typeof value.rescheduled !== 'boolean') throw new Error('Invalid review rescheduling mode')
     Object.assign(result, { rescheduled: value.rescheduled })
   }
-  for (const key of ['rating', 'state', 'stability', 'difficulty', 'elapsedDays', 'lastElapsedDays', 'scheduledDays', 'learningSteps', 'durationMs'] as const) {
+  for (const key of ['rating', 'state', 'stability', 'difficulty', 'elapsedDays', 'lastElapsedDays', 'scheduledDays', 'learningSteps', 'durationMs', 'afterState', 'afterStability', 'afterDifficulty', 'afterElapsedDays', 'afterScheduledDays', 'afterLearningSteps'] as const) {
     const field = value[key]
-    if (key === 'durationMs' && field === undefined) continue
-    if (typeof field !== 'number' || !Number.isFinite(field) || field < 0 || (key === 'rating' && (!Number.isInteger(field) || field < 1 || field > 4)) || (key === 'state' && (!Number.isInteger(field) || field > 3))) throw new Error(`Invalid review ${key}`)
+    if (field === undefined && (key === 'durationMs' || key.startsWith('after'))) continue
+    if (typeof field !== 'number' || !Number.isFinite(field) || field < 0 || (key === 'rating' && (!Number.isInteger(field) || field < 1 || field > 4)) || ((key === 'state' || key === 'afterState') && (!Number.isInteger(field) || field > 3))) throw new Error(`Invalid review ${key}`)
     Object.assign(result, { [key]: field })
   }
-  for (const key of ['due', 'reviewedAt'] as const) {
+  for (const key of ['due', 'reviewedAt', 'afterDue'] as const) {
+    if (key === 'afterDue' && value[key] === undefined) continue
     const field = value[key]
     if (typeof field !== 'string' || !Number.isFinite(Date.parse(field))) throw new Error(`Invalid review ${key}`)
     result[key] = new Date(field).toISOString()
