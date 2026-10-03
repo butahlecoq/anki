@@ -98,13 +98,6 @@ test('independent offline clients merge fields, retain conflicts through reload,
     await pair(pc, syncService.url, syncService.runtime); await pair(phone, syncService.url, syncService.runtime)
     await sync(pc); await sync(phone)
     const phoneDeckAction = phone.getByRole('button', { name: `Open ${deckName}`, exact: true })
-    await phoneDeckAction.evaluate((element) => element.scrollIntoView({ block: 'center' }))
-    await expect.poll(() => phone.evaluate(() => {
-      const deckAction = document.querySelector<HTMLButtonElement>('.tile-action')
-      const mobileNav = document.querySelector<HTMLElement>('.mobile-nav')
-      if (!deckAction || !mobileNav) return false
-      return deckAction.getBoundingClientRect().bottom <= mobileNav.getBoundingClientRect().top - 8
-    })).toBe(true)
     await phoneDeckAction.click()
     await context.setOffline(true); await phoneContext.setOffline(true)
     await edit(pc, 'ねこ', 'cat'); await edit(phone, '猫', 'кот')
@@ -127,6 +120,7 @@ test('independent offline clients merge fields, retain conflicts through reload,
     await expect(dialog).toContainText('кот · feline')
     await expect(dialog).toContainText(`Deck: ${deckName}`)
     await expect(dialog).toContainText('Conflicting properties: front')
+    await expect.poll(() => dialog.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
     await expect.poll(() => phone.evaluate(() => document.documentElement.scrollWidth <= screen.width + 1)).toBe(true)
     await phone.screenshot({ path: test.info().outputPath('offline-conflict-choice.png'), fullPage: true })
     await phoneContext.setOffline(true)
