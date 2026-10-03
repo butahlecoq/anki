@@ -21,6 +21,7 @@ certificates/
 /media/
 /collection.media/
 /runtime/
+.runtime/
 *.apkg
 *.colpkg
 *.anki2
