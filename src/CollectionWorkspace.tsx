@@ -33,6 +33,7 @@ import { CustomStudy } from './CustomStudy'
 import { answerCustomStudy, customStudyQueue, practiceChoices, undoCustomStudy } from './custom-study'
 import { customStudySessions } from './custom-study-state'
 import { isShortcutBlocked } from './keyboard-shortcuts'
+import { formatStorageBytes, requestPersistentStorage, type PersistenceResult } from './offline-storage'
 import { TextCollectionDialog } from './TextCollectionDialog'
 import { SyncConflicts } from './SyncConflicts'
 import { loadSampleDeck, removeSampleDeck, SAMPLE_DECK_NAME } from './sample-deck'
@@ -249,6 +250,15 @@ function ExistingMedia({ media }: { media: NoteMediaReference }) {
 
 function SyncControls() {
   const settings = useLiveQuery(() => collection.syncSettings(), [], undefined)
+  const offlineInventory = useLiveQuery(async () => {
+    const [notes, cards, media, missingMedia, pending] = await Promise.all([
+      collection.notes.count(), collection.cards.count(), collection.mediaBlobs.toArray(),
+      collection.missingReferencedMedia(), collection.outbox.count(),
+    ])
+    return { notes, cards, mediaBytes: media.reduce((total, blob) => total + blob.byteLength, 0), mediaFiles: media.length, missingMedia: new Set(missingMedia.map((item) => item.digest)).size, pending }
+  }, [], undefined)
+  const [persistence, setPersistence] = useState<PersistenceResult | 'checking'>('checking')
+  const [storageEstimate, setStorageEstimate] = useState<{ usage?: number; quota?: number }>()
   const [pairing, setPairing] = useState(false)
   const [endpoint, setEndpoint] = useState('')
   const [code, setCode] = useState('')
@@ -256,6 +266,19 @@ function SyncControls() {
   const [busy, setBusy] = useState(false)
   const [backups, setBackups] = useState<PcBackup[]>([])
   const [restorePreview, setRestorePreview] = useState('')
+
+  useEffect(() => {
+    let active = true
+    void Promise.all([
+      requestPersistentStorage(),
+      navigator.storage?.estimate().catch(() => undefined),
+    ]).then(([result, estimate]) => {
+      if (!active) return
+      setPersistence(result)
+      if (estimate) setStorageEstimate({ usage: estimate.usage, quota: estimate.quota })
+    })
+    return () => { active = false }
+  }, [])
 
   useEffect(() => {
     if (!settings) return
@@ -337,6 +360,13 @@ function SyncControls() {
   return (
     <section className="sync-controls" aria-label="PC sync">
       <div><span className="section-code">SYNC // {settings ? 'PAIRED' : 'LOCAL ONLY'}</span><p aria-live="polite">{message}</p></div>
+      <details className="offline-storage-status">
+        <summary data-testid="offline-storage-summary">Offline storage and local collection</summary>
+        <p>{persistence === 'checking' ? 'Checking browser storage protection…' : persistence === 'granted' ? 'Persistent storage is enabled for this app.' : persistence === 'denied' ? 'The browser may clear this app’s local data to free space. Keep a verified backup.' : 'This browser cannot protect local storage from automatic cleanup.'}</p>
+        {storageEstimate && <p>Browser storage estimate: {storageEstimate.usage === undefined ? 'unknown' : formatStorageBytes(storageEstimate.usage)} used of {storageEstimate.quota === undefined ? 'unknown' : formatStorageBytes(storageEstimate.quota)} available.</p>}
+        {offlineInventory && <p>{offlineInventory.notes} notes · {offlineInventory.cards} cards · {offlineInventory.mediaFiles} media files ({formatStorageBytes(offlineInventory.mediaBytes)}) · {offlineInventory.missingMedia} media files missing · {offlineInventory.pending} changes waiting to sync.</p>}
+        {offlineInventory?.missingMedia ? <p role="alert">Some referenced media is not stored on this device. Connect to the PC and sync before relying on offline access.</p> : offlineInventory && <p>All referenced media is available on this device.</p>}
+      </details>
       <div className="sync-actions">
         {settings && <button className="text-button" type="button" disabled={busy} onClick={() => void sync()}>{busy ? 'Syncing…' : 'Sync now'}</button>}
         {settings && <button className="text-button" type="button" disabled={busy} onClick={() => void backupPcCollection()}>{busy ? 'Working…' : 'Download PC backup'}</button>}
