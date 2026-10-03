@@ -126,24 +126,59 @@ test('a collection holding a legacy path identity ends the import with one deck,
   expect((await db.cards.toArray()).map(({ deckId }) => deckId)).toEqual(['anki-deck:1'])
 })
 
+test('a legacy deck is reconciled even when the package defines that Deck Path itself', async () => {
+  // The package names JLPT as well as JLPT::N5, so the path resolves from the
+  // package rather than from derivation. The legacy deck is still a second deck
+  // answering to JLPT, and must not survive the import.
+  const db = database()
+  const now = new Date('2026-10-02T12:00:00Z').toISOString()
+  const legacy = 'anki-deck-path:JLPT'
+  await db.decks.bulkPut([
+    { id: legacy, name: 'JLPT', parentId: null, optionGroupId: DEFAULT_DECK_OPTION_GROUP_ID, createdAt: now, updatedAt: now },
+    { id: 'anki-deck:2', name: 'N5', parentId: legacy, optionGroupId: DEFAULT_DECK_OPTION_GROUP_ID, createdAt: now, updatedAt: now },
+  ])
+
+  const prepared = await prepareAnkiDataImport(await packageNaming(['JLPT', 'JLPT::N5']), db, { SQL })
+  expect(prepared.issues.filter((issue) => issue.code === 'deck-identity-normalised'))
+    .toEqual([expect.objectContaining({ severity: 'info', subject: 'JLPT', detail: `Deck identity ${legacy} was brought into the package scheme as anki-deck:1.` })])
+  await prepared.commit()
+  expect(await deckPaths(db)).toEqual([['JLPT', 'anki-deck:1'], ['JLPT::N5', 'anki-deck:2']])
+  expect(await db.decks.get(legacy)).toBeUndefined()
+})
+
+test('a deck the learner made is left alone when the package names the same Deck Path', async () => {
+  // Story 19: importing must not disturb a deck the app created for itself, and
+  // in particular must not reset the deck options the learner chose for it.
+  const db = database()
+  const group = await db.createDeckOptionGroup('Deck options the learner chose')
+  const mine = await db.createDeck('JLPT', { optionGroupId: group.id })
+  await db.createBasicNote(mine.id, { front: '猫', back: 'cat' })
+
+  await (await prepareAnkiDataImport(await packageNaming(['JLPT', 'JLPT::N5']), db, { SQL })).commit()
+  const after = await db.decks.get(mine.id)
+  expect(after?.optionGroupId).toBe(group.id)
+  expect(after?.parentId).toBeNull()
+  expect((await db.notes.toArray())[0].deckId).toBe(mine.id)
+})
+
 test('a deck holding a duplicate of the same Deck Path is reconciled, not left alongside it', async () => {
   const data = await packageNaming(['JLPT::N5'])
   const db = database()
   const now = new Date('2026-10-02T12:00:00Z').toISOString()
   // The symptom of an import made before the identity was derived: two decks
-  // answering to one Deck Path, one of them holding the learner's cards.
-  const [older, newer] = ['anki-deck-path:JLPT', 'anki-deck:1110936686436']
-  await db.decks.bulkPut([
-    { id: older, name: 'JLPT', parentId: null, optionGroupId: DEFAULT_DECK_OPTION_GROUP_ID, createdAt: now, updatedAt: now },
-    { id: newer, name: 'JLPT', parentId: null, optionGroupId: DEFAULT_DECK_OPTION_GROUP_ID, createdAt: now, updatedAt: now },
-    { id: 'anki-deck:1', name: 'N5', parentId: newer, optionGroupId: DEFAULT_DECK_OPTION_GROUP_ID, createdAt: now, updatedAt: now },
-  ])
+  // answering to one Deck Path, one of them holding the learner's cards. Import
+  // once so the standing identity comes from the real derivation rather than
+  // from a literal restating it.
+  await (await prepareAnkiDataImport(data, db, { SQL })).commit()
+  const standing = (await deckPaths(db)).find(([path]) => path === 'JLPT')![1]
+  const older = 'anki-deck-path:JLPT'
+  await db.decks.bulkPut([{ id: older, name: 'JLPT', parentId: null, optionGroupId: DEFAULT_DECK_OPTION_GROUP_ID, createdAt: now, updatedAt: now }])
 
   const prepared = await prepareAnkiDataImport(data, db, { SQL })
   expect(prepared.issues.filter((issue) => issue.code === 'deck-identity-normalised'))
     .toEqual([expect.objectContaining({ severity: 'info', subject: 'JLPT', detail: expect.stringContaining(older) })])
   await prepared.commit()
-  expect(await deckPaths(db)).toEqual([['JLPT', newer], ['JLPT::N5', 'anki-deck:1']])
+  expect(await deckPaths(db)).toEqual([['JLPT', standing], ['JLPT::N5', 'anki-deck:1']])
   expect(await db.decks.get(older)).toBeUndefined()
 })
 
@@ -159,6 +194,27 @@ test('a Deck Path with an empty name segment is still refused', async () => {
   expect(refused.issues).toContainEqual(expect.objectContaining({ severity: 'error', code: 'deck-hierarchy-malformed', subject: 'JLPT::::N5' }))
   await expect(refused.commit()).rejects.toThrow('Resolve package errors before importing')
   expect(await malformed.decks.count()).toBe(0)
+})
+
+test('an undo record survives a deck being superseded beneath it', async () => {
+  // An undo holds a copy of the note it deleted, and restoring it insists that
+  // deck still exists. Pointing at a superseded identity breaks it for good.
+  const db = database()
+  const now = new Date('2026-10-02T12:00:00Z').toISOString()
+  const duplicate = 'anki-deck-path:JLPT'
+  const standing = 'anki-deck:1110936686436'
+  await (await prepareAnkiDataImport(await packageNaming(['JLPT::N5']), db, { SQL })).commit()
+  const note = (await db.notes.toArray())[0]
+  await db.decks.bulkPut([
+    { id: duplicate, name: 'JLPT', parentId: null, optionGroupId: DEFAULT_DECK_OPTION_GROUP_ID, createdAt: now, updatedAt: now },
+    { id: standing, name: 'JLPT', parentId: null, optionGroupId: DEFAULT_DECK_OPTION_GROUP_ID, createdAt: now, updatedAt: now },
+  ])
+  await db.settings.put({ key: 'noteDeletionUndo', value: { syncEpoch: 0, operationId: 'op-1', occurredAt: now, note: { ...note, deckId: duplicate }, noteType: (await db.noteTypes.get(note.typeId))!, cards: [], reviews: [], media: [] } })
+
+  await (await prepareAnkiDataImport(await packageNaming(['JLPT::N5']), db, { SQL })).commit()
+  const undo = (await db.settings.get('noteDeletionUndo'))?.value as { note: { deckId: string } }
+  expect(undo.note.deckId).toBe(standing)
+  expect(await db.decks.get(undo.note.deckId)).toBeDefined()
 })
 
 test('a superseded deck hands its notes, cards and reviews to the one that survives', async () => {

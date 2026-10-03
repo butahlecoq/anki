@@ -31,6 +31,13 @@ unchanged. A Synthesised Deck is always an ancestor: notes and cards are assigne
 to the leaf of a Deck Path.
 _Avoid_: fake deck, generated deck, orphan deck, placeholder deck
 
+**Superseded Deck**:
+A local Deck that a later import reconciles away, because a deck already stands
+at its Deck Path under a better identity — either one carrying the legacy form
+this repo no longer emits, or a duplicate of the same path. Everything pointing
+at a Superseded Deck moves to the deck that survives.
+_Avoid_: deleted deck, replaced deck, merged deck
+
 **Import Plan**:
 The named, inspectable value a package import produces before anything is
 written — every Deck, note, card and media row it would write, plus every issue

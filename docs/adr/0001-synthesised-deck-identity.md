@@ -38,8 +38,9 @@ number export writes, a re-import finds a row for that Deck Path and assigns
 
 ## Consequences
 
-- `anki-deck:<kind>:<native>` becomes the only identity form the app emits for
-  decks. The `anki-deck-path:` form is gone.
+- `anki-deck:<number>` becomes the only identity form the app emits for decks,
+  matching the `anki-<kind>:<native>` shape every other entity uses. The
+  `anki-deck-path:` form is gone.
 - Export needs no new case. It already reads the number out of a deck identity;
   a derived identity *is* a number in that scheme.
 - The derivation is the same deterministic hash notes and cards already use, so
@@ -55,10 +56,17 @@ number export writes, a re-import finds a row for that Deck Path and assigns
 - Collections imported before this decision hold the legacy form. They are
   reconciled and rekeyed at import time rather than by a schema migration. The
   migration was rejected as too broad for the defect — it would rewrite five
-  tables to fix a deck that is, provably, an empty container holding one parent
-  pointer — and because the collection ladder is already ahead of the advertised
-  schema constant, so a migration widens a drift another issue owns.
-- The rekey is safe specifically because a Synthesised Deck is always an ancestor:
-  notes and cards are assigned to the leaf of a Deck Path. If a future feature
-  places notes or cards directly in a deck that has no package row, this decision
-  must be revisited before the rekey can stay safe.
+  tables plus the settings holding undo records, to fix a deck that in the legacy
+  case is provably an empty container holding one parent pointer — and because
+  the collection ladder is already ahead of the advertised schema constant, so a
+  migration widens a drift another issue owns.
+- Reconciliation adopts whatever deck already stands at a Deck Path, so a deck
+  the learner made keeps its identity and its deck options. Only the legacy form
+  and duplicates are superseded.
+- A deck reconciled away is *not* necessarily empty. A Synthesised Deck is always
+  an ancestor — notes and cards are assigned to the leaf of a Deck Path — so the
+  legacy-form case is cheap. But a collection may already hold two decks at one
+  Deck Path, and the one reconciled away can hold anything. Its notes, cards,
+  reviews and undo records therefore follow the deck that survives. If a future
+  feature introduces a third kind of reference to a deck, this decision must be
+  revisited before the reconciliation can stay safe.
