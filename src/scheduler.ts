@@ -17,10 +17,13 @@ export function isBuried(card: CardRecord, now: Date) {
   return card.buriedUntil != null && Date.parse(card.buriedUntil) > now.getTime()
 }
 
-/** Whether the template marked this card's content unavailable. Legacy rows
- * recorded only `suspended`, which mirrors template suspension. */
+/** Whether the template marked this card's content unavailable. The legacy
+ * `suspended` flag mirrors template suspension, and package import and note-type
+ * deletion still set only that field, so either one being true suspends the
+ * card. This must be an OR: treating `suspended` as a fallback value would make
+ * an imported suspended card answerable again. */
 export function templateSuspended(card: CardRecord) {
-  return card.templateSuspended ?? Boolean(card.suspended)
+  return card.templateSuspended === true || card.suspended === true
 }
 
 /** Suspension only, ignoring burial. Buried cards still occupy the forecast, so

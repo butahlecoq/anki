@@ -1465,11 +1465,13 @@ export class Collection extends Dexie {
     })
   }
 
-  /** Eligibility for every rating is decided by the scheduler module, so this
-   * only resolves the card and its deck policy before delegating. */
+  /** Eligibility for every rating is decided by the scheduler module. An
+   * ineligible card resolves to no choices without consulting its deck policy,
+   * so a card whose deck has since lost its option group cannot turn the
+   * reviewer's poll into an error. */
   async reviewChoices(cardId: string, now = new Date(), allowEarly = false): Promise<ReviewChoice[]> {
     const card = await this.cards.get(cardId)
-    if (!card) return []
+    if (!card || !(allowEarly ? eligibleForQueue(card, now) : eligibleForStudy(card, now))) return []
     const deck = await this.decks.get(card.deckId)
     const group = deck ? await this.deckOptionGroups.get(deck.optionGroupId) : undefined
     if (!deck || !group) throw new Error('Deck option group not found')

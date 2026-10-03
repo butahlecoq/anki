@@ -85,8 +85,14 @@ describe('pure scheduling rules', () => {
     for (const id of ['none', 't', 'm', 'b']) {
       expect(eligibleForQueue(unavailable(id), now)).toBe(unavailableReason(unavailable(id), now) === null)
     }
-    // A legacy row with only `suspended` mirrors template suspension.
+    // A row carrying only the legacy `suspended` flag is still suspended. Package
+    // import and note-type deletion both write `suspended` without
+    // `templateSuspended`, so treating the flag as a mere fallback would make
+    // an imported suspended card answerable again.
     expect(templateSuspended({ ...card('legacy', State.Review), templateSuspended: undefined, suspended: true })).toBe(true)
+    expect(templateSuspended({ ...card('legacy-clear', State.Review), templateSuspended: false, suspended: true })).toBe(true)
+    expect(templateSuspended({ ...card('legacy-partial', State.Review), templateSuspended: undefined, suspended: false })).toBe(false)
+    expect(eligibleForQueue({ ...card('imported-suspended', State.Review), templateSuspended: false, suspended: true }, now)).toBe(false)
     expect(isSuspended(card('m', State.Review, { manualSuspended: true }))).toBe(true)
     expect(isSuspended(card('b', State.Review, { buriedUntil: '2026-10-04T00:00:00.000Z' }))).toBe(false)
     expect(isBuried(card('b', State.Review, { buriedUntil: '2026-10-01T00:00:00.000Z' }), now)).toBe(false)

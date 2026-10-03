@@ -176,6 +176,35 @@ describe('local collection', () => {
     await expect(collection.answer(card.id, Rating.Good, now)).resolves.toMatchObject({ cardId: card.id, rating: Rating.Good })
   })
 
+  test('an ineligible card yields no review choices even when its deck policy is gone', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Choices')
+    const note = await collection.createBasicNote(deck.id, { front: 'front', back: 'back' })
+    const [card] = await collection.cards.where('noteId').equals(note.id).toArray()
+    const now = new Date('2026-10-01T12:00:00.000Z')
+    // An eligible card in a deck that has lost its option group is a real fault.
+    await collection.deckOptionGroups.delete(deck.optionGroupId)
+    await expect(collection.reviewChoices(card.id, now)).rejects.toThrow(/option group/i)
+    // An ineligible one is refused on eligibility alone, before the deck policy
+    // is read, so the reviewer's poll cannot fail on a card it would not show.
+    await collection.cards.update(card.id, { manualSuspended: true })
+    await expect(collection.reviewChoices(card.id, now)).resolves.toEqual([])
+    await expect(collection.reviewChoices(card.id, now, true)).resolves.toEqual([])
+  })
+
+  test('a card suspended only by the legacy flag stays ineligible for review', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Legacy suspension')
+    const note = await collection.createBasicNote(deck.id, { front: 'front', back: 'back' })
+    const [card] = await collection.cards.where('noteId').equals(note.id).toArray()
+    const now = new Date('2026-10-01T12:00:00.000Z')
+    // Package import and note-type deletion write `suspended` alone.
+    await collection.cards.update(card.id, { templateSuspended: false, suspended: true })
+    await expect(collection.reviewChoices(card.id, now)).resolves.toEqual([])
+    await expect(collection.reviewChoices(card.id, now, true)).resolves.toEqual([])
+    await expect(collection.answer(card.id, Rating.Good, now)).rejects.toThrow(/suspended or buried/i)
+  })
+
   test('does not let template reconciliation clear a manual suspension', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const deck = await collection.createDeck('Policies')
