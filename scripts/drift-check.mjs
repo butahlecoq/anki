@@ -18,8 +18,21 @@ const finding = (level, check, subject, message, remedy) => ({ level, check, sub
 const PLURAL = (count, noun) => `${count} ${noun}(s)`
 
 function run(command, args, cwd) {
-  return execFileSync(command, args, { cwd, encoding: 'utf8', windowsHide: true })
+  return execFileSync(command, args, {
+    cwd,
+    encoding: 'utf8',
+    windowsHide: true,
+    // git reports a bad revision on stderr and exits non-zero. Inheriting that
+    // stream printed a `fatal:` line per branch above the report, which buried
+    // the findings this script exists to print. It is captured and discarded:
+    // a null return already says the command failed.
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
 }
+
+// A revision used as an argument must not carry git's trailing newline, or it
+// stops being a revision: `a0667f0\n..branch` is not a range git can read.
+export const revision = (output) => (output === null ? null : output.trim() || null)
 
 function tryRun(command, args, cwd) {
   try {
@@ -36,6 +49,21 @@ export const gitArgs = {
   aheadBehind: (mainBranch) => ['rev-list', '--left-right', '--count', `${mainBranch}...origin/${mainBranch}`],
   localBranches: () => ['for-each-ref', '--format=%(refname:short)', 'refs/heads/'],
   diffAgainstMain: (mainBranch, name) => ['diff', '--numstat', `origin/${mainBranch}`, name],
+  // Which of a branch's own commits each open pull request does not carry, and
+  // whether the branch is already contained in main. The diff against main alone
+  // cannot answer either: it also counts every commit main took after the branch
+  // point, so a branch holding nothing reads as thousands of lines.
+  mergeBase: (mainBranch, name) => ['merge-base', `origin/${mainBranch}`, name],
+  diffFromMergeBase: (_mainBranch, name, base) => ['diff', '--numstat', base, name],
+  revList: (_mainBranch, name, base) => ['rev-list', '--count', `${base}..${name}`],
+  isAncestor: (mainBranch, name) => ['merge-base', '--is-ancestor', name, `origin/${mainBranch}`],
+  revListNotIn: (_mainBranch, name, base, head, extra = []) => [
+    'rev-list',
+    `${base}..${name}`,
+    '--not',
+    head,
+    ...extra,
+  ],
   modifiedTracked: () => ['status', '--porcelain', '--untracked-files=all'],
   remoteUrl: () => ['remote', 'get-url', 'origin'],
 }
@@ -128,7 +156,10 @@ function worktreeStatus(path) {
   return { dirtyFiles: tracked, untrackedFiles: untracked }
 }
 
-function pullRequests(repo, cwd) {
+// `gh` is asked once per run. #158 needs the pull requests inside the collector,
+// to decide which branch's work an open pull request already holds, so this is
+// returned as a collected fact rather than fetched again by the caller.
+export function pullRequestsFor(repo, cwd) {
   const output = tryRun(
     'gh',
     [
@@ -195,28 +226,84 @@ const posixCommandLines = () =>
 
 export const runningCommandLines = () => (process.platform === 'win32' ? windowsCommandLines() : posixCommandLines())
 
-export function collectGitFacts({ cwd = process.cwd(), mainBranch = 'main' } = {}) {
+export function collectGitFacts({ cwd = process.cwd(), mainBranch = 'main', repo = 'butahlecoq/anki' } = {}) {
   const porcelain = tryRun('git', gitArgs.worktreeList(), cwd)
   const worktrees = porcelain === null ? [] : parseWorktreePorcelain(porcelain)
   const present = worktrees.filter((worktree) => existsSync(worktree.path))
   const counts = parseLeftRightCount(tryRun('git', gitArgs.aheadBehind(mainBranch), cwd) ?? '')
 
-  const branches = (tryRun('git', gitArgs.localBranches(), cwd) ?? '')
+  const names = (tryRun('git', gitArgs.localBranches(), cwd) ?? '')
     .split('\n')
     .map((line) => line.trim())
     .filter((line) => line.length > 0 && line !== mainBranch)
-    .map((name) => ({
+
+  // Which open pull request heads are already contained in each branch, and how
+  // many of its commits no open pull request can account for. Both need the pull
+  // requests, so they are collected here and handed to the pure analysis.
+  const pullRequests = pullRequestsFor(repo, cwd)
+  const openHeads = (pullRequests ?? []).filter((pr) => pr.state === 'OPEN').map((pr) => pr.headRefName)
+
+  const branches = names.map((name) => {
+    const worktree = present.find((entry) => entry.branch === name)?.path ?? null
+    const base = revision(tryRun('git', gitArgs.mergeBase(mainBranch, name), cwd))
+    const own =
+      base === null
+        ? null
+        : {
+            ...parseNumstat(tryRun('git', gitArgs.diffFromMergeBase(mainBranch, name, base), cwd) ?? ''),
+            ownCommits: Number(revision(tryRun('git', gitArgs.revList(mainBranch, name, base), cwd)) ?? NaN),
+          }
+    const unsharedBy = countUnsharedByOpenHead({ base, name, openHeads, cwd, mainBranch })
+    return {
       name,
       ...parseNumstat(tryRun('git', gitArgs.diffAgainstMain(mainBranch, name), cwd) ?? ''),
-      worktree: present.find((entry) => entry.branch === name)?.path ?? null,
-    }))
+      ...(own ?? {}),
+      // `--is-ancestor` exits 0 and prints nothing, so exit status is the answer.
+      isAncestorOfMain: tryRun('git', gitArgs.isAncestor(mainBranch, name), cwd) !== null,
+      unsharedBy,
+      unsharedCommits: unsharedBy === undefined ? undefined : Math.min(...Object.values(unsharedBy)),
+      worktree,
+    }
+  })
 
   return {
     main: counts === null ? null : { branch: mainBranch, ...counts },
     primary: present[0] ?? null,
     worktrees: present.map((worktree) => ({ ...worktree, ...worktreeStatus(worktree.path) })),
     branches,
+    pullRequests,
   }
+}
+
+// For each open pull request head, how many of this branch's own commits that
+// head does not carry. `git rev-list <base>..<branch> --not <head>` is that
+// count directly: a branch whose commits are all on an open pull request
+// returns nothing.
+//
+// A merge commit is not lost work. `fix/94-review-replay-current` is #117's
+// branch with main merged into it, so the merge commit itself is in no pull
+// request and the raw count is 1. Counting only commits that introduced a
+// change on this branch gives 0, which is the honest answer.
+function countUnsharedByOpenHead({ base, name, openHeads, cwd, mainBranch }) {
+  if (base === null || openHeads.length === 0) return undefined
+  const unsharedBy = {}
+  for (const head of openHeads) {
+    if (head === name) continue
+    const listed = tryRun('git', gitArgs.revListNotIn(mainBranch, name, base, head), cwd)
+    if (listed === null) continue
+    const commits = listed
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+    // `--no-merges` is the second question git is asked, so a merge that exists
+    // only to bring main in is not counted as work nobody has.
+    const withoutMerges = tryRun('git', gitArgs.revListNotIn(mainBranch, name, base, head, ['--no-merges']), cwd)
+    unsharedBy[head] =
+      withoutMerges === null
+        ? commits.length
+        : withoutMerges.split('\n').filter((line) => line.trim().length > 0).length
+  }
+  return Object.keys(unsharedBy).length === 0 ? undefined : unsharedBy
 }
 
 // git refuses to delete a branch that a worktree has checked out, so the worktree
@@ -225,6 +312,32 @@ const removal = (branch) =>
   branch.worktree === null
     ? `git branch -D ${branch.name}`
     : `git worktree remove ${branch.worktree} (from outside it), then git branch -D ${branch.name}`
+
+// The size of the work a branch itself carries, as opposed to the size of its
+// diff against main, which also counts every commit main took after the branch
+// point. `ownSize` is absent when the merge base could not be read, and the
+// caller then falls back to the main diff rather than claiming a number.
+const ownSizeOf = (branch, mainBranch) =>
+  branch.ownAdditions === undefined
+    ? `${PLURAL(branch.additions, 'added line')} and ${PLURAL(branch.deletions, 'deleted line')} against origin/${mainBranch}`
+    : `${PLURAL(branch.ownAdditions, 'added line')} and ${PLURAL(branch.ownDeletions, 'deleted line')} of its own, across ${PLURAL(branch.ownCommits ?? 0, 'commit')} not on origin/${mainBranch}`
+
+// Which open pull request, if any, already holds the work on this branch. A
+// branch with `main` merged into it points at no pull request of its own, so
+// this is asked of the pull requests rather than of the branch name.
+//
+// The collector reports, per open pull request, how many of this branch's own
+// commits that pull request does not carry. The two merge workspaces on this
+// machine relate to their pull requests in opposite directions - #133's head
+// contains `merge/99-current-main`, while `fix/94-review-replay-current`
+// contains #117's head - so containment in either direction is not the test.
+// "Commits of this branch that no open pull request carries" is.
+function openPullRequestHolding(branch, pullRequests) {
+  const unshared = branch.unsharedBy ?? {}
+  const holding = pullRequests.find((pr) => pr.state === 'OPEN' && unshared[pr.headRefName] === 0)
+  if (holding === undefined) return undefined
+  return { ...holding, unshared: 0 }
+}
 
 function branchFindings({ branches, pullRequests, mainBranch, inProgress }) {
   const findings = []
@@ -245,6 +358,40 @@ function branchFindings({ branches, pullRequests, mainBranch, inProgress }) {
     const carriesWork = branch.additions > 0 || branch.binary > 0
     const size = `${PLURAL(branch.additions, 'added line')} and ${PLURAL(branch.deletions, 'deleted line')} against origin/${mainBranch}`
     const binaryNote = branch.binary > 0 ? `, including ${PLURAL(branch.binary, 'binary file')}` : ''
+
+    // A strict ancestor of main holds no commit that main does not, so whatever
+    // its tree diff says it cannot carry unsaved work. This has to be decided
+    // before the diff is read: an ancestor that main has since edited reports a
+    // one-line diff in one direction, which used to read as possible loss.
+    if (branch.isAncestorOfMain === true) {
+      findings.push(
+        finding(
+          busy ? 'info' : 'drift',
+          pr?.state === 'CLOSED' ? 'branch-closed-superseded' : 'branch-stale-snapshot',
+          subject,
+          `it is an ancestor of origin/${mainBranch} and carries nothing of its own, so it is a stale snapshot whatever it diffs by (${where}).${handOn}`,
+          busy ? 'none while an agent is in it' : remedy,
+        ),
+      )
+      continue
+    }
+
+    // A branch that has main merged into it holds work an open pull request
+    // already carries. It is a workspace for a merge that was started and not
+    // finished, not work at risk.
+    const holding = openPullRequestHolding(branch, pullRequests)
+    if (holding !== undefined && (branch.unsharedCommits ?? 0) === 0) {
+      findings.push(
+        finding(
+          busy ? 'info' : 'drift',
+          'branch-merge-workspace',
+          subject,
+          `its work is on pull request #${holding.number} (${holding.headRefName}), so it carries no unsaved work: it is a workspace for a merge that was started and not finished (${where}).${handOn}`,
+          busy ? 'none while an agent is in it' : remedy,
+        ),
+      )
+      continue
+    }
 
     // A branch can only be recommended for deletion when main is known to hold the
     // work, or when it is byte-identical. Anything else asks a question.
@@ -311,7 +458,7 @@ function branchFindings({ branches, pullRequests, mainBranch, inProgress }) {
           'loss',
           'branch-past-merge',
           subject,
-          `pull request #${pr.number} merged on ${pr.mergedAt?.slice(0, 10)}, but the branch still carries ${size}${binaryNote} (${where}).${handOn}`,
+          `pull request #${pr.number} merged on ${pr.mergedAt?.slice(0, 10)}, but the branch still carries ${ownSizeOf(branch, mainBranch)}${binaryNote} (${where}).${handOn}`,
           busy ? remedy : 'rebase the branch onto origin/main and open a pull request, or confirm the work already reached main',
         ),
       )
@@ -324,7 +471,7 @@ function branchFindings({ branches, pullRequests, mainBranch, inProgress }) {
           'loss',
           'branch-closed-superseded',
           subject,
-          `pull request #${pr.number} closed unmerged with no replacement, and the branch still carries ${size}${binaryNote} (${where}).${handOn}`,
+          `pull request #${pr.number} closed unmerged with no replacement, and the branch still carries ${ownSizeOf(branch, mainBranch)}${binaryNote} (${where}).${handOn}`,
           busy ? remedy : `reopen the work on a fresh branch from origin/${mainBranch}, or confirm it was abandoned`,
         ),
       )
@@ -336,7 +483,7 @@ function branchFindings({ branches, pullRequests, mainBranch, inProgress }) {
         'loss',
         'branch-no-pr',
         subject,
-        `branch has no pull request at all and still carries ${size}${binaryNote} (${where}).${handOn}`,
+        `branch has no pull request at all and still carries ${ownSizeOf(branch, mainBranch)}${binaryNote} (${where}).${handOn}`,
         busy ? remedy : 'open a pull request from the branch, or move the work somewhere the tracker can see it',
       ),
     )
@@ -480,7 +627,8 @@ export const USAGE = `Usage: node scripts/drift-check.mjs [--repo <owner/name>] 
 Reports work stranded outside Git and the tracker, and exits non-zero when it finds any:
   0  no drift
   1  recoverable drift: stale main, uncommitted work nothing is in, a disposable branch,
-     or something this check could not read
+     a branch an ancestor of main, a merge workspace for an open pull request, or
+     something this check could not read
   2  possible loss: a branch with work that is on no pull request, or past a merge`
 
 export function parseArgv(argv) {
@@ -506,9 +654,12 @@ function main(argv) {
 
   const cwd = process.cwd()
   const repo = requested ?? repoFromRemote(cwd, 'butahlecoq/anki')
+  const facts = collectGitFacts({ cwd, mainBranch, repo })
   const report = analyseDrift({
-    ...collectGitFacts({ cwd, mainBranch }),
-    pullRequests: pullRequests(repo, cwd),
+    ...facts,
+    // Already collected above; #158 needs them there, and asking `gh` twice would
+    // read the tracker twice and could disagree with itself.
+    pullRequests: facts.pullRequests,
     commandLines: runningCommandLines(),
     cwd,
   })
