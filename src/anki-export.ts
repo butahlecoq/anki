@@ -1,3 +1,4 @@
+import { blobBytes, extensionForMediaType, DAY_MILLISECONDS, toHex } from '../anki-interchange'
 import type { SqlJsStatic } from 'sql.js'
 import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url'
 import type { Deck as NativeDeck, Notetype as NativeNotetype } from 'ankipack'
@@ -10,7 +11,7 @@ import { derivedNativeId, nativeNumberOf } from './anki-identity'
 
 export interface AnkiExportOptions { deckId?: string; scheduling: boolean; history: boolean; media: boolean; SQL?: SqlJsStatic }
 let sqlPromise: Promise<SqlJsStatic> | undefined
-const day = 86_400_000
+const day = DAY_MILLISECONDS
 function escape(value: string) { return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;') }
 function guid(value: string) { return value.startsWith('anki-note:') ? value.slice(10) : value }
 // Independently written template invoking the official image occlusion runtime.
@@ -40,20 +41,17 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
   const names = new Map<string, string>()
   const media = new Map<string, Uint8Array>()
   if (options.media) for (const reference of references) {
-    const extension = ({ 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'audio/mpeg': 'mp3', 'audio/ogg': 'ogg', 'audio/wav': 'wav' } as Record<string, string>)[reference.mimeType]
+    const extension = extensionForMediaType(reference.mimeType)
     if (!extension) throw new Error(`Unsupported media: ${reference.displayName}`)
     const name = `${reference.digest}.${extension}`
     names.set(reference.id, name)
     if (media.has(name)) continue
     const stored = snapshot.blobs.find((blob) => blob.digest === reference.digest)
     if (!stored) throw new Error(`Missing media: ${reference.displayName}. Sync or restore it before exporting.`)
-    const isBuffer = Object.prototype.toString.call(stored.blob) === '[object ArrayBuffer]'
-    const blob = stored.blob as Blob
-    const bytes = isBuffer ? stored.blob as ArrayBuffer : typeof blob.arrayBuffer === 'function' ? await blob.arrayBuffer() : await new Promise<ArrayBuffer>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result as ArrayBuffer); reader.onerror = () => reject(reader.error); reader.readAsArrayBuffer(blob) })
-    const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map((byte) => byte.toString(16).padStart(2, '0')).join('')
-    if (digest !== reference.digest) throw new Error(`Damaged media: ${reference.displayName}`)
-    validateMediaBytes(new Uint8Array(bytes), reference.mimeType)
-    media.set(name, new Uint8Array(bytes))
+    const bytes = await blobBytes(stored.blob)
+    if (toHex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))) !== reference.digest) throw new Error(`Damaged media: ${reference.displayName}`)
+    validateMediaBytes(bytes, reference.mimeType)
+    media.set(name, bytes)
   }
   const packageFile = new Package()
   const exportedTypes = new Map<string, NativeNotetype>()

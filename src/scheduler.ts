@@ -130,7 +130,7 @@ export function schedulerFor(group: DeckOptionGroup, cardId: string) {
   })
 }
 
-export function serializeCard(card: FsrsCard, identity: Pick<CardRecord, 'id' | 'deckId' | 'noteId' | 'templateId' | 'clozeOrdinal' | 'flag'>): CardRecord {
+export function serializeCard(card: FsrsCard, identity: Pick<CardRecord, 'id' | 'deckId' | 'noteId' | 'templateId'> & Partial<CardRecord>): CardRecord {
   return {
     manualSuspended: false, templateSuspended: false, buriedUntil: null, suspended: false,
     ...identity, flag: identity.flag ?? 0,

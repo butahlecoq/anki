@@ -38,46 +38,8 @@ import { isShortcutBlocked } from './keyboard-shortcuts'
 import { TextCollectionDialog } from './TextCollectionDialog'
 import { SyncConflicts } from './SyncConflicts'
 import { loadSampleDeck, removeSampleDeck, SAMPLE_DECK_NAME } from './sample-deck'
-
-type Route =
-  | { view: 'decks' }
-  | { view: 'note-types' }
-  | { view: 'statistics' }
-  | { view: 'browse' }
-  | { view: 'study' }
-  | { view: 'custom-review'; sessionId: string }
-  | { view: 'deck'; deckId: string }
-  | { view: 'review'; deckId: string }
-
-function routeFromHash(): Route {
-  if (window.location.hash === '#note-types') return { view: 'note-types' }
-  if (window.location.hash === '#statistics') return { view: 'statistics' }
-  const custom = window.location.hash.match(/^#custom-review\/([^/]+)$/)
-  if (custom) return { view: 'custom-review', sessionId: decodeURIComponent(custom[1]) }
-  if (window.location.hash === '#study') return { view: 'study' }
-  if (window.location.hash === '#browse') return { view: 'browse' }
-  const match = window.location.hash.match(/^#(deck|review)\/([^/]+)$/)
-  if (!match) return { view: 'decks' }
-  return { view: match[1] as 'deck' | 'review', deckId: decodeURIComponent(match[2]) }
-}
-
-function useRoute() {
-  const [route, setRoute] = useState<Route>(routeFromHash)
-
-  useEffect(() => {
-    const update = () => setRoute(routeFromHash())
-    window.addEventListener('hashchange', update)
-    return () => window.removeEventListener('hashchange', update)
-  }, [])
-
-  const navigate = (next: Route) => {
-    const hash = 'sessionId' in next ? `#custom-review/${encodeURIComponent(next.sessionId)}` : 'deckId' in next ? `#${next.view}/${encodeURIComponent(next.deckId)}` : `#${next.view}`
-    if (window.location.hash === hash) setRoute(next)
-    else window.location.hash = hash
-  }
-
-  return [route, navigate] as const
-}
+import { useRoute } from './route'
+import { pairOutcomeMessage, pairingClosesOn, SYNC_LOCAL_ONLY, syncOutcomeMessage } from './sync-messages'
 
 function CountStrip({ counts, reviews }: { counts: DeckCounts; reviews: number }) {
   return (
@@ -254,7 +216,7 @@ function SyncControls() {
   const [pairing, setPairing] = useState(false)
   const [endpoint, setEndpoint] = useState('')
   const [code, setCode] = useState('')
-  const [message, setMessage] = useState('This collection stays on this device until you connect a PC.')
+  const [message, setMessage] = useState(SYNC_LOCAL_ONLY)
   const [busy, setBusy] = useState(false)
 
   async function pair(event: FormEvent) {
@@ -262,37 +224,26 @@ function SyncControls() {
     setBusy(true)
     const result = await pairCollection(collection, endpoint, code)
     setBusy(false)
-    if (result.state === 'paired') {
+    setMessage(pairOutcomeMessage(result.state))
+    // Only a successful pairing closes the form; a rejection keeps the code the
+    // learner just typed, which is the one thing that could still work.
+    if (pairingClosesOn(result.state)) {
       setPairing(false)
       setCode('')
-      setMessage('PC connected. Your collections are ready to sync.')
-    } else if (result.state === 'unreachable') setMessage('Your PC service could not be reached. Check its address and that it is running.')
-    else setMessage('That pairing code was not accepted. Create a new code on your PC and try again.')
+    }
   }
 
   async function sync() {
+    // With no pairing yet, "Sync now" means "connect a PC".
     if (!settings) {
       setPairing(true)
       return
     }
     setBusy(true)
-    setMessage('Syncing your collection…')
+    setMessage('Syncing your collection:')
     const result = await syncCollection(collection)
     setBusy(false)
-    if (result.state === 'complete') {
-      const media = result.media
-      const mediaError = media?.uploadError ?? media?.downloadError
-      if (mediaError === 'authentication-required') setMessage(`Card sync complete. ${media?.pending ?? 0} media file${media?.pending === 1 ? '' : 's'} still need pairing.`)
-      else if (mediaError) setMessage(`Card sync complete. ${media?.pending ?? 0} media file${media?.pending === 1 ? '' : 's'} will retry when the PC is reachable.`)
-      else setMessage(`Sync complete. ${result.accepted} local change${result.accepted === 1 ? '' : 's'} sent; ${media?.uploaded ?? 0} uploaded and ${media?.downloaded ?? 0} downloaded.`)
-    }
-    else if (result.state === 'authentication-required') setMessage('This device needs to be paired again before it can sync.')
-    else if (result.state === 'upgrade-required') {
-      setMessage(result.target === 'this-device'
-        ? 'This device needs a Kiroku update before it can sync this collection. Update the app, then try again. Your local changes remain on this device.'
-        : 'Your PC sync service needs an update before this collection can sync. Update the PC service, then try again. Your local changes remain on this device.')
-    }
-    else setMessage('Your PC service could not be reached. Your changes remain on this device and will retry next time.')
+    setMessage(syncOutcomeMessage(result))
   }
 
   return (

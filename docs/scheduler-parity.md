@@ -59,8 +59,11 @@ that same-stage review and interday-learning siblings are buried when enabled,
 while two intraday-learning siblings remain available.
 
 The app now uses the same 4:00 a.m. local rollover for daily limits, daily shuffle
-seeds, sibling burial, and statistics. The broader grade/state matrix, review
-sort modes, more complex gather priority, sibling-bury behavior,
-and full persisted log parity still require comparison against this pinned target
-before #94 can close. A user-configured Anki rollover hour is not yet a setting
-in the app; this target currently matches Anki's default.
+seeds, sibling burial, and statistics. App tests cover all 16 state/grade
+transitions, preview-to-answer agreement, persistence after reload, review sort
+modes, gather modes, and cross-type bury precedence. The pinned native oracle
+checks the default review and new-card schedules plus the queue, limit, and
+burial cases above. It still does not compare all 16 persisted state/grade
+outcomes or every alternate sort/gather mode directly against Anki, so #94 stays
+open for that remaining parity evidence. A user-configured Anki rollover hour is
+not yet a setting in the app; this target currently matches Anki's default.

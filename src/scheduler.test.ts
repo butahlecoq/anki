@@ -143,10 +143,11 @@ describe('pure scheduling rules', () => {
   })
 
   test('answering is a pure, deterministic schedule transition with an explicit review identity', () => {
-    const source = card('answer-me', State.Review)
+    const source = card('answer-me', State.Review, { occlusionId: 'mask-7', occlusionOrdinal: 7, newPosition: 42, templateOrdinal: 6 })
     const first = answerWithSchedule(source, options, Rating.Good, now, 'review-1')
     const replay = answerWithSchedule(source, options, Rating.Good, now, 'review-2')
     expect(first.card).toEqual(replay.card)
+    expect(first.card).toMatchObject({ occlusionId: 'mask-7', occlusionOrdinal: 7, newPosition: 42, templateOrdinal: 6 })
     expect(Date.parse(first.card.due)).toBeGreaterThan(now.getTime())
     expect(first.review).toMatchObject({ id: 'review-1', cardId: source.id, deckId: source.deckId, rating: Rating.Good, state: State.Review, scheduling: { before: source } })
     expect(reviewChoices(source, options, now).map((choice) => choice.label)).toEqual(['Again', 'Hard', 'Good', 'Easy'])

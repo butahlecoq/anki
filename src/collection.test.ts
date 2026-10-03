@@ -91,6 +91,32 @@ describe('local collection', () => {
     await expect(collection.pendingOperations()).resolves.toHaveLength(0)
   })
 
+  test('upgrades v18 cards with stable new-card positions, sibling positions, and template ordinals', async () => {
+    const databaseName = `kiroku-test-${crypto.randomUUID()}`
+    const old = new Dexie(databaseName)
+    old.version(18).stores({
+      decks: 'id, parentId, optionGroupId, name, createdAt', notes: 'id, deckId, typeId, updatedAt', cards: 'id, deckId, noteId, templateId, due, state', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId', deletedEntities: 'key, entityType, entityId, occurredAt', noteMedia: 'id, noteId, digest, side, kind, updatedAt', mediaBlobs: 'digest, verifiedAt', noteTypes: 'id, name, updatedAt', deckOptionGroups: 'id, name, updatedAt', syncRevisions: 'opId, key', syncConflicts: 'key, entityType, entityId',
+    })
+    const createdAt = '2026-10-01T00:00:00.000Z'
+    await old.table('deckOptionGroups').add({ id: 'default', name: 'Default', protected: true, dailyNewLimit: 20, dailyReviewLimit: 200, desiredRetention: 0.9, learningSteps: ['1m', '10m'], relearningSteps: ['10m'], newCardOrder: 'added', reviewCardOrder: 'due', interdayLearningOrder: 'before-reviews', buryNewSiblings: false, buryReviewSiblings: false, leechThreshold: 8, leechAction: 'suspend', leechTag: 'leech', createdAt, updatedAt: createdAt })
+    await old.table('noteTypes').add({ id: 'basic', name: 'Basic', kind: 'standard', fields: [], templates: [{ id: 'second', name: 'Second', front: '', back: '', css: '' }, { id: 'first', name: 'First', front: '', back: '', css: '' }], protected: true, createdAt, updatedAt: createdAt })
+    await old.table('notes').bulkAdd([
+      { id: 'later', type: 'basic', typeId: 'basic', deckId: 'deck', fields: {}, createdAt: '2026-10-02T00:00:00.000Z', updatedAt: createdAt },
+      { id: 'earlier', type: 'basic', typeId: 'basic', deckId: 'deck', fields: {}, createdAt: '2026-10-01T00:00:00.000Z', updatedAt: createdAt },
+    ])
+    const makeNewCard = (id: string, noteId: string, templateId: string): CardRecord => ({ id, noteId, deckId: 'deck', templateId, due: createdAt, stability: 0, difficulty: 0, elapsedDays: 0, scheduledDays: 0, learningSteps: 0, reps: 0, lapses: 0, state: State.New, lastReview: null })
+    await old.table('cards').bulkAdd([
+      makeNewCard('later-second', 'later', 'second'), makeNewCard('later-first', 'later', 'first'), makeNewCard('earlier-first', 'earlier', 'first'),
+    ])
+    old.close()
+
+    collection = createCollection(databaseName)
+    await expect(collection.cards.get('earlier-first')).resolves.toMatchObject({ newPosition: 0, templateOrdinal: 1 })
+    await expect(collection.cards.get('later-second')).resolves.toMatchObject({ newPosition: 1, templateOrdinal: 0 })
+    await expect(collection.cards.get('later-first')).resolves.toMatchObject({ newPosition: 1, templateOrdinal: 1 })
+    await expect(collection.deckOptionGroups.get('default')).resolves.toMatchObject({ newCardGatherOrder: 'deck', newCardSortOrder: 'template', newReviewOrder: 'mix', buryInterdayLearningSiblings: false })
+  })
+
   test('upgrades v11 option groups with the explicit interday-learning order', async () => {
     const databaseName = `kiroku-test-${crypto.randomUUID()}`
     const old = new Dexie(databaseName)
