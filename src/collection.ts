@@ -1003,23 +1003,37 @@ export class Collection extends Dexie {
   cardGenerationStatus(noteType: NoteType, fields: Record<string, string>, imageOcclusion?: ImageOcclusion) {
     const skipped: { templateId: string; reason: string }[] = []
     const eligible: Array<CardTemplate & { clozeOrdinal?: number; occlusionId?: string; occlusionOrdinal?: number }> = []
+    const validateRenderable = (template: CardTemplate, ordinal?: number) => {
+      for (const side of ['front', 'back'] as const) {
+        const result = tryRenderNoteTemplate(template[side], noteType, fields, undefined, ordinal, side)
+        if (!result.ok) throw new Error(result.error)
+      }
+    }
     if (noteType.kind === 'image-occlusion') {
       if (!imageOcclusion) throw new Error('Image occlusion metadata is required')
       validateImageOcclusion(imageOcclusion)
       if (noteType.templates.length !== 1) throw new Error('Image occlusion needs exactly one template')
-      for (const mask of imageOcclusion.masks) eligible.push({ ...noteType.templates[0], occlusionId: mask.id, occlusionOrdinal: mask.ordinal })
+      for (const mask of imageOcclusion.masks) {
+        validateRenderable(noteType.templates[0], mask.ordinal)
+        eligible.push({ ...noteType.templates[0], occlusionId: mask.id, occlusionOrdinal: mask.ordinal })
+      }
       return { eligible, skipped }
     }
     if (noteType.kind === 'cloze') {
       const field = clozeField(noteType)
       if (!field) throw new Error('Cloze field not found')
       const ordinals = clozeOrdinals(fields[field.id] ?? '')
+      validateRenderable(noteType.templates[0], ordinals[0] ?? 1)
       for (const ordinal of ordinals) eligible.push({ ...noteType.templates[0], clozeOrdinal: ordinal })
       if (!ordinals.length) skipped.push({ templateId: noteType.templates[0].id, reason: 'No cloze deletions found' })
       return { eligible, skipped }
     }
     for (const template of noteType.templates) {
-      if (renderNoteTemplate(template.front, noteType, fields).isEmpty) skipped.push({ templateId: template.id, reason: 'Front has no visible field content' })
+      const front = tryRenderNoteTemplate(template.front, noteType, fields, undefined, undefined, 'front')
+      if (!front.ok) throw new Error(front.error)
+      const back = tryRenderNoteTemplate(template.back, noteType, fields, undefined, undefined, 'back')
+      if (!back.ok) throw new Error(back.error)
+      if (front.value.isEmpty) skipped.push({ templateId: template.id, reason: 'Front has no visible field content' })
       else eligible.push(template)
     }
     return { eligible, skipped }
