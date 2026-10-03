@@ -132,6 +132,33 @@ test('a learner creates a child deck from its parent', async () => {
   }
 })
 
+test('a learner can prepare a deck and see that its local media is ready for offline review', async () => {
+  const deck = await collection.createDeck(`Offline preparation ${crypto.randomUUID()}`)
+  window.location.hash = `#deck/${deck.id}`
+  render(<CollectionWorkspace />)
+  try {
+    fireEvent.click(await screen.findByRole('button', { name: 'Prepare this deck for offline use' }))
+    expect(await screen.findByText(/This deck is ready for offline review/)).toBeVisible()
+  } finally {
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+  }
+})
+
+test('offline deck preparation explains when missing media needs a PC connection', async () => {
+  const deck = await collection.createDeck(`Offline media ${crypto.randomUUID()}`)
+  const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
+  const media = await collection.attachMedia(note.id, { file: new File(['cat image'], 'cat.png', { type: 'image/png' }), side: 'front' })
+  await collection.mediaBlobs.delete(media.digest)
+  window.location.hash = `#deck/${deck.id}`
+  render(<CollectionWorkspace />)
+  try {
+    fireEvent.click(await screen.findByRole('button', { name: 'Prepare this deck for offline use' }))
+    expect(await screen.findByText(/needs 1 media file from the paired PC/)).toBeVisible()
+  } finally {
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+  }
+})
+
 test('a learner creates and assigns reusable scheduling options', async () => {
   const deck = await collection.createDeck(`Options ${crypto.randomUUID()}`)
   window.location.hash = `#deck/${deck.id}`

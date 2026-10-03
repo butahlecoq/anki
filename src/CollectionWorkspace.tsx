@@ -795,6 +795,14 @@ function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () =>
   const noteTypes = useLiveQuery(() => collection.noteTypes.toArray(), [], [])
   const summary = useLiveQuery(async () => (await collection.summaries()).find((item) => item.id === deckId), [deckId])
   const due = useLiveQuery(() => collection.dueCards(deckId, new Date()), [deckId], [])
+  const offlineReadiness = useLiveQuery(async () => {
+    const noteIds = (await collection.notes.where('deckId').equals(deckId).primaryKeys()).map(String)
+    const references = noteIds.length ? await collection.noteMedia.where('noteId').anyOf(noteIds).toArray() : []
+    const digests = [...new Set(references.map((reference) => reference.digest))]
+    const blobs = digests.length ? await collection.mediaBlobs.bulkGet(digests) : []
+    const available = new Set(blobs.filter((blob): blob is NonNullable<typeof blob> => Boolean(blob)).map((blob) => blob.digest))
+    return { required: digests.length, missing: digests.filter((digest) => !available.has(digest)).length }
+  }, [deckId])
   const [deckDialog, setDeckDialog] = useState(false)
   const [childDialog, setChildDialog] = useState(false)
   const [moveDialog, setMoveDialog] = useState(false)
@@ -803,11 +811,37 @@ function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () =>
   const [moveNote, setMoveNote] = useState<Note | null>(null)
   const [manageCardsNote, setManageCardsNote] = useState<Note | null>(null)
   const [noteDialog, setNoteDialog] = useState<{ note?: Note } | null>(null)
+  const [preparingOffline, setPreparingOffline] = useState(false)
+  const [offlineMessage, setOfflineMessage] = useState('')
 
   if (deck === undefined || summary === undefined) return <div className="loading-state" role="status">Loading local deck…</div>
   if (!deck || !summary) return <div className="loading-state"><h1>Deck not found</h1><button className="text-button" onClick={onBack}>Back to decks</button></div>
 
   const hasDueCards = due.length > 0
+
+  async function prepareDeckOffline() {
+    if (!offlineReadiness) return
+    if (offlineReadiness.missing === 0) {
+      setOfflineMessage('This deck is ready for offline review. All referenced media is stored on this device.')
+      return
+    }
+    setPreparingOffline(true)
+    setOfflineMessage('Syncing the collection to download this deck’s missing media…')
+    try {
+      const result = await syncCollection(collection)
+      const current = await collection.notes.where('deckId').equals(deckId).primaryKeys()
+      const references = current.length ? await collection.noteMedia.where('noteId').anyOf(current.map(String)).toArray() : []
+      const missing = new Set((await collection.missingReferencedMedia()).map((reference) => reference.digest))
+      const deckMissing = new Set(references.map((reference) => reference.digest).filter((digest) => missing.has(digest))).size
+      if (deckMissing === 0) setOfflineMessage('This deck is ready for offline review. All referenced media is stored on this device.')
+      else if (result.state === 'authentication-required') setOfflineMessage(`This deck needs ${deckMissing} media file${deckMissing === 1 ? '' : 's'} from the paired PC. Connect to the PC, sync, and prepare the deck again.`)
+      else if (result.state === 'complete') setOfflineMessage(`${deckMissing} media file${deckMissing === 1 ? '' : 's'} could not be downloaded. Keep the PC reachable and try again before going offline.`)
+      else if (result.state === 'backup-failed') setOfflineMessage(result.message)
+      else setOfflineMessage(`This deck still needs ${deckMissing} media file${deckMissing === 1 ? '' : 's'}. The collection could not sync; try again while the PC is reachable.`)
+    } catch (error) {
+      setOfflineMessage(userFacingStorageError(error, 'This deck could not be checked. Free device storage and try again.'))
+    } finally { setPreparingOffline(false) }
+  }
 
   return (
     <>
@@ -817,6 +851,7 @@ function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () =>
         <h1>{deck.name}</h1>
         <CountStrip counts={summary.counts} reviews={summary.reviewCount} />{deck.name === SAMPLE_DECK_NAME ? <p className="temporary-membership">A small sample collection for trying Japanese review. Remove it any time from this page.</p> : <p className="temporary-membership">{summary.temporaryCount} home cards reserved for custom study. Home totals include them; today’s normal queue excludes them.</p>}
         <div className="deck-actions">
+          <button className="text-button" type="button" disabled={preparingOffline || !offlineReadiness} onClick={() => void prepareDeckOffline()}>{preparingOffline ? 'Preparing offline…' : 'Prepare this deck for offline use'}</button>
           <button className="primary-action" type="button" onClick={() => setNoteDialog({})}>Add note</button>
           <button className="primary-action study-action" type="button" disabled={!hasDueCards} onClick={onStudy}>Study now</button>
           <button className="text-button" type="button" onClick={() => setChildDialog(true)}>Create child deck</button>
@@ -825,6 +860,7 @@ function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () =>
           <button className="text-button" type="button" onClick={() => setDeckDialog(true)}>Rename deck</button>
           <button className="text-button danger" type="button" onClick={() => setDeleteDialog(true)}>{deck.name === SAMPLE_DECK_NAME ? 'Remove sample deck' : 'Delete deck'}</button>
         </div>
+        {offlineReadiness && <p className="temporary-membership" aria-live="polite">{offlineMessage || (offlineReadiness.missing === 0 ? `Offline ready · ${offlineReadiness.required} referenced media file${offlineReadiness.required === 1 ? '' : 's'} available.` : `${offlineReadiness.missing} of ${offlineReadiness.required} referenced media files need to be downloaded.`)}</p>}
       </section>
       <section className="note-list" aria-label="Notes">
         <div className="panel-heading"><div><span className="section-code">NOTES // {String(notes.length).padStart(2, '0')}</span><h2>Notes</h2></div></div>
