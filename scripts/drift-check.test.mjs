@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { execFileSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import {
   analyseDrift,
@@ -10,6 +11,7 @@ import {
   parseNumstat,
   parseStatus,
   parseWorktreePorcelain,
+  revision,
   USAGE,
 } from './drift-check.mjs'
 
@@ -162,6 +164,26 @@ describe('branches', () => {
     pullRequests,
   })
 
+  it('does not let git trailing newlines turn a merge base into an unreadable revision', () => {
+    // `git merge-base` prints a hash and a newline. Passed on untrimmed, the
+    // argument becomes `a0667f0\n..branch`, git rejects it, and every branch
+    // silently loses its own size. The first real run printed a `fatal:` line
+    // per branch above the report, which is how this was found.
+    const dirty = execFileSync('git', ['merge-base', 'origin/main', 'HEAD'], { encoding: 'utf8' })
+    expect(dirty).toMatch(/\n$/)
+
+    const base = revision(dirty)
+    expect(base).toBe(dirty.trim())
+    expect(() =>
+      execFileSync('git', ['rev-list', '--count', `${dirty}..HEAD`], { encoding: 'utf8', stdio: 'pipe' }),
+    ).toThrow()
+    const counted = execFileSync('git', ['rev-list', '--count', `${base}..HEAD`], {
+      encoding: 'utf8',
+      stdio: 'pipe',
+    })
+    expect(Number(counted.trim())).toBeGreaterThanOrEqual(0)
+  })
+
   it('reports commits beyond the merge point of a merged pull request as loss', () => {
     const input = withBranch({ name: 'feat/2-pwa-shell', additions: 1279, deletions: 4 }, [
       { number: 27, state: 'MERGED', mergedAt: '2026-09-30T10:00:00Z', headRefName: 'feat/2-pwa-shell' },
@@ -217,11 +239,152 @@ describe('branches', () => {
     expect(finding.message).toMatch(/identical to origin\/main/)
   })
 
+  it('asks git for a branch own size and ancestry, not only its diff against main', () => {
+    // Every git invocation goes through gitArgs, so a flag this git rejects is
+    // one failing test here rather than a silently empty report.
+    expect(gitArgs.diffFromMergeBase('main', 'feat/9-x', 'abc123')).toEqual([
+      'diff',
+      '--numstat',
+      'abc123',
+      'feat/9-x',
+    ])
+    expect(gitArgs.mergeBase('main', 'feat/9-x')).toEqual(['merge-base', 'origin/main', 'feat/9-x'])
+    expect(gitArgs.isAncestor('main', 'feat/9-x')).toEqual([
+      'merge-base',
+      '--is-ancestor',
+      'feat/9-x',
+      'origin/main',
+    ])
+    expect(gitArgs.revList('main', 'feat/9-x', 'abc123')).toEqual(['rev-list', '--count', 'abc123..feat/9-x'])
+    expect(gitArgs.revListNotIn('main', 'feat/9-x', 'abc123', 'feat/8-y')).toEqual([
+      'rev-list',
+      'abc123..feat/9-x',
+      '--not',
+      'feat/8-y',
+    ])
+    expect(gitArgs.revListNotIn('main', 'feat/9-x', 'abc123', 'feat/8-y', ['--no-merges'])).toEqual([
+      'rev-list',
+      'abc123..feat/9-x',
+      '--not',
+      'feat/8-y',
+      '--no-merges',
+    ])
+  })
+
   it('leaves a branch with an open pull request alone', () => {
     const input = withBranch({ name: 'feat/150-oracle', additions: 40, deletions: 2 }, [
       { number: 150, state: 'OPEN', mergedAt: null, headRefName: 'feat/150-oracle' },
     ])
     expect(analyseDrift(input).findings).toEqual([])
+  })
+
+  // The three rows below are the branches from issue #158, with the figures the
+  // issue records for them. `ownAdditions`/`ownDeletions` are the branch's diff
+  // from its merge base; `additions`/`deletions` stay the diff against main.
+  it('calls a branch that is an ancestor of main a disposable snapshot, whatever the tree diff says', () => {
+    const input = withBranch(
+      {
+        name: 'audit/85-current-main',
+        additions: 1,
+        deletions: 1150,
+        ownAdditions: 0,
+        ownDeletions: 0,
+        ownCommits: 0,
+        isAncestorOfMain: true,
+      },
+      [],
+    )
+    const report = analyseDrift(input)
+    expect(findingsFor(input, 'branch-no-pr')).toEqual([])
+    expect(findingsFor(input, 'branch-past-merge')).toEqual([])
+    const [finding] = findingsFor(input, 'branch-stale-snapshot')
+    expect(finding.level).toBe('drift')
+    expect(finding.message).toMatch(/ancestor of origin\/main/)
+    expect(finding.message).toMatch(/carries nothing of its own/)
+    // A branch that provably holds no work must never claim possible loss.
+    expect(report.exitCode).toBe(1)
+  })
+
+  it('calls a branch whose work is on an open pull request a merge workspace, not lost work', () => {
+    const input = withBranch(
+      {
+        name: 'merge/99-current-main',
+        additions: 2702,
+        deletions: 6011,
+        ownAdditions: 101,
+        ownDeletions: 11,
+        ownCommits: 3,
+        unsharedBy: { 'feat/106-import-reconciliation': 0 },
+        unsharedCommits: 0,
+      },
+      [{ number: 133, state: 'OPEN', mergedAt: null, headRefName: 'feat/106-import-reconciliation' }],
+    )
+    const report = analyseDrift(input)
+    expect(findingsFor(input, 'branch-no-pr')).toEqual([])
+    const [finding] = findingsFor(input, 'branch-merge-workspace')
+    expect(finding.level).toBe('drift')
+    expect(finding.message).toMatch(/#133/)
+    expect(finding.message).toMatch(/feat\/106-import-reconciliation/)
+    expect(finding.message).toMatch(/carries no unsaved work/)
+    expect(finding.remedy).toMatch(/git branch -D merge\/99-current-main/)
+    expect(report.exitCode).toBe(1)
+  })
+
+  it('still reports a merge workspace as unsaved work when it holds commits on no pull request', () => {
+    const input = withBranch(
+      {
+        name: 'merge/99-current-main',
+        additions: 2702,
+        deletions: 6011,
+        ownAdditions: 101,
+        ownDeletions: 11,
+        ownCommits: 3,
+        unsharedBy: { 'feat/106-import-reconciliation': 1 },
+        unsharedCommits: 1,
+      },
+      [{ number: 133, state: 'OPEN', mergedAt: null, headRefName: 'feat/106-import-reconciliation' }],
+    )
+    expect(findingsFor(input, 'branch-merge-workspace')).toEqual([])
+    const [finding] = findingsFor(input, 'branch-no-pr')
+    expect(finding.level).toBe('loss')
+    expect(finding.message).toMatch(/101 added line\(s\) and 11 deleted line\(s\) of its own/)
+    expect(analyseDrift(input).exitCode).toBe(2)
+  })
+
+  it('states a branch own size rather than the size of its diff against main', () => {
+    const input = withBranch(
+      {
+        name: 'feat/160-orphan',
+        additions: 5000,
+        deletions: 4000,
+        ownAdditions: 101,
+        ownDeletions: 11,
+        ownCommits: 3,
+        unsharedCommits: 3,
+      },
+      [],
+    )
+    const [finding] = findingsFor(input, 'branch-no-pr')
+    expect(finding.message).toMatch(/101 added line\(s\) and 11 deleted line\(s\) of its own/)
+    expect(finding.message).not.toMatch(/5000/)
+    expect(finding.message).not.toMatch(/4000/)
+  })
+
+  it('says which of the two diffs it used, so a reader can tell main-moved-on from branch-has-work', () => {    const input = withBranch(
+      {
+        name: 'fix/94-review-replay-current',
+        additions: 1337,
+        deletions: 1315,
+        ownAdditions: 1335,
+        ownDeletions: 165,
+        ownCommits: 17,
+        unsharedCommits: 17,
+      },
+      [],
+    )
+    const [finding] = findingsFor(input, 'branch-no-pr')
+    expect(finding.message).toMatch(/17 commit\(s\) not on origin\/main/)
+    expect(finding.message).toMatch(/1335 added line\(s\) and 165 deleted line\(s\) of its own/)
   })
 
   it('leaves a branch an agent is working in alone', () => {
