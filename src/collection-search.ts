@@ -1,4 +1,5 @@
 import { Rating, State, type CardRecord, type Deck, type Note, type NoteType, type ReviewEntry } from './collection'
+import { eligibleForStudy } from './scheduler'
 
 export class SearchSyntaxError extends Error {
   constructor(public readonly position: number, message: string) { super(message); this.name = 'SearchSyntaxError' }
@@ -113,7 +114,7 @@ function termPredicate(token: Token, now: Date): Predicate {
       if (!card) return false
       if (state === 'suspended') return Boolean(card.manualSuspended || card.templateSuspended || card.suspended)
       if (state === 'buried') return Boolean(card.buriedUntil && Date.parse(card.buriedUntil) > now.getTime())
-      if (state === 'due') return card.state !== State.New && Date.parse(card.due) <= now.getTime() && !card.manualSuspended && !card.templateSuspended && !card.suspended && !(card.buriedUntil && Date.parse(card.buriedUntil) > now.getTime())
+      if (state === 'due') return card.state !== State.New && eligibleForStudy(card, now)
       if (state === 'learn') return card.state === State.Learning || card.state === State.Relearning
       return card.state === ({ new: State.New, learning: State.Learning, relearning: State.Relearning, review: State.Review })[state as 'new' | 'learning' | 'relearning' | 'review']
     }

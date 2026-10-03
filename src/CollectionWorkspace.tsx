@@ -28,6 +28,7 @@ import { compareTypedAnswer } from './typed-answer'
 import { prepareAnkiImport, type PreparedAnkiImport } from './anki-import'
 import { CardHistory, Statistics, TodayWorkload } from './Statistics'
 import { CollectionBrowser } from './CollectionBrowser'
+import { eligibleForQueue } from './scheduler'
 import { ExportDialog } from './ExportDialog'
 import { CustomStudy } from './CustomStudy'
 import { answerCustomStudy, customStudyQueue, practiceChoices, undoCustomStudy } from './custom-study'
@@ -836,7 +837,7 @@ function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: string; se
   // unsupported attachment must not make the card permanently unanswerable.
   const mediaBlocked = !mediaQuery || preparedMedia.pending
   const unavailable = card === null || note === null || noteType === null ||
-    Boolean(card?.suspended || card?.manualSuspended || card?.templateSuspended) ||
+    Boolean(card && !eligibleForQueue(card, new Date())) ||
     (Boolean(noteType && card) && !template) ||
     Boolean(frontResult?.ok && frontResult.value.isEmpty && !imageOcclusion)
 
