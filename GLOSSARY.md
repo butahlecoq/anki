@@ -64,6 +64,28 @@ reporting - asks the scheduler module for that one answer rather than testing
 suspension fields itself.
 _Avoid_: availability, schedulable, active
 
+**Undo Record**:
+The single record describing the last action that can be taken back, held under
+one key and carrying its kind - a review, a note deletion, or a card action. Only
+one exists at a time, so the learner is offered one undo rather than several
+competing ones. It is undoable until a sync attempt, synchronisation, or a change
+to the rows it captured.
+_Avoid_: undo state, undo buffer, undo entry
+
+**Schema Ladder**:
+The ordered list of collection schema steps, each declaring the fields it
+introduced. The database migrations, the version a client advertises, the
+maximum a sync service accepts and the minimum a payload requires are all
+derived from it, so a step cannot be added in one place and missed in another.
+_Avoid_: migrations, schema history, version table
+
+**Card Displayability**:
+Whether a card can be shown to a learner. A card is displayable unless its front
+renders to nothing; an image occlusion note has no front template, so its empty
+front is expected rather than a fault.
+_Avoid_: emptiness, renderability, visibility
+
 ## Reading further
 
 - [ADR 0001: a Synthesised Deck's identity is derived from its Deck Path](docs/adr/0001-synthesised-deck-identity.md)
+- [ADR 0002: rules live in modules, not in the adapter that stores them](docs/adr/0002-rules-own-modules.md)
