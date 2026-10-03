@@ -1,13 +1,14 @@
 import type { Collection, SyncOperation, SyncSettings } from './collection'
-import { CLIENT_COLLECTION_SCHEMA_VERSION, SYNC_PROTOCOL_VERSION, type IncompatibleSync, type SyncHealth } from '../sync-capabilities.js'
+import { CLIENT_COLLECTION_SCHEMA_VERSION, SYNC_OPERATION_BATCH_SIZE, SYNC_REQUESTS_PER_ATTEMPT, SYNC_PROTOCOL_VERSION, type IncompatibleSync, type SyncHealth } from '../sync-capabilities.js'
 import { digestMedia } from './media'
 
 type Fetcher = typeof fetch
 type Change = { cursor: number; opId: string; entityType: string; entityId: string; action: string; occurredAt: string; payload: unknown }
 export type MediaSyncProgress = { uploaded: number; downloaded: number; pending: number; uploadError?: 'authentication-required' | 'unreachable'; downloadError?: 'authentication-required' | 'unreachable' }
-type Complete = { state: 'complete'; accepted: number; cursor: number; changes: Change[]; media?: MediaSyncProgress }
+export type SyncProgress = { phase: 'records' | 'upload' | 'download'; completed: number; pending: number; cursor?: number; remoteChangesPending?: boolean }
+type Complete = { state: 'complete'; accepted: number; cursor: number; changes: Change[]; hasMore?: boolean; media?: MediaSyncProgress }
 type UpgradeRequired = { state: 'upgrade-required'; target: 'this-device' | 'pc-service'; message: string; requiredSchemaVersion?: number }
-type SyncResult = Complete | UpgradeRequired | BackupFailed | { state: 'authentication-required' } | { state: 'unreachable' }
+type SyncResult = Complete | UpgradeRequired | BackupFailed | { state: 'authentication-required' } | { state: 'unreachable' } | { state: 'incomplete'; accepted: number; cursor: number; pendingOperations: number; remoteChangesPending: boolean }
 type PreflightResult = { state: 'ready' } | Exclude<SyncResult, Complete>
 export type PairingResult = { state: 'paired' } | { state: 'pairing-error' } | { state: 'unreachable' }
 export type PcBackup = { format: string; formatVersion: number; id: string; createdAt: string; reason: 'manual' | 'before-sync'; collectionSchemaVersion: number; changeCount: number; latestCursor: number; databaseBytes: number; databaseSha256: string; media: Array<{ digest: string; byteLength: number; mimeType: string }>; archiveSha256: string; archiveBytes: number }
@@ -168,7 +169,7 @@ export async function foregroundSync(settings: SyncSettings, operations: Partial
   }
 }
 
-export async function syncCollection(collection: Collection, fetcher: Fetcher = fetch): Promise<SyncResult> {
+export async function syncCollection(collection: Collection, fetcher: Fetcher = fetch, onProgress?: (progress: SyncProgress) => void): Promise<SyncResult> {
   const settings = await collection.syncSettings()
   if (!settings) return { state: 'authentication-required' }
   // An in-flight upload may already hold a snapshot of pending operations.
@@ -182,6 +183,7 @@ export async function syncCollection(collection: Collection, fetcher: Fetcher = 
   let downloadError: MediaSyncProgress['downloadError']
   const references = await collection.noteMedia.toArray()
   const localDigests = new Set(references.map((reference) => reference.digest))
+  onProgress?.({ phase: 'upload', completed: 0, pending: localDigests.size })
   for (const digest of localDigests) {
     const local = await collection.verifiedMediaBlob(digest)
     if (!local) continue
@@ -191,13 +193,38 @@ export async function syncCollection(collection: Collection, fetcher: Fetcher = 
     } catch (error) {
       uploadError = error instanceof MediaTransferError ? error.state : 'unreachable'
     }
+    onProgress?.({ phase: 'upload', completed: uploaded, pending: localDigests.size - uploaded })
   }
-  const operations = await collection.captureSyncOperations()
-  const result = await foregroundSync(settings, operations, fetcher)
-  if (result.state === 'complete') {
-    await collection.applyRemoteChanges(result.changes as SyncOperation[], result.cursor)
+  let cursor = settings.cursor
+  let accepted = 0
+  let result: Complete | undefined
+  let rounds = 0
+  let remoteChangesPending = false
+  while (rounds < SYNC_REQUESTS_PER_ATTEMPT) {
+    const operations = await collection.captureSyncOperations(SYNC_OPERATION_BATCH_SIZE)
+    const page = await foregroundSync({ ...settings, cursor }, operations, fetcher)
+    if (page.state !== 'complete') return page
+    await collection.applyRemoteChanges(page.changes as SyncOperation[], page.cursor)
     await collection.acknowledgeOperations(operations.map((operation) => operation.opId))
-    for (const digest of new Set((await collection.missingReferencedMedia()).map((reference) => reference.digest))) {
+    cursor = page.cursor
+    accepted += page.accepted
+    remoteChangesPending = page.hasMore === true
+    result = page
+    rounds += 1
+    const pending = await collection.outbox.count()
+    onProgress?.({ phase: 'records', completed: accepted, pending, cursor, remoteChangesPending })
+    if (!remoteChangesPending && pending === 0) break
+  }
+
+  const pendingOperations = await collection.outbox.count()
+  if (pendingOperations > 0 || remoteChangesPending) {
+    return { state: 'incomplete', accepted, cursor, pendingOperations, remoteChangesPending }
+  }
+
+  if (result) {
+    const missingDigests = new Set((await collection.missingReferencedMedia()).map((reference) => reference.digest))
+    onProgress?.({ phase: 'download', completed: 0, pending: missingDigests.size, cursor })
+    for (const digest of missingDigests) {
       try {
         const blob = await downloadMedia(settings, digest, fetcher)
         await collection.storeDownloadedMedia(digest, blob)
@@ -205,10 +232,11 @@ export async function syncCollection(collection: Collection, fetcher: Fetcher = 
       } catch (error) {
         downloadError = error instanceof MediaTransferError ? error.state : 'unreachable'
       }
+      onProgress?.({ phase: 'download', completed: downloaded, pending: missingDigests.size - downloaded, cursor })
     }
     const missing = new Set((await collection.missingReferencedMedia()).map((reference) => reference.digest)).size
     const pending = (uploadError ? localDigests.size - uploaded : 0) + missing
-    return { ...result, media: { uploaded, downloaded, pending, ...(uploadError ? { uploadError } : {}), ...(downloadError ? { downloadError } : {}) } }
+    return { ...result, accepted, cursor, hasMore: false, media: { uploaded, downloaded, pending, ...(uploadError ? { uploadError } : {}), ...(downloadError ? { downloadError } : {}) } }
   }
-  return result
+  return { state: 'unreachable' }
 }

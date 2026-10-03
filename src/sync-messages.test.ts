@@ -25,6 +25,15 @@ describe('a completed sync', () => {
     expect(syncOutcomeMessage({ state: 'complete', accepted: 0 })).toBe('Sync complete. 0 local changes sent; 0 uploaded and 0 downloaded.')
   })
 
+  test('a sync with conflicts tells the learner to review them', () => {
+    expect(syncOutcomeMessage({ state: 'complete', accepted: 1, conflicts: 2 })).toBe('Sync complete. 1 local change sent; 0 uploaded and 0 downloaded. 2 conflicts need review.')
+  })
+
+  test('an incomplete sync explains saved progress and remaining work', () => {
+    expect(syncOutcomeMessage({ state: 'incomplete', accepted: 100, pendingOperations: 25, remoteChangesPending: true }))
+      .toBe('Sync saved progress after sending 100 local changes. 25 local changes remain; tap Sync now to continue. More changes are waiting from the PC.')
+  })
+
   test('media awaiting pairing is distinguished from media that will retry', () => {
     const needsPairing = syncOutcomeMessage(complete({ pending: 2, uploadError: 'authentication-required' }))
     expect(needsPairing).toContain('still need pairing')
