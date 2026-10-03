@@ -251,14 +251,19 @@ function ExistingMedia({ media }: { media: NoteMediaReference }) {
 function SyncControls() {
   const settings = useLiveQuery(() => collection.syncSettings(), [], undefined)
   const offlineInventory = useLiveQuery(async () => {
-    const [notes, cards, media, missingMedia, pending] = await Promise.all([
-      collection.notes.count(), collection.cards.count(), collection.mediaBlobs.toArray(),
+    let mediaFiles = 0
+    let mediaBytes = 0
+    const mediaSize = collection.mediaBlobs.toCollection().each((blob) => { mediaFiles += 1; mediaBytes += blob.byteLength })
+    const [notes, cards, missingMedia, pending] = await Promise.all([
+      collection.notes.count(), collection.cards.count(),
       collection.missingReferencedMedia(), collection.outbox.count(),
+      mediaSize,
     ])
-    return { notes, cards, mediaBytes: media.reduce((total, blob) => total + blob.byteLength, 0), mediaFiles: media.length, missingMedia: new Set(missingMedia.map((item) => item.digest)).size, pending }
+    return { notes, cards, mediaBytes, mediaFiles, missingMedia: new Set(missingMedia.map((item) => item.digest)).size, pending }
   }, [], undefined)
   const [persistence, setPersistence] = useState<PersistenceResult | 'checking'>('checking')
   const [storageEstimate, setStorageEstimate] = useState<{ usage?: number; quota?: number }>()
+  const [estimateError, setEstimateError] = useState('')
   const [pairing, setPairing] = useState(false)
   const [endpoint, setEndpoint] = useState('')
   const [code, setCode] = useState('')
@@ -266,6 +271,14 @@ function SyncControls() {
   const [busy, setBusy] = useState(false)
   const [backups, setBackups] = useState<PcBackup[]>([])
   const [restorePreview, setRestorePreview] = useState('')
+
+  async function refreshStorageEstimate() {
+    try {
+      const estimate = await navigator.storage?.estimate()
+      setStorageEstimate(estimate ? { usage: estimate.usage, quota: estimate.quota } : undefined)
+      setEstimateError(estimate ? '' : 'Browser storage estimates are unavailable.')
+    } catch { setEstimateError('Browser storage estimates are unavailable.') }
+  }
 
   useEffect(() => {
     let active = true
@@ -367,6 +380,8 @@ function SyncControls() {
         <summary data-testid="offline-storage-summary">Offline storage and local collection</summary>
         <p>{persistence === 'checking' ? 'Checking browser storage protection…' : persistence === 'granted' ? 'Persistent storage is enabled for this app.' : persistence === 'denied' ? 'The browser may clear this app’s local data to free space. Keep a verified backup.' : 'This browser cannot protect local storage from automatic cleanup.'}</p>
         {storageEstimate && <p>Browser storage estimate: {storageEstimate.usage === undefined ? 'unknown' : formatStorageBytes(storageEstimate.usage)} used of {storageEstimate.quota === undefined ? 'unknown' : formatStorageBytes(storageEstimate.quota)} available.</p>}
+        <button className="text-button" type="button" onClick={() => void refreshStorageEstimate()}>Refresh storage estimate</button>
+        {estimateError && <p>{estimateError}</p>}
         {offlineInventory && <p>{offlineInventory.notes} notes · {offlineInventory.cards} cards · {offlineInventory.mediaFiles} media files ({formatStorageBytes(offlineInventory.mediaBytes)}) · {offlineInventory.missingMedia} media files missing · {offlineInventory.pending} changes waiting to sync.</p>}
         {offlineInventory?.missingMedia ? <p role="alert">Some referenced media is not stored on this device. Connect to the PC and sync before relying on offline access.</p> : offlineInventory && <p>All referenced media is available on this device.</p>}
       </details>
