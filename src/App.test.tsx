@@ -219,6 +219,25 @@ test('offline deck preparation explains when missing media needs a PC connection
   }
 })
 
+test('offline deck preparation refuses to report readiness for media with a bad content hash', async () => {
+  const deck = await collection.createDeck(`Damaged offline media ${crypto.randomUUID()}`)
+  const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
+  const media = await collection.attachMedia(note.id, { file: new File(['cat image'], 'cat.png', { type: 'image/png' }), side: 'front' })
+  const storedMedia = await collection.mediaBlobs.get(media.digest)
+  const damagedBytes = new Uint8Array(storedMedia!.byteLength).fill(0)
+  await collection.mediaBlobs.update(media.digest, { blob: damagedBytes.buffer })
+  window.location.hash = `#deck/${deck.id}`
+  render(<CollectionWorkspace />)
+  try {
+    fireEvent.click(await screen.findByRole('button', { name: 'Prepare this deck for offline use' }))
+    expect(await screen.findByText(/needs 1 media file from the paired PC/)).toBeVisible()
+    await waitFor(async () => expect(await collection.mediaBlobs.get(media.digest)).toBeUndefined())
+    expect(screen.queryByText(/This deck is ready for offline review/)).not.toBeInTheDocument()
+  } finally {
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+  }
+})
+
 test('a learner creates and assigns reusable scheduling options', async () => {
   const deck = await collection.createDeck(`Options ${crypto.randomUUID()}`)
   window.location.hash = `#deck/${deck.id}`
