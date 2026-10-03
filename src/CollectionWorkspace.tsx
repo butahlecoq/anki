@@ -22,7 +22,7 @@ import { ImageOcclusionEditor, ImageOcclusionReview } from './ImageOcclusion'
 import { NoteTypeManager } from './NoteTypeManager'
 import { TemplatePreview } from './TemplatePreview'
 import { useReviewMedia } from './use-review-media'
-import { validateMedia } from './media'
+import { digestMedia, validateMedia } from './media'
 import { createAndDownloadPcBackup, listPcBackups, pairCollection, previewPcBackupRestore, syncCollection, type PcBackup } from './sync-client'
 import { clozeOrdinals } from './template-renderer'
 import { compareTypedAnswer } from './typed-answer'
@@ -894,23 +894,44 @@ function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () =>
 
   async function prepareDeckOffline() {
     if (!offlineReadiness) return
-    if (offlineReadiness.missing === 0) {
-      setOfflineMessage('This deck is ready for offline review. All referenced media is stored on this device.')
-      return
-    }
     setPreparingOffline(true)
-    setOfflineMessage('Syncing the collection to download this deck’s missing media…')
+    setOfflineMessage(offlineReadiness.missing === 0
+      ? 'Verifying this deck’s stored media…'
+      : 'Syncing the collection to download this deck’s missing media…')
     try {
-      const result = await syncCollection(collection)
-      const current = await collection.notes.where('deckId').equals(deckId).primaryKeys()
-      const references = current.length ? await collection.noteMedia.where('noteId').anyOf(current.map(String)).toArray() : []
-      const missing = new Set((await collection.missingReferencedMedia()).map((reference) => reference.digest))
-      const deckMissing = new Set(references.map((reference) => reference.digest).filter((digest) => missing.has(digest))).size
-      if (deckMissing === 0) setOfflineMessage('This deck is ready for offline review. All referenced media is stored on this device.')
-      else if (result.state === 'authentication-required') setOfflineMessage(`This deck needs ${deckMissing} media file${deckMissing === 1 ? '' : 's'} from the paired PC. Connect to the PC, sync, and prepare the deck again.`)
-      else if (result.state === 'complete') setOfflineMessage(`${deckMissing} media file${deckMissing === 1 ? '' : 's'} could not be downloaded. Keep the PC reachable and try again before going offline.`)
-      else if (result.state === 'backup-failed') setOfflineMessage(result.message)
-      else setOfflineMessage(`This deck still needs ${deckMissing} media file${deckMissing === 1 ? '' : 's'}. The collection could not sync; try again while the PC is reachable.`)
+      let result: Awaited<ReturnType<typeof syncCollection>> | undefined
+      const inspectMedia = async () => {
+        const current = await collection.notes.where('deckId').equals(deckId).primaryKeys()
+        const references = current.length ? await collection.noteMedia.where('noteId').anyOf(current.map(String)).toArray() : []
+        const digests = [...new Set(references.map((reference) => reference.digest))]
+        const missing: string[] = []
+        const damaged: string[] = []
+        for (const digest of digests) {
+          const stored = await collection.verifiedMediaBlob(digest)
+          if (!stored) { missing.push(digest); continue }
+          if (stored.byteLength !== stored.blob.size || await digestMedia(stored.blob) !== digest) damaged.push(digest)
+        }
+        return { digests, missing, damaged }
+      }
+
+      if (offlineReadiness.missing > 0) result = await syncCollection(collection)
+      let checked = await inspectMedia()
+      if (checked.damaged.length > 0) {
+        // A digest-mismatched blob cannot be safely used or uploaded. Drop only
+        // the bad local cache entries; keep references so sync can fetch them.
+        await collection.mediaBlobs.bulkDelete(checked.damaged)
+        result = await syncCollection(collection)
+        checked = await inspectMedia()
+      }
+      const missing = checked.missing.length
+      const damaged = checked.damaged.length
+
+      if (missing === 0 && damaged === 0) setOfflineMessage(`This deck is ready for offline review. Verified ${checked.digests.length} referenced media file${checked.digests.length === 1 ? '' : 's'} on this device.`)
+      else if (result?.state === 'authentication-required') setOfflineMessage(`This deck needs ${missing} media file${missing === 1 ? '' : 's'} from the paired PC. Connect to the PC, sync, and prepare the deck again.`)
+      else if (damaged > 0) setOfflineMessage(`${damaged} stored media file${damaged === 1 ? ' failed its' : 's failed their'} size or SHA-256 check. Sync with the PC to replace damaged media before going offline.`)
+      else if (result?.state === 'complete') setOfflineMessage(`${missing} media file${missing === 1 ? '' : 's'} could not be downloaded. Keep the PC reachable and try again before going offline.`)
+      else if (result?.state === 'backup-failed') setOfflineMessage(result.message)
+      else setOfflineMessage(`This deck still needs ${missing} media file${missing === 1 ? '' : 's'}. The collection could not sync; try again while the PC is reachable.`)
     } catch (error) {
       setOfflineMessage(userFacingStorageError(error, 'This deck could not be checked. Free device storage and try again.'))
     } finally { setPreparingOffline(false) }
