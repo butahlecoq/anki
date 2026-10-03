@@ -879,7 +879,7 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
     for (const existing of await collection.cards.where('noteId').equals(noteId).toArray()) {
       if (incomingCardIds.has(existing.id) || existing.suspended) continue
       snapshots.push({ table: 'cards', id: existing.id, value: fingerprint(existing) })
-      writes.cards.push({ value: { ...existing, suspended: true }, action: 'update' })
+      writes.cards.push({ value: { ...existing, suspended: true, templateSuspended: true }, action: 'update' })
       recordDecision('card', existing.id, 'update')
     }
   }
