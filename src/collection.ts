@@ -261,6 +261,14 @@ export interface ReviewEntry {
   rescheduled?: boolean
   /** Original schedule and policy make independently produced reviews replayable. */
   scheduling?: { before: CardRecord; options: DeckOptionGroup }
+  /** Resulting schedule after this answer. The fields above retain Anki's pre-answer review-log meaning. */
+  afterState?: State
+  afterDue?: string
+  afterStability?: number
+  afterDifficulty?: number
+  afterElapsedDays?: number
+  afterScheduledDays?: number
+  afterLearningSteps?: number
 }
 
 export interface DeckCounts {
@@ -844,7 +852,8 @@ export class Collection extends Dexie {
       await transaction.table('cards').toCollection().modify((card: CardRecord) => { if (card.flag === undefined) card.flag = 0 })
     })
     this.version(14).stores({})
-    this.version(15).stores({ syncRevisions: 'opId, key', syncConflicts: 'key, entityType, entityId' })
+  this.version(15).stores({ syncRevisions: 'opId, key', syncConflicts: 'key, entityType, entityId' })
+    this.version(16).stores({})
     this.on('populate', (transaction) => {
       transaction.table('noteTypes').put(basicNoteType)
       transaction.table('noteTypes').put(imageOcclusionNoteType)
@@ -1748,7 +1757,7 @@ export class Collection extends Dexie {
       review.scheduling = { before: existing, options: group }
       if (durationMs !== undefined && Number.isFinite(durationMs) && durationMs >= 0) review.durationMs = Math.round(Math.min(60_000, durationMs))
       if (options?.reschedule === false) {
-        Object.assign(review, { rescheduled: false, due: existing.due, stability: existing.stability, difficulty: existing.difficulty, elapsedDays: existing.elapsedDays, scheduledDays: existing.scheduledDays, learningSteps: existing.learningSteps })
+        Object.assign(review, { rescheduled: false, due: existing.due, stability: existing.stability, difficulty: existing.difficulty, elapsedDays: existing.elapsedDays, scheduledDays: existing.scheduledDays, learningSteps: existing.learningSteps, afterState: existing.state, afterDue: existing.due, afterStability: existing.stability, afterDifficulty: existing.difficulty, afterElapsedDays: existing.elapsedDays, afterScheduledDays: existing.scheduledDays, afterLearningSteps: existing.learningSteps })
         await this.reviewEntries.add(review)
         const operation: SyncOperation = { opId: id(), entityType: 'review', entityId: review.id, action: 'create', occurredAt: review.reviewedAt, payload: review }
         await this.enqueueOperation(operation)
@@ -1771,6 +1780,7 @@ export class Collection extends Dexie {
         }
         if (group.leechAction === 'suspend') card = { ...card, manualSuspended: true }
       }
+      Object.assign(review, { afterState: card.state, afterDue: card.due, afterStability: card.stability, afterDifficulty: card.difficulty, afterElapsedDays: card.elapsedDays, afterScheduledDays: card.scheduledDays, afterLearningSteps: card.learningSteps })
       const buriedUntil = nextStudyBoundary(now).toISOString()
       const siblings = await this.cards.where('noteId').equals(card.noteId).toArray()
       for (const sibling of siblings) {
@@ -2303,7 +2313,7 @@ export class Collection extends Dexie {
           ...commands.map((command) => ({ at: command.occurredAt, id: command.opId, review: undefined as ReviewEntry | undefined, command })),
         ].sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id))
         for (const event of events) {
-          if (event.review) schedule = schedulerFor(event.review.scheduling!.options).next(schedule, new Date(event.at), event.review.rating as Grade).card
+          if (event.review) schedule = schedulerFor(event.review.scheduling!.options, event.review.cardId).next(schedule, new Date(event.at), event.review.rating as Grade).card
           else if (event.command) {
             const commanded = event.command.payload as CardRecord
             schedule = { ...schedule, due: new Date(commanded.due), state: commanded.state }

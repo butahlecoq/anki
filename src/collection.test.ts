@@ -291,6 +291,29 @@ describe('local collection', () => {
     }
   })
 
+  test('stores pre-answer Anki values and the resulting schedule for each card state transition', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Review history meanings')
+    const now = new Date('2026-10-01T12:00:00.000Z')
+    const cases = [
+      { name: 'New to Learning', initial: { state: State.New, due: now.toISOString(), stability: 0, difficulty: 0, elapsedDays: 0, scheduledDays: 0, learningSteps: 0, reps: 0, lapses: 0, lastReview: null }, rating: Rating.Good, after: State.Learning },
+      { name: 'Learning to Learning', initial: { state: State.Learning, due: now.toISOString(), stability: 1, difficulty: 5, elapsedDays: 0, scheduledDays: 0, learningSteps: 1, reps: 1, lapses: 0, lastReview: now.toISOString() }, rating: Rating.Again, after: State.Learning },
+      { name: 'Learning to Review', initial: { state: State.Learning, due: now.toISOString(), stability: 1, difficulty: 5, elapsedDays: 0, scheduledDays: 0, learningSteps: 1, reps: 1, lapses: 0, lastReview: now.toISOString() }, rating: Rating.Easy, after: State.Review },
+      { name: 'Review to Relearning', initial: { state: State.Review, due: now.toISOString(), stability: 5, difficulty: 5, elapsedDays: 2, scheduledDays: 5, learningSteps: 0, reps: 3, lapses: 0, lastReview: now.toISOString() }, rating: Rating.Again, after: State.Relearning },
+      { name: 'Relearning to Review', initial: { state: State.Relearning, due: now.toISOString(), stability: 2, difficulty: 6, elapsedDays: 1, scheduledDays: 2, learningSteps: 1, reps: 4, lapses: 1, lastReview: now.toISOString() }, rating: Rating.Easy, after: State.Review },
+    ] as const
+    for (const scenario of cases) {
+      const note = await collection.createBasicNote(deck.id, { front: scenario.name, back: 'result' })
+      const [created] = await collection.cards.where('noteId').equals(note.id).toArray()
+      const initial = { ...created, ...scenario.initial }
+      await collection.cards.put(initial)
+      const result = await collection.answer(created.id, scenario.rating, now)
+      const after = (await collection.cards.get(created.id))!
+      const stored = (await collection.reviewEntries.get(result.id))!
+      expect(stored).toMatchObject({ state: initial.state, due: initial.due, scheduledDays: initial.scheduledDays, afterState: scenario.after, afterDue: after.due, afterScheduledDays: after.scheduledDays })
+    }
+  })
+
   test('converges durable manual policy changes between two clients', async () => {
     const source = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const remote = createCollection(`kiroku-test-${crypto.randomUUID()}`)

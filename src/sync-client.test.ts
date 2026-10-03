@@ -3,7 +3,7 @@ import { foregroundSync, pairCollection, preflightSync, syncCollection } from '.
 import { createCollection, Rating } from './collection'
 import { digestMedia } from './media'
 
-const health = (collectionSchemaVersion = 15, maximumCollectionSchemaVersion = 15) => new Response(JSON.stringify({ ready: true, schemaVersion: 1, protocolVersion: 2, collectionSchemaVersion, maximumCollectionSchemaVersion, store: 'sqlite' }), { status: 200 })
+const health = (collectionSchemaVersion = 16, maximumCollectionSchemaVersion = 16) => new Response(JSON.stringify({ ready: true, schemaVersion: 1, protocolVersion: 2, collectionSchemaVersion, maximumCollectionSchemaVersion, store: 'sqlite' }), { status: 200 })
 
 test('sends pending operations with the local pairing credential', async () => {
   const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ accepted: 2, cursor: 2, changes: [] }), { status: 200 }))
@@ -11,13 +11,13 @@ test('sends pending operations with the local pairing credential', async () => {
 
   expect(result).toEqual({ state: 'complete', accepted: 2, cursor: 2, changes: [] })
   expect(fetcher).toHaveBeenCalledWith('https://pc.example.test/api/sync', expect.objectContaining({ method: 'POST', headers: expect.objectContaining({ authorization: 'Bearer token' }) }))
-  expect(JSON.parse(fetcher.mock.calls[0][1].body as string)).toMatchObject({ protocolVersion: 2, collectionSchemaVersion: 15, cursor: 0 })
+  expect(JSON.parse(fetcher.mock.calls[0][1].body as string)).toMatchObject({ protocolVersion: 2, collectionSchemaVersion: 16, cursor: 0 })
 })
 
 test('preflights the service and gives an actionable upgrade result without posting local changes', async () => {
-  const fetcher = vi.fn().mockResolvedValue(health(16, 16))
+  const fetcher = vi.fn().mockResolvedValue(health(17, 17))
 
-  await expect(preflightSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 }, fetcher)).resolves.toMatchObject({ state: 'upgrade-required', target: 'this-device', requiredSchemaVersion: 16 })
+  await expect(preflightSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 }, fetcher)).resolves.toMatchObject({ state: 'upgrade-required', target: 'this-device', requiredSchemaVersion: 17 })
   expect(fetcher).toHaveBeenCalledWith('https://pc.example.test/api/health')
 })
 
@@ -27,9 +27,9 @@ test('does not upload media or acknowledge local operations when the preflight r
   const deck = await collection.createDeck('Words')
   const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
   await collection.attachMedia(note.id, { file: new File(['image'], 'cat.png', { type: 'image/png' }), side: 'front' })
-  const fetcher = vi.fn().mockResolvedValue(health(16, 16))
+  const fetcher = vi.fn().mockResolvedValue(health(15, 15))
 
-  await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'upgrade-required', target: 'this-device' })
+  await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'upgrade-required', target: 'pc-service' })
   expect(fetcher).toHaveBeenCalledTimes(1)
   expect(fetcher).toHaveBeenCalledWith('https://pc.example.test/api/health')
   await expect(collection.pendingOperations()).resolves.not.toHaveLength(0)
