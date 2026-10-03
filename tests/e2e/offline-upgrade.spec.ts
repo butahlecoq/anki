@@ -2,12 +2,11 @@ import { expect, test } from '@playwright/test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { openOfflineProfileDocument, WEBKIT_COLD_OFFLINE_LIMITATION } from './offline-navigation'
+import { openOfflineProfileDocument } from './offline-navigation'
 
 const webURL = process.env.KIROKU_TEST_URL ?? `http://127.0.0.1:${process.env.KIROKU_WEB_PORT ?? '4173'}`
 
-test('a populated prior-schema collection migrates and cold-opens offline with its media', async ({ browserName, browser }) => {
-  test.skip(browserName === 'webkit', WEBKIT_COLD_OFFLINE_LIMITATION)
+test('a populated prior-schema collection migrates before offline use and cold-opens in Chromium', async ({ browserName, browser }) => {
   const profile = await mkdtemp(join(tmpdir(), 'kiroku-upgrade-profile-'))
   let firstContext: import('@playwright/test').BrowserContext | undefined
   let reopenedContext: import('@playwright/test').BrowserContext | undefined
@@ -65,6 +64,16 @@ test('a populated prior-schema collection migrates and cold-opens offline with i
     const firstImage = first.getByRole('img', { name: 'cat.png' })
     await expect(firstImage).toBeVisible()
     await expect.poll(() => firstImage.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth === 1)).toBe(true)
+
+    if (browserName === 'webkit') {
+      await firstContext.setOffline(true)
+      await expect(first.getByText('Offline shell active')).toBeVisible()
+      await first.getByRole('button', { name: 'Show answer' }).click()
+      await first.getByRole('button', { name: /^Good · / }).click()
+      await expect(first.getByRole('heading', { name: 'Session complete' })).toBeVisible()
+      return
+    }
+
     await first.evaluate(async () => { await navigator.serviceWorker.ready })
 
     await firstContext.close()
