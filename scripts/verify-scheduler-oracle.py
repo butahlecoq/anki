@@ -44,6 +44,7 @@ def main() -> None:
             collection.fsrs_short_term_with_steps_enabled = True
 
             config = collection.decks.config_dict_for_deck_id(1)
+            rollover_hour = collection.conf.get("rollover", 4)
             assert len(config["fsrsParams6"]) == len(update.defaults.config.fsrs_params_6) == 21, config["fsrsParams6"]
             assert all(
                 abs(actual - expected) < 0.00001
@@ -54,6 +55,7 @@ def main() -> None:
             assert config["lapse"]["delays"] == [10.0]
             assert config["new"]["perDay"] == 20
             assert config["rev"]["perDay"] == 200
+            assert rollover_hour == 4, rollover_hour
 
             easy_days_by_id = {}
             labels = []
@@ -111,6 +113,7 @@ def main() -> None:
                 "relearningStepsMinutes": config["lapse"]["delays"],
                 "dailyNewLimit": config["new"]["perDay"],
                 "dailyReviewLimit": config["rev"]["perDay"],
+                "studyDayRolloverHour": rollover_hour,
                 "nativeCardId": CARD_ID,
                 "newCardChoices": labels,
                 "easyScheduledDays": easy_days,

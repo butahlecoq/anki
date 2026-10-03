@@ -5,6 +5,7 @@ with **FSRS-6** enabled. The oracle uses Anki's built-in 21 default FSRS paramet
 0.9 desired retention, short-term FSRS learning enabled, learning steps of 1 and
 10 minutes, one 10-minute relearning step, and daily limits of 20 new and 200
 review cards. These settings come from the fresh official Anki 26.9.3 profile.
+The profile's study day rolls over at 4:00 a.m. local time (Anki's default).
 
 Run the isolated official scheduler oracle with:
 
@@ -27,6 +28,9 @@ compare 64 stable card identities against those wider native bands, avoiding a
 false mismatch from comparing short-term previews immediately after graduation
 with due-time review previews.
 
-The broader grade/state matrix, review ordering, gather limits, sibling-bury
-behavior, and full persisted log parity still require comparison against this
-pinned target before #94 can close.
+The app now uses the same 4:00 a.m. local rollover for daily limits, daily shuffle
+seeds, sibling burial, and statistics. The broader grade/state matrix, review
+ordering, gather limits, sibling-bury behavior, and full persisted log parity
+still require comparison against this pinned target before #94 can close. A
+user-configured Anki rollover hour is not yet a setting in the app; this target
+currently matches Anki's default.

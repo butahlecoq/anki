@@ -1,13 +1,14 @@
 import { Rating, State, type CardRecord, type ReviewEntry } from './collection'
+import { studyDayKey, studyDayStart, studyDayWindow } from './study-day'
 
 export type StatisticsPeriod = 'day' | 'week' | 'month' | 'all'
 
 export function localDayKey(date: Date) {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+  return studyDayKey(date)
 }
 
 export function periodWindow(period: StatisticsPeriod, anchor: Date) {
-  const start = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate())
+  const start = studyDayStart(anchor)
   const end = new Date(start)
   if (period === 'week') {
     start.setDate(start.getDate() - (start.getDay() + 6) % 7)
@@ -15,6 +16,11 @@ export function periodWindow(period: StatisticsPeriod, anchor: Date) {
   } else if (period === 'month') {
     start.setDate(1); end.setTime(start.getTime()); end.setMonth(end.getMonth() + 1)
   } else end.setDate(end.getDate() + 1)
+  if (period === 'day') {
+    const dayWindow = studyDayWindow(anchor)
+    start.setTime(dayWindow.start.getTime())
+    end.setTime(dayWindow.end.getTime())
+  }
   return { start: period === 'all' ? -Infinity : start.getTime(), end: period === 'all' ? Infinity : end.getTime() }
 }
 
@@ -44,7 +50,8 @@ export function reviewHeatmap(entries: ReviewEntry[], now: Date, days = 84) {
     counts.set(key, (counts.get(key) ?? 0) + 1)
   }
   return Array.from({ length: days }, (_, index) => {
-    const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() - days + index + 1)
+    const date = studyDayStart(now)
+    date.setDate(date.getDate() - days + index + 1)
     const key = localDayKey(date)
     return { date, key, count: counts.get(key) ?? 0 }
   })
@@ -52,8 +59,9 @@ export function reviewHeatmap(entries: ReviewEntry[], now: Date, days = 84) {
 
 export function schedulingStatistics(cards: CardRecord[], now: Date) {
   const scheduled = cards.filter((card) => card.state !== State.New && !card.suspended && !card.templateSuspended && !card.manualSuspended)
+  const today = studyDayStart(now)
   const forecast = Array.from({ length: 30 }, (_, index) => {
-    const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() + index)
+    const date = new Date(today); date.setDate(date.getDate() + index)
     const end = new Date(date); end.setDate(end.getDate() + 1)
     return { key: localDayKey(date), count: scheduled.filter((card) => {
       const due = Math.max(Date.parse(card.due), card.buriedUntil ? Date.parse(card.buriedUntil) : -Infinity)

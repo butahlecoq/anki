@@ -276,15 +276,15 @@ describe('Anki queue ordering parity', () => {
     expect(order).not.toEqual([...order].sort())
   })
 
-  test('holds the same-due order steady across local midnight', async () => {
+  test('holds the same-due order steady across the 4am local rollover', async () => {
     await freshCollection('order')
     const { deckId } = await seedSameDueReviews(12, SAME_DUE, LAST_REVIEW)
 
-    const beforeMidnight = (await collection!.reviewQueue(deckId, new Date('2026-10-01T23:50:00.000Z'))).map((c) => c.id)
-    const afterMidnight = (await collection!.reviewQueue(deckId, new Date('2026-10-02T00:10:00.000Z'))).map((c) => c.id)
+    const beforeMidnight = (await collection!.reviewQueue(deckId, new Date(2026, 9, 1, 3, 50))).map((c) => c.id)
+    const afterMidnight = (await collection!.reviewQueue(deckId, new Date(2026, 9, 1, 4, 10))).map((c) => c.id)
 
-    // Anki salts the review tiebreak with each card's own last answer, so a session
-    // running past midnight must not reorder, repeat or skip the cards it already showed.
+    // Anki salts the review tiebreak with each card's own last answer, so crossing
+    // the study-day rollover must not reorder, repeat or skip the cards already shown.
     expect(afterMidnight).toEqual(beforeMidnight)
   })
 

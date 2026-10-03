@@ -14,6 +14,7 @@ import {
 import { digestMedia, validateMedia, type AudioPlayback, type MediaKind, type MediaSide } from './media'
 import { clozeOrdinals, renderTemplate, tryRenderTemplate, validateTemplate } from './template-renderer'
 import { mergeRevisions, revisionHeads, type RevisionMerge } from './sync-revisions'
+import { DEFAULT_STUDY_DAY_ROLLOVER_HOUR, studyDayKey as studyDay, studyDayWindow as getStudyDayWindow } from './study-day'
 
 export { Rating, State }
 export type { Grade }
@@ -516,18 +517,13 @@ function nextSchedule(scheduler: ReturnType<typeof schedulerFor>, card: FsrsCard
   return result
 }
 
-function studyDay(value: Date) {
-  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`
-}
-
 function studyDayWindow(value: Date) {
-  const start = new Date(value.getFullYear(), value.getMonth(), value.getDate())
-  const end = new Date(value.getFullYear(), value.getMonth(), value.getDate() + 1)
+  const { start, end } = getStudyDayWindow(value, DEFAULT_STUDY_DAY_ROLLOVER_HOUR)
   return { start: start.getTime(), end: end.getTime() }
 }
 
 function nextStudyBoundary(value: Date) {
-  return new Date(value.getFullYear(), value.getMonth(), value.getDate() + 1)
+  return new Date(studyDayWindow(value).end)
 }
 
 function templateSuspended(card: CardRecord) {
@@ -1664,7 +1660,7 @@ export class Collection extends Dexie {
       // breaks same-due ties with a salted hash, never with card identity. Without
       // this the order is frozen for the life of the collection. Anki salts the
       // review tiebreak with the card's own modification time, so the order holds
-      // still across local midnight and only moves when the card is answered. Only
+      // still across the daily rollover and only moves when the card is answered. Only
       // the explicitly random orders are day-seeded. New and learning cards keep
       // identity ordering so daily-limit truncation stays predictable.
       const tiebreakKey = (card: CardRecord, group: DeckOptionGroup, kind: 'new' | 'review' | 'learning') => {

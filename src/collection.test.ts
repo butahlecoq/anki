@@ -139,7 +139,7 @@ describe('local collection', () => {
 
     await collection.buryCard(card.id, now)
     const buried = (await collection.cards.get(card.id))!
-    expect(buried.buriedUntil).toBe(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString())
+    expect(buried.buriedUntil).toBe(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 4).toISOString())
     await expect(collection.dueCards(deck.id, now)).resolves.toEqual([])
     await expect(collection.dueCards(deck.id, new Date(buried.buriedUntil!))).resolves.toEqual([expect.objectContaining({ id: card.id })])
     await collection.unburyCard(card.id, now)
@@ -213,7 +213,7 @@ describe('local collection', () => {
     const now = new Date('2026-10-01T12:00:00.000Z')
 
     await collection.answer(first.id, Rating.Good, now)
-    await expect(collection.cards.get(sibling.id)).resolves.toMatchObject({ buriedUntil: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString() })
+    await expect(collection.cards.get(sibling.id)).resolves.toMatchObject({ buriedUntil: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 4).toISOString() })
 
     await collection.unburyCard(sibling.id, now)
     await collection.cards.update(sibling.id, { state: State.Review, due: now.toISOString(), stability: 2, difficulty: 5, reps: 3, lapses: 0 })
@@ -267,7 +267,7 @@ describe('local collection', () => {
 
     await collection.answer(reviewed.id, Rating.Good, now)
 
-    const nextBoundary = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString()
+    const nextBoundary = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 4).toISOString()
     await expect(collection.cards.get(intraday.id)).resolves.toMatchObject({ buriedUntil: nextBoundary })
     await expect(collection.cards.get(interday.id)).resolves.toMatchObject({ buriedUntil: nextBoundary })
     const due = await collection.dueCards(deck.id, now)
@@ -381,11 +381,11 @@ describe('local collection', () => {
       const outbound = await source.pendingOperations()
       await remote.applyRemoteChanges(outbound, outbound.length)
 
-      await expect(remote.cards.get(card.id)).resolves.toMatchObject({ manualSuspended: true, templateSuspended: false, buriedUntil: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString(), due: '2026-10-03T12:00:00.000Z', state: State.Review })
+      await expect(remote.cards.get(card.id)).resolves.toMatchObject({ manualSuspended: true, templateSuspended: false, buriedUntil: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 4).toISOString(), due: '2026-10-03T12:00:00.000Z', state: State.Review })
       await remote.unsuspendCard(card.id, new Date('2026-10-01T12:01:00.000Z'))
       const returnOperations = await remote.pendingOperations()
       await source.applyRemoteChanges(returnOperations, outbound.length + returnOperations.length)
-      await expect(source.cards.get(card.id)).resolves.toMatchObject({ manualSuspended: false, buriedUntil: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString(), due: '2026-10-03T12:00:00.000Z' })
+      await expect(source.cards.get(card.id)).resolves.toMatchObject({ manualSuspended: false, buriedUntil: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 4).toISOString(), due: '2026-10-03T12:00:00.000Z' })
     } finally {
       await source.delete()
       await remote.delete()
@@ -582,7 +582,7 @@ describe('local collection', () => {
       await remote.applyRemoteChanges(changes, changes.length)
 
       await expect(remote.cards.get(reviewed.id)).resolves.toMatchObject({ manualSuspended: true })
-      await expect(remote.cards.get(sibling.id)).resolves.toMatchObject({ buriedUntil: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString() })
+      await expect(remote.cards.get(sibling.id)).resolves.toMatchObject({ buriedUntil: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 4).toISOString() })
       await expect(remote.notes.get(note.id)).resolves.toMatchObject({ tags: ['leech'] })
       await expect(remote.reviewEntries.where('cardId').equals(reviewed.id).count()).resolves.toBe(1)
     } finally {
@@ -734,7 +734,7 @@ describe('local collection', () => {
     await expect(collection.deleteDeck(source.id, { mode: 'relocate', destinationDeckId: destination.id })).rejects.toThrow(/unique among siblings/i)
   })
 
-  test('applies new-card caps to the learner local study day across a UTC midnight offset', async () => {
+  test('applies new-card caps to the learner local study day across the 4am rollover and UTC midnight offset', async () => {
     const runtime = (globalThis as unknown as { process: NodeRuntime }).process
     if (runtime.env.KIROKU_LOCAL_DAY_CHILD !== '1') {
       const moduleName = ['node', 'child_process'].join(':')
@@ -756,9 +756,9 @@ describe('local collection', () => {
     const second = await collection.createBasicNote(deck.id, { front: 'second', back: 'second' })
     const firstCard = (await collection.cards.where('noteId').equals(first.id).first())!
     const secondCard = (await collection.cards.where('noteId').equals(second.id).first())!
-    const localMidnight = new Date(2026, 9, 1, 0, 0, 0, 0)
-    const previousLocalDay = new Date(localMidnight.getTime() - 15 * 60 * 1000)
-    const currentLocalDay = new Date(localMidnight.getTime() + 15 * 60 * 1000)
+    const rollover = new Date(2026, 9, 1, 4, 0, 0, 0)
+    const previousLocalDay = new Date(rollover.getTime() - 15 * 60 * 1000)
+    const currentLocalDay = new Date(rollover.getTime() + 15 * 60 * 1000)
     await collection.cards.update(firstCard.id, { state: State.Learning, due: new Date(currentLocalDay.getTime() + 60 * 60 * 1000).toISOString() })
     await collection.reviewEntries.add({ id: 'previous-local-day', cardId: firstCard.id, deckId: deck.id, rating: Rating.Good, state: State.New, due: firstCard.due, stability: 1, difficulty: 5, elapsedDays: 0, lastElapsedDays: 0, scheduledDays: 0, learningSteps: 1, reviewedAt: previousLocalDay.toISOString() })
 
