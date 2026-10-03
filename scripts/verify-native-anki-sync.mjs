@@ -122,11 +122,15 @@ try {
   assert(ready, 'official server readiness')
   const oracle = (action) => execFileSync(python, [fixture, action, root, endpoint], { stdio: 'pipe', windowsHide: true })
   oracle('seed')
-  execFileSync(process.execPath, ['node_modules/typescript/bin/tsc', 'src/native-anki-sync.ts', 'src/native-anki-media.ts', 'src/native-anki-state.ts', '--outDir', 'runtime/native-build', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--target', 'ES2022', '--strict', '--skipLibCheck'], { stdio: 'pipe', windowsHide: true })
-  const { NativeAnkiClient } = await import('../runtime/native-build/native-anki-sync.js')
-  const { nativeFieldText } = await import('../runtime/native-build/native-anki-cache.js')
-  const { NativeAnkiMedia } = await import('../runtime/native-build/native-anki-media.js')
-  const { NativeAnkiState } = await import('../runtime/native-build/native-anki-state.js')
+  // The application build uses bundler resolution and extensionless TS imports.
+  // Emit this isolated verifier build as CommonJS so TypeScript's NodeNext
+  // extension checks do not reject valid Vite imports.
+  execFileSync(process.execPath, ['node_modules/typescript/bin/tsc', 'src/native-anki-sync.ts', 'src/native-anki-media.ts', 'src/native-anki-state.ts', '--outDir', 'runtime/native-build', '--module', 'CommonJS', '--moduleResolution', 'Node', '--target', 'ES2022', '--strict', '--skipLibCheck'], { stdio: 'pipe', windowsHide: true })
+  writeFileSync(join(process.cwd(), 'runtime', 'native-build', 'package.json'), '{"type":"commonjs"}')
+  const { NativeAnkiClient } = await import('../runtime/native-build/src/native-anki-sync.js')
+  const { nativeFieldText } = await import('../runtime/native-build/src/native-anki-cache.js')
+  const { NativeAnkiMedia } = await import('../runtime/native-build/src/native-anki-media.js')
+  const { NativeAnkiState } = await import('../runtime/native-build/src/native-anki-state.js')
   for (const [field, text, checksum] of JSON.parse(oracle('cache').toString())) {
     assert.equal(nativeFieldText(field), text, 'official native field text/cache interpretation')
     assert.equal(createHash('sha1').update(nativeFieldText(field)).digest().readUInt32BE(0), checksum)

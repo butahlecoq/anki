@@ -35,7 +35,7 @@ git worktree add ..\anki-3 -b feat/3-first-offline-review origin/main
 
 Never run two implementation agents in the same worktree; see [one agent, one worktree](#one-agent-one-worktree) below for why that is not negotiable.
 
-There is no GitHub Actions workflow at present, so `npm run check` — typecheck, lint, unit, server, build, and browser — is the only gate, and its result must be recorded on the pull request. See [the CI guide](docs/agents/ci.md) for why the workflow was removed and what restoring it involves.
+There is no blocking GitHub Actions gate, so `npm run check` — typecheck, lint, unit, server, build, and browser — remains the only merge gate, and its result must be recorded on the pull request. A separate non-blocking scheduled workflow monitors the latest Anki sync wheel for #150. See [the CI guide](docs/agents/ci.md) for the billing limitation and workflow scope.
 
 ### Local browser verification
 

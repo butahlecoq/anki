@@ -1,0 +1,157 @@
+name: Latest Anki native sync oracle
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-anki-latest-wheel
+  cancel-in-progress: false
+
+jobs:
+  oracle:
+    name: Compare the latest Anki wheel
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # This compatibility monitor reports regressions but never blocks a merge.
+    continue-on-error: true
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/checkout@v7
+        with:
+          repository: ankitects/anki
+          ref: main
+          path: upstream/anki
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - name: Install repository dependencies
+        id: dependencies
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          npm ci 2>&1 | tee dependencies.log
+
+      - name: Resolve latest stable Anki wheel
+        id: latest
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          VERSION="$(python -c "import json, urllib.request; print(json.load(urllib.request.urlopen('https://pypi.org/pypi/anki/json'))['info']['version'])")"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Latest published Anki wheel: $VERSION"
+
+      - name: Install the latest published Anki wheel
+        id: wheel
+        if: ${{ steps.latest.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          WHEEL_VERSION: ${{ steps.latest.outputs.version }}
+        run: |
+          set -euo pipefail
+          python -m venv .anki-oracle-venv
+          . .anki-oracle-venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install "anki==${WHEEL_VERSION}" 2>&1 | tee wheel-install.log
+
+      - name: Report latest upstream boundary constants
+        id: boundary
+        if: ${{ steps.dependencies.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          ANKI_SOURCE_DIR: upstream/anki
+        run: |
+          set -euo pipefail
+          npx tsc src/native-anki-upstream-boundary.ts --outDir runtime/native-boundary --module NodeNext --moduleResolution NodeNext --target ES2022 --strict --skipLibCheck --noEmit false --rootDir src
+          node --input-type=module - <<'NODE' | tee boundary-report.log
+          import { writeFileSync } from 'node:fs'
+          import { nativeAnkiBoundaryReport, readNativeAnkiUpstreamBoundary } from './runtime/native-boundary/native-anki-upstream-boundary.js'
+          const report = nativeAnkiBoundaryReport(readNativeAnkiUpstreamBoundary(process.env.ANKI_SOURCE_DIR))
+          writeFileSync('boundary-report.txt', report)
+          console.log(report)
+          NODE
+
+      - name: Run upstream boundary tripwire
+        id: tripwire
+        if: ${{ steps.dependencies.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          ANKI_SOURCE_DIR: upstream/anki
+        run: |
+          set -o pipefail
+          npx vitest run src/native-anki-upstream-boundary.test.ts 2>&1 | tee tripwire.log
+
+      - name: Run the oracle against the latest wheel
+        id: oracle_check
+        if: ${{ steps.dependencies.outcome == 'success' && steps.wheel.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          ANKI_TEST_PYTHON: .anki-oracle-venv/bin/python
+        run: |
+          set -o pipefail
+          node scripts/verify-native-anki-sync.mjs 2>&1 | tee oracle.log
+
+      - name: Open or update the issue for a failed check
+        if: ${{ always() && (steps.dependencies.outcome != 'success' || steps.latest.outcome != 'success' || steps.wheel.outcome != 'success' || steps.boundary.outcome != 'success' || steps.tripwire.outcome != 'success' || steps.oracle_check.outcome != 'success') }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WHEEL_VERSION: ${{ steps.latest.outputs.version }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          DEPENDENCIES_RESULT: ${{ steps.dependencies.outcome }}
+          LATEST_RESULT: ${{ steps.latest.outcome }}
+          WHEEL_RESULT: ${{ steps.wheel.outcome }}
+          BOUNDARY_RESULT: ${{ steps.boundary.outcome }}
+          TRIPWIRE_RESULT: ${{ steps.tripwire.outcome }}
+          ORACLE_RESULT: ${{ steps.oracle_check.outcome }}
+        run: |
+          VERSION="${WHEEL_VERSION:-unavailable}"
+          TITLE="Latest Anki wheel oracle failed ($VERSION)"
+          {
+            echo "## Failing checks"
+            echo
+            echo "- Repository dependencies: ${DEPENDENCIES_RESULT:-skipped}"
+            echo "- Latest wheel lookup: ${LATEST_RESULT:-skipped}"
+            echo "- Wheel installation: ${WHEEL_RESULT:-skipped}"
+            echo "- Upstream boundary report: ${BOUNDARY_RESULT:-skipped}"
+            echo "- Protocol/schema tripwire: ${TRIPWIRE_RESULT:-skipped}"
+            echo "- Latest-wheel oracle: ${ORACLE_RESULT:-skipped}"
+            echo
+            echo "Anki wheel version: ${VERSION}"
+            echo "Workflow run: ${RUN_URL}"
+            echo
+            echo "## Upstream boundary constant diff"
+            echo
+            if [ -f boundary-report.txt ]; then cat boundary-report.txt; else echo "Boundary constants could not be read from the upstream checkout."; fi
+            for LOG in dependencies.log wheel-install.log boundary-report.log tripwire.log oracle.log; do
+              if [ -f "$LOG" ]; then
+                echo
+                echo "## ${LOG} (last 250 lines)"
+                echo '```text'
+                tail -n 250 "$LOG"
+                echo '```'
+              fi
+            done
+          } > failure-issue.md
+
+          EXISTING="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title $TITLE" --json number,title --jq ".[] | select(.title == \"$TITLE\") | .number" | head -n 1)"
+          if [ -n "$EXISTING" ]; then
+            gh issue edit "$EXISTING" --repo "$GITHUB_REPOSITORY" --body-file failure-issue.md
+            gh issue comment "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "Another scheduled oracle run failed. See [run]($RUN_URL); the issue body contains the latest failing check, wheel version, and boundary report."
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body-file failure-issue.md
+          fi
