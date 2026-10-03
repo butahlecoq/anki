@@ -492,6 +492,7 @@ function settingsFromGroup(group: DeckOptionGroup): DeckOptionSettings {
     relearningSteps: group.relearningSteps,
     newCardOrder: group.newCardOrder,
     reviewCardOrder: group.reviewCardOrder,
+    newReviewOrder: group.newReviewOrder,
     interdayLearningOrder: group.interdayLearningOrder,
     buryNewSiblings: group.buryNewSiblings,
     buryReviewSiblings: group.buryReviewSiblings,
@@ -635,7 +636,8 @@ function DeckOptionsDialog({ deck, onClose }: { deck: Deck; onClose: () => void 
         <label>Relearning steps<input aria-label="Relearning steps" value={selectedSettings.relearningSteps.join(', ')} onChange={(event) => update('relearningSteps', stepList(event.target.value))} /></label>
         <label>New card order<select aria-label="New card order" value={selectedSettings.newCardOrder} onChange={(event) => update('newCardOrder', event.target.value as DeckOptionSettings['newCardOrder'])}><option value="added">Added</option><option value="random">Random</option></select></label>
         <label>Review card order<select aria-label="Review card order" value={selectedSettings.reviewCardOrder} onChange={(event) => update('reviewCardOrder', event.target.value as DeckOptionSettings['reviewCardOrder'])}><option value="due">Due</option><option value="random">Random</option></select></label>
-        <label>Interday learning order<select aria-label="Interday learning order" value={selectedSettings.interdayLearningOrder} onChange={(event) => update('interdayLearningOrder', event.target.value as DeckOptionSettings['interdayLearningOrder'])}><option value="before-reviews">Before reviews</option><option value="after-reviews">After reviews</option></select></label>
+        <label>New/review order<select aria-label="New/review order" value={selectedSettings.newReviewOrder} onChange={(event) => update('newReviewOrder', event.target.value as DeckOptionSettings['newReviewOrder'])}><option value="mix">Mix with reviews</option><option value="before-reviews">Before reviews</option><option value="after-reviews">After reviews</option></select></label>
+        <label>Interday learning order<select aria-label="Interday learning order" value={selectedSettings.interdayLearningOrder} onChange={(event) => update('interdayLearningOrder', event.target.value as DeckOptionSettings['interdayLearningOrder'])}><option value="mix">Mix with reviews</option><option value="before-reviews">Before reviews</option><option value="after-reviews">After reviews</option></select></label>
         <fieldset className="policy-settings"><legend>Sibling burial</legend>
           <label className="choice"><input aria-label="Bury new siblings" type="checkbox" checked={Boolean(selectedSettings.buryNewSiblings)} onChange={(event) => update('buryNewSiblings', event.target.checked)} />Bury new siblings</label>
           <label className="choice"><input aria-label="Bury review siblings" type="checkbox" checked={Boolean(selectedSettings.buryReviewSiblings)} onChange={(event) => update('buryReviewSiblings', event.target.checked)} />Bury review siblings</label>

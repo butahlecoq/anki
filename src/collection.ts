@@ -33,7 +33,8 @@ export const DEFAULT_DECK_OPTION_GROUP_ID = 'default'
 /** Reusable scheduling settings are introduced independently of any individual deck. */
 export type NewCardOrder = 'added' | 'random'
 export type ReviewCardOrder = 'due' | 'random'
-export type InterdayLearningOrder = 'before-reviews' | 'after-reviews'
+export type ReviewMixOrder = 'mix' | 'before-reviews' | 'after-reviews'
+export type InterdayLearningOrder = ReviewMixOrder
 type FsrsStep = `${number}${'m' | 'h' | 'd'}`
 
 export interface DeckOptionSettings {
@@ -44,6 +45,8 @@ export interface DeckOptionSettings {
   relearningSteps: readonly string[]
   newCardOrder: NewCardOrder
   reviewCardOrder: ReviewCardOrder
+  /** Controls where new cards appear relative to reviews after gathering. */
+  newReviewOrder?: ReviewMixOrder
   /** Controls where day-crossing learning cards appear relative to review cards. */
   interdayLearningOrder?: InterdayLearningOrder
   /** Omitted by pre-policy callers; the owning group retains its current policy. */
@@ -67,6 +70,7 @@ export interface DeckOptionGroup {
   relearningSteps: readonly string[]
   newCardOrder: NewCardOrder
   reviewCardOrder: ReviewCardOrder
+  newReviewOrder: ReviewMixOrder
   interdayLearningOrder: InterdayLearningOrder
   buryNewSiblings: boolean
   buryReviewSiblings: boolean
@@ -321,7 +325,8 @@ const defaultDeckOptionSettings: Required<DeckOptionSettings> = {
   relearningSteps: ['10m'],
   newCardOrder: 'added',
   reviewCardOrder: 'due',
-  interdayLearningOrder: 'before-reviews',
+  newReviewOrder: 'mix',
+  interdayLearningOrder: 'mix',
   buryNewSiblings: false,
   buryReviewSiblings: false,
   leechThreshold: 8,
@@ -397,6 +402,7 @@ function copiedDeckOptionSettings(settings: DeckOptionSettings): Required<DeckOp
     ...settings,
     learningSteps: [...settings.learningSteps],
     relearningSteps: [...settings.relearningSteps],
+    newReviewOrder: settings.newReviewOrder ?? defaultDeckOptionSettings.newReviewOrder,
     interdayLearningOrder: settings.interdayLearningOrder ?? defaultDeckOptionSettings.interdayLearningOrder,
     buryNewSiblings: settings.buryNewSiblings ?? defaultDeckOptionSettings.buryNewSiblings,
     buryReviewSiblings: settings.buryReviewSiblings ?? defaultDeckOptionSettings.buryReviewSiblings,
@@ -438,8 +444,10 @@ function validateDeckOptionSettings(input: DeckOptionSettings): Required<DeckOpt
   if (!Number.isFinite(input.desiredRetention) || input.desiredRetention <= 0 || input.desiredRetention > 1) throw new Error('Desired retention must be greater than 0 and at most 1')
   if (input.newCardOrder !== 'added' && input.newCardOrder !== 'random') throw new Error('New card order is invalid')
   if (input.reviewCardOrder !== 'due' && input.reviewCardOrder !== 'random') throw new Error('Review card order is invalid')
+  const newReviewOrder = input.newReviewOrder ?? defaultDeckOptionSettings.newReviewOrder
+  if (newReviewOrder !== 'mix' && newReviewOrder !== 'before-reviews' && newReviewOrder !== 'after-reviews') throw new Error('New/review order is invalid')
   const interdayLearningOrder = input.interdayLearningOrder ?? defaultDeckOptionSettings.interdayLearningOrder
-  if (interdayLearningOrder !== 'before-reviews' && interdayLearningOrder !== 'after-reviews') throw new Error('Interday learning order is invalid')
+  if (interdayLearningOrder !== 'mix' && interdayLearningOrder !== 'before-reviews' && interdayLearningOrder !== 'after-reviews') throw new Error('Interday learning order is invalid')
   const buryNewSiblings = input.buryNewSiblings ?? defaultDeckOptionSettings.buryNewSiblings
   const buryReviewSiblings = input.buryReviewSiblings ?? defaultDeckOptionSettings.buryReviewSiblings
   if (typeof buryNewSiblings !== 'boolean' || typeof buryReviewSiblings !== 'boolean') throw new Error('Sibling burying options are invalid')
@@ -453,6 +461,7 @@ function validateDeckOptionSettings(input: DeckOptionSettings): Required<DeckOpt
     relearningSteps: validateSteps(input.relearningSteps, 'Relearning steps'),
     newCardOrder: input.newCardOrder,
     reviewCardOrder: input.reviewCardOrder,
+    newReviewOrder,
     interdayLearningOrder,
     buryNewSiblings,
     buryReviewSiblings,
@@ -473,6 +482,7 @@ function canonicalDeckOptionGroup(group: LegacyDeckOptionGroup): DeckOptionGroup
       relearningSteps: group.relearningSteps ?? defaultDeckOptionSettings.relearningSteps,
       newCardOrder: group.newCardOrder ?? defaultDeckOptionSettings.newCardOrder,
       reviewCardOrder: group.reviewCardOrder ?? defaultDeckOptionSettings.reviewCardOrder,
+      newReviewOrder: group.newReviewOrder ?? defaultDeckOptionSettings.newReviewOrder,
       interdayLearningOrder: group.interdayLearningOrder ?? defaultDeckOptionSettings.interdayLearningOrder,
       buryNewSiblings: group.buryNewSiblings ?? defaultDeckOptionSettings.buryNewSiblings,
       buryReviewSiblings: group.buryReviewSiblings ?? defaultDeckOptionSettings.buryReviewSiblings,
@@ -500,6 +510,21 @@ function schedulerFor(group: DeckOptionGroup, cardId: string) {
   return scheduler.useStrategy(StrategyMode.SEED, function (this: AbstractScheduler) {
     return `${cardId}_${this.current.reps}`
   })
+}
+
+/** Evenly weave two already sorted queues, matching Anki's V3 Intersperser. */
+function mixQueues<T>(first: readonly T[], second: readonly T[]): T[] {
+  const ratio = (first.length + 1) / (second.length + 1)
+  const mixed: T[] = []
+  let firstIndex = 0
+  let secondIndex = 0
+  while (firstIndex < first.length || secondIndex < second.length) {
+    if (firstIndex >= first.length) mixed.push(second[secondIndex++])
+    else if (secondIndex >= second.length) mixed.push(first[firstIndex++])
+    else if ((secondIndex + 1) * ratio < firstIndex + 1) mixed.push(second[secondIndex++])
+    else mixed.push(first[firstIndex++])
+  }
+  return mixed
 }
 
 function nextSchedule(scheduler: ReturnType<typeof schedulerFor>, card: FsrsCard, now: Date, grade: Grade) {
@@ -865,6 +890,9 @@ export class Collection extends Dexie {
     this.version(14).stores({})
     this.version(15).stores({ syncRevisions: 'opId, key', syncConflicts: 'key, entityType, entityId' })
     this.version(16).stores({})
+    this.version(17).stores({}).upgrade(async (transaction) => {
+      await transaction.table('deckOptionGroups').toCollection().modify((group: LegacyDeckOptionGroup) => Object.assign(group, canonicalDeckOptionGroup(group)))
+    })
     this.on('populate', (transaction) => {
       transaction.table('noteTypes').put(basicNoteType)
       transaction.table('noteTypes').put(imageOcclusionNoteType)
@@ -1698,17 +1726,14 @@ export class Collection extends Dexie {
         const newCards = sortWithinDeck(own.filter((card) => card.state === State.New), selectedGroup, 'new')
         const totals = reviewedToday.get(deck.id) ?? { new: 0, review: 0 }
         // Each owning deck applies its own policy while gathering from its daily review budget.
-        const limited = group.interdayLearningOrder === 'before-reviews'
-          ? [...interdayLearning, ...reviewsDue]
-          : [...reviewsDue, ...interdayLearning]
+        // Anki gathers interday learning ahead of reviews; the selected deck's
+        // display mix is applied only after all daily limits have been enforced.
+        const limited = [...interdayLearning, ...reviewsDue]
         selected.push(...intradayLearning, ...limited.slice(0, Math.max(0, group.dailyReviewLimit - totals.review)), ...newCards.slice(0, Math.max(0, group.dailyNewLimit - totals.new)))
       }
       const intradayLearning = sortQueue(selected.filter((card) => isLearningCard(card) && !isInterdayLearning(card)), 'learning')
       const interdayLearning = sortQueue(selected.filter(isInterdayLearning), 'learning')
       const orderedReviews = sortQueue(selected.filter((card) => card.state === State.Review), 'review')
-      const orderedLimited = selectedGroup.interdayLearningOrder === 'before-reviews'
-        ? [...interdayLearning, ...orderedReviews]
-        : [...orderedReviews, ...interdayLearning]
       const totalsAcrossSubtree = deckIds.reduce((sum, id) => {
         const totals = reviewedToday.get(id)
         return { new: sum.new + (totals?.new ?? 0), review: sum.review + (totals?.review ?? 0) }
@@ -1716,10 +1741,26 @@ export class Collection extends Dexie {
       // Anki applies each subdeck's limit while gathering, then the selected
       // deck's limits to the whole gathered subtree. Intraday learning is exempt
       // from the daily review cap, while interday learning shares its budget.
-      const gatheredLimited = orderedLimited.slice(0, Math.max(0, selectedGroup.dailyReviewLimit - totalsAcrossSubtree.review))
+      // Limits consume cards in Anki's gather priority order (interday learning,
+      // then reviews); display-order mixing is applied to the cards that survive.
+      const gatheredLimited = [...interdayLearning, ...orderedReviews]
+        .slice(0, Math.max(0, selectedGroup.dailyReviewLimit - totalsAcrossSubtree.review))
+      const gatheredInterdayLearning = gatheredLimited.filter(isInterdayLearning)
+      const gatheredReviews = gatheredLimited.filter((card) => card.state === State.Review)
+      const orderedLimited = selectedGroup.interdayLearningOrder === 'before-reviews'
+        ? [...gatheredInterdayLearning, ...gatheredReviews]
+        : selectedGroup.interdayLearningOrder === 'after-reviews'
+          ? [...gatheredReviews, ...gatheredInterdayLearning]
+          : mixQueues(gatheredReviews, gatheredInterdayLearning)
       const newCards = sortQueue(selected.filter((card) => card.state === State.New), 'new')
         .slice(0, Math.max(0, selectedGroup.dailyNewLimit - totalsAcrossSubtree.new))
-      return [...intradayLearning, ...gatheredLimited, ...newCards]
+      const reviewAndLearning = orderedLimited
+      const mainQueue = selectedGroup.newReviewOrder === 'before-reviews'
+        ? [...newCards, ...reviewAndLearning]
+        : selectedGroup.newReviewOrder === 'after-reviews'
+          ? [...reviewAndLearning, ...newCards]
+          : mixQueues(reviewAndLearning, newCards)
+      return [...intradayLearning, ...mainQueue]
     })
   }
 

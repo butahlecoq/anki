@@ -65,6 +65,35 @@ def verify_selected_deck_limits(path: Path) -> dict[str, int]:
         collection.close()
 
 
+def verify_default_queue_mixing(path: Path) -> dict[str, object]:
+    collection = Collection(str(path))
+    try:
+        config = collection.decks.config_dict_for_deck_id(1)
+        assert config["newMix"] == 0
+        assert config["interdayLearningMix"] == 0
+        card_ids = []
+        for offset in range(7):
+            note = collection.new_note(collection.models.by_name("Basic"))
+            note.fields = [f"mix {offset}", f"混合{offset}"]
+            collection.add_note(note, 1)
+            card_ids.append(int(collection.db.scalar("select id from cards where nid = ?", note.id)))
+
+        today = collection.sched.today
+        for card_id in card_ids[2:]:
+            collection.db.execute(
+                "update cards set type=2, queue=2, due=?, ivl=10 where id=?",
+                today,
+                card_id,
+            )
+
+        queued = collection.sched.get_queued_cards(fetch_limit=100)
+        order = ["new" if card.card.ctype == 0 else "review" for card in queued.cards]
+        assert order == ["review", "review", "new", "review", "review", "new", "review"], order
+        return {"newMix": config["newMix"], "interdayLearningMix": config["interdayLearningMix"], "queueOrder": order}
+    finally:
+        collection.close()
+
+
 def main() -> None:
     actual_version = version("anki")
     assert actual_version == ANKI_VERSION, (actual_version, ANKI_VERSION)
@@ -150,6 +179,7 @@ def main() -> None:
             assert easy_range == {"min": 6, "max": 10}, easy_range
             assert first_review_labels == ["<10m", "28d", "1.3mo", "2.2mo"], first_review_labels
             selected_deck_limits = verify_selected_deck_limits(Path(directory) / "queue-oracle.anki2")
+            default_queue_mixing = verify_default_queue_mixing(Path(directory) / "mixing-oracle.anki2")
             print(json.dumps({
                 "ankiVersion": actual_version,
                 "scheduler": "V3",
@@ -169,6 +199,7 @@ def main() -> None:
                 "firstGraduatedCardReviewScheduledDays": first_review_days,
                 "nativeReviewIntervalRangesFor512CardIds": review_ranges,
                 "nativeSelectedDeckLimits": selected_deck_limits,
+                "nativeDefaultQueueMixing": default_queue_mixing,
             }, indent=2))
         finally:
             collection.close()

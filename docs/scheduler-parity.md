@@ -35,9 +35,17 @@ then the selected deck's total limit across its subtree. The app currently uses
 Anki's default behavior; the optional “Limits Start From The Top” preference is
 not configurable.
 
+Anki's fresh profile uses `mixWithReviews` for both new/review and
+interday-learning/review order. The native oracle gathers two new and five review
+cards and verifies the default queue sequence `review, review, new, review,
+review, new, review`. The app uses the same even intersperser and now exposes
+separate mix/before/after settings for both queue types. Intraday learning remains
+ahead of the main queue, while daily caps gather interday learning before reviews
+as Anki does.
+
 The app now uses the same 4:00 a.m. local rollover for daily limits, daily shuffle
 seeds, sibling burial, and statistics. The broader grade/state matrix, review
-ordering and display mix, more complex gather priority, sibling-bury behavior,
+sort modes, more complex gather priority, sibling-bury behavior,
 and full persisted log parity still require comparison against this pinned target
 before #94 can close. A user-configured Anki rollover hour is not yet a setting
 in the app; this target currently matches Anki's default.
