@@ -28,6 +28,36 @@ test('card-level flags and suspension retain sibling identity; note view affects
   } finally { db.close(); await db.delete() }
 })
 
+test('a bulk deletion leaves no undo to press, because one record cannot restore it all', async () => {
+  const { db, deck } = await fixture()
+  const other = await db.createDeck('Second')
+  const notes = [
+    await db.createBasicNote(deck.id, { front: '犬', back: 'dog' }),
+    await db.createBasicNote(other.id, { front: '鳥', back: 'bird' }),
+  ]
+
+  // A single deletion is genuinely reversible, and keeps its undo.
+  await applyBulkAction(db, { view: 'notes', ids: [notes[0].id] }, { kind: 'delete' })
+  await expect(db.pendingUndo()).resolves.toMatchObject({ kind: 'note-deletion', note: { id: notes[0].id } })
+  await expect(db.undo()).resolves.toBe(notes[0].id)
+
+  // Two would leave only the last record, and pressing it would restore one note
+  // while the learner believes both came back.
+  await applyBulkAction(db, { view: 'notes', ids: notes.map((note) => note.id) }, { kind: 'delete' })
+  await expect(db.pendingUndo()).resolves.toBeNull()
+  await expect(db.undo()).rejects.toThrow(/nothing to undo/i)
+  await expect(db.notes.bulkGet(notes.map((note) => note.id))).resolves.toEqual([undefined, undefined])
+})
+
+test('bulk card maintenance drops the single-record undo it cannot honour', async () => {
+  const { db, cards } = await fixture()
+  await db.suspendCard(cards[0].id)
+  await expect(db.pendingUndo()).resolves.toMatchObject({ kind: 'card-maintenance' })
+
+  await applyBulkAction(db, { view: 'cards', ids: cards.map((card) => card.id) }, { kind: 'suspend', suspended: true })
+  await expect(db.pendingUndo()).resolves.toBeNull()
+})
+
 test('note actions deduplicate selected siblings and moving preserves scheduling and review identity', async () => {
   const { db, note, cards } = await fixture()
   try {

@@ -87,7 +87,7 @@ test('a deletion remains effective when an offline client uploads a stale edit',
 test('undoing an unpublished deletion removes its causal revision before later synchronization', async () => {
   const { a, b, note } = await clients()
   await a.deleteNote(note.id, new Date('2026-10-02T12:00:00Z'))
-  await a.undoLastNoteDeletion()
+  await a.undo()
   await b.updateBasicNote(note.id, { front: 'ねこ', back: 'cat' }, new Date('2026-10-02T12:01:00Z'))
   await exchange(a, b)
   expect(await a.notes.get(note.id)).toEqual(await b.notes.get(note.id))

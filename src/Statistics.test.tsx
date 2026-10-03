@@ -49,7 +49,7 @@ test('live offline answers and undo update totals, heatmap selection, and chrono
     fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }))
     fireEvent.click(screen.getByRole('button', { name: 'Today' }))
     await waitFor(() => expect(screen.getByText('ANSWERS').parentElement).toHaveTextContent('1'))
-    await collection.undoLastReview()
+    await collection.undo()
     await waitFor(() => expect(screen.getByText('ANSWERS').parentElement).toHaveTextContent('0'))
   } finally { cleanup(); await collection.deleteDeck(deck.id, { mode: 'delete-subtree' }) }
 })

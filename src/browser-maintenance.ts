@@ -53,14 +53,14 @@ export async function applyBulkAction(db: Collection, selection: BrowserSelectio
       for (const note of notes) await db.deleteNote(note.id, now)
       // A one-record undo would incorrectly suggest that the entire bulk deletion
       // was restored. Single-note deletions retain the existing safe undo.
-      if (notes.length > 1) await db.settings.delete('noteDeletionUndo')
+      if (notes.length > 1) await db.clearPendingUndo()
     } else {
       for (const card of cards) {
         if (action.kind === 'flag') await db.setCardFlag(card.id, action.flag, now)
         else if (action.suspended) await db.suspendCard(card.id, now)
         else await db.unsuspendCard(card.id, now)
       }
-      if (cards.length > 1) await db.settings.delete('cardMaintenanceUndo')
+      if (cards.length > 1) await db.clearPendingUndo()
     }
     return { notes: notes.length, cards: cards.length }
   })
