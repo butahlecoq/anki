@@ -133,3 +133,16 @@ test('a first Good learning answer remains a native intraday learning review', a
   expect(native.data.revlog[0]).toMatchObject({ ease: 3, type: 0, ivl: -600, time: 1234 })
 })
 
+test('review transitions keep Anki pre-answer revlog fields while exporting the resulting interval', async () => {
+  const source = database()
+  const deck = await source.createDeck('Review transition')
+  const note = await source.createBasicNote(deck.id, { front: '復習', back: 'review' })
+  const [card] = await source.cards.where('noteId').equals(note.id).toArray()
+  const now = new Date('2026-10-01T12:00:00Z')
+  await source.cards.put({ ...card, state: State.Review, due: now.toISOString(), stability: 5, difficulty: 5, elapsedDays: 2, scheduledDays: 5, learningSteps: 0, reps: 3, lapses: 0, lastReview: now.toISOString() })
+  const review = await source.answer(card.id, Rating.Again, now)
+  const native = AnkiCollection.open((await exportAnkiPackage(source, { ...all, SQL })).bytes, SQL)
+  expect(review).toMatchObject({ state: State.Review, scheduledDays: 5, afterState: State.Relearning, afterScheduledDays: 0 })
+  expect(native.data.revlog[0]).toMatchObject({ type: 1, lastIvl: 5, ivl: -600 })
+})
+

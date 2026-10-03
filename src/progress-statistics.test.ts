@@ -32,6 +32,16 @@ test('answers cross the local midnight once, and learning answers do not inflate
   expect(reviewHeatmap([...log, log[1]], now, 2).map((day) => [day.key, day.count])).toEqual([['2026-09-30', 1], ['2026-10-01', 3]])
 })
 
+test('recall uses the resulting state while legacy logs use their original state', () => {
+  const now = new Date(2026, 9, 1, 12)
+  const stats = reviewStatistics([
+    review('graduate', now, { state: State.Learning, afterState: State.Review, rating: Rating.Good }),
+    review('relearn', now, { state: State.Review, afterState: State.Relearning, rating: Rating.Again }),
+  ], 'day', now)
+  expect(stats.retentionCount).toBe(1)
+  expect(stats.retention).toBe(1)
+})
+
 test('forecasts count overdue once, respect burial, and exclude suspended and new cards', () => {
   const now = new Date(2026, 9, 1, 12)
   const tomorrow = new Date(2026, 9, 2)

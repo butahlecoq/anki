@@ -396,6 +396,12 @@ function reviewState(review: RevlogRow): State {
   return State.Review
 }
 
+function resultingReviewState(next: RevlogRow | undefined, card: CardRecord): State {
+  // The next revlog's review type identifies the state the card had reached
+  // before its next answer. For the last row, the current cards table is authoritative.
+  return next ? reviewState(next) : card.state
+}
+
 function fingerprint(value: unknown) {
   if (value === undefined) return 'missing'
   if (value && typeof value === 'object' && 'blob' in value) {
@@ -778,7 +784,8 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
   }
 
   const previousReviewByCard = new Map<number, { reviewedAt: number; elapsedDays: number }>()
-  for (const row of [...data.revlog].sort((left, right) => left.id - right.id)) {
+  const orderedReviewRows = [...data.revlog].sort((left, right) => left.id - right.id)
+  for (const [reviewIndex, row] of orderedReviewRows.entries()) {
     const cardId = sourceCardIds.get(row.cid)
     const card = cards.find((candidate) => candidate.id === cardId)
     if (!cardId || !card || row.ease < 1 || row.ease > 4) {
@@ -809,6 +816,8 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
       reviewedAt,
       ...(Number.isFinite(row.time) && row.time >= 0 ? { durationMs: row.time } : {}),
       ...(row.type === 3 ? { rescheduled: false } : {}),
+      afterState: resultingReviewState(orderedReviewRows.slice(reviewIndex + 1).find((candidate) => candidate.cid === row.cid), card),
+      afterDue: new Date(row.id + intervalMilliseconds(row.ivl)).toISOString(), afterScheduledDays: intervalDays(row.ivl),
       ...exportedReview,
     })
     previousReviewByCard.set(row.cid, { reviewedAt: row.id, elapsedDays })

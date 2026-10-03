@@ -166,7 +166,8 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
       while (used.has(id)) id += 1
       used.add(id)
       const next = historyEntries[index + 1] ?? card
-      const interval = next.scheduledDays || -Math.max(1, Math.round((Date.parse(next.due) - Date.parse(review.reviewedAt)) / 1000))
+      const resultingInterval = review.afterScheduledDays ?? next.scheduledDays
+      const interval = resultingInterval || -Math.max(1, Math.round((Date.parse(review.afterDue ?? next.due) - Date.parse(review.reviewedAt)) / 1000))
       const previous = historyEntries[index - 1]
       const lastInterval = review.scheduledDays || (previous ? -Math.max(1, Math.round((Date.parse(review.due) - Date.parse(previous.reviewedAt)) / 1000)) : 0)
       const practice = 'rescheduled' in review && review.rescheduled === false
@@ -175,7 +176,7 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
       const metadata = JSON.parse(row.data || '{}') as Record<string, unknown>
       const history = (metadata.kirokuReviews ?? {}) as Record<string, unknown>
       const { rating, state, due, stability, difficulty, elapsedDays, lastElapsedDays, scheduledDays, learningSteps, reviewedAt, durationMs } = review
-      history[id] = { native: nativeReviewFingerprint(data.revlog.at(-1)!), rating, state, due, stability, difficulty, elapsedDays, lastElapsedDays, scheduledDays, learningSteps, reviewedAt, durationMs, ...(practice ? { rescheduled: false } : {}) }
+      history[id] = { native: nativeReviewFingerprint(data.revlog.at(-1)!), rating, state, due, stability, difficulty, elapsedDays, lastElapsedDays, scheduledDays, learningSteps, reviewedAt, durationMs, afterState: review.afterState, afterDue: review.afterDue, afterStability: review.afterStability, afterDifficulty: review.afterDifficulty, afterElapsedDays: review.afterElapsedDays, afterScheduledDays: review.afterScheduledDays, afterLearningSteps: review.afterLearningSteps, ...(practice ? { rescheduled: false } : {}) }
       row.data = JSON.stringify({ ...metadata, kirokuReviews: history })
       }
     }
