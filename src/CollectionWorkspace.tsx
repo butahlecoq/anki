@@ -23,6 +23,7 @@ import { TemplatePreview } from './TemplatePreview'
 import { useReviewMedia } from './use-review-media'
 import { validateMedia } from './media'
 import { pairCollection, syncCollection } from './sync-client'
+import { supportsServiceWorkers } from './browser-capabilities'
 import { clozeOrdinals } from './template-renderer'
 import { compareTypedAnswer } from './typed-answer'
 import { prepareAnkiImport, type PreparedAnkiImport } from './anki-import'
@@ -212,13 +213,14 @@ function ExistingMedia({ media }: { media: NoteMediaReference }) {
   return <div className="media-attachment"><strong>{media.displayName}</strong><span>{media.side} · {media.kind}</span><button className="text-button" type="button" onClick={() => void collection.removeMedia(media.id).catch((reason) => setError(reason instanceof Error ? reason.message : 'Unable to remove media'))}>Remove</button>{error && <p className="form-error" role="alert">{error}</p>}</div>
 }
 
-function SyncControls() {
+function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: boolean }) {
   const settings = useLiveQuery(() => collection.syncSettings(), [], undefined)
   const [pairing, setPairing] = useState(false)
   const [endpoint, setEndpoint] = useState('')
   const [code, setCode] = useState('')
   const [message, setMessage] = useState(SYNC_LOCAL_ONLY)
   const [busy, setBusy] = useState(false)
+  const offlineShellSupported = supportsServiceWorkers()
 
   async function pair(event: FormEvent) {
     event.preventDefault()
@@ -235,6 +237,10 @@ function SyncControls() {
   }
 
   async function sync() {
+    if (!offlineSyncAvailable || !offlineShellSupported) {
+      setMessage('Sync is paused until Kiroku confirms its offline app shell is ready. Keep this page open and retry once it is ready.')
+      return
+    }
     // With no pairing yet, "Sync now" means "connect a PC".
     if (!settings) {
       setPairing(true)
@@ -249,9 +255,9 @@ function SyncControls() {
 
   return (
     <section className="sync-controls" aria-label="PC sync">
-      <div><span className="section-code">SYNC // {settings ? 'PAIRED' : 'LOCAL ONLY'}</span><p aria-live="polite">{message}</p></div>
+      <div><span className="section-code">SYNC // {settings ? 'PAIRED' : 'LOCAL ONLY'}</span><p aria-live="polite">{settings && !offlineSyncAvailable ? 'Sync is paused until Kiroku confirms its offline app shell is ready.' : message}</p></div>
       <div className="sync-actions">
-        {settings && <button className="text-button" type="button" disabled={busy} onClick={() => void sync()}>{busy ? 'Syncing…' : 'Sync now'}</button>}
+        {settings && <button className="text-button" type="button" disabled={busy || !offlineSyncAvailable || !offlineShellSupported} onClick={() => void sync()}>{busy ? 'Syncing…' : 'Sync now'}</button>}
         <button className="primary-action" type="button" disabled={busy} onClick={() => setPairing(true)}>{settings ? 'Pair another device' : 'Connect a PC'}</button>
       </div>
       {pairing && (
@@ -1086,7 +1092,7 @@ function NoteTagsDialog({ note, onClose }: { note: Note; onClose: () => void }) 
   </section></div>
 }
 
-export function CollectionWorkspace() {
+export function CollectionWorkspace({ offlineSyncAvailable = true }: { offlineSyncAvailable?: boolean }) {
   const [route, navigate] = useRoute()
   const decks = useLiveQuery(() => collection.summaries(), [], [])
   const [newDeck, setNewDeck] = useState(false)
@@ -1120,7 +1126,7 @@ export function CollectionWorkspace() {
 
   return (
     <>
-      <SyncControls />
+      <SyncControls offlineSyncAvailable={offlineSyncAvailable} />
       <SyncConflicts />
       <button className="text-button" onClick={() => setExporting(true)}>Export Anki package</button>
       <button className="text-button" onClick={() => setTextTransfer(true)}>Import / export text</button>

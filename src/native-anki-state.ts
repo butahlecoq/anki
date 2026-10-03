@@ -2,6 +2,7 @@ import { Dexie, type Table } from 'dexie'
 import type { SqlJsStatic } from 'sql.js'
 import { NativeAnkiClient, NativeSyncConflict, NativeSyncError, nativeSnapshotHash, prepareNativeUpload, type NativeFullSyncDecision, type NativeRequestOptions, type NativeSyncMeta } from './native-anki-sync.js'
 import { nativeAnkiProjectionManifest, type NativeAnkiProjectionManifest } from './native-anki-projection.js'
+import { requireWebLocks } from './native-sync-capability.js'
 
 interface Checkpoint {
   id: 'collection'
@@ -148,8 +149,7 @@ export class NativeAnkiState extends Dexie {
 
   async synchronize(client: NativeAnkiClient, SQL: SqlJsStatic, options: NativeRequestOptions = {}) { return this.exclusive(() => this.run(client, SQL, false, options)) }
   private async exclusive<T>(action: () => Promise<T>): Promise<T> {
-    if (typeof navigator === 'undefined' || !navigator.locks) throw new NativeSyncError('upgrade', 'Account synchronization requires browser support for exclusive storage operations.')
-    return navigator.locks.request(`${this.name}:sync`, { mode: 'exclusive', ifAvailable: true }, (lock) => {
+    return requireWebLocks('Anki account').request(`${this.name}:sync`, { mode: 'exclusive', ifAvailable: true }, (lock) => {
       if (!lock) throw new NativeSyncError('transfer', 'Another page is synchronizing this account. Wait for it to finish.')
       return action()
     })

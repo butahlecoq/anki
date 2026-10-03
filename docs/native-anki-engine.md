@@ -39,6 +39,12 @@ conflicts block retry. State replacement checks the expected revision and
 atomically retains the previous checkpoint in the separate `backups` table.
 Backups are not automatically pruned; a storage/quota failure aborts replacement.
 
+Exclusive account and media synchronization requires the browser Web Locks API.
+If it is missing (including iOS Lockdown Mode), startup fails with a typed
+`NativeSyncError('unsupported', ...)` before recording an attempt; the durable
+checkpoint, cursor, and pending media remain unchanged. The app does not detect
+Lockdown Mode itself; it detects the missing platform capability.
+
 `state.previewFullSync(client, SQL)` binds local SHA-256 and revision to current
 remote mod/schema/USN. Pass that preview with an explicit `direction` to
 `state.fullSynchronize()` to upload or download. Upload retains local, prepared
