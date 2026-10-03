@@ -1,4 +1,5 @@
 import { Rating, State, type CardRecord, type ReviewEntry } from './collection'
+import { isSuspended } from './scheduler'
 
 export type StatisticsPeriod = 'day' | 'week' | 'month' | 'all'
 
@@ -51,7 +52,7 @@ export function reviewHeatmap(entries: ReviewEntry[], now: Date, days = 84) {
 }
 
 export function schedulingStatistics(cards: CardRecord[], now: Date) {
-  const scheduled = cards.filter((card) => card.state !== State.New && !card.suspended && !card.templateSuspended && !card.manualSuspended)
+  const scheduled = cards.filter((card) => card.state !== State.New && !isSuspended(card))
   const forecast = Array.from({ length: 30 }, (_, index) => {
     const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() + index)
     const end = new Date(date); end.setDate(end.getDate() + 1)

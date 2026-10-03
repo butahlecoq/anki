@@ -1,12 +1,7 @@
 import Dexie, { type EntityTable } from 'dexie'
 import { customStudyKey, customStudyMembership, customStudySessions, type CustomStudySession } from './custom-study-state'
-import {
-  Rating,
-  State,
-  createEmptyCard,
-  type Grade,
-} from 'ts-fsrs'
-import { answerWithSchedule, deserializeCard, eligibleForQueue, eligibleForStudy, isLearningCard, nextStudyBoundary, reviewChoices as scheduleChoices, schedulerFor, selectDueCards, serializeCard, validateSteps } from './scheduler'
+import { createEmptyCard } from 'ts-fsrs'
+import { answerWithSchedule, deserializeCard, eligibleForQueue, eligibleForStudy, isBuried, isLearningCard, nextStudyBoundary, Rating, reviewChoices as previewReviewChoices, schedulerFor, selectDueCards, serializeCard, State, templateSuspended, validateSteps, type Grade } from './scheduler'
 import { digestMedia, validateMedia, type AudioPlayback, type MediaKind, type MediaSide } from './media'
 import { clozeOrdinals, renderTemplate, tryRenderTemplate, validateTemplate } from './template-renderer'
 import { mergeRevisions, revisionHeads, type RevisionMerge } from './sync-revisions'
@@ -276,7 +271,8 @@ export interface DeckSummary extends Deck {
   counts: DeckCounts
   noteCount: number
   reviewCount: number
-  temporaryCount: number
+  /** Cards currently claimed by a Custom Study Session in this Deck. */
+  sessionCount: number
 }
 
 export interface ReviewChoice {
@@ -464,14 +460,6 @@ function canonicalDeckOptionGroup(group: LegacyDeckOptionGroup): DeckOptionGroup
       leechTag: group.leechTag ?? defaultDeckOptionSettings.leechTag,
     }),
   }
-}
-
-function templateSuspended(card: CardRecord) {
-  return card.templateSuspended ?? Boolean(card.suspended)
-}
-
-function isBuried(card: CardRecord, now: Date) {
-  return card.buriedUntil !== null && card.buriedUntil !== undefined && new Date(card.buriedUntil).getTime() > now.getTime()
 }
 
 function withPolicyDefaults(card: CardRecord): CardRecord {
@@ -1428,7 +1416,7 @@ export class Collection extends Dexie {
 
   async summaries(): Promise<DeckSummary[]> {
     return this.transaction('r', [this.settings, this.decks, this.notes, this.cards, this.reviewEntries], async () => {
-    const temporary = await customStudyMembership(this)
+    const sessionCards = await customStudyMembership(this)
     const [decks, notes, cards, reviews] = await Promise.all([
       this.decks.orderBy('createdAt').toArray(),
       this.notes.toArray(),
@@ -1455,7 +1443,7 @@ export class Collection extends Dexie {
         counts: countsFor(cards.filter((card) => ids.has(card.deckId))),
         noteCount: notes.filter((note) => ids.has(note.deckId)).length,
         reviewCount: reviews.filter((review) => ids.has(review.deckId)).length,
-        temporaryCount: cards.filter((card) => ids.has(card.deckId) && temporary.has(card.id)).length,
+        sessionCount: cards.filter((card) => ids.has(card.deckId) && sessionCards.has(card.id)).length,
       }
     }))
     })
@@ -1463,7 +1451,7 @@ export class Collection extends Dexie {
 
   async dueCards(deckId: string, now = new Date()): Promise<CardRecord[]> {
     return this.transaction('r', [this.decks, this.deckOptionGroups, this.notes, this.cards, this.reviewEntries, this.settings], async () => {
-      const temporary = await customStudyMembership(this)
+      const sessionCards = await customStudyMembership(this)
       const subtree = await this.deckSubtree(deckId)
       if (!subtree.length) return []
       const deckIds = subtree.map((deck) => deck.id)
@@ -1473,17 +1461,19 @@ export class Collection extends Dexie {
         this.deckOptionGroups.toArray(),
         this.reviewEntries.toArray(),
       ])
-      return selectDueCards({ deckId, now, decks: subtree, groups, notes, cards, reviews: reviewEntries, temporaryCardIds: new Set(temporary.keys()) })
+      return selectDueCards({ deckId, now, decks: subtree, groups, notes, cards, reviews: reviewEntries, sessionCardIds: new Set(sessionCards.keys()) })
     })
   }
 
+  /** Eligibility for every rating is decided by the scheduler module, so this
+   * only resolves the card and its deck policy before delegating. */
   async reviewChoices(cardId: string, now = new Date(), allowEarly = false): Promise<ReviewChoice[]> {
     const card = await this.cards.get(cardId)
-    if (!card || !(allowEarly ? eligibleForQueue(card, now) : eligibleForStudy(card, now))) return []
+    if (!card) return []
     const deck = await this.decks.get(card.deckId)
     const group = deck ? await this.deckOptionGroups.get(deck.optionGroupId) : undefined
     if (!deck || !group) throw new Error('Deck option group not found')
-    return scheduleChoices(card, group, now, allowEarly)
+    return previewReviewChoices(card, group, now, allowEarly)
   }
 
   /** The renderable queue shared by the reviewer and today's workload. */

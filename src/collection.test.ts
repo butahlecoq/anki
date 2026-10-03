@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto'
 import Dexie from 'dexie'
 import { afterEach, describe, expect, test } from 'vitest'
 import { BASIC_NOTE_TYPE_ID, createCollection, Rating, State, type CardRecord, type Collection, type DeckOptionSettings } from './collection'
+import { intervalLabel } from './scheduler'
 
 let collection: Collection | undefined
 
@@ -13,15 +14,7 @@ function directCard(id: string, deckId: string, noteId: string, state: State, du
   return { id, deckId, noteId, templateId: 'basic', due, stability: 0, difficulty: 0, elapsedDays: 0, scheduledDays: 0, learningSteps: 0, reps: 0, lapses: 0, state, lastReview: null }
 }
 
-function intervalLabelForTest(due: Date, reviewedAt: Date) {
-  const seconds = Math.max(1, Math.round((due.getTime() - reviewedAt.getTime()) / 1000))
-  if (seconds < 60) return `${seconds}s`
-  const minutes = Math.round(seconds / 60)
-  if (minutes < 60) return `${minutes}m`
-  const hours = Math.round(minutes / 60)
-  if (hours < 24) return `${hours}h`
-  return `${Math.round(hours / 24)}d`
-}
+
 
 afterEach(async () => {
   await collection?.delete()
@@ -287,7 +280,7 @@ describe('local collection', () => {
       const persisted = (await collection.cards.get(card.id))!
       expect(review.rating).toBe(rating)
       expect(persisted.state).not.toBe(State.New)
-      expect(intervalLabelForTest(new Date(persisted.due), now)).toBe(choice.interval)
+      expect(intervalLabel(new Date(persisted.due), now)).toBe(choice.interval)
     }
   })
 

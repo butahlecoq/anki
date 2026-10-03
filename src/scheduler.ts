@@ -13,9 +13,34 @@ import type { CardRecord, Deck, DeckOptionGroup, Note, ReviewChoice, ReviewEntry
 export { Rating, State }
 export type { Grade }
 
+export function isBuried(card: CardRecord, now: Date) {
+  return card.buriedUntil != null && Date.parse(card.buriedUntil) > now.getTime()
+}
+
+/** Whether the template marked this card's content unavailable. Legacy rows
+ * recorded only `suspended`, which mirrors template suspension. */
+export function templateSuspended(card: CardRecord) {
+  return card.templateSuspended ?? Boolean(card.suspended)
+}
+
+/** Suspension only, ignoring burial. Buried cards still occupy the forecast, so
+ * workload reporting asks for this narrower rule. */
+export function isSuspended(card: CardRecord) {
+  return templateSuspended(card) || card.manualSuspended === true
+}
+
+/** Why a card cannot join a queue, or null when it can. This is the single
+ * definition of unavailability; callers report the reason, they do not restate
+ * the rule. */
+export function unavailableReason(card: CardRecord, now: Date): 'template' | 'manual' | 'buried' | null {
+  if (templateSuspended(card)) return 'template'
+  if (card.manualSuspended === true) return 'manual'
+  if (isBuried(card, now)) return 'buried'
+  return null
+}
+
 export function eligibleForQueue(card: CardRecord, now: Date) {
-  const buried = card.buriedUntil != null && Date.parse(card.buriedUntil) > now.getTime()
-  return card.manualSuspended !== true && !(card.templateSuspended ?? Boolean(card.suspended)) && !buried
+  return unavailableReason(card, now) === null
 }
 
 export function isDueForStudy(card: CardRecord, now: Date) {
@@ -75,14 +100,17 @@ export function schedulerFor(group: DeckOptionGroup, cardId: string) {
   const scheduler = fsrs({
     request_retention: group.desiredRetention,
     maximum_interval: 36500,
-    // Match Anki's fuzz policy and permit short-term learning steps.
+    // Anki has no fuzz toggle: intervals of 2.5 days or more always carry a
+    // random offset. Short-term learning steps are permitted for the same reason.
     enable_fuzz: true,
     enable_short_term: true,
     learning_steps: validateSteps(group.learningSteps, 'Learning steps'),
     relearning_steps: validateSteps(group.relearningSteps, 'Relearning steps'),
   })
-  // Seed fuzz from card identity and repetition count so replay on another device
-  // produces the same answer schedule while sibling cards receive separate offsets.
+  // Anki seeds fuzz from the card's identity, not the wall clock, so a replayed
+  // or synchronised review produces the same schedule on every device while
+  // sibling cards still receive separate offsets. ts-fsrs would otherwise seed
+  // from review time, difficulty and stability.
   return scheduler.useStrategy(StrategyMode.SEED, function (this: AbstractScheduler) {
     return `${cardId}_${this.current.reps}`
   })
@@ -152,12 +180,13 @@ export interface DueSelectionInput {
   notes: readonly Pick<Note, 'id' | 'createdAt'>[]
   cards: readonly CardRecord[]
   reviews: readonly ReviewEntry[]
-  temporaryCardIds: ReadonlySet<string>
+  /** Cards a Custom Study Session has claimed; they are withheld from the daily queue. */
+  sessionCardIds: ReadonlySet<string>
 }
 
 /** Pure queue selection over a deck subtree and its current scheduling policy. */
 export function selectDueCards(input: DueSelectionInput): CardRecord[] {
-  const { deckId, now, decks, groups, notes, cards, reviews, temporaryCardIds } = input
+  const { deckId, now, decks, groups, notes, cards, reviews, sessionCardIds } = input
   const decksById = new Map(decks.map((deck) => [deck.id, deck]))
   const groupsById = new Map(groups.map((group) => [group.id, group]))
   const notesById = new Map(notes.map((note) => [note.id, note]))
@@ -181,8 +210,9 @@ export function selectDueCards(input: DueSelectionInput): CardRecord[] {
   }
   const tiebreakKey = (card: CardRecord, group: DeckOptionGroup, kind: 'new' | 'review' | 'learning') => {
     if (kind !== 'review' || group.reviewCardOrder !== 'due') return card.id
-    // Anki's due-date review order randomizes equal-due cards using their schedule
-    // history; it stays stable until the card is answered again.
+    // Anki's due-date review order randomizes equal-due cards using their
+    // scheduling history rather than a per-day seed, so the order a learner
+    // sees survives until those cards are answered.
     return String(stableRank(`${card.lastReview ?? ''}:${card.reps}:${card.deckId}:${card.id}`)).padStart(10, '0')
   }
   const compareWithinDeck = (left: CardRecord, right: CardRecord, group: DeckOptionGroup, kind: 'new' | 'review' | 'learning') =>
@@ -201,7 +231,7 @@ export function selectDueCards(input: DueSelectionInput): CardRecord[] {
   for (const deck of decks) {
     const group = groupsById.get(deck.optionGroupId)
     if (!group) throw new Error('Deck option group not found')
-    const own = cards.filter((card) => card.deckId === deck.id && !temporaryCardIds.has(card.id) && eligibleForStudy(card, now))
+    const own = cards.filter((card) => card.deckId === deck.id && !sessionCardIds.has(card.id) && eligibleForStudy(card, now))
     const learning = sortWithinDeck(own.filter(isLearningCard), group, 'learning')
     const intradayLearning = learning.filter((card) => !isInterdayLearning(card))
     const interdayLearning = learning.filter(isInterdayLearning)

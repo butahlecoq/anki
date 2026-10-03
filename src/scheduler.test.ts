@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import type { CardRecord, Deck, DeckOptionGroup, Note, ReviewEntry } from './collection'
 import { Rating, State } from './scheduler'
-import { answerWithSchedule, eligibleForQueue, eligibleForStudy, intervalLabel, reviewChoices, selectDueCards } from './scheduler'
+import { answerWithSchedule, eligibleForQueue, eligibleForStudy, intervalLabel, isBuried, isInterdayLearning, isLearningCard, isSuspended, nextStudyBoundary, reviewChoices, selectDueCards, studyDayWindow, templateSuspended, unavailableReason, validateSteps } from './scheduler'
 
 const now = new Date('2026-10-03T12:00:00.000Z')
 
@@ -48,7 +48,7 @@ describe('pure scheduling rules', () => {
     ]
     const result = selectDueCards({
       deckId: deck.id, now, decks: [deck], groups: [{ ...options, dailyNewLimit: 1 }], notes, cards,
-      reviews: [] as ReviewEntry[], temporaryCardIds: new Set(['reserved']),
+      reviews: [] as ReviewEntry[], sessionCardIds: new Set(['reserved']),
     })
     expect(result.map((entry) => entry.id)).toEqual(['review-due', 'new-b'])
   })
@@ -68,5 +68,69 @@ describe('pure scheduling rules', () => {
     expect(intervalLabel(new Date(now.getTime() + 90_000), now)).toBe('2m')
     expect(intervalLabel(new Date(now.getTime() + 90 * 60_000), now)).toBe('2h')
     expect(intervalLabel(new Date(now.getTime() + 3 * 86_400_000), now)).toBe('3d')
+  })
+
+  test('unavailability has one rule, and every caller reads the same reason', () => {
+    expect(unavailableReason(card('none', State.Review), now)).toBe(null)
+    expect(unavailableReason(card('t', State.Review, { templateSuspended: true, suspended: true }), now)).toBe('template')
+    expect(unavailableReason(card('m', State.Review, { manualSuspended: true }), now)).toBe('manual')
+    expect(unavailableReason(card('b', State.Review, { buriedUntil: '2026-10-04T00:00:00.000Z' }), now)).toBe('buried')
+    // Every reason is exactly the negation of queue eligibility, so the reviewer,
+    // the browser, custom study and statistics cannot drift apart.
+    const unavailable = (id: string) => card(id, State.Review, {
+      templateSuspended: id === 't', suspended: id === 't',
+      manualSuspended: id === 'm',
+      buriedUntil: id === 'b' ? '2026-10-04T00:00:00.000Z' : null,
+    })
+    for (const id of ['none', 't', 'm', 'b']) {
+      expect(eligibleForQueue(unavailable(id), now)).toBe(unavailableReason(unavailable(id), now) === null)
+    }
+    // A legacy row with only `suspended` mirrors template suspension.
+    expect(templateSuspended({ ...card('legacy', State.Review), templateSuspended: undefined, suspended: true })).toBe(true)
+    expect(isSuspended(card('m', State.Review, { manualSuspended: true }))).toBe(true)
+    expect(isSuspended(card('b', State.Review, { buriedUntil: '2026-10-04T00:00:00.000Z' }))).toBe(false)
+    expect(isBuried(card('b', State.Review, { buriedUntil: '2026-10-01T00:00:00.000Z' }), now)).toBe(false)
+  })
+
+  test('a learning card is interday once FSRS gives it a positive day count', () => {
+    expect(isLearningCard(card('l', State.Learning))).toBe(true)
+    expect(isLearningCard(card('r', State.Relearning))).toBe(true)
+    expect(isLearningCard(card('v', State.Review))).toBe(false)
+    expect(isInterdayLearning(card('intraday', State.Learning, { scheduledDays: 0 }))).toBe(false)
+    expect(isInterdayLearning(card('interday', State.Learning, { scheduledDays: 1 }))).toBe(true)
+    expect(isInterdayLearning(card('review', State.Review, { scheduledDays: 1 }))).toBe(false)
+  })
+
+  test('study day boundaries are local midnight, matching the statistics day key', () => {
+    const { start, end } = studyDayWindow(new Date(2026, 9, 3, 23, 59, 59))
+    expect(new Date(start).getHours()).toBe(0)
+    expect(new Date(start).getDate()).toBe(3)
+    expect(new Date(end).getDate()).toBe(4)
+    expect(end - start).toBe(86_400_000)
+    expect(nextStudyBoundary(new Date(2026, 9, 3, 12)).getDate()).toBe(4)
+  })
+
+  test('the interday learning policy decides whether interday steps precede due reviews', () => {
+    const build = (order: DeckOptionGroup['interdayLearningOrder']) => selectDueCards({
+      deckId: deck.id, now, decks: [deck], groups: [{ ...options, interdayLearningOrder: order, dailyNewLimit: 0 }],
+      notes: [], sessionCardIds: new Set<string>(),
+      reviews: [] as ReviewEntry[],
+      cards: [
+        card('review', State.Review, { due: '2026-10-03T08:00:00.000Z' }),
+        card('interday', State.Learning, { due: '2026-10-03T09:00:00.000Z', scheduledDays: 1 }),
+        card('intraday', State.Learning, { due: '2026-10-03T10:00:00.000Z', scheduledDays: 0 }),
+      ],
+    }).map((entry) => entry.id)
+    // Intraday steps always come first; the policy only orders interday against reviews.
+    expect(build('before-reviews')).toEqual(['intraday', 'interday', 'review'])
+    expect(build('after-reviews')).toEqual(['intraday', 'review', 'interday'])
+  })
+
+  test('learning steps are validated as a bounded, unit-suffixed list', () => {
+    expect(validateSteps(['1m', '10m', '1.5h', '2d'], 'Learning steps')).toEqual(['1m', '10m', '1.5h', '2d'])
+    expect(() => validateSteps(['10'], 'Learning steps')).toThrow(/invalid learning step/)
+    expect(() => validateSteps(['0m'], 'Learning steps')).toThrow(/invalid learning step/)
+    expect(() => validateSteps(['400d'], 'Learning steps')).toThrow(/invalid learning step/)
+    expect(() => validateSteps(['1m', '2m', '3m', '4m', '5m', '6m', '7m', '8m', '9m', '10m', '11m'], 'Learning steps')).toThrow(/are invalid/)
   })
 })
