@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto'
 import initSqlJs, { type SqlJsStatic } from 'sql.js'
 import { Collection as AnkiCollection, Deck, Note as AnkiNote, Notetype, Package } from 'ankipack'
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest'
-import { DEFAULT_DECK_OPTION_GROUP_ID, createCollection, State, type Collection } from './collection'
+import { DEFAULT_DECK_OPTION_GROUP_ID, createCollection, renderNoteTemplate, State, type Collection } from './collection'
 import { prepareAnkiImport } from './anki-import'
 import { zipSync } from 'fflate'
 import { ANKI_ARCHIVE_LIMITS } from './anki-archive'
@@ -119,6 +119,23 @@ async function imageOcclusionPackage() {
   pkg.addDeck(deck)
   pkg.addMedia('diagram.png', png)
   return new File([(await pkg.toUint8Array(SQL)).slice().buffer as ArrayBuffer], 'occlusion.colpkg', { type: 'application/octet-stream' })
+}
+
+async function fieldHtmlPackage(unsafe = true) {
+  const type = new Notetype({
+    id: 1_700_000_000_060,
+    name: 'Layout field fixture',
+    fields: [{ name: 'Front' }, { name: 'Layout' }],
+    templates: [{ name: 'Card', questionFormat: '{{Front}}<hr>{{Layout}}', answerFormat: '{{FrontSide}}' }],
+  })
+  const deck = new Deck({ id: 1_700_000_000_061, name: 'HTML Fixture' })
+  const layout = unsafe
+    ? '<table onclick="run()"><tr><td style="width:50%;background-image:url(https://invalid.test/x)">猫</td><td><script>alert(1)</script><img src=x onerror="run()"><b>ねこ</b></td></tr></table>'
+    : '<table><tr><td style="width:50%">猫</td><td><b>ねこ</b></td></tr></table>'
+  deck.addNote(new AnkiNote({ notetype: type, guid: 'field-html-guid', fields: ['plain text', layout] }))
+  const pkg = new Package()
+  pkg.addDeck(deck)
+  return new File([(await pkg.toUint8Array(SQL)).slice().buffer as ArrayBuffer], 'field-html.apkg', { type: 'application/octet-stream' })
 }
 
 async function unsupportedPackage() {
@@ -522,6 +539,30 @@ describe('Anki package import', () => {
     await expect(prepared.commit()).rejects.toThrow(/resolve package errors/i)
     await expect(collection.decks.count()).resolves.toBe(0)
     await expect(collection.notes.count()).resolves.toBe(0)
+  })
+
+  test('preserves safe field layout HTML and reports preserved markup in import findings', async () => {
+    collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
+    const prepared = await prepareAnkiImport(await fieldHtmlPackage(), collection, { SQL, now: new Date('2026-10-01T12:00:00.000Z') })
+    const note = prepared.plan.writes.notes.map((write) => write.value).find((entry) => entry.ankiId !== undefined)!
+    const type = prepared.plan.writes.noteTypes.map((write) => write.value).find((entry) => entry.name === 'Layout field fixture')!
+    const rendered = renderNoteTemplate(type.templates[0].front, type, note.fields)
+
+    expect(note.fields[type.fields[0].id]).toBe('plain text')
+    expect(note.fields[type.fields[1].id]).toContain('<table>')
+    expect(rendered.html).toContain('<table><tbody><tr><td style="width: 50%">猫</td><td>&lt;script&gt;alert(1)&lt;/script&gt;<b>ねこ</b></td></tr></tbody></table>')
+    expect(rendered.html).toContain('plain text')
+    expect(prepared.issues).toContainEqual(expect.objectContaining({ severity: 'warning', code: 'field-html-sanitized', subject: expect.stringContaining('Layout') }))
+  })
+
+  test('labels fully supported field markup as preserved in the import report', async () => {
+    collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
+    const prepared = await prepareAnkiImport(await fieldHtmlPackage(false), collection, { SQL, now: new Date('2026-10-01T12:00:00.000Z') })
+
+    expect(prepared.issues).toContainEqual(expect.objectContaining({
+      severity: 'info', code: 'field-html-preserved', subject: expect.stringContaining('Layout'),
+      detail: expect.stringMatching(/preserved/i),
+    }))
   })
 
   test('blocks executable templates and malformed media bytes with detailed errors', async () => {

@@ -8,6 +8,7 @@ import { parseAnkiImageOcclusion, type AnkiImageOcclusionFields } from './image-
 import { digestMedia, validateMedia, type MediaKind, type MediaSide } from './media'
 import { validateTemplate } from './template-renderer'
 import { supportedNavigationTemplate } from './template-navigation'
+import { decodeFieldText, sanitizeFieldHtml } from './field-html'
 import { ANKI_ARCHIVE_LIMITS, validateAnkiArchive } from './anki-archive'
 import { readKirokuSchedule, readKirokuReview } from './anki-scheduling-metadata'
 import { derivedNativeId, hasLegacyDeckIdentity, nativeIdentity } from './anki-identity'
@@ -365,14 +366,14 @@ function mediaNames(value: string): string[] {
   return [...new Set(found)]
 }
 
-function plainField(value: string): string {
-  const withoutMedia = value
+function importedField(value: string) {
+  const withMedia = value
     .replace(/<img\b[^>]*\bsrc\s*=\s*["']([^"'<>]+)["'][^>]*>/gi, (_tag, name: string) => `[[kiroku-media:${encodeURIComponent(name)}]]`)
     .replace(/\[sound:([^\]]+)\]/gi, (_tag, name: string) => `[[kiroku-media:${encodeURIComponent(name)}]]`)
-    .replace(/<br\s*\/?>/gi, '\n')
-  const document = new DOMParser().parseFromString(withoutMedia, 'text/html')
-  const text = document.body.textContent ?? ''
-  return text.trim() ? text : mediaNames(value).length ? '\u200b' : ''
+  const sanitized = sanitizeFieldHtml(withMedia)
+  if (!sanitized.hadMarkup) sanitized.html = decodeFieldText(withMedia)
+  if (!sanitized.html.trim() && mediaNames(value).length) sanitized.html = '\u200b'
+  return sanitized
 }
 
 function fieldUsed(template: string, name: string) {
@@ -606,16 +607,18 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
       issues.push({ severity: 'error', code: 'malformed-field-count', subject: row.guid, detail: `Note has ${rawFields.length} fields but ${sourceType.name} requires ${sourceType.fields.length}.` })
       continue
     }
-    rawFields.forEach((value, index) => {
-      const unsupportedHtml = value.replace(/<img\b[^>]*>/gi, '').replace(/<br\s*\/?>/gi, '').match(/<[^>]+>/)
-      if (unsupportedHtml) issues.push({ severity: 'warning', code: 'field-html-normalized', subject: `${row.guid} · ${sourceType.fields[index].name}`, detail: `Field HTML ${unsupportedHtml[0]} was converted to plain text because imported field markup is outside the supported template subset.` })
+    const importedFields = rawFields.map(importedField)
+    importedFields.forEach((field, index) => {
+      const subject = `${row.guid} · ${sourceType.fields[index].name}`
+      if (field.hadMarkup && field.preservedMarkup && !field.removed.length) issues.push({ severity: 'info', code: 'field-html-preserved', subject, detail: 'Supported field HTML was preserved for safe rendering inside the card.' })
+      if (field.removed.length) issues.push({ severity: 'warning', code: 'field-html-sanitized', subject, detail: `Unsupported or unsafe field HTML was removed: ${field.removed.join(', ')}. ${field.preservedMarkup ? 'Supported markup remains preserved.' : 'Remaining content was imported as text.'}` })
     })
     const noteId = nativeIdentity('note', row.guid)
     const noteCreatedAt = isoFromSeconds(Math.floor(row.id / 1000), now)
     const noteUpdatedAt = isoFromSeconds(row.mod, now)
     const referenceUpdatedAt = sourceType.updatedAt > noteUpdatedAt ? sourceType.updatedAt : noteUpdatedAt
     let noteTypeId = sourceType.localId
-    let fields = Object.fromEntries(sourceType.fields.map((field, index) => [field.id, plainField(rawFields[index] ?? '')]))
+    let fields = Object.fromEntries(sourceType.fields.map((field, index) => [field.id, importedFields[index]?.html ?? '']))
     let imageOcclusion: Note['imageOcclusion']
     const fieldByName = Object.fromEntries(sourceType.fields.map((field, index) => [field.name, rawFields[index] ?? '']))
     if (sourceType.stockKind === 6 || ['Occlusion', 'Image', 'Header', 'Back Extra', 'Comments'].every((name) => name in fieldByName)) {

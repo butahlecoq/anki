@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import { clozeOrdinals, renderTemplate, tryRenderTemplate, validateTemplate } from './template-renderer'
+import { sanitizeFieldHtml } from './field-html'
 
 describe('renderTemplate', () => {
   test('hint fields use an accessible checkbox disclosure without executing field markup', () => {
@@ -66,7 +67,7 @@ describe('renderTemplate', () => {
     expect(renderTemplate('{{type:Word}}', { 'type:Word': 'legacy value', Word: 'typed value' }))
       .toEqual({ html: 'legacy value', isEmpty: false })
     expect(renderTemplate('{{reverse:Word}}', { 'reverse:Word': '<b>literal</b>' }))
-      .toEqual({ html: '&lt;b&gt;literal&lt;/b&gt;', isEmpty: false })
+      .toEqual({ html: '<b>literal</b>', isEmpty: false })
   })
 
   test('rejects unsupported filters and malformed clozes through a safe result', () => {
@@ -92,11 +93,24 @@ describe('renderTemplate', () => {
     expect(tryRenderTemplate('{{FrontSide}}<hr>{{cloze:Text}}', fields, '<span class="cloze">[…]</span>', { kind: 'cloze', ordinal: 1 }))
       .toMatchObject({ ok: true, value: { html: '<span class="cloze">[…]</span><hr><span class="cloze">猫</span>' } })
   })
-  test('escapes field values while retaining template markup', () => {
+  test('sanitizes field markup and keeps text-filter values escaped', () => {
     expect(renderTemplate('<b>{{Word}}</b>', { Word: '<img src=x onerror=alert(1)>&"' })).toEqual({
-      html: '<b>&lt;img src=x onerror=alert(1)&gt;&amp;&quot;</b>',
+      html: '<b>&amp;"</b>',
       isEmpty: false,
     })
+    expect(renderTemplate('{{text:Word}}', { Word: '<img src=x onerror=alert(1)>&"' }).html)
+      .toBe('&lt;img src=x onerror=alert(1)&gt;&amp;&quot;')
+  })
+
+  test('preserves field layout HTML while removing active elements and unsafe attributes', () => {
+    const result = sanitizeFieldHtml('<table onclick="run()"><tr><td style="width:50%;background-image:url(https://evil.test/x)"><b>猫</b></td><td><script>alert(1)</script><img src=x onerror="run()">&lt;script&gt;</td></tr></table>')
+    expect(result.hadMarkup).toBe(true)
+    expect(result.html).toContain('<table>')
+    expect(result.html).toContain('<td style="width: 50%">')
+    expect(result.html).toContain('<b>猫</b>')
+    expect(result.html).toContain('&lt;script&gt;')
+    expect(result.html).not.toMatch(/<script|<img|onclick|onerror|background-image/i)
+    expect(result.removed).toEqual(expect.arrayContaining(['<script>', '<img>', 'onclick', 'style:background-image']))
   })
 
   test('renders positive and inverse sections from trimmed field values', () => {
