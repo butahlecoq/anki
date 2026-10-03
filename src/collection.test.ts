@@ -314,6 +314,58 @@ describe('local collection', () => {
     }
   })
 
+  test('keeps preview, persisted answer state, history, and reload aligned across every state and grade', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Scheduler grade matrix')
+    const now = new Date('2026-10-01T12:00:00.000Z')
+    const stateCases = [
+      { state: State.New, name: 'New', initial: { stability: 0, difficulty: 0, elapsedDays: 0, scheduledDays: 0, learningSteps: 0, reps: 0, lapses: 0, lastReview: null } },
+      { state: State.Learning, name: 'Learning', initial: { stability: 1, difficulty: 5, elapsedDays: 0, scheduledDays: 0, learningSteps: 1, reps: 1, lapses: 0, lastReview: now.toISOString() } },
+      { state: State.Review, name: 'Review', initial: { stability: 30, difficulty: 5, elapsedDays: 30, scheduledDays: 30, learningSteps: 0, reps: 4, lapses: 0, lastReview: new Date(now.getTime() - 30 * 86_400_000).toISOString() } },
+      { state: State.Relearning, name: 'Relearning', initial: { stability: 2, difficulty: 6, elapsedDays: 1, scheduledDays: 2, learningSteps: 0, reps: 4, lapses: 1, lastReview: now.toISOString() } },
+    ] as const
+    const grades = [
+      { rating: Rating.Again, label: 'Again' },
+      { rating: Rating.Hard, label: 'Hard' },
+      { rating: Rating.Good, label: 'Good' },
+      { rating: Rating.Easy, label: 'Easy' },
+    ] as const
+    const expected: { cardId: string; reviewId: string; rating: number; choice: string }[] = []
+
+    for (const stateCase of stateCases) {
+      for (const grade of grades) {
+        const note = await collection.createBasicNote(deck.id, { front: `${stateCase.name} ${grade.label}`, back: 'matrix' })
+        const card = (await collection.cards.where('noteId').equals(note.id).first())!
+        await collection.cards.put({ ...card, ...stateCase.initial, state: stateCase.state, due: now.toISOString() })
+        const choices = await collection.reviewChoices(card.id, now, true)
+        const choice = choices.find((candidate) => candidate.rating === grade.rating)
+        expect(choice).toBeDefined()
+        const review = await collection.answer(card.id, grade.rating, now, undefined, { allowEarly: true, reschedule: true })
+        const persisted = (await collection.cards.get(card.id))!
+        const history = (await collection.reviewEntries.get(review.id))!
+        expect(intervalLabelForTest(new Date(persisted.due), now)).toBe(choice!.interval)
+        expect(history).toMatchObject({
+          rating: grade.rating,
+          state: stateCase.state,
+          afterState: persisted.state,
+          afterDue: persisted.due,
+          afterScheduledDays: persisted.scheduledDays,
+        })
+        expected.push({ cardId: card.id, reviewId: review.id, rating: grade.rating, choice: choice!.interval })
+      }
+    }
+
+    collection.close()
+    await collection.open()
+    for (const item of expected) {
+      const card = (await collection.cards.get(item.cardId))!
+      const review = (await collection.reviewEntries.get(item.reviewId))!
+      expect(review.rating).toBe(item.rating)
+      expect(review.afterDue).toBe(card.due)
+      expect(intervalLabelForTest(new Date(card.due), now)).toBe(item.choice)
+    }
+  })
+
   test('converges durable manual policy changes between two clients', async () => {
     const source = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const remote = createCollection(`kiroku-test-${crypto.randomUUID()}`)
