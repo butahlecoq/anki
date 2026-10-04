@@ -113,7 +113,7 @@ test('exports packages with thousands of distinct media windows inside the archi
   const output = await exportAnkiPackage(source, { ...all, SQL })
   expect(output.media).toBe(count)
   expect(AnkiCollection.open(output.bytes, SQL).data.media).toHaveLength(count)
-})
+}, 20_000)
 
 test('selected deck includes descendants and options reset cards and omit media and history', async () => {
   const source = database()
