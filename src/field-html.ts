@@ -8,14 +8,7 @@ const allowedTags = new Set([
   'TR', 'U', 'UL', 'WBR',
 ])
 const dropContentsTags = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'SVG', 'MATH', 'TEMPLATE', 'NOSCRIPT'])
-const knownHtmlTags = new Set([
-  ...allowedTags, ...dropContentsTags, 'ADDRESS', 'AREA', 'ARTICLE', 'ASIDE', 'AUDIO', 'BASE', 'BDI', 'BDO', 'BODY', 'BUTTON', 'IMG',
-  'CANVAS', 'DATALIST', 'DETAILS', 'DIALOG', 'FIELDSET', 'FIGCAPTION', 'FIGURE', 'FOOTER', 'FORM', 'HEAD',
-  'HEADER', 'HGROUP', 'INPUT', 'LABEL', 'LEGEND', 'LINK', 'MAIN', 'MAP', 'MARQUEE', 'MENU', 'META', 'NAV',
-  'OPTGROUP', 'OPTION', 'OUTPUT', 'PICTURE', 'PROGRESS', 'SECTION', 'SELECT', 'SOURCE', 'STYLE', 'SUMMARY',
-  'SVG', 'TEXTAREA', 'VIDEO', 'XML',
-])
-const htmlTagPattern = new RegExp(`<\\/?(?:${[...knownHtmlTags].map((tag) => tag.toLowerCase()).join('|')})(?:\\s|/?>)`, 'i')
+const htmlTagPattern = /<\/?[a-z][^>]*>/i
 const allowedStyleProperties = new Set([
   'background-color', 'border', 'border-bottom', 'border-collapse', 'border-color', 'border-left',
   'border-right', 'border-spacing', 'border-style', 'border-top', 'border-width', 'color', 'display',

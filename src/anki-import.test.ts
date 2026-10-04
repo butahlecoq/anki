@@ -121,7 +121,7 @@ async function imageOcclusionPackage() {
   return new File([(await pkg.toUint8Array(SQL)).slice().buffer as ArrayBuffer], 'occlusion.colpkg', { type: 'application/octet-stream' })
 }
 
-async function fieldHtmlPackage(unsafe = true) {
+async function fieldHtmlPackage(unsafe = true, layoutOverride?: string) {
   const type = new Notetype({
     id: 1_700_000_000_060,
     name: 'Layout field fixture',
@@ -129,9 +129,9 @@ async function fieldHtmlPackage(unsafe = true) {
     templates: [{ name: 'Card', questionFormat: '{{Front}}<hr>{{Layout}}', answerFormat: '{{FrontSide}}' }],
   })
   const deck = new Deck({ id: 1_700_000_000_061, name: 'HTML Fixture' })
-  const layout = unsafe
+  const layout = layoutOverride ?? (unsafe
     ? '<table onclick="run()"><tr><td style="width:50%;background-image:url(https://invalid.test/x)">猫</td><td><script>alert(1)</script><img src=x onerror="run()"><b>ねこ</b></td></tr></table>'
-    : '<table><tr><td style="width:50%">猫</td><td><b>ねこ</b></td></tr></table>'
+    : '<table><tr><td style="width:50%">猫</td><td><b>ねこ</b></td></tr></table>')
   deck.addNote(new AnkiNote({ notetype: type, guid: 'field-html-guid', fields: ['plain text', layout] }))
   const pkg = new Package()
   pkg.addDeck(deck)
@@ -562,6 +562,15 @@ describe('Anki package import', () => {
     expect(prepared.issues).toContainEqual(expect.objectContaining({
       severity: 'info', code: 'field-html-preserved', subject: expect.stringContaining('Layout'),
       detail: expect.stringMatching(/preserved/i),
+    }))
+  })
+
+  test('reports HTML-like constructs outside the supported element list', async () => {
+    collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
+    const prepared = await prepareAnkiImport(await fieldHtmlPackage(false, '<blink>special text</blink>'), collection, { SQL, now: new Date('2026-10-01T12:00:00.000Z') })
+
+    expect(prepared.issues).toContainEqual(expect.objectContaining({
+      severity: 'warning', code: 'field-html-sanitized', subject: expect.stringContaining('Layout'), detail: expect.stringContaining('<blink>'),
     }))
   })
 
