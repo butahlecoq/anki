@@ -147,8 +147,8 @@ test('a branch is called disposable only when a closed or merged PR is accounted
   const finding = { check: 'branch-stale-snapshot', provenOnMain: true }
   const merged = [{ number: 12, headRefName: branch.name, state: 'MERGED', updatedAt: '2026-10-01' }]
   assert.deepEqual(branchDisposition(branch, finding, null, []), { disposition: 'retain', relatedPrNumber: undefined })
-  assert.deepEqual(branchDisposition(branch, finding, null, merged), { disposition: 'provably disposable', relatedPrNumber: 12 })
-  assert.deepEqual(branchDisposition({ ...branch, provenOnMain: true }, { check: finding.check }, null, merged), { disposition: 'provably disposable', relatedPrNumber: 12 })
+  assert.deepEqual(branchDisposition(branch, finding, { dirtyFiles: [], untrackedFiles: [] }, merged), { disposition: 'provably disposable', relatedPrNumber: 12 })
+  assert.deepEqual(branchDisposition({ ...branch, provenOnMain: true }, { check: finding.check }, { dirtyFiles: [], untrackedFiles: [] }, merged), { disposition: 'provably disposable', relatedPrNumber: 12 })
   assert.equal(branchDisposition(branch, finding, { dirtyFiles: ['file'], untrackedFiles: [] }, merged).disposition, 'retain')
   assert.equal(branchDisposition(branch, { check: 'branch-past-merge' }, null, merged).disposition, 'retain')
 })
@@ -157,7 +157,7 @@ test('deletion-only stale snapshots are retained until their content is proven o
   const branch = { name: 'feat/8-old', additions: 0, deletions: 40, binary: 0 }
   const merged = [{ number: 12, headRefName: branch.name, state: 'MERGED', updatedAt: '2026-10-01' }]
   assert.equal(branchDisposition(branch, { check: 'branch-stale-snapshot' }, null, merged).disposition, 'retain')
-  assert.equal(branchDisposition(branch, { check: 'branch-stale-snapshot', provenOnMain: true }, null, merged).disposition, 'provably disposable')
+  assert.equal(branchDisposition(branch, { check: 'branch-stale-snapshot', provenOnMain: true }, { dirtyFiles: [], untrackedFiles: [] }, merged).disposition, 'provably disposable')
 })
 
 test('the generated report never marks itself dirty in its own worktree', () => {
@@ -168,4 +168,34 @@ test('the generated report never marks itself dirty in its own worktree', () => 
   assert.deepEqual(trees[0].dirtyFiles, ['src/app.ts'])
   assert.deepEqual(trees[0].untrackedFiles, [])
   assert.deepEqual(trees[1].untrackedFiles, ['docs/agents/status.md'])
+})
+
+test('PR worktree matching uses the exact branch even when the branch name has another issue number', () => {
+  const output = renderStatus({
+    issues: [issue],
+    prs: [{ ...pr, headRefName: 'feat/99-shared-name' }],
+    worktrees: [
+      { branch: 'feat/42-other', path: 'D:/work/anki-42', dirtyFiles: [], untrackedFiles: [] },
+      { branch: 'feat/99-shared-name', path: 'D:/work/anki-99', dirtyFiles: [], untrackedFiles: [] },
+    ],
+    branches: [],
+    generatedFrom: 'deadbeef',
+  })
+  assert.match(output, /feat\/99-shared-name.*D:\/work\/anki-99/)
+  assert.doesNotMatch(output, /feat\/99-shared-name.*D:\/work\/anki-42/)
+})
+
+test('open PRs linked to a closed issue remain visible, including fork heads', () => {
+  const output = renderStatus({
+    issues: [],
+    prs: [
+      { ...pr, number: 44, title: 'Fixes #999', headRepositoryOwner: { login: 'butahlecoq' } },
+      { ...pr, number: 45, title: 'Fixes #998', headRepositoryOwner: { login: 'contributor' } },
+    ],
+    worktrees: [{ branch: pr.headRefName, path: 'D:/work/anki-42', dirtyFiles: [], untrackedFiles: [] }],
+    branches: [],
+    generatedFrom: 'deadbeef',
+    repoOwner: 'butahlecoq',
+  })
+  assert.match(output, /## Open PRs without an open issue[\s\S]*#44[\s\S]*#45/)
 })

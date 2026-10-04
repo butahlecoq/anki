@@ -189,6 +189,24 @@ export function pullRequestsFor(repo, cwd) {
   }
 }
 
+export function branchProvenOnMain(branch, finding) {
+  return branch.provenOnMain === true || finding?.provenOnMain === true || (finding?.check === 'branch-stale-snapshot' && (
+    branch.isAncestorOfMain === true ||
+    (branch.additions === 0 && branch.deletions === 0 && branch.binary === 0)
+  ))
+}
+
+export function branchDispositionEvidence(branch, finding, tree, pullRequests) {
+  const related = pullRequests
+    .filter((pr) => pr.headRefName === branch.name && ['MERGED', 'CLOSED'].includes(pr.state))
+    .sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''))[0]
+  const clean = Boolean(tree) && !(tree.dirtyFiles?.length || tree.untrackedFiles?.length)
+  return {
+    disposable: Boolean(related && clean && branchProvenOnMain(branch, finding)),
+    relatedPrNumber: related?.number,
+  }
+}
+
 // The state that decides a branch's fate, so `gh`'s listing order cannot.
 const STATE_RANK = { OPEN: 0, MERGED: 1, CLOSED: 2 }
 
@@ -661,7 +679,7 @@ export function parseArgv(argv) {
   return { help: argv.includes('--help'), repo: valueOf('--repo'), mainBranch: valueOf('--main') ?? 'main' }
 }
 
-function repoFromRemote(cwd, fallback) {
+export function repoFromRemote(cwd, fallback) {
   const remote = tryRun('git', gitArgs.remoteUrl(), cwd)
   const fromRemote = remote?.trim().match(/github\.com[/:]([^/]+\/[^/\s]+?)(?:\.git)?$/)?.[1]
   return fromRemote ?? fallback

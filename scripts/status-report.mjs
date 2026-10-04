@@ -4,11 +4,14 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
-import { analyseDrift, collectGitFacts, runningCommandLines } from './drift-check.mjs'
+import { analyseDrift, branchDispositionEvidence, branchProvenOnMain, collectGitFacts, repoFromRemote, runningCommandLines } from './drift-check.mjs'
+
+export function branchDisposition(branch, finding, tree, pullRequests) {
+  const evidence = branchDispositionEvidence(branch, finding, tree, pullRequests)
+  return { disposition: evidence.disposable ? 'provably disposable' : 'retain', relatedPrNumber: evidence.relatedPrNumber }
+}
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const repo = 'butahlecoq/anki'
-
 function run(command, args, cwd = root) {
   return execFileSync(command, args, { cwd, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim()
 }
@@ -30,6 +33,10 @@ function linkedIssue(pr) {
   const title = issueNumber(pr.title)
   const branch = /(?:^|[/-])(\d+)(?:-|$)/.exec(pr.headRefName ?? '')?.[1]
   return Number(explicit ?? title ?? branch ?? NaN)
+}
+
+function isLocalHead(pr, owner) {
+  return !pr.headRepositoryOwner?.login || pr.headRepositoryOwner.login === owner
 }
 
 export function deferredLines(pr, comments = []) {
@@ -72,19 +79,6 @@ export function checkState(pr, checkSnapshot) {
   return `unknown check state (${checkSnapshot.state})`
 }
 
-export function branchDisposition(branch, finding, tree, pullRequests) {
-  const related = pullRequests
-    .filter((pr) => pr.headRefName === branch.name && ['MERGED', 'CLOSED'].includes(pr.state))
-    .sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''))[0]
-  const clean = !tree || (!tree.dirtyFiles.length && !tree.untrackedFiles.length)
-  const alreadyOnMain = branch.provenOnMain === true || finding?.provenOnMain === true
-  const disposable = Boolean(related && clean && alreadyOnMain)
-  return {
-    disposition: disposable ? 'provably disposable' : 'retain',
-    relatedPrNumber: related?.number,
-  }
-}
-
 export function omitGeneratedStatusFile(worktrees, repositoryRoot = root) {
   const normalizedRoot = repositoryRoot.replaceAll('\\', '/').toLowerCase()
   const reportPath = 'docs/agents/status.md'
@@ -93,15 +87,19 @@ export function omitGeneratedStatusFile(worktrees, repositoryRoot = root) {
     : tree)
 }
 
-function statusForIssue(issue, prs, worktrees, commentsByIssue, checksByPr) {
-  const issuePrs = prs.filter((pr) => linkedIssue(pr) === issue.number)
+function prRow(pr, tree, comments, checks) {
+  const deferred = deferredLines(pr, comments)
+  return `PR [#${pr.number}](${pr.url}) (${pr.isDraft ? 'draft' : 'open'}); head \`${pr.headRefOid}\`; exact-head checks: ${checkState(pr, checks)}; branch \`${pr.headRefName}\`; worktree: ${tree?.path ?? 'not registered'}; deferred: ${deferred.length ? deferred.map(escapeCell).join('; ') : 'none stated in PR or checkpoint comments'}`
+}
+
+function statusForIssue(issue, prs, worktrees, commentsByIssue, checksByPr, owner) {
+  const issuePrs = prs.filter((pr) => linkedIssue(pr) === issue.number && isLocalHead(pr, owner))
   const issueWorktrees = worktrees.filter((tree) => new RegExp(`(?:^|[/-])${issue.number}(?:-|$)`).test(tree.branch ?? ''))
   if (!issuePrs.length && !issueWorktrees.length) return null
   const rows = []
   for (const pr of issuePrs) {
-    const tree = issueWorktrees.find((item) => item.branch === pr.headRefName)
-    const deferred = deferredLines(pr, commentsByIssue.get(issue.number) ?? [])
-    rows.push(`PR [#${pr.number}](${pr.url}) (${pr.isDraft ? 'draft' : 'open'}); head \`${pr.headRefOid}\`; exact-head checks: ${checkState(pr, checksByPr.get(pr.number))}; branch \`${pr.headRefName}\`; worktree: ${tree?.path ?? 'not registered'}; deferred: ${deferred.length ? deferred.map(escapeCell).join('; ') : 'none stated in PR or checkpoint comments'}`)
+    const tree = worktrees.find((item) => item.branch === pr.headRefName)
+    rows.push(prRow(pr, tree, commentsByIssue.get(issue.number) ?? [], checksByPr.get(pr.number)))
   }
   for (const tree of issueWorktrees.filter((item) => !issuePrs.some((pr) => pr.headRefName === item.branch))) {
     const deferred = deferredLines({}, commentsByIssue.get(issue.number) ?? [])
@@ -110,8 +108,10 @@ function statusForIssue(issue, prs, worktrees, commentsByIssue, checksByPr) {
   return { issue, rows }
 }
 
-export function renderStatus({ issues, prs, worktrees, branches, commentsByIssue = new Map(), checksByPr = new Map(), generatedFrom }) {
-  const inFlight = issues.map((issue) => statusForIssue(issue, prs, worktrees, commentsByIssue, checksByPr)).filter(Boolean)
+export function renderStatus({ issues, prs, worktrees, branches, commentsByIssue = new Map(), checksByPr = new Map(), generatedFrom, repoOwner = '' }) {
+  const inFlight = issues.map((issue) => statusForIssue(issue, prs, worktrees, commentsByIssue, checksByPr, repoOwner)).filter(Boolean)
+  const represented = new Set(inFlight.flatMap(({ issue }) => prs.filter((pr) => linkedIssue(pr) === issue.number && isLocalHead(pr, repoOwner)).map((pr) => pr.number)))
+  const unlinked = prs.filter((pr) => !represented.has(pr.number))
   const dirty = worktrees.filter((tree) => tree.dirtyFiles?.length || tree.untrackedFiles?.length)
   const superseded = branches.filter((branch) => branch.disposition === 'provably disposable')
   const lines = [
@@ -128,6 +128,9 @@ export function renderStatus({ issues, prs, worktrees, branches, commentsByIssue
   for (const { issue, rows } of inFlight) {
     lines.push(`### [#${issue.number} ${issue.title}](${issue.url})`, '', ...rows.map((row) => `- ${row}`), '')
   }
+  lines.push('## Open PRs without an open issue', '')
+  if (!unlinked.length) lines.push('None.')
+  else for (const pr of unlinked) lines.push(`- ${prRow(pr, worktrees.find((tree) => tree.branch === pr.headRefName && isLocalHead(pr, repoOwner)), commentsByIssue.get(linkedIssue(pr)) ?? [], checksByPr.get(pr.number))}`)
   lines.push('## Dirty worktrees', '')
   if (!dirty.length) lines.push('All registered worktrees are clean.')
   else for (const tree of dirty) lines.push(`- \`${tree.path}\` (${tree.branch ?? 'detached'}): ${[...(tree.dirtyFiles ?? []), ...(tree.untrackedFiles ?? [])].join(', ')}`)
@@ -142,10 +145,11 @@ export function renderStatus({ issues, prs, worktrees, branches, commentsByIssue
   return lines.join('\n')
 }
 
-function collect() {
+function collect({ repoOverride } = {}) {
   run('git', ['fetch', 'origin'])
+  const repo = repoOverride ?? repoFromRemote(root, 'butahlecoq/anki')
   const issues = ghJson(['issue', 'list', '--repo', repo, '--state', 'open', '--limit', '500', '--json', 'number,title,body,url,labels']).sort((a, b) => a.number - b.number)
-  const prs = ghJson(['pr', 'list', '--repo', repo, '--state', 'open', '--limit', '500', '--json', 'number,title,body,isDraft,headRefName,headRefOid,baseRefName,url']).sort((a, b) => a.number - b.number)
+  const prs = ghJson(['pr', 'list', '--repo', repo, '--state', 'open', '--limit', '500', '--json', 'number,title,body,isDraft,headRefName,headRefOid,headRepositoryOwner,baseRefName,url']).sort((a, b) => a.number - b.number)
   if (issues.length >= 500 || prs.length >= 500) throw new Error('Tracker result reached the 500 item limit; paginate before generating status.')
   const facts = collectGitFacts({ repo })
   if (!facts.pullRequests) throw new Error('Could not read all pull request states; status would be incomplete.')
@@ -158,16 +162,15 @@ function collect() {
   const branches = facts.branches.map((branch) => {
     const finding = report.findings.find((item) => item.subject === branch.name)
     const tree = worktrees.find((item) => item.path === branch.worktree)
-    const provenOnMain = finding?.check === 'branch-stale-snapshot' && (
-      branch.isAncestorOfMain === true ||
-      (branch.additions === 0 && branch.deletions === 0 && branch.binary === 0)
-    )
+    const provenOnMain = branchProvenOnMain(branch, finding)
+    const evidence = branchDispositionEvidence(branch, finding, tree, facts.pullRequests ?? [])
     return {
       ...branch,
       pastMerge: finding?.check === 'branch-past-merge',
       detail: finding?.message,
       provenOnMain,
-      ...branchDisposition({ ...branch, provenOnMain }, finding, tree, facts.pullRequests ?? []),
+      disposition: evidence.disposable ? 'provably disposable' : 'retain',
+      relatedPrNumber: evidence.relatedPrNumber,
     }
   })
   const issueNumbers = [...new Set([
@@ -188,12 +191,13 @@ function collect() {
     return [pr.number, commit ? { oid: commit.oid, state: commit.statusCheckRollup?.state ?? null } : null]
   }))
   const normalizedWorktrees = omitGeneratedStatusFile(worktrees)
-  return { issues, prs, worktrees: normalizedWorktrees, branches, commentsByIssue, checksByPr, generatedFrom: run('git', ['rev-parse', 'origin/main']) }
+  return { issues, prs, worktrees: normalizedWorktrees, branches, commentsByIssue, checksByPr, generatedFrom: run('git', ['rev-parse', 'origin/main']), repoOwner: repo.split('/')[0] }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const output = path.join(root, 'docs', 'agents', 'status.md')
-  const status = renderStatus(collect())
+  const repoAt = process.argv.indexOf('--repo')
+  const status = renderStatus(collect({ repoOverride: repoAt === -1 ? undefined : process.argv[repoAt + 1] }))
   let existing = ''
   try { existing = readFileSync(output, 'utf8') } catch {}
   if (existing !== status) writeFileSync(output, status, 'utf8')
