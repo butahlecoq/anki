@@ -642,13 +642,17 @@ const defaultDeckOptionGroup: DeckOptionGroup = {
   updatedAt: '1970-01-01T00:00:00.000Z',
 }
 
+function addCardCount(counts: DeckCounts, card: CardRecord) {
+  if (card.suspended) return
+  if (card.state === State.New) counts.new += 1
+  else if (card.state === State.Review) counts.review += 1
+  else counts.learning += 1
+}
+
 function countsFor(cards: CardRecord[]): DeckCounts {
-  return cards.filter((card) => !card.suspended).reduce<DeckCounts>((counts, card) => {
-    if (card.state === State.New) counts.new += 1
-    else if (card.state === State.Review) counts.review += 1
-    else counts.learning += 1
-    return counts
-  }, { new: 0, learning: 0, review: 0 })
+  const counts = { new: 0, learning: 0, review: 0 }
+  for (const card of cards) addCardCount(counts, card)
+  return counts
 }
 
 export class Collection extends Dexie {
@@ -1717,36 +1721,70 @@ export class Collection extends Dexie {
 
   async summaries(): Promise<DeckSummary[]> {
     return this.transaction('r', [this.settings, this.decks, this.notes, this.cards, this.reviewEntries], async () => {
-    const sessionCards = await customStudyMembership(this)
-    const [decks, notes, cards, reviews] = await Promise.all([
-      this.decks.orderBy('createdAt').toArray(),
-      this.notes.toArray(),
-      this.cards.toArray(),
-      this.reviewEntries.toArray(),
-    ])
-    const descendants = (deckId: string) => {
-      const ids = new Set([deckId])
-      for (let changed = true; changed;) {
-        changed = false
-        for (const deck of decks) {
-          if (deck.parentId && ids.has(deck.parentId) && !ids.has(deck.id)) {
-            ids.add(deck.id)
-            changed = true
+      const sessionCards = await customStudyMembership(this)
+      const [decks, notes, cards, reviews] = await Promise.all([
+        this.decks.orderBy('createdAt').toArray(),
+        this.notes.toArray(),
+        this.cards.toArray(),
+        this.reviewEntries.toArray(),
+      ])
+      const totals = new Map(decks.map((deck) => [deck.id, {
+        counts: { new: 0, learning: 0, review: 0 }, noteCount: 0, reviewCount: 0, sessionCount: 0,
+      }]))
+      const decksById = new Map(decks.map((deck) => [deck.id, deck]))
+      const children = new Map<string, string[]>()
+      for (const deck of decks) if (deck.parentId && totals.has(deck.parentId)) {
+        const siblings = children.get(deck.parentId)
+        if (siblings) siblings.push(deck.id)
+        else children.set(deck.parentId, [deck.id])
+      }
+      for (const note of notes) {
+        const total = totals.get(note.deckId)
+        if (total) total.noteCount += 1
+      }
+      for (const card of cards) {
+        const total = totals.get(card.deckId)
+        if (!total) continue
+        addCardCount(total.counts, card)
+        if (sessionCards.has(card.id)) total.sessionCount += 1
+      }
+      for (const review of reviews) {
+        const total = totals.get(review.deckId)
+        if (total) total.reviewCount += 1
+      }
+
+      // A single post-order traversal folds each Deck's local totals into its
+      // parent, leaving each node with the same descendant totals as before.
+      const postOrder: string[] = []
+      const visited = new Set<string>()
+      for (const deck of decks) {
+        const stack: Array<[string, boolean]> = [[deck.id, false]]
+        while (stack.length) {
+          const [id, expanded] = stack.pop()!
+          if (expanded) {
+            postOrder.push(id)
+            continue
           }
+          if (visited.has(id)) continue
+          visited.add(id)
+          stack.push([id, true])
+          for (const childId of children.get(id) ?? []) stack.push([childId, false])
         }
       }
-      return ids
-    }
-    return Promise.all(decks.map(async (deck) => {
-      const ids = descendants(deck.id)
-      return {
-        ...deck,
-        counts: countsFor(cards.filter((card) => ids.has(card.deckId))),
-        noteCount: notes.filter((note) => ids.has(note.deckId)).length,
-        reviewCount: reviews.filter((review) => ids.has(review.deckId)).length,
-        sessionCount: cards.filter((card) => ids.has(card.deckId) && sessionCards.has(card.id)).length,
+      for (const id of postOrder) {
+        const deck = decksById.get(id)!
+        const parent = deck.parentId ? totals.get(deck.parentId) : undefined
+        const total = totals.get(id)!
+        if (parent) {
+          parent.counts.new += total.counts.new
+          parent.counts.learning += total.counts.learning
+          parent.counts.review += total.counts.review
+          parent.noteCount += total.noteCount
+          parent.reviewCount += total.reviewCount
+          parent.sessionCount += total.sessionCount
+        }
       }
-    }))
+      return decks.map((deck) => ({ ...deck, ...totals.get(deck.id)! }))
     })
   }
 
