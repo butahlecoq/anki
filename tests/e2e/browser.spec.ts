@@ -2,6 +2,8 @@ import { expect, test, type Page } from '@playwright/test'
 import initSqlJs from 'sql.js'
 import { Deck, Note, Notetype, Package } from 'ankipack'
 
+const PACKAGE_PREVIEW_TIMEOUT = 10_000 // Windows WebKit SQL/WASM preview measured at ~5.2s; Chromium remains sub-second.
+
 async function search(page: Page, query: string) {
   await page.getByLabel('Collection search', { exact: true }).fill(query)
   await page.getByRole('button', { name: 'Search', exact: true }).click()
@@ -153,7 +155,7 @@ test('large imported collections page results, report duplicates, and stop expen
   await page.getByRole('button', { name: 'Import Anki package', exact: true }).click()
   const importer = page.getByRole('dialog', { name: 'Import Anki package' })
   await importer.getByLabel('Anki package', { exact: true }).setInputFiles({ name: 'browser.apkg', mimeType: 'application/octet-stream', buffer: await largeFixture() })
-  await expect(importer.getByText('72 notes', { exact: true })).toBeVisible()
+  await expect(importer.getByText('72 notes', { exact: true })).toBeVisible({ timeout: PACKAGE_PREVIEW_TIMEOUT })
   await importer.getByRole('button', { name: 'Import package', exact: true }).click()
   await page.getByRole('link', { name: 'Browse', exact: true }).click()
   await expect(page.getByRole('table').locator('tbody tr')).toHaveCount(50)

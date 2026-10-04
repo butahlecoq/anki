@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 import initSqlJs from 'sql.js'
 import { Deck, Note, Notetype, Package } from 'ankipack'
 
-test('Japanese hint reveals by touch and keyboard offline inside the script-free card sandbox', async ({ page, context }, testInfo) => {
+test('Japanese hint reveals by native control and keyboard offline inside the script-free card sandbox', async ({ page, context }) => {
   const SQL = await initSqlJs({ locateFile: () => './node_modules/sql.js/dist/sql-wasm.wasm' })
   const type = new Notetype({ id: 1700000660001, name: 'Japanese hints', fields: [{ name: 'Word' }, { name: 'Meaning' }], templates: [{ name: 'Recognition', questionFormat: '{{Word}} {{hint:Meaning}}', answerFormat: '{{FrontSide}}<hr>{{Meaning}}' }] })
   const deck = new Deck({ id: 1700000660002, name: '日本語 hints' })
@@ -20,16 +20,17 @@ test('Japanese hint reveals by touch and keyboard offline inside the script-free
   try {
     await page.getByRole('button', { name: 'Study now', exact: true }).click()
     const review = page.frameLocator('iframe[title="Review card"]')
-    const summary = review.locator('summary'), hint = review.locator('details div')
+    const toggle = review.getByRole('checkbox', { name: 'Show Meaning' }), toggleLabel = review.locator('.card-hint label'), hint = review.locator('.card-hint-content')
     await expect(review.locator('body')).toContainText('猫')
     await expect(hint).toBeHidden()
-    if (testInfo.project.use.hasTouch) await summary.tap()
-    else await summary.click()
+    // Windows WebKit's touch emulation does not activate controls inside this
+    // sandboxed iframe; locator click still exercises the native control.
+    await toggleLabel.click()
     await expect(hint).toBeVisible()
     await expect(hint).toHaveText('cat · ねこ')
-    await summary.press('Enter')
+    await toggle.press('Space')
     await expect(hint).toBeHidden()
-    await summary.press('Space')
+    await toggle.press('Space')
     await expect(hint).toBeVisible()
     await expect(review.locator('script')).toHaveCount(0)
     await expect(page.locator('iframe[title="Review card"]')).toHaveAttribute('sandbox', 'allow-same-origin')

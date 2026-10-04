@@ -61,3 +61,10 @@ Outside CI, the browser suite may reuse existing servers
 (`reuseExistingServer: !process.env.CI`). Isolate each run instead of relying on
 fixed ports, and treat a changed failure count on identical code as
 inconclusive until the run is repeated without competing jobs.
+
+The repository's local Playwright default is one worker. On this Windows host,
+parallel WebKit workers intermittently starve one another during application
+startup and IndexedDB/service-worker readiness, producing rotating timeouts
+without application errors. This keeps every test enabled while making the
+local gate deterministic. CI retains its own worker policy; capable local
+hosts may opt into a measured parallel run with `--workers=2`.

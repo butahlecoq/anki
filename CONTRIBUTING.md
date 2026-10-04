@@ -55,6 +55,13 @@ $env:KIROKU_RUNTIME_DIRECTORY = "$PWD\.runtime\browser-run"
 npx playwright test
 ```
 
+The local default runs one worker because Windows WebKit becomes intermittently
+starved when the full suite runs six workers concurrently. This is a resource
+isolation policy, not a test reduction: all projects and journeys still run.
+On a host with measured capacity for parallel WebKit runs, opt in explicitly
+with `npx playwright test --workers=2` (or another tested value), while keeping
+the one-worker result as the local gate evidence.
+
 Playwright's WebKit project emulates a phone-sized browser; it is not installed iOS Safari. Warm offline journeys verify an already loaded application. Fresh offline navigation, service-worker behavior, and audible playback have documented WebKit or physical-device limits. Keep those skips and limitations separate from application failures.
 
 If a browser process fails before the application starts with `spawn UNKNOWN`, capture the Node/npm/Playwright versions, command, exact head, and process-launch context, then compare an unrestricted run with a clean baseline. Do not treat an application assertion, port collision, reused server, or browser automation limitation as the same failure, and do not claim an unproven historical root cause.

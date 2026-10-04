@@ -21,6 +21,6 @@ test('Japanese hint meaning and template survive portable export and a clean imp
     expect(restored.fields.map((field) => note.fields[field.id])).toEqual(['猫', 'cat · ねこ'])
     const rendered = tryRenderNoteTemplate(restored.templates[0].front, restored, note.fields)
     expect(rendered.ok).toBe(true)
-    if (rendered.ok) expect(new DOMParser().parseFromString(rendered.value.html, 'text/html').querySelector('details div')?.textContent).toBe('cat · ねこ')
+    if (rendered.ok) expect(new DOMParser().parseFromString(rendered.value.html, 'text/html').querySelector('.card-hint-content')?.textContent).toBe('cat · ねこ')
   } finally { await source.delete(); await target.delete() }
 })

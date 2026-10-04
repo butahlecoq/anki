@@ -371,7 +371,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .occlusion-review-canvas { cursor: default; }
 .text-collection-dialog { width: min(880px, 100%); max-height: 92vh; overflow-y: auto; }
 .text-transfer-tabs { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
-.text-transfer-controls { min-width: 0; display: grid; gap: 14px; border: 1px solid var(--border-subtle); padding: 16px; margin: 14px 0; }
+.text-transfer-controls { min-width: 0; overflow-x: hidden; display: grid; gap: 14px; border: 1px solid var(--border-subtle); padding: 16px; margin: 14px 0; }
 .text-transfer-controls > label, .text-column-mapping > label { display: grid; gap: 6px; min-width: 0; }
 .text-transfer-controls input, .text-transfer-controls select, .text-transfer-controls textarea { min-width: 0; max-width: 100%; }
 .text-column-mapping { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 12px; }

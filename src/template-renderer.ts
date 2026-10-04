@@ -147,6 +147,7 @@ export function renderTemplate(template: string, fields: Record<string, string>,
   let section: { name: string; enabled: boolean } | undefined
   let visibleField = navigation.hasContent
   let typedAnswer: string | undefined
+  let hintIndex = 0
   for (const match of template.matchAll(token)) {
     const position = match.index
     const [source, marker, rawName] = match
@@ -170,7 +171,7 @@ export function renderTemplate(template: string, fields: Record<string, string>,
         if (typedAnswer.trim()) visibleField = true
       } else {
         if (value.trim() && name !== 'FrontSide') visibleField = true
-        html += filter === 'hint' ? (value.trim() ? `<details class="card-hint"><summary>Show ${escapeHtml(name)}</summary><div>${renderField(value, options.media)}</div></details>` : '') : name === 'FrontSide' ? value : filter === 'cloze'
+        html += filter === 'hint' ? (value.trim() ? (() => { const id = `kiroku-hint-${hintIndex++}`; return `<div class="card-hint"><input class="card-hint-toggle" type="checkbox" id="${id}"><label for="${id}">Show ${escapeHtml(name)}</label><div class="card-hint-content">${renderField(value, options.media)}</div></div>` })() : '') : name === 'FrontSide' ? value : filter === 'cloze'
           ? renderCloze(value, ordinal ?? 0, side)
           : filter === 'furigana' || filter === 'kana' || filter === 'kanji' ? renderReading(value, filter)
             : renderField(value, options.media)
