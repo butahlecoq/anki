@@ -23,6 +23,38 @@ test('navigation marks the note-type manager as the current page', () => {
   expect(within(navigation).getByRole('link', { name: 'Decks' })).not.toHaveAttribute('aria-current')
 })
 
+test('rotates a paired device key from the visible sync controls', async () => {
+  const priorFetch = globalThis.fetch
+  const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ token: 'rotated-device-key' }), { status: 200 }))
+  globalThis.fetch = fetcher as typeof fetch
+  await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'old-device-key', cursor: 6 })
+  try {
+    render(<CollectionWorkspace />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Rotate device key' }))
+    await waitFor(async () => expect(await collection.syncSettings()).toEqual({ endpoint: 'https://pc.example.test', token: 'rotated-device-key', cursor: 6 }))
+    expect(await screen.findByText(/previous key can no longer sync this collection/i)).toBeVisible()
+    expect(fetcher).toHaveBeenCalledWith('https://pc.example.test/api/credential/rotate', expect.objectContaining({ method: 'POST' }))
+  } finally {
+    globalThis.fetch = priorFetch
+    await collection.settings.delete('sync')
+  }
+})
+
+test('does not claim the old key is unchanged after a lost rotation response', async () => {
+  const priorFetch = globalThis.fetch
+  globalThis.fetch = vi.fn().mockRejectedValue(new TypeError('connection dropped')) as typeof fetch
+  await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'old-device-key', cursor: 6 })
+  try {
+    render(<CollectionWorkspace />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Rotate device key' }))
+    expect(await screen.findByText(/may have rotated this device key, but confirmation was lost/i)).toBeVisible()
+    expect(screen.getByText(/pair this device again before syncing/i)).toBeVisible()
+  } finally {
+    globalThis.fetch = priorFetch
+    await collection.settings.delete('sync')
+  }
+})
+
 describe('application shell', () => {
   test('presents the local-first study workspace with accessible primary navigation', () => {
     render(<App />)

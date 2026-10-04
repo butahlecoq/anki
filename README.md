@@ -42,7 +42,11 @@ For local desktop verification, start the durable SQLite-backed service and prin
 ```powershell
 npm run server:start
 npm run server:pair
+npm run server:devices
+npm run server:revoke -- <device-id>
 ```
+
+The device list shows identifiers and active/revoked status only. To invalidate a lost phone, copy its ID from `server:devices` and run `server:revoke`; the PC command removes its credentials from the local sync store. The phone will need to be paired again if it is recovered.
 
 The default service listens only on `127.0.0.1:4174`. To pair a phone across the network, provide a trusted TLS key and certificate, an HTTPS app origin, and a network host:
 

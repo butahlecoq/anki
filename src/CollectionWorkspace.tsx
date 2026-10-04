@@ -24,6 +24,7 @@ import { useReviewMedia } from './use-review-media'
 import { validateMedia } from './media'
 import { createAndDownloadPcBackup, listPcBackups, pairCollection, previewPcBackupRestore, syncCollection, type PcBackup } from './sync-client'
 import { supportsServiceWorkers } from './browser-capabilities'
+import { rotateCredential } from './sync-client'
 import { clozeOrdinals } from './template-renderer'
 import { compareTypedAnswer } from './typed-answer'
 import { prepareAnkiImport, type PreparedAnkiImport } from './anki-import'
@@ -297,12 +298,34 @@ function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: boolean 
     finally { setBusy(false) }
   }
 
+  async function rotateDeviceCredential() {
+    if (!settings) return
+    setBusy(true)
+    const result = await rotateCredential(settings)
+    if (result.state === 'rotated') {
+      try {
+        await collection.configureSync({ ...settings, token: result.token })
+        setMessage('Device key rotated. The previous key can no longer sync this collection.')
+      } catch {
+        setMessage('The PC rotated this device key, but it could not be saved here. Pair this device again to reconnect.')
+      }
+    } else if (result.state === 'authentication-required') {
+      setMessage('This device key has expired or was already rotated. Pair this device again to reconnect.')
+    } else if (result.state === 'indeterminate') {
+      setMessage('The PC may have rotated this device key, but confirmation was lost. Create a new pairing code on the PC and pair this device again before syncing.')
+    } else {
+      setMessage('This PC address is not safe for key rotation. Check its HTTPS address; no request was sent.')
+    }
+    setBusy(false)
+  }
+
   return (
     <section className="sync-controls" aria-label="PC sync">
       <div><span className="section-code">SYNC // {settings ? 'PAIRED' : 'LOCAL ONLY'}</span><p aria-live="polite">{settings && !offlineSyncAvailable ? 'Sync is paused until Kiroku confirms its offline app shell is ready.' : message}</p></div>
       <div className="sync-actions">
         {settings && <button className="text-button" type="button" disabled={busy || !offlineSyncAvailable || !offlineShellSupported} onClick={() => void sync()}>{busy ? 'Syncing…' : 'Sync now'}</button>}
         {settings && <button className="text-button" type="button" disabled={busy} onClick={() => void backupPcCollection()}>{busy ? 'Working…' : 'Download PC backup'}</button>}
+        {settings && <button className="text-button" type="button" disabled={busy} title="Invalidates this device’s previous key immediately" onClick={() => void rotateDeviceCredential()}>{busy ? 'Working…' : 'Rotate device key'}</button>}
         <button className="primary-action" type="button" disabled={busy} onClick={() => setPairing(true)}>{settings ? 'Pair another device' : 'Connect a PC'}</button>
       </div>
       {settings && backups[0] && <p className="sync-help">Latest verified PC backup: {new Date(backups[0].createdAt).toLocaleString()} · {backups[0].changeCount} sync changes · {backups[0].media.length} media files · {backups[0].reason === 'manual' ? 'manual' : 'before sync'}.</p>}

@@ -214,6 +214,26 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
       } finally { release() }
     },
 
+    listDevices() {
+      const rows = database.prepare('SELECT id, revoked_at FROM devices ORDER BY id').all() as Array<{ id: string; revoked_at: string | null }>
+      return rows.map(({ id, revoked_at }) => ({ id, status: revoked_at === null ? 'active' as const : 'revoked' as const }))
+    },
+
+    revokeDevice(deviceId: string, now = new Date()) {
+      database.exec('BEGIN IMMEDIATE')
+      try {
+        const device = database.prepare('SELECT id FROM devices WHERE id = ?').get(deviceId) as { id: string } | undefined
+        if (!device) throw new Error('Device was not found.')
+        database.prepare('UPDATE devices SET revoked_at = COALESCE(revoked_at, ?) WHERE id = ?').run(now.toISOString(), deviceId)
+        database.prepare('DELETE FROM tokens WHERE device_id = ?').run(deviceId)
+        database.exec('COMMIT')
+      } catch (error) {
+        database.exec('ROLLBACK')
+        throw error
+      }
+      return { deviceId, status: 'revoked' as const }
+    },
+
     pair({ code, deviceId }: PairRequest, now = new Date()) {
       const pairing = database.prepare('SELECT expires_at, consumed_at FROM pairing_codes WHERE hash = ?').get(hash(code)) as { expires_at: string; consumed_at: string | null } | undefined
       if (!pairing || pairing.consumed_at || pairing.expires_at <= now.toISOString()) throw new Error('Pairing code is invalid or expired.')
@@ -229,6 +249,22 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
         throw error
       }
       return { deviceId, token: issuedToken }
+    },
+
+    rotateCredential(accessToken: string) {
+      const issuedToken = token()
+      database.exec('BEGIN IMMEDIATE')
+      try {
+        const device = database.prepare('SELECT devices.id FROM tokens JOIN devices ON devices.id = tokens.device_id WHERE tokens.hash = ? AND devices.revoked_at IS NULL').get(hash(accessToken)) as { id: string } | undefined
+        if (!device) throw new Error('Authentication required.')
+        database.prepare('DELETE FROM tokens WHERE device_id = ?').run(device.id)
+        database.prepare('INSERT INTO tokens (hash, device_id) VALUES (?, ?)').run(hash(issuedToken), device.id)
+        database.exec('COMMIT')
+      } catch (error) {
+        database.exec('ROLLBACK')
+        throw error
+      }
+      return { token: issuedToken }
     },
 
     sync(accessToken: string, request: SyncRequest) {

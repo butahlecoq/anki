@@ -7,7 +7,7 @@ import { afterEach, test } from 'node:test'
 import { createServer, request as httpRequest } from 'node:http'
 import { DatabaseSync } from 'node:sqlite'
 import { unzipSync } from 'fflate'
-import { createPairingCode, startSyncServer } from './index.js'
+import { createPairingCode, listPairedDevices, revokePairedDevice, startSyncServer } from './index.js'
 import { createSyncService } from './sync-service.js'
 import { createSyncHttpHandler } from './sync-http.js'
 import { SERVER_MAX_COLLECTION_SCHEMA_VERSION } from '../sync-capabilities.js'
@@ -33,6 +33,48 @@ test('reports a ready durable store and accepts a pairing code only once', async
   assert.match(paired.token, /^[a-f0-9]{64}$/)
   assert.throws(() => service.pair({ code: pairingCode, deviceId: 'phone-2' }, new Date('2026-10-01T12:02:00.000Z')))
   service.close()
+})
+
+test('rotates a device credential atomically and rejects its previous token', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
+  const service = createSyncService({ databasePath: join(runtimeDirectory, 'collection.sqlite') })
+  const { token: previousToken } = service.pair({ code: service.createPairingCode(), deviceId: 'phone-1' })
+  const rotated = service.rotateCredential(previousToken)
+
+  assert.match(rotated.token, /^[a-f0-9]{64}$/)
+  assert.notEqual(rotated.token, previousToken)
+  assert.throws(() => service.sync(previousToken, { protocolVersion: 2, collectionSchemaVersion: 16, cursor: 0, operations: [] }), /authentication required/i)
+  assert.equal(service.sync(rotated.token, { protocolVersion: 2, collectionSchemaVersion: 16, cursor: 0, operations: [] }).accepted, 0)
+  assert.throws(() => service.rotateCredential(previousToken), /authentication required/i)
+  service.close()
+})
+
+test('revokes a lost device through local administration without listing credentials', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
+  const service = createSyncService({ databasePath: join(runtimeDirectory, 'collection.sqlite') })
+  const { token } = service.pair({ code: service.createPairingCode(), deviceId: 'lost-phone' })
+
+  assert.deepEqual(service.listDevices(), [{ id: 'lost-phone', status: 'active' }])
+  assert.deepEqual(service.revokeDevice('lost-phone', new Date('2026-10-03T12:00:00.000Z')), { deviceId: 'lost-phone', status: 'revoked' })
+  assert.deepEqual(service.listDevices(), [{ id: 'lost-phone', status: 'revoked' }])
+  assert.throws(() => service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 16, cursor: 0, operations: [] }), /authentication required/i)
+  assert.throws(() => service.revokeDevice('unknown-phone'), /device was not found/i)
+  service.close()
+})
+
+test('local device-management commands persist a revocation across service restart', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
+  const databasePath = join(runtimeDirectory, 'kiroku-sync.sqlite')
+  const service = createSyncService({ databasePath })
+  const { token } = service.pair({ code: service.createPairingCode(), deviceId: 'phone-to-remove' })
+  service.close()
+
+  assert.deepEqual(await listPairedDevices({ runtimeDirectory }), [{ id: 'phone-to-remove', status: 'active' }])
+  assert.deepEqual(await revokePairedDevice({ runtimeDirectory, deviceId: 'phone-to-remove' }), { deviceId: 'phone-to-remove', status: 'revoked' })
+  assert.deepEqual(await listPairedDevices({ runtimeDirectory }), [{ id: 'phone-to-remove', status: 'revoked' }])
+  const reopened = createSyncService({ databasePath })
+  assert.throws(() => reopened.sync(token, { protocolVersion: 2, collectionSchemaVersion: 16, cursor: 0, operations: [] }), /authentication required/i)
+  reopened.close()
 })
 
 test('accepts a review mutation once when the request is delivered twice', async () => {
@@ -444,6 +486,17 @@ test('serves health, pairing, and authenticated sync over HTTP', async () => {
   assert.equal(downloaded.headers.get('x-content-sha256'), mediaDigest)
   assert.match(downloaded.headers.get('access-control-expose-headers') ?? '', /x-content-sha256/)
   assert.deepEqual(new Uint8Array(await downloaded.arrayBuffer()), mediaBytes)
+
+  const rotated = await fetch(`${origin}/api/credential/rotate`, { method: 'POST', headers: { authorization: `Bearer ${credential.token}` } })
+  assert.equal(rotated.status, 200)
+  const nextCredential = await rotated.json() as { token: string }
+  assert.match(nextCredential.token, /^[a-f0-9]{64}$/)
+  const oldCredentialDenied = await fetch(`${origin}/api/sync`, { method: 'POST', headers: { authorization: `Bearer ${credential.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, collectionSchemaVersion: 16, cursor: 0, operations: [] }) })
+  assert.equal(oldCredentialDenied.status, 401)
+  const newCredentialAccepted = await fetch(`${origin}/api/sync`, { method: 'POST', headers: { authorization: `Bearer ${nextCredential.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, collectionSchemaVersion: 16, cursor: 0, operations: [] }) })
+  assert.equal(newCredentialAccepted.status, 200)
+  const unauthenticatedRotation = await fetch(`${origin}/api/credential/rotate`, { method: 'POST' })
+  assert.equal(unauthenticatedRotation.status, 401)
 
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
