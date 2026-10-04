@@ -20,6 +20,15 @@ test('browser maintains stable Japanese selections and previews field changes of
   await page.getByRole('button', { name: 'New deck', exact: true }).click()
   await page.getByLabel('Deck name', { exact: true }).fill('日本語 browser')
   await page.getByRole('button', { name: 'Create deck', exact: true }).click()
+  if (test.info().project.use.hasTouch) {
+    const deckAction = page.getByRole('button', { name: 'Open 日本語 browser', exact: true })
+    await deckAction.scrollIntoViewIfNeeded()
+    const actionBox = await deckAction.boundingBox()
+    const navigationBox = await page.getByRole('navigation', { name: 'Mobile navigation' }).boundingBox()
+    expect(actionBox).not.toBeNull()
+    expect(navigationBox).not.toBeNull()
+    expect(actionBox!.bottom).toBeLessThanOrEqual(navigationBox!.top + 1)
+  }
   await page.getByRole('button', { name: 'Open 日本語 browser', exact: true }).click()
   await createNote(page, '猫', 'cat')
   await createNote(page, '犬', 'dog')
