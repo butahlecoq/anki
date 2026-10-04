@@ -192,7 +192,8 @@ test('sends pending collection changes in bounded batches and acknowledges each 
 })
 
 test('replays a batch with stable operation IDs after the server commits but its response is lost', async () => {
-  const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+  const databaseName = `kiroku-test-${crypto.randomUUID()}`
+  let collection = createCollection(databaseName)
   try {
     await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 })
     await collection.outbox.add({ opId: 'lost-response-op', entityType: 'note', entityId: 'note-1', action: 'update', occurredAt: '2026-10-01T12:00:00.000Z', payload: { id: 'note-1', value: true } })
@@ -214,6 +215,10 @@ test('replays a batch with stable operation IDs after the server commits but its
     expect(interruptedProgress).toContainEqual(expect.objectContaining({ phase: 'retry', task: 'records', pending: 1, cursor: 0 }))
     expect(interruptedProgress.some((progress) => progress.phase === 'complete')).toBe(false)
     await expect(collection.pendingOperations()).resolves.toHaveLength(1)
+    collection.close()
+    collection = createCollection(databaseName)
+    await expect(collection.pendingOperations()).resolves.toHaveLength(1)
+    await expect(collection.syncSettings()).resolves.toMatchObject({ cursor: 0 })
     const resumedProgress: SyncProgress[] = []
     await expect(syncCollection(collection, fetcher as typeof fetch, (progress) => resumedProgress.push(progress))).resolves.toMatchObject({ state: 'complete', accepted: 0, cursor: 1 })
     expect(resumedProgress.at(-1)).toMatchObject({ phase: 'complete', accepted: 0, cursor: 1, conflicts: 0, media: { pending: 0 } })
