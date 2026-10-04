@@ -9,6 +9,7 @@ import {
   type OcclusionMaskDraft,
 } from './collection'
 import { validateMedia } from './media'
+import { useDialogKeyboard } from './use-dialog-keyboard'
 
 type DraftMask = OcclusionMaskDraft & { localId: string }
 type Point = { x: number; y: number }
@@ -185,6 +186,7 @@ export function ImageOcclusionCanvas({
 }
 
 export function ImageOcclusionEditor({ deckId, note, onClose }: { deckId: string; note?: Note; onClose: () => void }) {
+  const dialogKeyboard = useDialogKeyboard(onClose)
   const source = useLiveQuery(async () => {
     if (!note?.imageOcclusion) return undefined
     const reference = await collection.noteMedia.get(note.imageOcclusion.sourceMediaId)
@@ -230,7 +232,7 @@ export function ImageOcclusionEditor({ deckId, note, onClose }: { deckId: string
   }
 
   return <div className="dialog-backdrop">
-    <section className="dialog note-dialog occlusion-dialog" role="dialog" aria-modal="true" aria-labelledby="occlusion-dialog-title">
+    <section {...dialogKeyboard} className="dialog note-dialog occlusion-dialog" role="dialog" aria-modal="true" aria-labelledby="occlusion-dialog-title">
       <span className="section-code">IMAGE OCCLUSION // {note ? 'EDIT' : 'NEW'}</span>
       <h2 id="occlusion-dialog-title">{note ? 'Edit image occlusion note' : 'Add image occlusion note'}</h2>
       <form onSubmit={submit}>

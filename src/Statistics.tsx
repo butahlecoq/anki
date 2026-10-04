@@ -1,6 +1,7 @@
 import { useEffect, useState, type CSSProperties } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { collection, Rating, State, type CardRecord } from './collection'
+import { useDialogKeyboard } from './use-dialog-keyboard'
 import { localDayKey, periodWindow, reviewHeatmap, reviewStatistics, schedulingStatistics, type StatisticsPeriod } from './progress-statistics'
 
 function useStatisticsClock() {
@@ -58,6 +59,7 @@ export function Statistics() {
   const [anchorKey, setAnchorKey] = useState('')
   const [deckId, setDeckId] = useState('')
   const [selectedCard, setSelectedCard] = useState<string | null>(null)
+  const cardDialogKeyboard = useDialogKeyboard(() => setSelectedCard(null), Boolean(selectedCard))
   const anchor = anchorKey ? new Date(`${anchorKey}T12:00:00`) : now
   const data = useLiveQuery(async () => {
     return collection.transaction('r', collection.decks, collection.cards, collection.notes, collection.reviewEntries, async () => ({
@@ -96,7 +98,7 @@ export function Statistics() {
     <div className="statistics-grid"><section className="statistics-panel"><h2>Answer distribution</h2><Bars values={stats.ratings.map((item) => ({ label: Rating[item.rating], count: item.count }))} /></section><section className="statistics-panel"><h2>Current intervals</h2><Bars values={scheduling.intervals} /><p>Active scheduled cards; new and suspended cards are excluded.</p></section></div>
     <section className="statistics-panel"><h2>30-day forecast</h2><p>Current due dates, including overdue cards today. Daily limits, new introductions, and future answers can change the workload.</p><div className="forecast-scroll"><Bars values={scheduling.forecast.map((day) => ({ label: day.key, count: day.count }))} /></div></section>
     <section className="statistics-panel"><h2>Cards studied in this period</h2>{reviewedCards.length ? <ul className="studied-cards">{reviewedCards.map((id) => { const current = cardsById.get(id); const note = current && notes.get(current.noteId); return <li key={id}>{current ? <button className="text-button" type="button" onClick={() => setSelectedCard(id)}>{Object.values(note?.fields ?? {}).find(Boolean)?.replace(/<[^>]*>/g, '').slice(0, 100) || 'Card'} · {current.templateId}</button> : <span>Removed card</span>}</li> })}</ul> : <p>Your reviewed cards will appear here.</p>}</section>
-    {card && <div className="dialog-backdrop"><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="statistics-card-title"><h2 id="statistics-card-title">Card progress</h2><p>Due {new Date(card.due).toLocaleString()} · {card.reps} answers · {card.lapses} lapses{card.manualSuspended || card.suspended || card.templateSuspended ? ' · Suspended' : ''}</p><CardHistory card={card} /><button className="primary-action" type="button" onClick={() => setSelectedCard(null)}>Close</button></section></div>}
+    {card && <div className="dialog-backdrop"><section {...cardDialogKeyboard} className="dialog" role="dialog" aria-modal="true" aria-labelledby="statistics-card-title"><h2 id="statistics-card-title">Card progress</h2><p>Due {new Date(card.due).toLocaleString()} · {card.reps} answers · {card.lapses} lapses{card.manualSuspended || card.suspended || card.templateSuspended ? ' · Suspended' : ''}</p><CardHistory card={card} /><button className="primary-action" type="button" onClick={() => setSelectedCard(null)}>Close</button></section></div>}
   </div>
 }
 

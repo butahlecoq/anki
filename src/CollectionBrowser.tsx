@@ -7,6 +7,7 @@ import { customStudyMembership } from './custom-study-state'
 import { unavailableReason } from './scheduler'
 import { ImageOcclusionEditor } from './ImageOcclusion'
 import { isRenderedCardDisplayable, renderNoteCard } from './card-rendering'
+import { useDialogKeyboard } from './use-dialog-keyboard'
 
 type View = 'cards' | 'notes'
 type Sort = { key: string; descending: boolean }
@@ -26,18 +27,20 @@ const frontText = (row: SearchRow) => plainField(Object.values(row.note.fields).
 const rowId = (row: SearchRow, view: View) => view === 'cards' ? row.card!.id : row.note.id
 
 function NoteEditor({ note, onClose }: { note: Note; onClose: () => void }) {
+  const dialogKeyboard = useDialogKeyboard(onClose)
   const type = useLiveQuery(() => collection.noteTypes.get(note.typeId), [note.typeId])
   const [fields, setFields] = useState(note.fields)
   const [error, setError] = useState('')
   if (type?.kind === 'image-occlusion') return <ImageOcclusionEditor note={note} deckId={note.deckId} onClose={onClose} />
-  return <div className="dialog-backdrop"><section className="dialog note-dialog" role="dialog" aria-modal="true" aria-labelledby="browser-note-title"><h2 id="browser-note-title">Edit note fields</h2><form onSubmit={(event) => { event.preventDefault(); if (!type) return; const changes = type.fields.filter((field) => (fields[field.id] ?? '') !== (note.fields[field.id] ?? '')).map((field) => ({ noteId: note.id, typeId: type.id, fieldId: field.id, before: note.fields[field.id] ?? '', after: fields[field.id] ?? '', expectedNote: note, expectedType: type })); if (!changes.length) { onClose(); return } void applyFieldChanges(collection, changes).then(onClose).catch((reason) => setError(String(reason.message ?? reason))) }}>
-    {type?.fields.map((field, index) => <label key={field.id}>{field.name}<textarea aria-label={field.name} autoFocus={index === 0} lang="ja" value={fields[field.id] ?? ''} onChange={(event) => setFields((current) => ({ ...current, [field.id]: event.target.value }))} rows={3} /></label>)}
+  return <div className="dialog-backdrop"><section {...dialogKeyboard} className="dialog note-dialog" role="dialog" aria-modal="true" aria-labelledby="browser-note-title"><h2 id="browser-note-title">Edit note fields</h2><form onSubmit={(event) => { event.preventDefault(); if (!type) return; const changes = type.fields.filter((field) => (fields[field.id] ?? '') !== (note.fields[field.id] ?? '')).map((field) => ({ noteId: note.id, typeId: type.id, fieldId: field.id, before: note.fields[field.id] ?? '', after: fields[field.id] ?? '', expectedNote: note, expectedType: type })); if (!changes.length) { onClose(); return } void applyFieldChanges(collection, changes).then(onClose).catch((reason) => setError(String(reason.message ?? reason))) }}>
+    {type?.fields.map((field) => <label key={field.id}>{field.name}<textarea aria-label={field.name} lang="ja" value={fields[field.id] ?? ''} onChange={(event) => setFields((current) => ({ ...current, [field.id]: event.target.value }))} rows={3} /></label>)}
     <p>Generated cards keep their identities and review history. Empty or removed templates can suspend cards.</p>{error && <p role="alert">{error}</p>}
     <div className="dialog-actions"><button className="text-button" type="button" onClick={onClose}>Cancel</button><button className="primary-action" type="submit" disabled={!type}>Save fields</button></div>
   </form></section></div>
 }
 
 function BulkDialog({ selection, kind, onClose, onApplied }: { selection: BrowserSelection; kind: BulkAction['kind']; onClose: () => void; onApplied: (message: string) => void }) {
+  const dialogKeyboard = useDialogKeyboard(onClose)
   const summary = useLiveQuery(() => selectionSummary(collection, selection).catch(() => null), [selection])
   const decks = useLiveQuery(() => collection.decks.orderBy('name').toArray(), [], [])
   const deckPaths = collectionDeckPaths(decks)
@@ -59,7 +62,7 @@ function BulkDialog({ selection, kind, onClose, onApplied }: { selection: Browse
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to apply this action.') }
     finally { setBusy(false) }
   }
-  return <div className="dialog-backdrop"><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="browser-bulk-title"><span className="section-code">BROWSER // SELECTED RECORDS</span><h2 id="browser-bulk-title">{kind === 'delete' ? 'Delete selected notes' : kind === 'tags' ? 'Bulk tags' : kind === 'move' ? 'Move selected notes' : kind === 'flag' ? 'Flag selected cards' : 'Suspend selected cards'}</h2>
+  return <div className="dialog-backdrop"><section {...dialogKeyboard} className="dialog" role="dialog" aria-modal="true" aria-labelledby="browser-bulk-title"><span className="section-code">BROWSER // SELECTED RECORDS</span><h2 id="browser-bulk-title">{kind === 'delete' ? 'Delete selected notes' : kind === 'tags' ? 'Bulk tags' : kind === 'move' ? 'Move selected notes' : kind === 'flag' ? 'Flag selected cards' : 'Suspend selected cards'}</h2>
     {summary ? <p>{summary.notes} notes · {summary.selectedCards} selected cards · {summary.generatedCards} total generated cards.</p> : <p role="status">{summary === null ? 'The selection changed. Close this dialog and refresh your selection.' : 'Checking selection…'}</p>}
     <form onSubmit={apply}>
       {kind === 'tags' && <><label>Tag operation<select aria-label="Tag operation" value={tagMode} onChange={(event) => setTagMode(event.target.value as 'add' | 'remove')}><option value="add">Add tags</option><option value="remove">Remove tags</option></select></label><label>Tags<input aria-label="Tags" value={tags} onChange={(event) => setTags(event.target.value)} placeholder="jlpt::n5, animal" /></label></>}
@@ -68,12 +71,13 @@ function BulkDialog({ selection, kind, onClose, onApplied }: { selection: Browse
       {kind === 'suspend' && <label>Suspension<select aria-label="Suspension" value={suspended ? 'suspend' : 'restore'} onChange={(event) => setSuspended(event.target.value === 'suspend')}><option value="suspend">Suspend</option><option value="restore">Restore manual suspension</option></select></label>}
       {kind !== 'flag' && kind !== 'suspend' && <p>Note actions affect every card generated from those notes, including unselected siblings.</p>}
       {kind === 'delete' && <><p>This deletes the notes, all their cards, review history, and media references. Multi-note deletion has no partial undo.</p><label className="checkbox-label"><input type="checkbox" checked={confirmationValid} onChange={(event) => setConfirmed(event.target.checked ? JSON.stringify(summary) : '')} />I reviewed the affected counts and want to delete these notes.</label></>}
-      {error && <p className="form-error" role="alert">{error}</p>}<div className="dialog-actions"><button className="text-button" type="button" disabled={busy} onClick={onClose}>Cancel</button><button className="primary-action" type="submit" disabled={busy || !summary || (kind === 'delete' && !confirmationValid) || (kind === 'move' && !destination) || (kind === 'tags' && !tags.trim())}>{busy ? 'Applying…' : kind === 'delete' ? 'Delete notes and cards' : 'Apply to selection'}</button></div>
+      {error && <p className="form-error" role="alert">{error}</p>}<div className="dialog-actions"><button className="text-button" data-dialog-initial-focus={kind === 'delete' ? '' : undefined} type="button" disabled={busy} onClick={onClose}>Cancel</button><button className="primary-action" type="submit" disabled={busy || !summary || (kind === 'delete' && !confirmationValid) || (kind === 'move' && !destination) || (kind === 'tags' && !tags.trim())}>{busy ? 'Applying…' : kind === 'delete' ? 'Delete notes and cards' : 'Apply to selection'}</button></div>
     </form>
   </section></div>
 }
 
 function FieldDialog({ selection, onClose, onApplied }: { selection: BrowserSelection; onClose: () => void; onApplied: (message: string) => void }) {
+  const dialogKeyboard = useDialogKeyboard(onClose)
   const data = useLiveQuery(async () => {
     const cards = selection.view === 'cards' ? await collection.cards.bulkGet(selection.ids) : []
     const ids = selection.view === 'cards' ? [...new Set(cards.filter((card) => !!card).map((card) => card!.noteId))] : selection.ids
@@ -105,7 +109,7 @@ function FieldDialog({ selection, onClose, onApplied }: { selection: BrowserSele
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to apply the preview.'); setPreview(null); setConfirmed(false) }
     finally { setBusy(false) }
   }
-  return <div className="dialog-backdrop"><section className="dialog type-dialog" role="dialog" aria-modal="true" aria-labelledby="browser-field-title"><h2 id="browser-field-title">Find, replace, or edit fields</h2><p>{data?.notes.length ?? '…'} selected notes. Choose one note type and field; other types remain unchanged. Image occlusion uses its own editor.</p>
+  return <div className="dialog-backdrop"><section {...dialogKeyboard} className="dialog type-dialog" role="dialog" aria-modal="true" aria-labelledby="browser-field-title"><h2 id="browser-field-title">Find, replace, or edit fields</h2><p>{data?.notes.length ?? '…'} selected notes. Choose one note type and field; other types remain unchanged. Image occlusion uses its own editor.</p>
     <label>Field<select aria-label="Field" value={fieldKey} disabled={busy} onChange={(event) => { setFieldKey(event.target.value); invalidate() }}><option value="">Choose a field</option>{data?.types.flatMap((type) => type.fields.map((field) => <option key={JSON.stringify([type.id, field.id])} value={JSON.stringify([type.id, field.id])}>{type.name} · {field.name}</option>))}</select></label>
     <label>Replacement mode<select aria-label="Replacement mode" value={mode} disabled={busy} onChange={(event) => { setMode(event.target.value as FieldOperation['mode']); invalidate() }}><option value="literal">Literal find/replace</option><option value="regex">Regular expression</option><option value="set">Set entire field</option></select></label>
     {mode !== 'set' && <label>Find<input aria-label="Find" value={find} disabled={busy} onChange={(event) => { setFind(event.target.value); invalidate() }} /></label>}

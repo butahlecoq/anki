@@ -1,9 +1,11 @@
 import { useState } from 'react'
+import { useDialogKeyboard } from './use-dialog-keyboard'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { collection } from './collection'
 import { exportAnkiPackage } from './anki-export'
 
 export function ExportDialog({ onClose }: { onClose: () => void }) {
+  const dialogKeyboard = useDialogKeyboard(onClose)
   const decks = useLiveQuery(() => collection.summaries(), [], [])
   const [deckId, setDeckId] = useState('')
   const [scheduling, setScheduling] = useState(true)
@@ -24,7 +26,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to export the package.') }
     finally { setBusy(false) }
   }
-  return <div className="dialog-backdrop"><section className="dialog export-dialog" role="dialog" aria-modal="true" aria-labelledby="export-title">
+  return <div className="dialog-backdrop"><section {...dialogKeyboard} className="dialog export-dialog" role="dialog" aria-modal="true" aria-labelledby="export-title">
     <button className="text-button" aria-label="Close export" disabled={busy} onClick={onClose}>Close</button>
     <span className="eyebrow">PORTABLE BACKUP</span><h2 id="export-title">Export Anki package</h2>
     <p>Save an independent .apkg file. Export works offline and includes the selected deck’s descendants.</p>

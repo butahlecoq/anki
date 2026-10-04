@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useDialogKeyboard } from './use-dialog-keyboard'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { BASIC_NOTE_TYPE_ID, collection } from './collection'
 import { applyTextImport, defaultMapping, exportTextCollection, pathsForDecks, previewTextImport, readTextDocument, serializeDelimited, TEXT_BYTE_LIMIT, type ColumnMapping, type CsvDocument, type Delimiter, type ImportOptions, type TextEncoding, type TextPreview } from './text-csv'
@@ -11,6 +12,7 @@ function downloadText(text: string, filename: string) {
 }
 
 export function TextCollectionDialog({ onClose }: { onClose: () => void }) {
+  const dialogKeyboard = useDialogKeyboard(onClose)
   const data = useLiveQuery(async () => ({ decks: await collection.decks.toArray(), types: await collection.noteTypes.toArray() }), [])
   const [tab, setTab] = useState<'import' | 'export'>('import')
   const [source, setSource] = useState<'file' | 'paste'>('file')
@@ -101,7 +103,7 @@ export function TextCollectionDialog({ onClose }: { onClose: () => void }) {
     finally { setBusy(false) }
   }
 
-  return <div className="dialog-backdrop"><section className="dialog text-collection-dialog" role="dialog" aria-modal="true" aria-labelledby="text-collection-title">
+  return <div className="dialog-backdrop"><section {...dialogKeyboard} className="dialog text-collection-dialog" role="dialog" aria-modal="true" aria-labelledby="text-collection-title">
     <button className="text-button" aria-label="Close text import/export" disabled={busy} onClick={onClose}>Close</button>
     <span className="section-code">COLLECTION // TEXT</span><h2 id="text-collection-title">Import and export text</h2>
     <div className="text-transfer-tabs"><button className="text-button" aria-pressed={tab === 'import'} disabled={busy} onClick={() => { setTab('import'); setError(''); setResult('') }}>Import text</button><button className="text-button" aria-pressed={tab === 'export'} disabled={busy} onClick={() => { setTab('export'); setError(''); setResult('') }}>Export text</button></div>

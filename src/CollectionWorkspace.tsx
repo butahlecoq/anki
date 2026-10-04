@@ -42,6 +42,7 @@ import { SyncConflicts } from './SyncConflicts'
 import { loadSampleDeck, removeSampleDeck, SAMPLE_DECK_NAME } from './sample-deck'
 import { useRoute } from './route'
 import { pairOutcomeMessage, pairingClosesOn, SYNC_LOCAL_ONLY, syncOutcomeMessage } from './sync-messages'
+import { useDialogKeyboard } from './use-dialog-keyboard'
 
 function CountStrip({ counts, reviews }: { counts: DeckCounts; reviews: number }) {
   return (
@@ -55,6 +56,7 @@ function CountStrip({ counts, reviews }: { counts: DeckCounts; reviews: number }
 }
 
 function DeckDialog({ deck, parentId, onClose }: { deck?: Deck; parentId?: string; onClose: () => void }) {
+  const dialogKeyboard = useDialogKeyboard(onClose)
   const [name, setName] = useState(deck?.name ?? '')
   const [error, setError] = useState('')
   const title = deck ? 'Rename deck' : parentId ? 'Create a child deck' : 'Create a deck'
@@ -72,13 +74,13 @@ function DeckDialog({ deck, parentId, onClose }: { deck?: Deck; parentId?: strin
 
   return (
     <div className="dialog-backdrop">
-      <section className="dialog" role="dialog" aria-modal="true" aria-labelledby="deck-dialog-title">
+      <section {...dialogKeyboard} className="dialog" role="dialog" aria-modal="true" aria-labelledby="deck-dialog-title">
         <span className="section-code">DECK // {deck ? 'EDIT' : 'NEW'}</span>
         <h2 id="deck-dialog-title">{title}</h2>
         <form onSubmit={submit}>
           <label>
             Deck name
-            <input autoFocus value={name} onChange={(event) => setName(event.target.value)} maxLength={120} />
+            <input value={name} onChange={(event) => setName(event.target.value)} maxLength={120} />
           </label>
           {error && <p className="form-error" role="alert">{error}</p>}
           <div className="dialog-actions">
@@ -94,6 +96,7 @@ function DeckDialog({ deck, parentId, onClose }: { deck?: Deck; parentId?: strin
 type PendingAttachment = { file: File; side: 'front' | 'back'; playback: 'automatic' | 'manual' }
 
 function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: Note; onClose: () => void }) {
+  const dialogKeyboard = useDialogKeyboard(onClose)
   const noteTypes = useLiveQuery(() => collection.noteTypes.orderBy('name').toArray(), [], [])
   const [typeId, setTypeId] = useState(note?.typeId ?? BASIC_NOTE_TYPE_ID)
   const [imageEditor, setImageEditor] = useState(note?.typeId === IMAGE_OCCLUSION_NOTE_TYPE_ID)
@@ -159,7 +162,7 @@ function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: Note; on
 
   return (
     <div className="dialog-backdrop">
-      <section className="dialog note-dialog" role="dialog" aria-modal="true" aria-labelledby="note-dialog-title">
+      <section {...dialogKeyboard} className="dialog note-dialog" role="dialog" aria-modal="true" aria-labelledby="note-dialog-title">
         <span className="section-code">{noteType?.name.toUpperCase() ?? 'NOTE'} // {note ? 'EDIT' : 'NEW'}</span>
         <h2 id="note-dialog-title">{note ? `Edit ${noteType?.name ?? ''} note` : `Add a ${noteType?.name ?? ''} note`}</h2>
         <form onSubmit={submit}>
@@ -170,7 +173,7 @@ function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: Note; on
           </label>
           {noteType?.fields.map((field, index) => <div key={field.id}>
             <label>{typeId === BASIC_NOTE_TYPE_ID ? field.name[0].toUpperCase() + field.name.slice(1) : field.name}
-              <textarea ref={(element) => { textareas.current[field.id] = element }} autoFocus={index === 0} lang="ja" value={fields[field.id] ?? ''} onChange={(event) => setFields((current) => ({ ...current, [field.id]: event.target.value }))} rows={index === 0 ? 3 : 4} />
+              <textarea ref={(element) => { textareas.current[field.id] = element }} lang="ja" value={fields[field.id] ?? ''} onChange={(event) => setFields((current) => ({ ...current, [field.id]: event.target.value }))} rows={index === 0 ? 3 : 4} />
             </label>
             {clozeEditorField === field.name && <button className="text-button" type="button" onClick={() => makeCloze(field.id)}>Make cloze</button>}
           </div>)}
@@ -221,6 +224,7 @@ function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: boolean 
   const [message, setMessage] = useState(SYNC_LOCAL_ONLY)
   const [busy, setBusy] = useState(false)
   const offlineShellSupported = supportsServiceWorkers()
+  const pairingKeyboard = useDialogKeyboard(() => setPairing(false), pairing)
 
   async function pair(event: FormEvent) {
     event.preventDefault()
@@ -262,13 +266,13 @@ function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: boolean 
       </div>
       {pairing && (
         <div className="dialog-backdrop">
-          <section className="dialog" role="dialog" aria-modal="true" aria-labelledby="sync-dialog-title">
+          <section {...pairingKeyboard} className="dialog" role="dialog" aria-modal="true" aria-labelledby="sync-dialog-title">
             <span className="section-code">SYNC // PAIR DEVICE</span>
             <h2 id="sync-dialog-title">Connect to your PC</h2>
             <form onSubmit={pair}>
               <label>
                 PC service address
-                <input autoFocus inputMode="url" placeholder="https://pc.example.net:4174" value={endpoint} onChange={(event) => setEndpoint(event.target.value)} required />
+                <input inputMode="url" placeholder="https://pc.example.net:4174" value={endpoint} onChange={(event) => setEndpoint(event.target.value)} required />
               </label>
               <label>
                 One-time pairing code
@@ -288,6 +292,7 @@ function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: boolean 
 }
 
 function ImportDialog({ onClose }: { onClose: () => void }) {
+  const dialogKeyboard = useDialogKeyboard(onClose)
   const [prepared, setPrepared] = useState<PreparedAnkiImport>()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -323,7 +328,7 @@ function ImportDialog({ onClose }: { onClose: () => void }) {
 
   const count = (value: number, singular: string, plural = `${singular}s`) => `${value} ${value === 1 ? singular : plural}`
   return <div className="dialog-backdrop">
-    <section className="dialog import-dialog" role="dialog" aria-modal="true" aria-labelledby="import-dialog-title">
+    <section {...dialogKeyboard} className="dialog import-dialog" role="dialog" aria-modal="true" aria-labelledby="import-dialog-title">
       <span className="section-code">ANKI // PACKAGE IMPORT</span>
       <h2 id="import-dialog-title">Import Anki package</h2>
       <p className="dialog-intro">Preview a local .apkg or .colpkg before making one atomic change to this collection.</p>
@@ -465,6 +470,7 @@ function settingsFromGroup(group: DeckOptionGroup): DeckOptionSettings {
 }
 
 function MoveDeckDialog({ deck, onClose }: { deck: Deck; onClose: () => void }) {
+  const dialogKeyboard = useDialogKeyboard(onClose)
   const decks = useLiveQuery(() => collection.decks.orderBy('name').toArray(), [], [])
   const [parentId, setParentId] = useState(deck.parentId ?? '')
   const [error, setError] = useState('')
@@ -484,7 +490,7 @@ function MoveDeckDialog({ deck, onClose }: { deck: Deck; onClose: () => void }) 
     }
   }
 
-  return <div className="dialog-backdrop"><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="move-deck-title">
+  return <div className="dialog-backdrop"><section {...dialogKeyboard} className="dialog" role="dialog" aria-modal="true" aria-labelledby="move-deck-title">
     <span className="section-code">DECK // MOVE</span><h2 id="move-deck-title">Move deck</h2>
     <form onSubmit={submit}><label>New parent deck<select value={parentId} onChange={(event) => setParentId(event.target.value)}><option value="">Top level</option>{decks.filter((candidate) => !blocked.has(candidate.id)).map((candidate) => <option value={candidate.id} key={candidate.id}>{candidate.name}</option>)}</select></label>
       <p className="options-note">Child decks stay with this deck.</p>{error && <p className="form-error" role="alert">{error}</p>}
@@ -494,6 +500,7 @@ function MoveDeckDialog({ deck, onClose }: { deck: Deck; onClose: () => void }) 
 }
 
 function DeleteDeckDialog({ deck, onClose, onDeleted }: { deck: Deck; onClose: () => void; onDeleted: () => void }) {
+  const dialogKeyboard = useDialogKeyboard(onClose)
   const decks = useLiveQuery(() => collection.decks.orderBy('name').toArray(), [], [])
   const [mode, setMode] = useState<'delete-subtree' | 'relocate'>('delete-subtree')
   const [destinationId, setDestinationId] = useState('')
@@ -516,7 +523,7 @@ function DeleteDeckDialog({ deck, onClose, onDeleted }: { deck: Deck; onClose: (
     }
   }
 
-  return <div className="dialog-backdrop"><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="delete-deck-title">
+  return <div className="dialog-backdrop"><section {...dialogKeyboard} className="dialog" role="dialog" aria-modal="true" aria-labelledby="delete-deck-title">
     <span className="section-code">{deck.name === SAMPLE_DECK_NAME ? 'SAMPLE // REMOVE' : 'DECK // DELETE'}</span><h2 id="delete-deck-title">{deck.name === SAMPLE_DECK_NAME ? 'Remove sample deck?' : 'Delete deck'}</h2>
     <form onSubmit={submit}>{deck.name === SAMPLE_DECK_NAME ? <p>This removes the sample deck, its notes, cards, review history, and attachments. Your other decks stay as they are.</p> : <fieldset className="delete-mode"><legend>How should this deck be removed?</legend><label className="choice"><input name="delete-mode" type="radio" checked={mode === 'relocate'} onChange={() => setMode('relocate')} />Relocate contents and child decks</label>
       <p className="options-note">Moves this deck’s notes and direct child decks to the destination, then deletes only this deck.</p>
@@ -524,12 +531,13 @@ function DeleteDeckDialog({ deck, onClose, onDeleted }: { deck: Deck; onClose: (
       <label className="choice"><input name="delete-mode" type="radio" checked={mode === 'delete-subtree'} onChange={() => setMode('delete-subtree')} />Delete this deck and its subtree</label>
       <p className="options-note">Permanently deletes this deck, child decks, notes, cards, and their review entries.</p></fieldset>}
       {error && <p className="form-error" role="alert">{error}</p>}
-      <div className="dialog-actions"><button className="text-button" type="button" onClick={onClose}>Cancel</button><button className="primary-action" type="submit">{deck.name === SAMPLE_DECK_NAME ? 'Remove sample deck' : mode === 'relocate' ? 'Relocate and delete deck' : 'Delete deck subtree'}</button></div>
+      <div className="dialog-actions"><button className="text-button" data-dialog-initial-focus type="button" onClick={onClose}>Cancel</button><button className="primary-action" type="submit">{deck.name === SAMPLE_DECK_NAME ? 'Remove sample deck' : mode === 'relocate' ? 'Relocate and delete deck' : 'Delete deck subtree'}</button></div>
     </form>
   </section></div>
 }
 
 function MoveNoteDialog({ note, onClose }: { note: Note; onClose: () => void }) {
+  const dialogKeyboard = useDialogKeyboard(onClose)
   const decks = useLiveQuery(() => collection.decks.orderBy('name').toArray(), [], [])
   const [destinationId, setDestinationId] = useState('')
   const [error, setError] = useState('')
@@ -542,7 +550,7 @@ function MoveNoteDialog({ note, onClose }: { note: Note; onClose: () => void }) 
       setError(reason instanceof Error ? reason.message : 'Unable to move note')
     }
   }
-  return <div className="dialog-backdrop"><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="move-note-title">
+  return <div className="dialog-backdrop"><section {...dialogKeyboard} className="dialog" role="dialog" aria-modal="true" aria-labelledby="move-note-title">
     <span className="section-code">NOTE // MOVE</span><h2 id="move-note-title">Move note</h2><form onSubmit={submit}>
       <label>Destination deck<select value={destinationId} onChange={(event) => setDestinationId(event.target.value)} required><option value="" disabled>Choose a destination</option>{decks.filter((deck) => deck.id !== note.deckId).map((deck) => <option value={deck.id} key={deck.id}>{deck.name}</option>)}</select></label>
       <p className="options-note">The note, generated cards, and review history keep their identities.</p>{error && <p className="form-error" role="alert">{error}</p>}
@@ -552,6 +560,7 @@ function MoveNoteDialog({ note, onClose }: { note: Note; onClose: () => void }) 
 }
 
 function DeckOptionsDialog({ deck, onClose }: { deck: Deck; onClose: () => void }) {
+  const dialogKeyboard = useDialogKeyboard(onClose)
   const groups = useLiveQuery(() => collection.deckOptionGroups.orderBy('name').toArray(), [], [])
   const decks = useLiveQuery(() => collection.decks.orderBy('name').toArray(), [], [])
   const [groupId, setGroupId] = useState(deck.optionGroupId)
@@ -582,14 +591,14 @@ function DeckOptionsDialog({ deck, onClose }: { deck: Deck; onClose: () => void 
     }
   }
 
-  return <div className="dialog-backdrop"><section className="dialog options-dialog" role="dialog" aria-modal="true" aria-labelledby="options-dialog-title">
+  return <div className="dialog-backdrop"><section {...dialogKeyboard} className="dialog options-dialog" role="dialog" aria-modal="true" aria-labelledby="options-dialog-title">
     <span className="section-code">DECK // SCHEDULING</span><h2 id="options-dialog-title">Scheduling options</h2>
     <form onSubmit={submit}>
       <label>Scheduling option group<select aria-label="Scheduling option group" value={creating ? '' : group.id} onChange={(event) => { const next = groups.find((candidate) => candidate.id === event.target.value); setCreating(false); setGroupId(event.target.value); setSettings(next ? settingsFromGroup(next) : null); setError('') }}>
         {groups.map((candidate) => <option value={candidate.id} key={candidate.id}>{candidate.name}{candidate.protected ? ' (Default)' : ''}</option>)}
       </select></label>
       <button className="text-button" type="button" onClick={() => { setCreating(true); setName(''); setSettings(settingsFromGroup(group)); setError('') }}>Create option group</button>
-      {creating && <label>Option group name<input autoFocus value={name} onChange={(event) => setName(event.target.value)} maxLength={120} /></label>}
+      {creating && <label>Option group name<input value={name} onChange={(event) => setName(event.target.value)} maxLength={120} /></label>}
       <div className="options-fields">
         <label>Daily new limit<input aria-label="Daily new limit" type="number" min="0" max="9999" value={selectedSettings.dailyNewLimit} onChange={(event) => update('dailyNewLimit', Number(event.target.value))} /></label>
         <label>Daily review limit<input aria-label="Daily review limit" type="number" min="0" max="9999" value={selectedSettings.dailyReviewLimit} onChange={(event) => update('dailyReviewLimit', Number(event.target.value))} /></label>
@@ -637,6 +646,7 @@ function cardStatus(card: CardRecord) {
 }
 
 function CardManagementDialog({ note, onClose }: { note: Note; onClose: () => void }) {
+  const dialogKeyboard = useDialogKeyboard(onClose)
   const cards = useLiveQuery(() => collection.cards.where('noteId').equals(note.id).sortBy('templateId'), [note.id], [])
   const [dueByCard, setDueByCard] = useState<Record<string, string>>({})
   const [busyCardId, setBusyCardId] = useState<string | null>(null)
@@ -654,7 +664,7 @@ function CardManagementDialog({ note, onClose }: { note: Note; onClose: () => vo
     }
   }
 
-  return <div className="dialog-backdrop"><section className="dialog card-management-dialog" role="dialog" aria-modal="true" aria-labelledby="card-management-title">
+  return <div className="dialog-backdrop"><section {...dialogKeyboard} className="dialog card-management-dialog" role="dialog" aria-modal="true" aria-labelledby="card-management-title">
     <span className="section-code">NOTE // CARDS</span><h2 id="card-management-title">Manage cards</h2>
     <p className="options-note">Suspend or bury a card temporarily. Rescheduling keeps its review history and scheduling data.</p>
     <div className="card-management-list">
@@ -762,6 +772,8 @@ function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: string; se
   const [editingTags, setEditingTags] = useState(false)
   const [deletingNote, setDeletingNote] = useState(false)
   const [showCardInfo, setShowCardInfo] = useState(false)
+  const deleteDialogKeyboard = useDialogKeyboard(() => setDeletingNote(false), deletingNote)
+  const cardInfoDialogKeyboard = useDialogKeyboard(() => setShowCardInfo(false), showCardInfo)
   const [audioMessage, setAudioMessage] = useState('')
   const typedResultRef = useRef<HTMLDivElement>(null)
   const reviewCardRef = useRef<HTMLElement>(null)
@@ -1002,13 +1014,13 @@ function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: string; se
     {editingNote && <NoteDialog key={note.id} deckId={note.deckId} note={note} onClose={() => setEditingNote(false)} />}
     {movingNote && <MoveNoteDialog note={note} onClose={() => setMovingNote(false)} />}
     {editingTags && <NoteTagsDialog key={note.id} note={note} onClose={() => setEditingTags(false)} />}
-    {deletingNote && <div className="dialog-backdrop"><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="review-delete-note-title">
+    {deletingNote && <div className="dialog-backdrop"><section {...deleteDialogKeyboard} className="dialog" role="dialog" aria-modal="true" aria-labelledby="review-delete-note-title">
       <span className="section-code">NOTE // DELETE</span><h2 id="review-delete-note-title">Delete note</h2>
       <p>This removes the note and all its cards, review history, and media references. You can undo it until the next sync attempt.</p>
       {actionError && <p className="form-error" role="alert">{actionError}</p>}
-      <div className="dialog-actions"><button className="text-button" type="button" onClick={() => setDeletingNote(false)}>Cancel</button><button className="primary-action" type="button" disabled={isAnswering} onClick={() => void deleteCurrentNote()}>Delete note and cards</button></div>
+      <div className="dialog-actions"><button className="text-button" data-dialog-initial-focus type="button" onClick={() => setDeletingNote(false)}>Cancel</button><button className="primary-action" type="button" disabled={isAnswering} onClick={() => void deleteCurrentNote()}>Delete note and cards</button></div>
     </section></div>}
-    {showCardInfo && <div className="dialog-backdrop"><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="review-card-info-title">
+    {showCardInfo && <div className="dialog-backdrop"><section {...cardInfoDialogKeyboard} className="dialog" role="dialog" aria-modal="true" aria-labelledby="review-card-info-title">
       <span className="section-code">CARD // DETAILS</span><h2 id="review-card-info-title">Card info</h2>
       <dl className="review-card-info"><div><dt>Note type</dt><dd>{noteType.name}</dd></div><div><dt>Card template</dt><dd>{template.name}</dd></div><div><dt>Due</dt><dd>{new Date(card.due).toLocaleString()}</dd></div><div><dt>Reviews</dt><dd>{reviewCount}</dd></div><div><dt>Lapses</dt><dd>{card.lapses}</dd></div><div><dt>Flag</dt><dd>{['None', 'Red', 'Orange', 'Green', 'Blue', 'Pink', 'Turquoise', 'Purple'][card.flag ?? 0]}</dd></div><div><dt>Tags</dt><dd>{note.tags?.join(', ') || 'None'}</dd></div></dl>
       <CardHistory key={card.id} card={card} />
@@ -1071,6 +1083,7 @@ function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: string; se
 }
 
 function NoteTagsDialog({ note, onClose }: { note: Note; onClose: () => void }) {
+  const dialogKeyboard = useDialogKeyboard(onClose)
   const [tags, setTags] = useState((note.tags ?? []).join(', '))
   const [error, setError] = useState('')
   async function submit(event: FormEvent) {
@@ -1082,9 +1095,9 @@ function NoteTagsDialog({ note, onClose }: { note: Note; onClose: () => void }) 
       setError(reason instanceof Error ? reason.message : 'Unable to save tags')
     }
   }
-  return <div className="dialog-backdrop"><section className="dialog" role="dialog" aria-modal="true" aria-labelledby="note-tags-title">
+  return <div className="dialog-backdrop"><section {...dialogKeyboard} className="dialog" role="dialog" aria-modal="true" aria-labelledby="note-tags-title">
     <span className="section-code">NOTE // TAGS</span><h2 id="note-tags-title">Edit tags</h2>
-    <form onSubmit={submit}><label>Tags<input autoFocus value={tags} onChange={(event) => setTags(event.target.value)} /></label>
+    <form onSubmit={submit}><label>Tags<input value={tags} onChange={(event) => setTags(event.target.value)} /></label>
       <p className="options-note">Separate tags with commas. Tags apply to every card generated from this note.</p>
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="dialog-actions"><button className="text-button" type="button" onClick={onClose}>Cancel</button><button className="primary-action" type="submit">Save tags</button></div>
