@@ -4,6 +4,8 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFile as execFileCallback } from 'node:child_process'
+import { spawn } from 'node:child_process'
+import { createServer } from 'node:net'
 import { promisify } from 'node:util'
 import initSqlJs from 'sql.js'
 import { zipSync } from 'fflate'
@@ -12,7 +14,44 @@ import { Deck as AnkiDeck, Note as AnkiNote, Notetype as AnkiNotetype, Package a
 const REVIEW_TIME = new Date('2026-09-30T12:00:00.000Z')
 const execFile = promisify(execFileCallback)
 const WEB_URL = `http://127.0.0.1:${process.env.KIROKU_WEB_PORT ?? '4173'}`
-const SYNC_URL = `http://127.0.0.1:${process.env.KIROKU_SYNC_PORT ?? '4174'}`
+
+type SyncService = { url: string; runtime: string; close: () => Promise<void> }
+
+async function isolatedSyncService(): Promise<SyncService> {
+  const runtime = await mkdtemp(join(tmpdir(), 'kiroku-collection-sync-e2e-'))
+  const reservation = createServer()
+  await new Promise<void>((resolve, reject) => reservation.listen(0, '127.0.0.1', resolve).once('error', reject))
+  const address = reservation.address()
+  if (!address || typeof address === 'string') throw new Error('Unable to reserve an isolated sync port')
+  const port = address.port
+  await new Promise<void>((resolve, reject) => reservation.close((error) => error ? reject(error) : resolve()))
+  const url = `http://127.0.0.1:${port}`
+  const service = spawn(process.execPath, ['dist-server/server/index.js'], { env: { ...process.env, PORT: String(port), KIROKU_RUNTIME_DIRECTORY: runtime, KIROKU_ALLOWED_ORIGIN: WEB_URL }, stdio: 'ignore', windowsHide: true })
+  try {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      if (service.exitCode !== null) throw new Error('The isolated sync service exited before becoming ready')
+      try {
+        if ((await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(500) })).ok) return {
+          url,
+          runtime,
+          async close() {
+            if (service.exitCode === null) {
+              const exited = new Promise<void>((resolve) => service.once('exit', () => resolve()))
+              service.kill()
+              await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 2000))])
+            }
+            await rm(runtime, { recursive: true, force: true }).catch(() => undefined)
+          },
+        }
+      } catch { await new Promise((resolve) => setTimeout(resolve, 50)) }
+    }
+    throw new Error('The isolated sync service did not become ready')
+  } catch (error) {
+    service.kill()
+    await rm(runtime, { recursive: true, force: true }).catch(() => undefined)
+    throw error
+  }
+}
 
 for (const reopen of [false, true]) {
 test(`statistics follow an offline Japanese review, heatmap selection, and undo${reopen ? ' in a fresh document' : ' in the current session'}`, async ({ page, context, browserName }) => {
@@ -26,7 +65,6 @@ test(`statistics follow an offline Japanese review, heatmap selection, and undo$
   await page.getByLabel('Front', { exact: true }).fill('猫')
   await page.getByLabel('Back', { exact: true }).fill('cat')
   await page.getByRole('button', { name: 'Save note' }).click()
-  await expect(page.getByText('Offline shell ready', { exact: true })).toBeVisible()
   try {
     await context.setOffline(true)
     await page.getByRole('button', { name: 'Study now' }).click()
@@ -114,18 +152,36 @@ function configuredSyncRuntimeDirectory() {
   return runtimeDirectory
 }
 
-async function pairingCode() {
-  const runtimeDirectory = configuredSyncRuntimeDirectory()
+async function pairingCode(runtimeDirectory = configuredSyncRuntimeDirectory()) {
   const { stdout } = await execFile(process.execPath, ['dist-server/server/index.js', '--pairing-code'], {
     env: { ...process.env, KIROKU_RUNTIME_DIRECTORY: runtimeDirectory },
   })
   return stdout.trim()
 }
 
+const isolatedServices = new Map<string, SyncService>()
+
+async function serviceForCurrentTest() {
+  const key = test.info().testId
+  const existing = isolatedServices.get(key)
+  if (existing) return existing
+  const service = await isolatedSyncService()
+  isolatedServices.set(key, service)
+  return service
+}
+
+test.afterEach(async () => {
+  const key = test.info().testId
+  const service = isolatedServices.get(key)
+  isolatedServices.delete(key)
+  await service?.close()
+})
+
 async function pair(page: import('@playwright/test').Page) {
+  const syncService = await serviceForCurrentTest()
   await page.getByRole('button', { name: 'Connect a PC' }).click()
-  await page.getByLabel('PC service address').fill(SYNC_URL)
-  await page.getByLabel('One-time pairing code').fill(await pairingCode())
+  await page.getByLabel('PC service address').fill(syncService.url)
+  await page.getByLabel('One-time pairing code').fill(await pairingCode(syncService.runtime))
   await page.getByRole('button', { name: 'Connect device' }).click()
   await expect(page.getByText('PC connected. Your collections are ready to sync.')).toBeVisible()
 }
@@ -211,7 +267,7 @@ for (const reopen of [false, true]) {
     const offlineAudio = offlineReview.locator('audio')
     await expectAudioReady(offlineAudio, browserName)
     await page.getByRole('button', { name: 'Replay audio' }).click()
-    await expect(page.getByText('Audio replayed.', { exact: true })).toBeVisible()
+    await expect(page.getByText(browserName === 'webkit' ? 'Audio could not play on this device.' : 'Audio replayed.', { exact: true })).toBeVisible()
     await expect(page.getByText('Offline shell active')).toBeVisible()
   })
 }

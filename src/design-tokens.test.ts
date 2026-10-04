@@ -118,6 +118,9 @@ test('component styles reference tokens instead of raw color literals', () => {
 
 test('every referenced token is defined by a theme block', () => {
   // --deck-depth and --activity are supplied per element from TypeScript.
+  // Layout variables are structural rather than theme tokens, but still need a
+  // stylesheet declaration so their fallbacks and breakpoint overrides are
+  // visible to every browser.
   const inline = new Set(['--deck-depth', '--activity'])
   const used = new Set([...stylesheet.matchAll(/var\((--[a-z0-9-]+)/g)].map((match) => match[1]))
   const defined = new Set([...Object.keys(dark), ...Object.keys(light)])
