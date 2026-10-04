@@ -123,6 +123,25 @@ test('explicit acceptance sections keep a separate inline full-gate deferral', (
   ])
 })
 
+test('inline non-zero gate results and outstanding checks remain visible', () => {
+  const result = deferredLines({
+    body: 'The final default `npm run check` remains non-zero: `83 passed, 6 failed, 9 skipped` in the browser stage.\n\nPhysical installed-Safari checks remain outstanding.',
+  })
+  assert.deepEqual(result, [
+    'The final default `npm run check` remains non-zero: `83 passed, 6 failed, 9 skipped` in the browser stage.',
+    'Physical installed-Safari checks remain outstanding.',
+  ])
+  assert.deepEqual(deferredLines({
+    body: 'No physical installed-Safari checks remain outstanding.\nThe checks do not remain outstanding after this patch.\nThis gate does not remain non-zero.',
+  }), [])
+  assert.deepEqual(deferredLines({
+    body: 'This is not yet validated; physical checks remain outstanding.\nNo earlier build passed, but this gate remains non-zero.',
+  }), [
+    'This is not yet validated; physical checks remain outstanding.',
+    'No earlier build passed, but this gate remains non-zero.',
+  ])
+})
+
 test('a branch is called disposable only when a closed or merged PR is accounted for on main and its worktree is clean', () => {
   const branch = { name: 'feat/8-old' }
   const finding = { check: 'branch-stale-snapshot' }

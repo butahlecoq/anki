@@ -33,7 +33,7 @@ function linkedIssue(pr) {
 }
 
 export function deferredLines(pr, comments = []) {
-  const markers = /\b(?:remains? open|does not close|doesn't close|not yet|still required|blocked|pending (?:review|verification|acceptance|evidence|decision|device|human|full gate))\b|\b(?:is|are|was|were|remains?|remain) deferred\b/i
+  const markers = /\b(?:remains? open|does not close|doesn't close|not yet|still required|blocked|pending (?:review|verification|acceptance|evidence|decision|device|human|full gate)|remains? (?:non-zero|incomplete)|remains? outstanding)\b|\b(?:is|are|was|were|remains?|remain) deferred\b/i
   const prLines = (pr.body ?? '').split('\n')
   const extractSections = (lines) => {
     const selected = []
@@ -47,7 +47,12 @@ export function deferredLines(pr, comments = []) {
     return selected
   }
   const prSections = extractSections(prLines)
-  const inlineDeferrals = prLines.filter((line) => !/^#{1,4}\s/.test(line.trim()) && markers.test(line))
+  const inlineDeferrals = prLines.filter((line) => {
+    if (/^#{1,4}\s/.test(line.trim()) || !markers.test(line)) return false
+    const negatedStatus = /\b(?:no|not|never|doesn't|does not|don't|do not)\b.*\b(?:remains? (?:non-zero|incomplete|outstanding))\b/i
+    const clauses = line.split(/(?<=[.!?;])\s+|,\s+(?=(?:but|and|yet|while|whereas)\b)/i)
+    return clauses.some((clause) => markers.test(clause) && !negatedStatus.test(clause))
+  })
   const fromPr = [...prSections, ...inlineDeferrals]
     .map((line) => line.trim()).filter(Boolean)
   const fromComments = []
