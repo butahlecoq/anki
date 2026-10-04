@@ -44,7 +44,7 @@ export function describeCardMedia(reference: NoteMediaReference, url?: string): 
 export function renderCard(
   template: Pick<CardTemplate, 'front' | 'back' | 'css'>,
   fields: Record<string, string>,
-  options: Pick<RenderOptions, 'kind' | 'ordinal' | 'media'> = {},
+  options: Pick<RenderOptions, 'kind' | 'ordinal' | 'media' | 'htmlFields'> = {},
   attachments: CardMediaDescription[] = [],
 ): RenderedCard {
   const front = tryRenderTemplate(template.front, fields, undefined, { ...options, side: 'front' })
@@ -67,11 +67,14 @@ export function renderNoteCard(
   ordinal?: number,
   media?: RenderOptions['media'],
   attachments: CardMediaDescription[] = [],
+  htmlFieldIds: readonly string[] = [],
 ) {
+  const richFieldIds = new Set(htmlFieldIds)
   return renderCard(template, fieldsByName(noteType.fields, fieldsById), {
     kind: noteType.kind === 'image-occlusion' ? 'standard' : noteType.kind,
     ordinal,
     media,
+    htmlFields: new Set(noteType.fields.filter((field) => richFieldIds.has(field.id)).map((field) => field.name)),
   }, attachments)
 }
 

@@ -67,7 +67,7 @@ describe('renderTemplate', () => {
     expect(renderTemplate('{{type:Word}}', { 'type:Word': 'legacy value', Word: 'typed value' }))
       .toEqual({ html: 'legacy value', isEmpty: false })
     expect(renderTemplate('{{reverse:Word}}', { 'reverse:Word': '<b>literal</b>' }))
-      .toEqual({ html: '<b>literal</b>', isEmpty: false })
+      .toEqual({ html: '&lt;b&gt;literal&lt;/b&gt;', isEmpty: false })
   })
 
   test('rejects unsupported filters and malformed clozes through a safe result', () => {
@@ -93,13 +93,19 @@ describe('renderTemplate', () => {
     expect(tryRenderTemplate('{{FrontSide}}<hr>{{cloze:Text}}', fields, '<span class="cloze">[…]</span>', { kind: 'cloze', ordinal: 1 }))
       .toMatchObject({ ok: true, value: { html: '<span class="cloze">[…]</span><hr><span class="cloze">猫</span>' } })
   })
-  test('sanitizes field markup and keeps text-filter values escaped', () => {
+  test('escapes field values by default and keeps text-filter values escaped', () => {
     expect(renderTemplate('<b>{{Word}}</b>', { Word: '<img src=x onerror=alert(1)>&"' })).toEqual({
-      html: '<b>&amp;"</b>',
+      html: '<b>&lt;img src=x onerror=alert(1)&gt;&amp;&quot;</b>',
       isEmpty: false,
     })
     expect(renderTemplate('{{text:Word}}', { Word: '<img src=x onerror=alert(1)>&"' }).html)
       .toBe('&lt;img src=x onerror=alert(1)&gt;&amp;&quot;')
+  })
+
+  test('preserves only explicitly marked imported HTML fields after sanitizing them', () => {
+    expect(renderTemplate('{{Word}}', { Word: '<table><tr><td>猫</td></tr></table>' }, undefined, { htmlFields: new Set(['Word']) }).html)
+      .toBe('<table><tbody><tr><td>猫</td></tr></tbody></table>')
+    expect(renderTemplate('{{Word}}', { Word: '<b>猫</b>' }).html).toBe('&lt;b&gt;猫&lt;/b&gt;')
   })
 
   test('preserves field layout HTML while removing active elements and unsafe attributes', () => {

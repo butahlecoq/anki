@@ -801,7 +801,7 @@ function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: string; se
     preparedMedia.sources.byReference[reference.id]?.url,
   ))
   const renderedCard = template && noteType && note && card
-    ? renderNoteCard(noteType, template, note.fields, card.clozeOrdinal, preparedMedia.sources.byName, attachments)
+    ? renderNoteCard(noteType, template, note.fields, card.clozeOrdinal, preparedMedia.sources.byName, attachments, note.renderedHtmlFields)
     : undefined
   const typedAnswer = renderedCard?.typedAnswer
   const renderError = renderedCard?.error

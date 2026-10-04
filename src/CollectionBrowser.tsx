@@ -158,7 +158,7 @@ export function CollectionBrowser() {
       const template = row.noteType?.templates.find((candidate) => candidate.id === row.card?.templateId)
       if (!template || !row.noteType) return true
       if (row.noteType.kind === 'image-occlusion') return false
-      return !isRenderedCardDisplayable(renderNoteCard(row.noteType, template, row.note.fields, row.card.clozeOrdinal), row.noteType.kind)
+      return !isRenderedCardDisplayable(renderNoteCard(row.noteType, template, row.note.fields, row.card.clozeOrdinal, undefined, [], row.note.renderedHtmlFields), row.noteType.kind)
     })
     if (view === 'notes') matches = [...new Map(matches.map((row) => [row.note.id, row])).values()]
     const cardCounts = new Map<string, number>()

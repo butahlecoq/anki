@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto'
 import initSqlJs, { type SqlJsStatic } from 'sql.js'
 import { Collection as AnkiCollection, Deck, Note as AnkiNote, Notetype, Package } from 'ankipack'
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest'
-import { DEFAULT_DECK_OPTION_GROUP_ID, createCollection, renderNoteTemplate, State, type Collection } from './collection'
+import { DEFAULT_DECK_OPTION_GROUP_ID, createCollection, tryRenderNoteTemplate, State, type Collection } from './collection'
 import { prepareAnkiImport } from './anki-import'
 import { zipSync } from 'fflate'
 import { ANKI_ARCHIVE_LIMITS } from './anki-archive'
@@ -546,12 +546,13 @@ describe('Anki package import', () => {
     const prepared = await prepareAnkiImport(await fieldHtmlPackage(), collection, { SQL, now: new Date('2026-10-01T12:00:00.000Z') })
     const note = prepared.plan.writes.notes.map((write) => write.value).find((entry) => entry.ankiId !== undefined)!
     const type = prepared.plan.writes.noteTypes.map((write) => write.value).find((entry) => entry.name === 'Layout field fixture')!
-    const rendered = renderNoteTemplate(type.templates[0].front, type, note.fields)
+    const rendered = tryRenderNoteTemplate(type.templates[0].front, type, note.fields, undefined, undefined, undefined, note.renderedHtmlFields)
+    if (!rendered.ok) throw new Error(rendered.error)
 
     expect(note.fields[type.fields[0].id]).toBe('plain text')
     expect(note.fields[type.fields[1].id]).toContain('<table>')
-    expect(rendered.html).toContain('<table><tbody><tr><td style="width: 50%">猫</td><td>&lt;script&gt;alert(1)&lt;/script&gt;<b>ねこ</b></td></tr></tbody></table>')
-    expect(rendered.html).toContain('plain text')
+    expect(rendered.value.html).toContain('<table><tbody><tr><td style="width: 50%">猫</td><td>&lt;script&gt;alert(1)&lt;/script&gt;<b>ねこ</b></td></tr></tbody></table>')
+    expect(rendered.value.html).toContain('plain text')
     expect(prepared.issues).toContainEqual(expect.objectContaining({ severity: 'warning', code: 'field-html-sanitized', subject: expect.stringContaining('Layout') }))
   })
 

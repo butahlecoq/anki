@@ -151,9 +151,11 @@ const imageOcclusionNoteType: NoteType = {
 }
 
 /** Note values are stored by immutable field ID; templates address display names. */
-export function tryRenderNoteTemplate(template: string, noteType: NoteType, fieldsById: Record<string, string>, front?: string, ordinal?: number, side?: 'front' | 'back') {
+export function tryRenderNoteTemplate(template: string, noteType: NoteType, fieldsById: Record<string, string>, front?: string, ordinal?: number, side?: 'front' | 'back', htmlFieldIds: readonly string[] = []) {
   const displayFields = fieldsByName(noteType.fields, fieldsById)
-  return tryRenderTemplate(template, displayFields, front, { kind: noteType.kind === 'image-occlusion' ? 'standard' : noteType.kind, ordinal, side: side ?? (front === undefined ? 'front' : 'back') })
+  const richFieldIds = new Set(htmlFieldIds)
+  const htmlFields = new Set(noteType.fields.filter((field) => richFieldIds.has(field.id)).map((field) => field.name))
+  return tryRenderTemplate(template, displayFields, front, { kind: noteType.kind === 'image-occlusion' ? 'standard' : noteType.kind, ordinal, side: side ?? (front === undefined ? 'front' : 'back'), htmlFields })
 }
 
 export interface Note {
@@ -164,6 +166,7 @@ export interface Note {
   type: 'basic' | 'custom'
   typeId: string
   fields: Record<string, string>
+  renderedHtmlFields?: string[]
   tags?: string[]
   imageOcclusion?: ImageOcclusion
   retiredFields?: Record<string, string>
@@ -922,7 +925,7 @@ export class Collection extends Dexie {
             if (input.removedFields?.[fieldId] === 'discard') delete retiredFields[fieldId]
             else retiredFields[fieldId] = value
           }
-          revised = { ...note, fields: values, ...(Object.keys(retiredFields).length ? { retiredFields } : {}), updatedAt: now.toISOString() }
+          revised = { ...note, fields: values, ...(note.renderedHtmlFields ? { renderedHtmlFields: note.renderedHtmlFields.filter((fieldId) => currentIds.has(fieldId)) } : {}), ...(Object.keys(retiredFields).length ? { retiredFields } : {}), updatedAt: now.toISOString() }
           await this.notes.put(revised)
           operations.push({ opId: id(), entityType: 'note', entityId: note.id, action: 'update', occurredAt: revised.updatedAt, payload: revised })
         }
@@ -960,7 +963,8 @@ export class Collection extends Dexie {
           if (destination) fields[destination] = value
           else retiredFields[fieldId] = value
         }
-        const revised: Note = { ...note, typeId: target.id, type: target.id === BASIC_NOTE_TYPE_ID ? 'basic' : 'custom', fields, ...(Object.keys(retiredFields).length ? { retiredFields } : {}), updatedAt: now.toISOString() }
+        const renderedHtmlFields = note.renderedHtmlFields?.flatMap((fieldId) => mapping[fieldId] ? [mapping[fieldId]] : [])
+        const revised: Note = { ...note, typeId: target.id, type: target.id === BASIC_NOTE_TYPE_ID ? 'basic' : 'custom', fields, ...(renderedHtmlFields ? { renderedHtmlFields } : {}), ...(Object.keys(retiredFields).length ? { retiredFields } : {}), updatedAt: now.toISOString() }
         await this.notes.put(revised)
         operations.push({ opId: id(), entityType: 'note', entityId: note.id, action: 'update', occurredAt: revised.updatedAt, payload: revised })
         await this.reconcileCards(revised, target, now, operations)

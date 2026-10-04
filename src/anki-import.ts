@@ -644,7 +644,8 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
         continue
       }
     }
-    const note: Note = { id: noteId, ankiId: row.id, deckId, type: noteTypeId === 'basic' ? 'basic' : 'custom', typeId: noteTypeId, fields, tags: row.tags.trim() ? row.tags.trim().split(/\s+/) : [], ...(imageOcclusion ? { imageOcclusion } : {}), createdAt: noteCreatedAt, updatedAt: noteUpdatedAt }
+    const renderedHtmlFields = sourceType.fields.flatMap((field, index) => importedFields[index]?.preservedMarkup ? [field.id] : [])
+    const note: Note = { id: noteId, ankiId: row.id, deckId, type: noteTypeId === 'basic' ? 'basic' : 'custom', typeId: noteTypeId, fields, ...(renderedHtmlFields.length ? { renderedHtmlFields } : {}), tags: row.tags.trim() ? row.tags.trim().split(/\s+/) : [], ...(imageOcclusion ? { imageOcclusion } : {}), createdAt: noteCreatedAt, updatedAt: noteUpdatedAt }
     notes.push(note)
 
     if (!imageOcclusion) {
