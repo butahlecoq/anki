@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { createBackupStore } from './backups.js'
+import { readBuildIdentity } from './build-identity.js'
 import { SERVER_MAX_COLLECTION_SCHEMA_VERSION, SYNC_CHANGE_PAGE_SIZE, SYNC_PROTOCOL_VERSION, type IncompatibleSync, type SyncCapabilities, type SyncHealth } from '../sync-capabilities.js'
 import { schemaRequiredByPayload } from '../schema-ladder.js'
 import { isSupportedMediaType } from '../anki-interchange.js'
@@ -195,7 +196,7 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
     },
 
     health() {
-      return { ready: true, schemaVersion: 1, protocolVersion: SYNC_PROTOCOL_VERSION, collectionSchemaVersion, maximumCollectionSchemaVersion: SERVER_MAX_COLLECTION_SCHEMA_VERSION, collectionGeneration: getCollectionGeneration(database), requiresCollectionGeneration: requiresCollectionGeneration(database), store: 'sqlite' as const } satisfies SyncHealth & { schemaVersion: number }
+      return { ready: true, schemaVersion: 1, build: readBuildIdentity(), protocolVersion: SYNC_PROTOCOL_VERSION, collectionSchemaVersion, maximumCollectionSchemaVersion: SERVER_MAX_COLLECTION_SCHEMA_VERSION, collectionGeneration: getCollectionGeneration(database), requiresCollectionGeneration: requiresCollectionGeneration(database), store: 'sqlite' as const } satisfies SyncHealth & { schemaVersion: number }
     },
 
     createPairingCode(now = new Date()) {

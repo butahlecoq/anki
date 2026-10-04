@@ -45,6 +45,10 @@ GitHub does not enforce `premerge` because this repository has no required hoste
 checks or branch protection. The repository merge procedure must run the local
 pre-merge check; GitHub's merge button and a direct `gh pr merge` can bypass it.
 
+### Attributing an observed build
+
+Open **Support / build details** in the application to record its version, 12-character Git commit, and whether it is a release build. For a sync-service observation, record the `build` object from `GET /api/health` as well. The generated web app manifest carries the same version and commit in its `kiroku` member. Compare the commit with `git rev-parse --short=12 <commit>` in the checkout used to build the app; a development build is explicitly labelled and is not a release artifact.
+
 ### Local browser verification
 
 Use Node.js 22 or newer and the repository's pinned npm version (`npm@11.16.0`). In a fresh worktree, install dependencies and matching browser engines:

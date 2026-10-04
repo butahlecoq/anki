@@ -22,7 +22,7 @@
     "drift": "node scripts/drift-check.mjs",
     "status": "node scripts/status-report.mjs",
     "server:build": "tsc -p tsconfig.server.json",
-    "server:start": "npm run server:build && node --enable-source-maps dist-server/server/index.js",
+    "server:start": "npm run server:build && node scripts/start-server.mjs",
     "server:pair": "npm run server:build && node --enable-source-maps dist-server/server/index.js --pairing-code",
     "server:devices": "npm run server:build && node --enable-source-maps dist-server/server/index.js --devices",
     "server:revoke": "npm run server:build && node --enable-source-maps dist-server/server/index.js --revoke-device",

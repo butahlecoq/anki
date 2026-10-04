@@ -24,7 +24,7 @@ test('reports a ready durable store and accepts a pairing code only once', async
   const service = createSyncService({ databasePath: join(runtimeDirectory, 'collection.sqlite') })
 
   const health = service.health()
-  assert.deepEqual({ ...health, collectionGeneration: 'generation' }, { ready: true, schemaVersion: 1, protocolVersion: 2, collectionSchemaVersion: 1, maximumCollectionSchemaVersion: SERVER_MAX_COLLECTION_SCHEMA_VERSION, collectionGeneration: 'generation', requiresCollectionGeneration: false, store: 'sqlite' })
+  assert.deepEqual({ ...health, collectionGeneration: 'generation' }, { ready: true, schemaVersion: 1, build: { version: 'development', commit: 'development', release: false }, protocolVersion: 2, collectionSchemaVersion: 1, maximumCollectionSchemaVersion: SERVER_MAX_COLLECTION_SCHEMA_VERSION, collectionGeneration: 'generation', requiresCollectionGeneration: false, store: 'sqlite' })
 
   const pairingCode = service.createPairingCode(new Date('2026-10-01T12:00:00.000Z'))
   const paired = service.pair({ code: pairingCode, deviceId: 'phone-1' }, new Date('2026-10-01T12:01:00.000Z'))
