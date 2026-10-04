@@ -169,6 +169,10 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
   }
 
   const service = {
+    authenticateDevice(accessToken: string) {
+      return Boolean(authenticatedDevice(accessToken))
+    },
+
     health() {
       return { ready: true, schemaVersion: 1, protocolVersion: SYNC_PROTOCOL_VERSION, collectionSchemaVersion, maximumCollectionSchemaVersion: SERVER_MAX_COLLECTION_SCHEMA_VERSION, store: 'sqlite' as const } satisfies SyncHealth & { schemaVersion: number }
     },

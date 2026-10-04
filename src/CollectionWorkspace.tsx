@@ -44,6 +44,7 @@ import { loadSampleDeck, removeSampleDeck, SAMPLE_DECK_NAME } from './sample-dec
 import { useRoute } from './route'
 import { pairOutcomeMessage, pairingClosesOn, SYNC_LOCAL_ONLY, syncOutcomeMessage } from './sync-messages'
 import { useDialogKeyboard } from './use-dialog-keyboard'
+import { AnkiWebAccountDialog } from './AnkiWebAccountDialog'
 
 function CountStrip({ counts, reviews }: { counts: DeckCounts; reviews: number }) {
   return (
@@ -228,6 +229,7 @@ function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: boolean 
   const pairingKeyboard = useDialogKeyboard(() => setPairing(false), pairing)
   const [backups, setBackups] = useState<PcBackup[]>([])
   const [restorePreview, setRestorePreview] = useState('')
+  const [ankiWebOpen, setAnkiWebOpen] = useState(false)
 
   useEffect(() => {
     if (!settings) return
@@ -341,6 +343,7 @@ function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: boolean 
     <section className="sync-controls" aria-label="PC sync">
       <div><span className="section-code">SYNC // {settings ? 'PAIRED' : 'LOCAL ONLY'}</span><p aria-live="polite">{settings && !offlineSyncAvailable ? 'Sync is paused until Kiroku confirms its offline app shell is ready.' : message}</p></div>
       <div className="sync-actions">
+        {settings && <button className="text-button" type="button" disabled={busy} onClick={() => setAnkiWebOpen(true)}>Connect AnkiWeb account</button>}
         {settings && <button className="text-button" type="button" disabled={busy || !offlineSyncAvailable || !offlineShellSupported} onClick={() => void sync()}>{busy ? 'Syncing…' : 'Sync now'}</button>}
         {settings && <button className="text-button" type="button" disabled={busy} onClick={() => void backupPcCollection()}>{busy ? 'Working…' : 'Download PC backup'}</button>}
         {settings && <button className="text-button" type="button" disabled={busy} title="Invalidates this device’s previous key immediately" onClick={() => void rotateDeviceCredential()}>{busy ? 'Working…' : 'Rotate device key'}</button>}
@@ -348,6 +351,7 @@ function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: boolean 
       </div>
       {settings && backups[0] && <p className="sync-help">Latest verified PC backup: {new Date(backups[0].createdAt).toLocaleString()} · {backups[0].changeCount} sync changes · {backups[0].media.length} media files · {backups[0].reason === 'manual' ? 'manual' : 'before sync'}.</p>}
       {settings && backups[0] && <p className="sync-help"><button className="text-button" type="button" disabled={busy} onClick={() => void previewPcRestore(backups[0])}>Preview latest backup</button>{restorePreview && <span role="status"> {restorePreview}</span>}</p>}
+      {ankiWebOpen && settings && <AnkiWebAccountDialog settings={settings} onClose={() => setAnkiWebOpen(false)} />}
       {pairing && (
         <div className="dialog-backdrop">
           <section {...pairingKeyboard} className="dialog" role="dialog" aria-modal="true" aria-labelledby="sync-dialog-title">

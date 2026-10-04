@@ -3,6 +3,7 @@ export interface GatewayEnvironment {
   PWA_ORIGIN: string
   GATEWAY_KEY: string
 }
+export interface PairedGatewayEnvironment { PWA_ORIGIN: string }
 
 const routes = new Set([
   'sync/hostKey', 'sync/meta', 'sync/start', 'sync/applyGraves', 'sync/applyChanges',
@@ -10,8 +11,8 @@ const routes = new Set([
   'sync/upload', 'sync/download', 'msync/begin', 'msync/mediaChanges',
   'msync/downloadFiles', 'msync/uploadChanges', 'msync/mediaSanity',
 ])
-const requestHeaders = ['content-type', 'anki-sync', 'authorization']
-const allowedHeaders = [...requestHeaders, 'x-kiroku-gateway-key', 'x-ankiweb-host']
+const gatewayHeaders = ['content-type', 'anki-sync', 'authorization', 'x-kiroku-gateway-key', 'x-ankiweb-host']
+const pairedHeaders = ['authorization', 'content-type', 'x-ankiweb-host']
 const transferLimit = 64 * 1024 * 1024
 const timeoutMs = 300_000
 
@@ -22,6 +23,13 @@ async function matchesSecret(actual: string, expected: string) {
   let difference = 0
   for (let index = 0; index < left.length; index++) difference |= left[index] ^ right[index]
   return difference === 0
+}
+
+function validOrigin(value: string, allowLoopbackHttp: boolean) {
+  let origin: URL
+  try { origin = new URL(value) } catch { return false }
+  const loopbackHttp = allowLoopbackHttp && origin.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(origin.hostname)
+  return origin.origin === value && (origin.protocol === 'https:' || loopbackHttp)
 }
 
 function boundedBody(body: ReadableStream<Uint8Array> | null, abort: AbortController, deadline: number) {
@@ -52,20 +60,28 @@ function boundedBody(body: ReadableStream<Uint8Array> | null, abort: AbortContro
   })
 }
 
-export async function handleAnkiWebGateway(request: Request, env: GatewayEnvironment, upstream: typeof fetch = fetch): Promise<Response> {
-  // Invalid configuration fails closed; never derive caller origin from the request.
-  let origin: URL
-  try { origin = new URL(env.PWA_ORIGIN) } catch { return new Response('Gateway is not configured', { status: 503 }) }
-  if (origin.origin !== env.PWA_ORIGIN || origin.protocol !== 'https:' || !/^[a-f0-9]{64}$/i.test(env.GATEWAY_KEY ?? '')) return new Response('Gateway is not configured', { status: 503 })
-  if (request.headers.get('origin') !== env.PWA_ORIGIN) return new Response('Origin not allowed', { status: 403 })
+async function forwardAnkiWebRequest(
+  request: Request,
+  pwaOrigin: string,
+  authenticate: () => Promise<boolean>,
+  upstream: typeof fetch,
+  allowedHeaders: string[],
+  forwardAuthorization: boolean,
+  authErrorHeader?: string,
+): Promise<Response> {
+  if (!validOrigin(pwaOrigin, true)) return new Response('Relay is not configured', { status: 503 })
   const cors = new Headers({
-    'access-control-allow-origin': env.PWA_ORIGIN, 'vary': 'Origin', 'cache-control': 'no-store',
-    'access-control-expose-headers': 'Content-Type, Retry-After',
+    'access-control-allow-origin': pwaOrigin,
+    'vary': 'Origin',
+    'cache-control': 'no-store',
+    'access-control-expose-headers': 'Content-Type, Content-Length, Retry-After, X-Kiroku-Relay-Error',
   })
   const reply = (message: string, status: number) => new Response(message, { status, headers: cors })
+  if (request.headers.get('origin') !== pwaOrigin) return reply('Origin not allowed', 403)
   const url = new URL(request.url)
-  const route = url.pathname.replace(/^\/ankiweb\//, '')
-  if (!url.pathname.startsWith('/ankiweb/') || !routes.has(route) || url.search) return reply('Unknown account route', 404)
+  const route = url.pathname.replace(/^\/api\/ankiweb\//, '').replace(/^\/ankiweb\//, '')
+  if (!url.pathname.startsWith('/api/ankiweb/') && !url.pathname.startsWith('/ankiweb/')) return reply('Unknown account route', 404)
+  if (!routes.has(route) || url.search) return reply('Unknown account route', 404)
   if (request.method === 'OPTIONS') {
     const requested = (request.headers.get('access-control-request-headers') ?? '').toLowerCase().split(',').map((header) => header.trim()).filter(Boolean)
     if (request.headers.get('access-control-request-method') !== 'POST' || requested.some((header) => !allowedHeaders.includes(header))) return reply('Preflight not allowed', 403)
@@ -74,16 +90,19 @@ export async function handleAnkiWebGateway(request: Request, env: GatewayEnviron
     return new Response(null, { status: 204, headers: cors })
   }
   if (request.method !== 'POST') return reply('Use POST', 405)
-  const key = request.headers.get('x-kiroku-gateway-key') ?? ''
-  if (!/^[a-f0-9]{64}$/i.test(key) || !await matchesSecret(key, env.GATEWAY_KEY)) return reply('Gateway authentication required', 401)
-  const host = request.headers.get('x-ankiweb-host') ?? 'sync.ankiweb.net'
-  if (!/^sync(?:[1-9][0-9]*)?\.ankiweb\.net$/.test(host)) return reply('Upstream host not allowed', 400)
   const length = request.headers.get('content-length')
   if (length !== null && (!/^\d+$/.test(length) || Number(length) > transferLimit)) return reply('Transfer exceeds 64 MiB limit', 413)
+  if (!await authenticate()) {
+    if (authErrorHeader) cors.set('x-kiroku-relay-error', authErrorHeader)
+    return reply('Authentication required', 401)
+  }
+  const host = request.headers.get('x-ankiweb-host') ?? 'sync.ankiweb.net'
+  if (!/^sync(?:[1-9][0-9]*)?\.ankiweb\.net$/.test(host)) return reply('Upstream host not allowed', 400)
   const headers = new Headers()
-  for (const name of requestHeaders) { const value = request.headers.get(name); if (value !== null) headers.set(name, value) }
-  // Avoid runtime-specific HTTP decompression. Zstd inside the protocol payload
-  // remains untouched; HTTP content encoding is a separate transport layer.
+  for (const name of ['content-type', 'anki-sync', ...(forwardAuthorization ? ['authorization'] : [])]) {
+    const value = request.headers.get(name)
+    if (value !== null) headers.set(name, value)
+  }
   headers.set('accept-encoding', 'identity')
   const abort = new AbortController()
   const deadline = Date.now() + timeoutMs
@@ -98,10 +117,38 @@ export async function handleAnkiWebGateway(request: Request, env: GatewayEnviron
     if (encoding && encoding.toLowerCase() !== 'identity') { await response.body?.cancel(); return reply('Unexpected upstream HTTP encoding', 502) }
     const responseLength = response.headers.get('content-length')
     if (responseLength !== null && (!/^\d+$/.test(responseLength) || Number(responseLength) > transferLimit)) { await response.body?.cancel(); return reply('Upstream transfer exceeds 64 MiB limit', 413) }
-    for (const name of ['content-type', 'retry-after']) { const value = response.headers.get(name); if (value !== null) cors.set(name, value) }
+    for (const name of ['content-type', 'content-length', 'retry-after']) {
+      const value = response.headers.get(name)
+      if (value !== null) cors.set(name, value)
+    }
     return new Response(boundedBody(response.body, abort, deadline), { status: response.status, headers: cors })
   } catch { return reply('Account service unavailable or transfer interrupted', 502) }
   finally { clearTimeout(timer) }
+}
+
+/** Standalone transport for the optional personal gateway deployment. */
+export async function handleAnkiWebGateway(request: Request, env: GatewayEnvironment, upstream: typeof fetch = fetch): Promise<Response> {
+  if (!validOrigin(env.PWA_ORIGIN, false) || !/^[a-f0-9]{64}$/i.test(env.GATEWAY_KEY ?? '')) return new Response('Gateway is not configured', { status: 503 })
+  return forwardAnkiWebRequest(request, env.PWA_ORIGIN, async () => {
+    const key = request.headers.get('x-kiroku-gateway-key') ?? ''
+    return /^[a-f0-9]{64}$/i.test(key) && await matchesSecret(key, env.GATEWAY_KEY)
+  }, upstream, gatewayHeaders, true)
+}
+
+/** PC relay: the paired-device Bearer credential authorizes access to this
+ * service only and is never forwarded to the upstream AnkiWeb request. */
+export async function handlePairedAnkiWebRelay(
+  request: Request,
+  env: PairedGatewayEnvironment,
+  authenticateDevice: (token: string) => boolean | Promise<boolean>,
+  upstream: typeof fetch = fetch,
+): Promise<Response> {
+  if (!validOrigin(env.PWA_ORIGIN, true)) return new Response('Relay is not configured', { status: 503 })
+  return forwardAnkiWebRequest(request, env.PWA_ORIGIN, async () => {
+    const authorization = request.headers.get('authorization') ?? ''
+    const match = /^Bearer ([a-f0-9]{64})$/i.exec(authorization)
+    return Boolean(match && await authenticateDevice(match[1]))
+  }, upstream, pairedHeaders, false, 'paired-authentication')
 }
 
 export default { fetch: (request: Request, env: GatewayEnvironment) => handleAnkiWebGateway(request, env) }

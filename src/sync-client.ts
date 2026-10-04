@@ -73,7 +73,7 @@ export async function downloadMedia(settings: SyncSettings, digest: string, fetc
   return new Blob([await response.arrayBuffer()], { type: response.headers.get('content-type') ?? '' })
 }
 
-function isSafeServiceEndpoint(endpoint: string) {
+export function isSafeServiceEndpoint(endpoint: string) {
   try {
     const parsed = new URL(endpoint)
     return parsed.protocol === 'https:' || (parsed.protocol === 'http:' && ['127.0.0.1', '::1', 'localhost'].includes(parsed.hostname))

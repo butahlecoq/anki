@@ -1,15 +1,17 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { Readable } from 'node:stream'
 import { SyncBackupError, SyncCompatibilityError, type createSyncService } from './sync-service.js'
+import { handlePairedAnkiWebRelay } from './ankiweb-gateway.js'
 
 type Service = ReturnType<typeof createSyncService>
 
 const DEFAULT_JSON_BODY_LIMIT_BYTES = 32 * 1024 * 1024
-type HttpOptions = { allowedOrigin?: string; jsonBodyLimitBytes?: number }
+type HttpOptions = { allowedOrigin?: string; jsonBodyLimitBytes?: number; ankiWebUpstream?: typeof fetch }
 
 const corsHeaders = (origin: string | undefined, allowedOrigin: string | undefined): Record<string, string> => origin && allowedOrigin === origin ? {
   'access-control-allow-origin': allowedOrigin,
   'access-control-allow-methods': 'GET, POST, PUT, OPTIONS',
-  'access-control-allow-headers': 'authorization, content-type',
+  'access-control-allow-headers': 'authorization, content-type, x-ankiweb-host',
   'access-control-expose-headers': 'content-length, x-content-sha256',
 } : {}
 
@@ -44,11 +46,42 @@ const bytes = async (request: IncomingMessage, maximum = 20 * 1024 * 1024) => {
   return new Uint8Array(Buffer.concat(chunks))
 }
 
-export function createSyncHttpHandler(service: Service, { allowedOrigin, jsonBodyLimitBytes = DEFAULT_JSON_BODY_LIMIT_BYTES }: HttpOptions = {}) {
+async function relayAnkiWeb(request: IncomingMessage, response: ServerResponse, service: Service, allowedOrigin: string | undefined, upstream: typeof fetch) {
+  const headers = new Headers()
+  for (const name of ['origin', 'authorization', 'content-type', 'content-length', 'x-ankiweb-host', 'access-control-request-method', 'access-control-request-headers']) {
+    const value = request.headers[name]
+    if (typeof value === 'string') headers.set(name, value)
+  }
+  const options: RequestInit & { duplex?: 'half' } = { method: request.method ?? 'GET', headers }
+  if (request.method === 'POST') {
+    options.body = Readable.toWeb(request) as ReadableStream<Uint8Array>
+    options.duplex = 'half'
+  }
+  let relayResponse: Response
+  try {
+    const relayRequest = new Request(`http://kiroku.local${request.url ?? '/'}`, options)
+    relayResponse = await handlePairedAnkiWebRelay(relayRequest, { PWA_ORIGIN: allowedOrigin ?? '' }, (token) => service.authenticateDevice(token), upstream)
+  } catch {
+    request.resume()
+    response.writeHead(502, { 'cache-control': 'no-store', 'content-type': 'text/plain; charset=utf-8' })
+    response.end('Account service unavailable or transfer interrupted')
+    return
+  }
+  response.writeHead(relayResponse.status, Object.fromEntries(relayResponse.headers.entries()))
+  if (!relayResponse.body) {
+    request.resume()
+    response.end()
+    return
+  }
+  Readable.fromWeb(relayResponse.body as never).on('error', () => response.destroy()).pipe(response)
+}
+
+export function createSyncHttpHandler(service: Service, { allowedOrigin, jsonBodyLimitBytes = DEFAULT_JSON_BODY_LIMIT_BYTES, ankiWebUpstream = fetch }: HttpOptions = {}) {
   return async (request: IncomingMessage, response: ServerResponse) => {
     const headers = corsHeaders(request.headers.origin, allowedOrigin)
     const reply = (status: number, responseBody: unknown) => send(response, status, responseBody, headers)
     try {
+      if (request.url?.startsWith('/api/ankiweb/')) return await relayAnkiWeb(request, response, service, allowedOrigin, ankiWebUpstream)
       if (request.method === 'OPTIONS') {
         response.writeHead(204, headers)
         response.end()
