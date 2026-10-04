@@ -177,8 +177,8 @@ test.afterEach(async () => {
   await service?.close()
 })
 
-async function pair(page: import('@playwright/test').Page, suppliedService?: Pick<SyncService, 'url' | 'runtime'>) {
-  const syncService = suppliedService ?? await serviceForCurrentTest()
+async function pair(page: import('@playwright/test').Page) {
+  const syncService = await serviceForCurrentTest()
   await page.getByRole('button', { name: 'Connect a PC' }).click()
   await page.getByLabel('PC service address').fill(syncService.url)
   await page.getByLabel('One-time pairing code').fill(await pairingCode(syncService.runtime))
