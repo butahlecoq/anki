@@ -142,6 +142,11 @@ test('Japanese CSV preview, explicit partial import, offline export and clean-cl
     await expect(imported.getByLabel('Include deck')).toBeChecked()
     await expect(imported.getByLabel('Include note type')).toBeChecked()
     await expect(imported.getByLabel('Include stable note identifiers')).toBeChecked()
+    await imported.getByLabel('front', { exact: true }).uncheck()
+    await imported.getByLabel('Include tags').uncheck()
+    await imported.getByLabel('Include deck').uncheck()
+    await imported.getByLabel('Include note type').uncheck()
+    await imported.getByLabel('Include stable note identifiers').uncheck()
     await imported.getByLabel('Export HTML handling').selectOption('strip')
     await imported.getByLabel('Export rows').selectOption('cards')
     const cardDownloadPending = target.waitForEvent('download')
@@ -149,7 +154,13 @@ test('Japanese CSV preview, explicit partial import, offline export and clean-cl
     const cardDownload = await cardDownloadPending
     await expect(imported.getByRole('status')).toContainText('Text export ready: 4 cards')
     const cardsCsv = await readFile((await cardDownload.path())!, 'utf8')
-    expect(cardsCsv).toContain('_card_id')
+    const cardHeaders = parseDelimited(cardsCsv.replace(/^\uFEFF/, ''), ',', '"')[0].values
+    expect(cardHeaders).toContain('_card_id')
+    expect(cardHeaders).not.toContain('_note_id')
+    expect(cardHeaders).not.toContain('_deck')
+    expect(cardHeaders).not.toContain('_note_type')
+    expect(cardHeaders).not.toContain('_tags')
+    expect(cardHeaders).not.toContain('Field: front')
     expect(cardsCsv).not.toContain('<b>')
   } finally {
     await target?.close().catch(() => undefined)
