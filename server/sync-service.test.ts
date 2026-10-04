@@ -13,7 +13,6 @@ import { createSyncHttpHandler } from './sync-http.js'
 import { SERVER_MAX_COLLECTION_SCHEMA_VERSION, SYNC_CHANGE_PAGE_SIZE } from '../sync-capabilities.js'
 
 let runtimeDirectory: string | undefined
-const serviceHealth = (collectionSchemaVersion = 1) => ({ ready: true, schemaVersion: 1, protocolVersion: 2, collectionSchemaVersion, maximumCollectionSchemaVersion: SERVER_MAX_COLLECTION_SCHEMA_VERSION, store: 'sqlite' as const })
 
 afterEach(async () => {
   if (runtimeDirectory) await rm(runtimeDirectory, { recursive: true, force: true })
@@ -24,13 +23,15 @@ test('reports a ready durable store and accepts a pairing code only once', async
   runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
   const service = createSyncService({ databasePath: join(runtimeDirectory, 'collection.sqlite') })
 
-  assert.deepEqual(service.health(), serviceHealth())
+  const health = service.health()
+  assert.deepEqual({ ...health, collectionGeneration: 'generation' }, { ready: true, schemaVersion: 1, protocolVersion: 2, collectionSchemaVersion: 1, maximumCollectionSchemaVersion: SERVER_MAX_COLLECTION_SCHEMA_VERSION, collectionGeneration: 'generation', requiresCollectionGeneration: false, store: 'sqlite' })
 
   const pairingCode = service.createPairingCode(new Date('2026-10-01T12:00:00.000Z'))
   const paired = service.pair({ code: pairingCode, deviceId: 'phone-1' }, new Date('2026-10-01T12:01:00.000Z'))
 
   assert.equal(paired.deviceId, 'phone-1')
   assert.match(paired.token, /^[a-f0-9]{64}$/)
+  assert.equal(paired.collectionGeneration, health.collectionGeneration)
   assert.throws(() => service.pair({ code: pairingCode, deviceId: 'phone-2' }, new Date('2026-10-01T12:02:00.000Z')))
   service.close()
 })
@@ -188,6 +189,7 @@ test('manual PC backups contain a consistent verified SQLite history and every m
   await assert.rejects(service.listBackups('wrong-token'), /authentication required/i)
   const manifest = await service.createBackup(token)
   assert.equal(manifest.reason, 'manual')
+  assert.equal(manifest.collectionGeneration, service.health().collectionGeneration)
   assert.equal(manifest.changeCount, 1)
   assert.equal(manifest.latestCursor, 1)
   assert.deepEqual(manifest.media, [{ digest: mediaDigest, byteLength: image.byteLength, mimeType: 'image/png' }])
@@ -210,13 +212,63 @@ test('manual PC backups contain a consistent verified SQLite history and every m
   const preview = await service.previewBackupRestore(token, manifest.id)
   assert.equal(preview.changeCount, 1)
   assert.equal(preview.mediaBytes, image.byteLength)
-  assert.equal(preview.restoreAvailable, false)
+  assert.equal(preview.restoreAvailable, true)
   const damaged = new Uint8Array(bytes)
   damaged[damaged.length - 4] ^= 1
   await writeFile(join(runtimeDirectory, 'backups', `backup-${manifest.id}.zip`), damaged)
   assert.deepEqual(await service.listBackups(token), [])
   await assert.rejects(service.downloadBackup(token, manifest.id), /verified backup not found/i)
   service.close()
+})
+
+test('restore replaces sync history atomically, keeps a pre-restore recovery backup, and fences previous-generation devices', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-restore-'))
+  const databasePath = join(runtimeDirectory, 'collection.sqlite')
+  const mediaDirectory = join(runtimeDirectory, 'media')
+  const service = createSyncService({ databasePath, mediaDirectory })
+  const { token, collectionGeneration: oldGeneration } = service.pair({ code: service.createPairingCode(), deviceId: 'restore-phone' })
+  const originalMedia = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 9])
+  const originalDigest = createHash('sha256').update(originalMedia).digest('hex')
+  await service.putMedia(token, originalDigest, 'image/png', originalMedia)
+  service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 16, cursor: 0, operations: [
+    { opId: 'backup-note', entityType: 'note', entityId: 'note-1', action: 'create', occurredAt: '2026-10-03T10:00:00.000Z', payload: { id: 'note-1', front: '猫' } },
+  ] })
+  const backup = await service.createBackup(token)
+  service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 16, cursor: 1, operations: [
+    { opId: 'after-backup', entityType: 'note', entityId: 'note-2', action: 'create', occurredAt: '2026-10-03T11:00:00.000Z', payload: { id: 'note-2', front: '犬' } },
+  ] })
+  assert.equal(service.changeCount(), 2)
+  const preview = await service.previewBackupRestore(token, backup.id)
+  assert.equal(preview.restoreAvailable, true)
+  assert.match(preview.restoreBlocker, /new sync generation/i)
+  assert.equal(service.health().collectionGeneration, oldGeneration)
+
+  await assert.rejects(service.restoreBackup(token, backup.id, 'no'), /type restore/i)
+  const restored = await service.restoreBackup(token, backup.id, 'RESTORE')
+  assert.notEqual(restored.generation, oldGeneration)
+  assert.equal(restored.changeCount, 1)
+  assert.equal(service.changeCount(), 1)
+  assert.equal(service.health().collectionGeneration, restored.generation)
+  assert.equal(service.health().requiresCollectionGeneration, true)
+  assert.ok((await service.listBackups(token)).some((item) => item.reason === 'before-restore'))
+  const restoredMedia = await service.getMedia(token, originalDigest, restored.generation)
+  assert.equal(restoredMedia.digest, originalDigest)
+  assert.equal(restoredMedia.byteLength, originalMedia.byteLength)
+  assert.equal(restoredMedia.mimeType, 'image/png')
+  assert.deepEqual([...restoredMedia.bytes], [...originalMedia])
+  await assert.rejects(service.getMedia(token, originalDigest, oldGeneration), /replaced from a backup/i)
+  assert.throws(() => service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 16, cursor: 0, operations: [] }), /replaced from a backup/i)
+  assert.throws(() => service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 16, collectionGeneration: oldGeneration, cursor: 0, operations: [] }), /replaced from a backup/i)
+  const replay = service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 16, collectionGeneration: restored.generation, cursor: 0, operations: [] })
+  assert.deepEqual(replay.changes.map((change) => change.opId), ['backup-note'])
+  assert.equal(service.listDevices()[0].status, 'active')
+  service.close()
+  const reopened = createSyncService({ databasePath, mediaDirectory })
+  assert.equal(reopened.health().collectionGeneration, restored.generation)
+  assert.equal(reopened.health().requiresCollectionGeneration, true)
+  assert.throws(() => reopened.sync(token, { protocolVersion: 2, collectionSchemaVersion: 16, collectionGeneration: oldGeneration, cursor: 0, operations: [] }), /replaced from a backup/i)
+  assert.equal(reopened.sync(token, { protocolVersion: 2, collectionSchemaVersion: 16, collectionGeneration: restored.generation, cursor: 0, operations: [] }).changes.length, 1)
+  reopened.close()
 })
 
 test('retains no more than fourteen verified backups and removes the oldest archive pair', async () => {
@@ -483,12 +535,13 @@ test('serves health, pairing, and authenticated sync over HTTP', async () => {
   try {
 
   const health = await fetch(`${origin}/api/health`)
-  assert.deepEqual(await health.json(), serviceHealth())
+  assert.deepEqual(await health.json(), service.health())
 
   const preflight = await fetch(`${origin}/api/sync`, { method: 'OPTIONS', headers: { origin: 'http://127.0.0.1:4173' } })
   assert.equal(preflight.status, 204)
   assert.equal(preflight.headers.get('access-control-allow-origin'), 'http://127.0.0.1:4173')
   assert.match(preflight.headers.get('access-control-allow-methods') ?? '', /PUT/)
+  assert.match(preflight.headers.get('access-control-allow-headers') ?? '', /x-collection-generation/)
   assert.match(preflight.headers.get('access-control-expose-headers') ?? '', /x-content-sha256/)
   const rejectedOrigin = await fetch(`${origin}/api/health`, { headers: { origin: 'https://untrusted.example.test' } })
   assert.equal(rejectedOrigin.headers.get('access-control-allow-origin'), null)
@@ -518,7 +571,7 @@ test('serves health, pairing, and authenticated sync over HTTP', async () => {
   assert.deepEqual(await legacyProtocol.json(), { code: 'protocol-upgrade-required', message: 'This PC sync service and this device use incompatible sync protocols. Update both, then try again.', protocolVersion: 2 })
   assert.equal(service.changeCount(), 0)
   const synced = await fetch(`${origin}/api/sync`, { method: 'POST', headers: { authorization: `Bearer ${credential.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, collectionSchemaVersion: 10, cursor: 0, operations: [] }) })
-  assert.deepEqual(await synced.json(), { protocolVersion: 2, collectionSchemaVersion: 10, accepted: 0, cursor: 0, hasMore: false, changes: [] })
+  assert.deepEqual(await synced.json(), { protocolVersion: 2, collectionSchemaVersion: 10, collectionGeneration: service.health().collectionGeneration, accepted: 0, cursor: 0, hasMore: false, changes: [] })
   const rejected = await fetch(`${origin}/api/sync`, { method: 'POST', headers: { authorization: `Bearer ${credential.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, collectionSchemaVersion: 6, cursor: 0, operations: [{ opId: 'stale-write', entityType: 'note', entityId: 'note-1', action: 'update', occurredAt: '2026-10-01T12:00:00.000Z', payload: { id: 'note-1' } }] }) })
   assert.equal(rejected.status, 409)
   assert.deepEqual(await rejected.json(), { code: 'client-upgrade-required', message: 'This collection requires schema 10; this device declares schema 6. Update Kiroku on this device, then try again.', protocolVersion: 2, requiredSchemaVersion: 10 })
@@ -575,13 +628,29 @@ test('exposes manual backup download and verified preview and snapshots before a
     assert.match(file.headers.get('content-disposition') ?? '', /kiroku-backup-/)
     const preview = await fetch(`${origin}/api/backups/${manifest.id}/restore-preview`, { method: 'POST', headers: { authorization: `Bearer ${token}` } })
     assert.equal(preview.status, 200)
-    assert.equal((await preview.json() as { restoreAvailable: boolean }).restoreAvailable, false)
+    assert.equal((await preview.json() as { restoreAvailable: boolean }).restoreAvailable, true)
 
     const sync = await fetch(`${origin}/api/sync`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, collectionSchemaVersion: 10, cursor: 0, operations: [{ opId: 'before-sync-backup', entityType: 'note', entityId: 'note-1', action: 'create', occurredAt: '2026-10-03T10:00:00.000Z', payload: { id: 'note-1' } }] }) })
     assert.equal(sync.status, 200)
     const listed = await fetch(`${origin}/api/backups`, { headers: { authorization: `Bearer ${token}` } })
     const backups = (await listed.json() as { backups: Array<{ reason: string; changeCount: number }> }).backups
     assert.deepEqual(backups.map(({ reason, changeCount }) => ({ reason, changeCount })), [{ reason: 'before-sync', changeCount: 0 }, { reason: 'manual', changeCount: 0 }])
+    const unconfirmed = await fetch(`${origin}/api/backups/${manifest.id}/restore`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ confirmation: 'no' }) })
+    assert.equal(unconfirmed.status, 400)
+    assert.equal(service.changeCount(), 1)
+    const restoredResponse = await fetch(`${origin}/api/backups/${manifest.id}/restore`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ confirmation: 'RESTORE' }) })
+    assert.equal(restoredResponse.status, 200)
+    const restored = await restoredResponse.json() as { generation: string; before: { reason: string } }
+    assert.match(restored.generation, /^[a-f0-9-]{36}$/)
+    assert.equal(restored.before.reason, 'before-restore')
+    assert.equal(service.changeCount(), 0)
+    const rejectedOldClient = await fetch(`${origin}/api/sync`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, collectionSchemaVersion: 16, cursor: 0, operations: [{ opId: 'stale-device-write', entityType: 'note', entityId: 'note-2', action: 'create', occurredAt: '2026-10-03T12:00:00.000Z', payload: { id: 'note-2' } }] }) })
+    assert.equal(rejectedOldClient.status, 409)
+    assert.equal((await rejectedOldClient.json() as { code: string }).code, 'collection-generation-required')
+    assert.equal(service.changeCount(), 0)
+    const activeGeneration = { authorization: `Bearer ${token}`, 'content-type': 'application/json' }
+    const acceptedCurrentClient = await fetch(`${origin}/api/sync`, { method: 'POST', headers: activeGeneration, body: JSON.stringify({ protocolVersion: 2, collectionSchemaVersion: 16, collectionGeneration: restored.generation, cursor: 0, operations: [] }) })
+    assert.equal(acceptedCurrentClient.status, 200)
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
     service.close()
@@ -607,7 +676,9 @@ test('starts a loopback service with a durable runtime directory', async () => {
 
   const health = await fetch(`http://127.0.0.1:${running.port}/api/health`)
   assert.equal(health.status, 200)
-  assert.deepEqual(await health.json(), serviceHealth())
+  const status = await health.json() as { collectionGeneration?: string; requiresCollectionGeneration?: boolean }
+  assert.match(status.collectionGeneration ?? '', /^[a-f0-9-]{36}$/)
+  assert.equal(status.requiresCollectionGeneration, false)
   await running.close()
 })
 

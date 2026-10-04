@@ -11,7 +11,7 @@ type HttpOptions = { allowedOrigin?: string; jsonBodyLimitBytes?: number; ankiWe
 const corsHeaders = (origin: string | undefined, allowedOrigin: string | undefined): Record<string, string> => origin && allowedOrigin === origin ? {
   'access-control-allow-origin': allowedOrigin,
   'access-control-allow-methods': 'GET, POST, PUT, OPTIONS',
-  'access-control-allow-headers': 'authorization, content-type, x-ankiweb-host',
+  'access-control-allow-headers': 'authorization, content-type, x-ankiweb-host, x-collection-generation',
   'access-control-expose-headers': 'content-length, x-content-sha256',
 } : {}
 
@@ -101,7 +101,7 @@ export function createSyncHttpHandler(service: Service, { allowedOrigin, jsonBod
       if (request.method === 'POST' && request.url === '/api/sync') {
         const authorization = request.headers.authorization
         if (!authorization?.startsWith('Bearer ')) return reply(401, { error: 'Authentication required.' })
-        const payload = await body(request, jsonBodyLimitBytes) as { protocolVersion?: unknown; collectionSchemaVersion?: unknown; cursor?: number; operations?: unknown[] }
+        const payload = await body(request, jsonBodyLimitBytes) as { protocolVersion?: unknown; collectionSchemaVersion?: unknown; collectionGeneration?: unknown; cursor?: number; operations?: unknown[] }
         if (typeof payload.cursor !== 'number' || !Array.isArray(payload.operations)) return reply(400, { error: 'A cursor and operations array are required.' })
         try { return reply(200, await service.syncWithBackup(authorization.slice(7), payload as Parameters<Service['sync']>[1])) }
         catch (error) {
@@ -119,7 +119,7 @@ export function createSyncHttpHandler(service: Service, { allowedOrigin, jsonBod
         if (!authorization?.startsWith('Bearer ')) return reply(401, { error: 'Authentication required.' })
         return reply(201, await service.createBackup(authorization.slice(7)))
       }
-      const backup = request.url?.match(/^\/api\/backups\/([a-f0-9-]{36})(?:\/(download|restore-preview))?$/)
+      const backup = request.url?.match(/^\/api\/backups\/([a-f0-9-]{36})(?:\/(download|restore-preview|restore))?$/)
       if (backup) {
         const authorization = request.headers.authorization
         if (!authorization?.startsWith('Bearer ')) return reply(401, { error: 'Authentication required.' })
@@ -130,6 +130,10 @@ export function createSyncHttpHandler(service: Service, { allowedOrigin, jsonBod
           return
         }
         if (request.method === 'POST' && backup[2] === 'restore-preview') return reply(200, await service.previewBackupRestore(authorization.slice(7), backup[1]))
+        if (request.method === 'POST' && backup[2] === 'restore') {
+          const payload = await body(request, jsonBodyLimitBytes) as { confirmation?: string }
+          return reply(200, await service.restoreBackup(authorization.slice(7), backup[1], payload.confirmation ?? ''))
+        }
       }
       const media = request.url?.match(/^\/api\/media\/([a-f0-9]{64})$/)
       if (request.method === 'PUT' && media) {
@@ -138,12 +142,14 @@ export function createSyncHttpHandler(service: Service, { allowedOrigin, jsonBod
         const declaredLength = Number(request.headers['content-length'] ?? 0)
         if (declaredLength > 20 * 1024 * 1024) return reply(413, { error: 'Media upload is too large.' })
         const mimeType = request.headers['content-type'].split(';', 1)[0].trim()
-        return reply(200, await service.putMedia(authorization.slice(7), media[1], mimeType, await bytes(request)))
+        const generationHeader = request.headers['x-collection-generation']
+        return reply(200, await service.putMedia(authorization.slice(7), media[1], mimeType, await bytes(request), typeof generationHeader === 'string' && generationHeader ? generationHeader : undefined))
       }
       if (request.method === 'GET' && media) {
         const authorization = request.headers.authorization
         if (!authorization?.startsWith('Bearer ')) return reply(401, { error: 'Authentication required.' })
-        const result = await service.getMedia(authorization.slice(7), media[1])
+        const generationHeader = request.headers['x-collection-generation']
+        const result = await service.getMedia(authorization.slice(7), media[1], typeof generationHeader === 'string' && generationHeader ? generationHeader : undefined)
         response.writeHead(200, { ...headers, 'content-type': result.mimeType, 'content-length': String(result.byteLength), 'x-content-sha256': result.digest, 'x-content-type-options': 'nosniff', 'cache-control': 'no-store' })
         response.end(result.bytes)
         return

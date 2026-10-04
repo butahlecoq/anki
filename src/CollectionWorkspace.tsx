@@ -22,7 +22,7 @@ import { NoteTypeManager } from './NoteTypeManager'
 import { TemplatePreview } from './TemplatePreview'
 import { useReviewMedia } from './use-review-media'
 import { validateMedia } from './media'
-import { createAndDownloadPcBackup, listPcBackups, pairCollection, previewPcBackupRestore, syncCollection, type PcBackup } from './sync-client'
+import { createAndDownloadPcBackup, listPcBackups, pairCollection, previewPcBackupRestore, restorePcBackup, syncCollection, type PcBackup } from './sync-client'
 import { supportsServiceWorkers } from './browser-capabilities'
 import { rotateCredential } from './sync-client'
 import { clozeOrdinals } from './template-renderer'
@@ -228,7 +228,8 @@ function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: boolean 
   const offlineShellSupported = supportsServiceWorkers()
   const pairingKeyboard = useDialogKeyboard(() => setPairing(false), pairing)
   const [backups, setBackups] = useState<PcBackup[]>([])
-  const [restorePreview, setRestorePreview] = useState('')
+  const [restorePreview, setRestorePreview] = useState<{ backupId: string; summary: string; available: boolean }>()
+  const [restoreConfirmation, setRestoreConfirmation] = useState('')
   const [ankiWebOpen, setAnkiWebOpen] = useState(false)
 
   useEffect(() => {
@@ -313,9 +314,24 @@ function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: boolean 
     try {
       const preview = await previewPcBackupRestore(settings, backup.id)
       const mediaMiB = (preview.mediaBytes / 1024 / 1024).toFixed(1)
-      setRestorePreview(`${new Date(preview.manifest.createdAt).toLocaleString()} · ${preview.changeCount} sync changes through cursor ${preview.latestCursor} · ${preview.manifest.media.length} verified media files (${mediaMiB} MiB). ${preview.restoreBlocker}`)
-    } catch (error) { setRestorePreview(error instanceof Error ? error.message : 'Restore preview could not be verified.') }
+      setRestorePreview({ backupId: backup.id, summary: `${new Date(preview.manifest.createdAt).toLocaleString()} · ${preview.changeCount} sync changes through cursor ${preview.latestCursor} · ${preview.manifest.media.length} verified media files (${mediaMiB} MiB). ${preview.restoreBlocker}`, available: preview.restoreAvailable })
+      setRestoreConfirmation('')
+    } catch (error) { setRestorePreview({ backupId: backup.id, summary: error instanceof Error ? error.message : 'Restore preview could not be verified.', available: false }) }
     finally { setBusy(false) }
+  }
+
+  async function restorePcCollection() {
+    if (!settings || !restorePreview?.available || restoreConfirmation !== 'RESTORE') return
+    setBusy(true)
+    try {
+      const result = await restorePcBackup(settings, restorePreview.backupId)
+      setBackups((current) => [result.before, ...current.filter((backup) => backup.id !== result.before.id)])
+      setRestorePreview(undefined)
+      setRestoreConfirmation('')
+      setMessage(`PC collection restored from verified backup. Recovery backup ${result.before.id} was kept. The PC now has a new sync generation; this device’s local collection and queued changes were not changed and must be explicitly recovered or reset before syncing.`)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'The PC collection was not replaced. Its current state was left unchanged.')
+    } finally { setBusy(false) }
   }
 
   async function rotateDeviceCredential() {
@@ -350,7 +366,7 @@ function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: boolean 
         <button className="primary-action" type="button" disabled={busy} onClick={() => setPairing(true)}>{settings ? 'Pair another device' : 'Connect a PC'}</button>
       </div>
       {settings && backups[0] && <p className="sync-help">Latest verified PC backup: {new Date(backups[0].createdAt).toLocaleString()} · {backups[0].changeCount} sync changes · {backups[0].media.length} media files · {backups[0].reason === 'manual' ? 'manual' : 'before sync'}.</p>}
-      {settings && backups[0] && <p className="sync-help"><button className="text-button" type="button" disabled={busy} onClick={() => void previewPcRestore(backups[0])}>Preview latest backup</button>{restorePreview && <span role="status"> {restorePreview}</span>}</p>}
+      {settings && backups[0] && <div className="sync-help"><button className="text-button" type="button" disabled={busy} onClick={() => void previewPcRestore(backups[0])}>Preview latest backup</button>{restorePreview && <><p role="status">{restorePreview.summary}</p>{restorePreview.available && <><label>Type RESTORE to replace the active PC collection<input value={restoreConfirmation} onChange={(event) => setRestoreConfirmation(event.target.value)} autoComplete="off" /></label><button className="text-button" type="button" disabled={busy || restoreConfirmation !== 'RESTORE'} onClick={() => void restorePcCollection()}>Restore this PC collection</button></>}</>}</div>}
       {ankiWebOpen && settings && <AnkiWebAccountDialog settings={settings} onClose={() => setAnkiWebOpen(false)} />}
       {pairing && (
         <div className="dialog-backdrop">

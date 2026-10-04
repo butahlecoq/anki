@@ -13,11 +13,12 @@ export type SyncOutcome =
   | { state: 'incomplete'; accepted: number; pendingOperations: number; remoteChangesPending: boolean }
   | { state: 'authentication-required' }
   | { state: 'upgrade-required'; target: 'this-device' | 'pc-service' }
+  | { state: 'collection-generation-required'; message: string }
   | { state: 'backup-failed'; message: string }
   | { state: 'unreachable' }
   | { state: 'error'; message?: string }
 
-export type PairOutcome = 'paired' | 'unreachable' | 'pairing-error'
+export type PairOutcome = 'paired' | 'unreachable' | 'pairing-error' | 'collection-generation-required'
 
 /** Shown before a device has ever been paired. */
 export const SYNC_LOCAL_ONLY = 'This collection stays on this device until you connect a PC.'
@@ -38,6 +39,7 @@ export function syncOutcomeMessage(result: SyncOutcome): string {
     return `Sync saved progress after sending ${plural(result.accepted, 'local change')}. ${plural(result.pendingOperations, 'local change')} remain; tap Sync now to continue.${remote}`
   }
   if (result.state === 'authentication-required') return 'This device needs to be paired again before it can sync.'
+  if (result.state === 'collection-generation-required') return result.message
   if (result.state === 'upgrade-required') {
     return result.target === 'this-device'
       ? 'This device needs a Kiroku update before it can sync this collection. Update the app, then try again. Your local changes remain on this device.'
@@ -49,6 +51,7 @@ export function syncOutcomeMessage(result: SyncOutcome): string {
 
 export function pairOutcomeMessage(result: PairOutcome): string {
   if (result === 'paired') return 'PC connected. Your collections are ready to sync.'
+  if (result === 'collection-generation-required') return 'The PC collection was replaced from a backup. This device’s offline collection and queued changes remain unchanged; export them before recovering or resetting this device.'
   if (result === 'unreachable') return 'Your PC service could not be reached. Check its address and that it is running.'
   return 'That pairing code was not accepted. Create a new code on your PC and try again.'
 }

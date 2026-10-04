@@ -2,7 +2,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { zipSync } from 'fflate'
+import { unzipSync, zipSync } from 'fflate'
+import { startCollectionGeneration } from './collection-generation.js'
 
 const MAX_BACKUPS = 14
 const RETENTION_DAYS = 30
@@ -13,7 +14,8 @@ export type BackupManifest = {
   formatVersion: 1
   id: string
   createdAt: string
-  reason: 'manual' | 'before-sync'
+  reason: 'manual' | 'before-sync' | 'before-restore'
+  collectionGeneration?: string
   collectionSchemaVersion: number
   changeCount: number
   latestCursor: number
@@ -24,7 +26,7 @@ export type BackupManifest = {
   archiveBytes: number
 }
 
-type Options = { database: DatabaseSync; mediaDirectory: string; backupDirectory: string; collectionSchemaVersion: () => number }
+type Options = { database: DatabaseSync; mediaDirectory: string; backupDirectory: string; collectionSchemaVersion: () => number; prepareRestoredDatabase: (path: string) => void }
 
 async function prune(directory: string) {
   const files = (await readdir(directory)).filter((name) => /^backup-[a-f0-9-]+\.json$/.test(name))
@@ -60,6 +62,7 @@ export function createBackupStore(options: Options) {
       let changeCount: number
       let latestCursor: number
       let schemaVersion: number
+      let generation: string
       try {
         const integrity = snapshot.prepare('PRAGMA integrity_check').all() as Array<{ integrity_check: string }>
         if (integrity.length !== 1 || integrity[0].integrity_check !== 'ok') throw new Error('SQLite backup failed its integrity check.')
@@ -78,6 +81,9 @@ export function createBackupStore(options: Options) {
         changeCount = Number((snapshot.prepare('SELECT COUNT(*) AS count FROM changes').get() as { count: number }).count)
         latestCursor = Number((snapshot.prepare('SELECT COALESCE(MAX(cursor), 0) AS cursor FROM changes').get() as { cursor: number }).cursor)
         const meta = snapshot.prepare("SELECT value FROM collection_metadata WHERE key = 'collection_schema_version'").get() as { value: string } | undefined
+        const generationMeta = snapshot.prepare("SELECT value FROM collection_metadata WHERE key = 'collection_generation'").get() as { value: string } | undefined
+        if (!generationMeta || !/^[a-f0-9-]{36}$/.test(generationMeta.value)) throw new Error('Collection generation is missing; reopen the service before creating a backup.')
+        generation = generationMeta.value
         schemaVersion = meta ? Number.parseInt(meta.value, 10) : options.collectionSchemaVersion()
       } finally { snapshot.close() }
       const databaseBytes = await readFile(snapshotPath)
@@ -85,7 +91,7 @@ export function createBackupStore(options: Options) {
       for (const item of media) entries[`media/${item.digest}`] = mediaContents.get(item.digest)!
       const archive = zipSync(entries, { level: 1 })
       const manifest: BackupManifest = {
-        format: 'kiroku-server-backup', formatVersion: 1, id, createdAt: new Date().toISOString(), reason,
+        format: 'kiroku-server-backup', formatVersion: 1, id, createdAt: new Date().toISOString(), reason, collectionGeneration: generation,
         collectionSchemaVersion: schemaVersion, changeCount, latestCursor, databaseBytes: databaseBytes.byteLength,
         databaseSha256: digest(databaseBytes), media, archiveSha256: digest(archive), archiveBytes: archive.byteLength,
       }
@@ -128,7 +134,6 @@ export function createBackupStore(options: Options) {
 
   async function previewRestore(id: string) {
     const { manifest, bytes } = await download(id)
-    const { unzipSync } = await import('fflate')
     const entries = unzipSync(bytes)
     const names = Object.keys(entries).sort()
     const expectedNames = ['collection.sqlite', ...manifest.media.map((item) => `media/${item.digest}`)].sort()
@@ -145,14 +150,69 @@ export function createBackupStore(options: Options) {
         const count = Number((snapshot.prepare('SELECT COUNT(*) AS count FROM changes').get() as { count: number }).count)
         const cursor = Number((snapshot.prepare('SELECT COALESCE(MAX(cursor), 0) AS cursor FROM changes').get() as { cursor: number }).cursor)
         if (count !== manifest.changeCount || cursor !== manifest.latestCursor) throw new Error('Backup collection does not match its manifest summary.')
+        if (manifest.collectionGeneration) {
+          const generation = snapshot.prepare("SELECT value FROM collection_metadata WHERE key = 'collection_generation'").get() as { value: string } | undefined
+          if (generation?.value !== manifest.collectionGeneration) throw new Error('Backup collection does not match its manifest generation.')
+        }
       } finally { snapshot.close() }
     } finally { await rm(tempPath, { force: true }) }
     for (const item of manifest.media) {
       const content = entries[`media/${item.digest}`]
       if (!content || content.byteLength !== item.byteLength || digest(content) !== item.digest) throw new Error(`Backup media ${item.digest} failed its integrity check.`)
     }
-    return { manifest, mediaBytes: manifest.media.reduce((sum, item) => sum + item.byteLength, 0), changeCount: manifest.changeCount, latestCursor: manifest.latestCursor, restoreAvailable: false, restoreBlocker: 'Replacing a collection requires an explicit paired-device reset and recovery flow; preview does not change the active collection.' }
+    return { manifest, mediaBytes: manifest.media.reduce((sum, item) => sum + item.byteLength, 0), changeCount: manifest.changeCount, latestCursor: manifest.latestCursor, restoreAvailable: true, restoreBlocker: 'Restore keeps a verified recovery backup of the current PC collection. It starts a new sync generation; devices with offline changes stay unchanged but cannot sync until they are explicitly recovered or reset.' }
   }
 
-  return { create, list, download, previewRestore }
+  async function restore(id: string) {
+    const preview = await previewRestore(id)
+    const { manifest, bytes } = await download(id)
+    const entries = unzipSync(bytes)
+    const databaseImage = entries['collection.sqlite']
+    if (!databaseImage) throw new Error('Backup does not contain a collection database.')
+    const restorePath = join(backupDirectory, `.restore-${id}.sqlite`)
+    try {
+      await writeFile(restorePath, databaseImage)
+      options.prepareRestoredDatabase(restorePath)
+      const before = await create('before-restore')
+      for (const item of manifest.media) {
+        const content = entries[`media/${item.digest}`]
+        if (!content || content.byteLength !== item.byteLength || digest(content) !== item.digest) throw new Error(`Backup media ${item.digest} failed verification before restore.`)
+        const directory = join(mediaDirectory, item.digest.slice(0, 2))
+        await mkdir(directory, { recursive: true })
+        const staged = join(directory, `.${item.digest}.${manifest.id}.restore`)
+        try {
+          await writeFile(staged, content, { flag: 'wx' })
+          await rename(staged, join(directory, item.digest))
+        } finally { await rm(staged, { force: true }) }
+      }
+
+      database.prepare('ATTACH DATABASE ? AS restore_source').run(restorePath)
+      try {
+        database.exec('BEGIN IMMEDIATE')
+        for (const table of ['changes', 'media_blobs', 'collection_metadata']) {
+          const source = database.prepare(`PRAGMA restore_source.table_info(${table})`).all() as Array<{ name: string }>
+          const target = database.prepare(`PRAGMA main.table_info(${table})`).all() as Array<{ name: string }>
+          const columns = target.map((column) => column.name)
+          if (!columns.length || JSON.stringify(columns) !== JSON.stringify(source.map((column) => column.name))) throw new Error(`Restored ${table} table does not match the current service schema.`)
+        }
+        database.exec('DELETE FROM changes; DELETE FROM media_blobs; DELETE FROM collection_metadata;')
+        for (const table of ['changes', 'media_blobs', 'collection_metadata']) {
+          const columns = (database.prepare(`PRAGMA main.table_info(${table})`).all() as Array<{ name: string }>).map((column) => `"${column.name.replaceAll('"', '""')}"`).join(', ')
+          database.exec(`INSERT INTO main.${table} (${columns}) SELECT ${columns} FROM restore_source.${table}`)
+        }
+        const generation = startCollectionGeneration(database)
+        database.exec('COMMIT')
+        return { manifest, before, generation, changeCount: preview.changeCount, latestCursor: preview.latestCursor }
+      } catch (error) {
+        try { database.exec('ROLLBACK') } catch { /* Keep the primary restore error. */ }
+        throw error
+      } finally { database.prepare('DETACH DATABASE restore_source').run() }
+    } finally {
+      await rm(restorePath, { force: true })
+      await rm(`${restorePath}-wal`, { force: true })
+      await rm(`${restorePath}-shm`, { force: true })
+    }
+  }
+
+  return { create, list, download, previewRestore, restore }
 }

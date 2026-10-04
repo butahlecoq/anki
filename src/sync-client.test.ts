@@ -4,7 +4,7 @@ import { createCollection, DEFAULT_DECK_OPTION_GROUP_ID, Rating } from './collec
 import { digestMedia } from './media'
 import { CLIENT_COLLECTION_SCHEMA_VERSION, SYNC_OPERATION_BATCH_SIZE, SYNC_REQUESTS_PER_ATTEMPT } from '../sync-capabilities.js'
 
-const health = (collectionSchemaVersion = CLIENT_COLLECTION_SCHEMA_VERSION, maximumCollectionSchemaVersion = CLIENT_COLLECTION_SCHEMA_VERSION) => new Response(JSON.stringify({ ready: true, schemaVersion: 1, protocolVersion: 2, collectionSchemaVersion, maximumCollectionSchemaVersion, store: 'sqlite' }), { status: 200 })
+const health = (collectionSchemaVersion = CLIENT_COLLECTION_SCHEMA_VERSION, maximumCollectionSchemaVersion = CLIENT_COLLECTION_SCHEMA_VERSION) => new Response(JSON.stringify({ ready: true, schemaVersion: 1, protocolVersion: 2, collectionSchemaVersion, maximumCollectionSchemaVersion, collectionGeneration: '11111111-1111-4111-8111-111111111111', requiresCollectionGeneration: false, store: 'sqlite' }), { status: 200 })
 
 test('sends pending operations with the local pairing credential', async () => {
   const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ accepted: 2, cursor: 2, changes: [] }), { status: 200 }))
@@ -35,6 +35,21 @@ test('does not upload media or acknowledge local operations when the preflight r
   expect(fetcher).toHaveBeenCalledWith('https://pc.example.test/api/health')
   await expect(collection.pendingOperations()).resolves.not.toHaveLength(0)
   await collection.delete()
+})
+
+test('holds local sync changes when the PC requires a newer collection generation', async () => {
+  const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+  try {
+    await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 3, collectionGeneration: 'old-generation' })
+    const deck = await collection.createDeck('Offline recovery')
+    await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
+    const response = new Response(JSON.stringify({ ready: true, schemaVersion: 1, protocolVersion: 2, collectionSchemaVersion: CLIENT_COLLECTION_SCHEMA_VERSION, maximumCollectionSchemaVersion: CLIENT_COLLECTION_SCHEMA_VERSION, collectionGeneration: 'new-generation', requiresCollectionGeneration: true, store: 'sqlite' }), { status: 200 })
+    const fetcher = vi.fn().mockResolvedValue(response)
+
+    await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'collection-generation-required' })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    await expect(collection.pendingOperations()).resolves.not.toHaveLength(0)
+  } finally { await collection.delete() }
 })
 
 test('distinguishes authentication and unreachable service failures', async () => {
@@ -129,6 +144,30 @@ test('pairs a collection and persists only the returned device credential', asyn
   await expect(pairCollection(collection, 'https://pc.example.test/', 'ABCD1234', fetcher)).resolves.toEqual({ state: 'paired' })
   await expect(collection.syncSettings()).resolves.toEqual({ endpoint: 'https://pc.example.test', token: 'device-token', cursor: 0 })
   expect(fetcher).toHaveBeenCalledWith('https://pc.example.test/api/pair', expect.objectContaining({ method: 'POST' }))
+  await collection.delete()
+})
+
+test('does not pair old local history onto a replacement PC collection', async () => {
+  const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+  const settings = { endpoint: 'https://pc.example.test', token: 'old-token', cursor: 5, collectionGeneration: 'old-generation' }
+  await collection.configureSync(settings)
+  const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ collectionGeneration: 'new-generation', requiresCollectionGeneration: true }), { status: 200 }))
+
+  await expect(pairCollection(collection, settings.endpoint, 'new-code', fetcher)).resolves.toEqual({ state: 'collection-generation-required' })
+  await expect(collection.syncSettings()).resolves.toEqual(settings)
+  expect(fetcher).toHaveBeenCalledTimes(1)
+  await collection.delete()
+})
+
+test('does not treat pre-generation local sync settings as a clean device after restore', async () => {
+  const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+  const settings = { endpoint: 'https://pc.example.test', token: 'legacy-token', cursor: 7 }
+  await collection.configureSync(settings)
+  const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ collectionGeneration: 'new-generation', requiresCollectionGeneration: true }), { status: 200 }))
+
+  await expect(pairCollection(collection, settings.endpoint, 'new-code', fetcher)).resolves.toEqual({ state: 'collection-generation-required' })
+  await expect(collection.syncSettings()).resolves.toEqual(settings)
+  expect(fetcher).toHaveBeenCalledTimes(1)
   await collection.delete()
 })
 

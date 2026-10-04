@@ -524,8 +524,8 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   .dialog-actions > button { flex: 0 0 calc(50% - 4.5px); width: calc(50% - 4.5px); min-width: 0; height: 54px; min-height: 54px; }
   .dialog-actions > button:only-child { flex: 1 1 100%; width: 100%; }
   .sync-controls { align-items: flex-start; flex-direction: column; gap: 14px; }
-  .sync-actions { width: 100%; }
-  .sync-actions button { flex: 1; }
+  .sync-actions { display: grid; width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .sync-actions button { min-width: 0; width: 100%; }
   .compact-hero h1, .deck-detail-header h1, .session-complete h1 { font-size: 38px; }
   .deck-grid { grid-template-columns: 1fr; padding-top: 18px; }
   .deck-tree .deck-tile { margin-left: calc(var(--deck-depth) * 12px); }

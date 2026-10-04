@@ -287,7 +287,7 @@ export interface SyncOperation {
 export interface SyncConflict extends RevisionMerge { key: string; entityType: SyncOperation['entityType']; entityId: string }
 interface SyncRevision extends SyncOperation { key: string }
 
-export interface SyncSettings { endpoint: string; token: string; cursor: number }
+export interface SyncSettings { endpoint: string; token: string; cursor: number; collectionGeneration?: string }
 interface DeletionTombstone { key: string; entityType: SyncOperation['entityType']; entityId: string; occurredAt: string }
 export interface NoteMediaReference { id: string; noteId: string; digest: string; kind: MediaKind; mimeType: string; displayName: string; side: MediaSide; templateId?: string; inline?: boolean; playback: AudioPlayback; createdAt: string; updatedAt: string }
 export interface MediaBlob { digest: string; blob: Blob; byteLength: number; mimeType: string; verifiedAt: string }
