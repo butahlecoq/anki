@@ -51,11 +51,11 @@ Base commit: `60b5cbb5c0a09cfb63c2ce8f9e4cd52ed288206c` (current `origin/main`).
 
 - PR [#95](https://github.com/butahlecoq/anki/pull/95) (draft); head `16d7cad83f6aaedcce92ebfee47aef6910558d6c`; exact-head checks: failing; branch `feat/85-local-browser-verification`; worktree: D:/work/anki-issue-85; deferred: This draft does not close issue #85. Keep it open until the full local check and remaining browser acceptance are verified.
 - PR [#160](https://github.com/butahlecoq/anki/pull/160) (draft); head `5b56d30a97ce08c0f8cdee22efe051562b866884`; exact-head checks: no hosted checks reported; branch `fix/85-ios-hint-disclosure`; worktree: D:/work/anki-85-baseline; deferred: none stated in PR or checkpoint comments
-- PR [#171](https://github.com/butahlecoq/anki/pull/171) (draft); head `0441182c089ec9b5ac31eb89d499d7bfc6ee9a42`; exact-head checks: no hosted checks reported; branch `fix/85-local-gate`; worktree: D:/work/anki-85-luna; deferred: Draft for review. **Issue #85 is not complete and this PR does not close it.** Work stopped at the approved hint-disclosure decision checkpoint.
+- PR [#171](https://github.com/butahlecoq/anki/pull/171) (draft); head `8681367b492ddbf4f570ade07e203f762854285d`; exact-head checks: no hosted checks reported; branch `fix/85-local-gate`; worktree: D:/work/anki-85-luna; deferred: Draft for review. **Issue #85 is not complete and this PR does not close it.** Review narrowed this PR to local verification work; the incomplete hint redesign was removed.; The final default `npm run check` remains non-zero: `83 passed, 6 failed, 9 skipped` in the browser stage. Failures are iPhone WebKit: large imported collection, imported audio replay, clean-phone media sync, collection/FSRS exchange, native hint disclosure, and CSV dialog overflow. The test suite retains these journeys; none are skipped or deleted.; This PR is not merge-ready and does not claim issue completion. Physical installed-Safari checks remain outstanding.
 
 ### [#87 Generate the status document from Git and the tracker](https://github.com/butahlecoq/anki/issues/87)
 
-- PR [#167](https://github.com/butahlecoq/anki/pull/167) (draft); head `b2b63b5a9557b8dfde0dd3d8d8e5d0855ed189c3`; exact-head checks: no hosted checks reported; branch `feat/87-live-status-luna-night`; worktree: D:/work/anki-87-live-status-luna-night; deferred: This remains a draft. `npm run check` was not run because the #85 worker is actively using the shared verification suite; the runbook prohibits competing full browser/unit/oracle runs. Run the complete gate on the final PR head after #85 records its final evidence/checkpoint. No merge-readiness claim is made.
+- PR [#167](https://github.com/butahlecoq/anki/pull/167) (draft); head `91889e98d16c22b4744348fc16d89ee4f40794b4`; exact-head checks: no hosted checks reported; branch `feat/87-live-status-luna-night`; worktree: D:/work/anki-87-live-status-luna-night; deferred: This remains a draft. `npm run check` was not run because the #85 worker is actively using the shared verification suite; the runbook prohibits competing full browser/unit/oracle runs. Run the complete gate on the final PR head after #85 records its final evidence/checkpoint. No merge-readiness claim is made.
 
 ### [#91 Preserve imported field HTML instead of normalising it to plain text](https://github.com/butahlecoq/anki/issues/91)
 
@@ -88,7 +88,6 @@ Base commit: `60b5cbb5c0a09cfb63c2ce8f9e4cd52ed288206c` (current `origin/main`).
 ## Dirty worktrees
 
 - `D:/work/anki` (main): docs/research/why-not-reuse-upstream-anki-clients.md
-- `D:/work/anki-85-luna` (fix/85-local-gate): CONTRIBUTING.md, docs/agents/ci.md, src/TemplatePreview.tsx, src/hint-compatibility.test.ts, src/template-renderer.test.ts, src/template-renderer.ts, tests/e2e/hint.spec.ts
 - `D:/work/anki-issue-85` (feat/85-local-browser-verification): .runtime/hint-webkit/kiroku-sync.sqlite-shm, .runtime/hint-webkit/kiroku-sync.sqlite-wal, .runtime/sync-shell/kiroku-sync.sqlite-shm, .runtime/sync-shell/kiroku-sync.sqlite-wal, .runtime/sync/kiroku-sync.sqlite-shm, .runtime/sync/kiroku-sync.sqlite-wal, .runtime/sync/media/2e/2eeb55e08e1a51af2003fabdfc8572539de6c3f0fa1c182a5b3d3a4806b84db5, .runtime/sync/media/5f/5fd4d7e331e0d162bd059c7573860f239ea9340d569f8b037de797c7abbf1b9d
 
 ## Branches with work beyond their pull request merge point
