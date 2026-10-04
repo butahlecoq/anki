@@ -206,22 +206,15 @@ export function intervalLabel(due: Date, reviewedAt: Date) {
   return `${Math.round(hours / 24)}d`
 }
 
-function nextSchedule(scheduler: ReturnType<typeof schedulerFor>, card: FsrsCard, identity: Pick<CardRecord, 'id' | 'ankiId'>, now: Date, grade: Grade) {
+function nextSchedule(scheduler: ReturnType<typeof schedulerFor>, card: FsrsCard, identity: Pick<CardRecord, 'id' | 'ankiId' | 'scheduledDays'>, now: Date, grade: Grade) {
   const result = scheduler.next(card, now, grade)
   if (result.card.state === State.Review && result.card.scheduled_days >= 2.5) {
-    const range = get_fuzz_range(result.card.scheduled_days, card.elapsed_days, scheduler.parameters.maximum_interval)
+    const previousInterval = card.state === State.Review ? identity.scheduledDays : card.elapsed_days
+    const range = get_fuzz_range(result.card.scheduled_days, previousInterval, scheduler.parameters.maximum_interval)
     const seed = fuzzSeed(identity, card.reps)
     const scheduledDays = Math.floor(range.min_ivl + ankiFuzzFactor(seed) * (range.max_ivl - range.min_ivl + 1))
     result.card.scheduled_days = scheduledDays
     result.card.due = new Date(now.getTime() + scheduledDays * 86_400_000)
-  }
-  if (card.state !== State.Review || grade === Rating.Again) return result
-
-  // Anki never fuzzes a successful review below its current scheduled interval.
-  const baseInterval = Math.min(scheduler.parameters.maximum_interval, Math.max(1, Math.round(result.card.stability * scheduler.interval_modifier)))
-  if (baseInterval > card.scheduled_days && result.card.scheduled_days <= card.scheduled_days) {
-    result.card.scheduled_days = card.scheduled_days + 1
-    result.card.due = new Date(now.getTime() + result.card.scheduled_days * 86_400_000)
   }
   return result
 }

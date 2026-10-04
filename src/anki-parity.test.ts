@@ -243,6 +243,7 @@ describe('Anki scheduling parity', () => {
     })
 
     const good = (await collection!.reviewChoices(cardId, now, true)).find(({ label }) => label === 'Good')!
+    expect(good.interval).toBe('34d')
     const previewDays = Number(good.interval.match(/^(\d+)d$/)?.[1])
     expect(previewDays).toBeGreaterThan(30)
     const review = await collection!.answer(cardId, Rating.Good, now, undefined, { allowEarly: true, reschedule: true })

@@ -79,9 +79,10 @@ pre-answer state.
 Those native outcomes still need to be compared with the app's persisted outputs
 for Learning, Review and Relearning across all four grades, and extended to every
 alternate sort/gather mode directly against Anki, so #94 stays open for that
-remaining parity evidence. The current Review fuzz path also remains approximate:
-Anki constrains its draw using the previous scheduled interval before drawing,
-while the app uses stored elapsed days and clamps the sampled result afterward.
-The native-output matrix must compare those Review cases before claiming parity.
+remaining parity evidence. Review fuzz bounds use the previous scheduled
+interval before the deterministic draw, matching Anki's lower-bound rule; the
+current tests compare review intervals against native bands, not exact persisted
+outputs for every Review state/grade combination. The native-output matrix must
+be compared before claiming full parity.
 A user-configured Anki rollover hour is not yet a setting in the app; this target
 currently matches Anki's default.
