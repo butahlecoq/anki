@@ -23,11 +23,12 @@ test('browser maintains stable Japanese selections and previews field changes of
   if (test.info().project.use.hasTouch) {
     const deckAction = page.getByRole('button', { name: 'Open 日本語 browser', exact: true })
     await deckAction.scrollIntoViewIfNeeded()
+    await page.evaluate(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'instant' }))
     const actionBox = await deckAction.boundingBox()
     const navigationBox = await page.getByRole('navigation', { name: 'Mobile navigation' }).boundingBox()
     expect(actionBox).not.toBeNull()
     expect(navigationBox).not.toBeNull()
-    expect(actionBox!.bottom).toBeLessThanOrEqual(navigationBox!.top + 1)
+    expect(actionBox!.y + actionBox!.height).toBeLessThanOrEqual(navigationBox!.y + 1)
   }
   await page.getByRole('button', { name: 'Open 日本語 browser', exact: true }).click()
   await createNote(page, '猫', 'cat')

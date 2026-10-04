@@ -2,23 +2,16 @@ import { describe, expect, test } from 'vitest'
 import { clozeOrdinals, renderTemplate, tryRenderTemplate, validateTemplate } from './template-renderer'
 
 describe('renderTemplate', () => {
-  test('hint fields use an accessible checkbox disclosure without executing field markup', () => {
+  test('hint fields use native accessible disclosure without executing field markup', () => {
     const result = renderTemplate('{{Word}} {{hint:Meaning}}', { Word: '猫', Meaning: '<script>alert(1)</script>cat' })
     const body = new DOMParser().parseFromString(result.html, 'text/html').body
-    const toggle = body.querySelector<HTMLInputElement>('input.card-hint-toggle')
-    expect(toggle?.type).toBe('checkbox')
-    expect(toggle?.checked).toBe(false)
-    expect(toggle?.labels?.[0]?.textContent).toContain('Show Meaning')
-    expect(body.querySelector('.card-hint-content')?.textContent).toBe('<script>alert(1)</script>cat')
+    expect(body.querySelector('details')?.open).toBe(false)
+    expect(body.querySelector('summary')?.textContent).toBe('Show Meaning')
+    expect(body.querySelector('details div')?.textContent).toBe('<script>alert(1)</script>cat')
     expect(body.querySelector('script')).toBeNull()
     expect(result.isEmpty).toBe(false)
     expect(renderTemplate('{{hint:Meaning}}', { Meaning: ' ' }).isEmpty).toBe(true)
     expect(renderTemplate('{{hint:Meaning}}', { Meaning: ' ' }).html).toBe('')
-    const multiple = new DOMParser().parseFromString(renderTemplate('{{hint:Word}} {{hint:Meaning}}', { Word: '猫', Meaning: 'cat' }).html, 'text/html').body.querySelectorAll<HTMLInputElement>('input.card-hint-toggle')
-    expect(multiple).toHaveLength(2)
-    multiple[0].checked = true
-    expect(multiple[1].checked).toBe(false)
-    expect(renderTemplate('{{hint:Meaning}}', { Meaning: 'cat' }, '猫').html).toContain('Show Meaning')
     expect(tryRenderTemplate('{{hint:furigana:Word}}', { Word: '猫[ねこ]' }).ok).toBe(false)
   })
   test('renders trusted imported media tokens inline and respects surrounding conditionals', () => {

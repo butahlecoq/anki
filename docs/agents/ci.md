@@ -35,14 +35,29 @@ once billing allows runners to start. The two jobs are unchanged in intent:
 fast checks without browser engines, and a separate browser job for the
 cross-browser journeys.
 
-## Known environment gaps
+## Local verification guidance
 
-- **#85** — Playwright cannot complete a sync pairing on this host. Six
-  desktop-chromium specs fail on clean `main` with *"PC connected"* never
-  appearing. Compare a browser run against a clean `origin/main` baseline before
-  attributing any browser failure to a change.
-- The browser suite reuses existing servers outside CI
-  (`reuseExistingServer: !process.env.CI`) on fixed ports 4173 and 4174, so
-  leftover servers from an earlier run can silently change the result. Run
-  serially, and treat a run whose failure count differs from a previous run on
-  identical code as inconclusive rather than as a signal.
+Record the exact commit, Node/npm/Playwright versions, ports, runtime directory,
+pass/fail/skip counts, and first actionable assertion on every pull request.
+Compare browser failures with a fresh `origin/main` baseline before attributing
+them to a change.
+
+Separate these cases:
+
+- **Process launch:** the browser process fails before the application starts,
+  such as a reproducible `spawn UNKNOWN`. Record the command and environment;
+  the historical cause is unconfirmed unless evidence proves it.
+- **Port or server reuse:** the configured web or sync port is occupied, or a
+  prior server is silently reused. Use isolated unused ports and a unique runtime
+  directory; never kill another agent's server.
+- **Application failure:** the browser launches and an application assertion,
+  request, or sync operation fails. Preserve that failure and diagnose its first
+  actionable symptom.
+- **Automation limitation:** WebKit emulation is not installed Safari. Service
+  workers and audible playback have known limitations, and physical installed-
+  Safari checks remain separate evidence.
+
+Outside CI, the browser suite may reuse existing servers
+(`reuseExistingServer: !process.env.CI`). Isolate each run instead of relying on
+fixed ports, and treat a changed failure count on identical code as
+inconclusive until the run is repeated without competing jobs.

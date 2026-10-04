@@ -170,7 +170,7 @@ export function renderTemplate(template: string, fields: Record<string, string>,
         if (typedAnswer.trim()) visibleField = true
       } else {
         if (value.trim() && name !== 'FrontSide') visibleField = true
-        html += filter === 'hint' ? (value.trim() ? `<label class="card-hint"><input class="card-hint-toggle" type="checkbox"><span>Show ${escapeHtml(name)}</span><span class="card-hint-content">${renderField(value, options.media)}</span></label>` : '') : name === 'FrontSide' ? value : filter === 'cloze'
+        html += filter === 'hint' ? (value.trim() ? `<details class="card-hint"><summary>Show ${escapeHtml(name)}</summary><div>${renderField(value, options.media)}</div></details>` : '') : name === 'FrontSide' ? value : filter === 'cloze'
           ? renderCloze(value, ordinal ?? 0, side)
           : filter === 'furigana' || filter === 'kana' || filter === 'kanji' ? renderReading(value, filter)
             : renderField(value, options.media)
