@@ -1,0 +1,9 @@
+# The AnkiWeb relay runs on the learner's PC
+
+AnkiWeb does not permit a browser page to read the sync protocol response directly, as measured in #179. The supported relay therefore runs as part of the learner's own Kiroku PC service and is reached over the private network using the paired-device credential. Account synchronization requires that PC to be running and reachable.
+
+Offline study is independent: after a collection is downloaded to the phone, its local collection, review state and media remain available when the PC is off. On 2026-10-04, the production-browser Chromium journey `persistent profile reopens offline and continues a remaining Japanese review` in `tests/e2e/collection.spec.ts` and both current/fresh-document checks in `tests/e2e/shell.spec.ts` passed (3/3). The methods and limitations are documented in `docs/offline-verification.md`. Phone-sized WebKit skips cold-restart service-worker journeys, and physical installed-iPhone confirmation remains outstanding.
+
+This topology requires no third-party sync service and preserves the free-to-use decision. The learner's PC is the online relay for account synchronization. Kiroku operates no always-on provider because it would put account traffic through a service outside the learner's control and create an ongoing infrastructure cost. If account synchronization while the PC is off becomes a requirement again, it needs an always-internet-facing relay that each learner operates and funds. Kiroku will not operate a shared relay, and this repository does not deploy one. That renewed requirement would conflict with the no-paid-service constraint and needs a new product decision before implementation.
+
+This refines ADR 0003's earlier independent free-tier gateway option for AnkiWeb synchronization. ADR 0003's no-shared-service, user-owned-account and no-mandatory-cost constraints remain in force; a free, always-on provider is not assumed by this decision.

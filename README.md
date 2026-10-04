@@ -12,10 +12,10 @@ Kiroku is a private, offline-first Japanese flashcard workspace with local colle
 Nothing, and it stays nothing. See [ADR 0003](docs/adr/0003-a-free-web-app-for-everyone.md).
 
 - **No Apple Developer membership.** Kiroku is a web app. There is no native build to sign and nothing to install from a store.
-- **No paid hosting.** A personal HTTPS origin and a personal gateway both run on a free tier. Reaching a free tier limit fails; it never asks for money.
+- **No third-party sync service.** The AnkiWeb relay runs on the learner's own PC, is reached over the private network, and requires that PC to be running for account synchronization. Offline study from the phone's downloaded collection does not require the PC. Syncing AnkiWeb while the PC is off would require each learner to operate and fund an always-internet-facing relay; that topology is not currently supported.
 - **No store account and no store listing.** Distribution is a URL.
 
-Anyone can run Kiroku, and anyone can share it. Each learner connects with their own AnkiWeb account, and their credentials stay in that browser's local collection settings. See [the AnkiWeb account notes](docs/ankiweb-account-sync.md).
+Anyone can run Kiroku, and anyone can share it. AnkiWeb account synchronization is being implemented through a relay on the learner's own PC, reached over the private network; the PC must be running and reachable to synchronize. Offline study from the phone's downloaded collection does not require the PC. Syncing AnkiWeb while the PC is off would require each learner to operate and fund an always-internet-facing relay, so that topology is not currently supported. Account synchronization is not yet available in the application. See [the AnkiWeb account notes](docs/ankiweb-account-sync.md) and [ADR 0004](docs/adr/0004-ankiweb-relay-runs-on-the-pc.md).
 
 ## Run locally
 

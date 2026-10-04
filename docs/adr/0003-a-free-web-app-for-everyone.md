@@ -3,8 +3,8 @@
 kiroku ships as a web app added to the iPhone Home Screen, and using it costs its
 learners nothing, forever. No one buys an Apple Developer membership, no one buys a
 paid hosting plan on our behalf, and no learner's collection or credentials pass
-through infrastructure we operate. Each learner runs the app and the gateway they
-need on a free tier, and connects with their own AnkiWeb account.
+through infrastructure we operate. Each learner runs the app and connects with
+their own AnkiWeb account. Account relay topology is recorded in ADR 0004.
 
 ## Context
 
@@ -51,10 +51,11 @@ chosen.
 - **We operate no shared gateway.** This is the direct cost of "everyone uses their
   own AnkiWeb account". A shared gateway would sit between a stranger's browser and
   their AnkiWeb credentials, which contradicts the privacy promise in `README.md`
-  and would make us the party holding other people's account traffic. Each learner
-  deploys their own gateway on a free tier instead, following
-  `docs/ankiweb-account-sync.md`. A shared gateway is not a feature we may add later
-  without reopening this decision.
+  and would make us the party holding other people's account traffic. Under ADR 0004,
+  each learner's PC service runs the relay and the learner reaches it over their
+  private network. A separate always-on hosted gateway is not part of the supported
+  topology. A shared gateway is not a feature we may add later without reopening
+  this decision.
 - **Money is a permanent engineering constraint, not a launch-phase one.** Every
   future proposal has a cost line, and a proposal whose running cost is non-zero is
   out of scope. This is the reason the free tier of every dependency is a hard
