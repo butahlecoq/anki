@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { handleAnkiWebGateway, type GatewayEnvironment } from './ankiweb-gateway.js'
+import { handleAnkiWebGateway, handlePairedAnkiWebRelay, type GatewayEnvironment } from './ankiweb-gateway.js'
 
 const env: GatewayEnvironment = { PWA_ORIGIN: 'https://study.example', GATEWAY_KEY: 'a'.repeat(64) }
 function request(path = '/ankiweb/sync/meta', overrides: RequestInit = {}) {
@@ -86,4 +86,23 @@ test('declared and actual oversized upstream bodies fail without a successful pa
     pull(controller) { if (chunks++ < 65) controller.enqueue(new Uint8Array(1024 * 1024)); else controller.close() },
   })))
   await assert.rejects(actual.arrayBuffer(), /interrupted or exceeded/)
+})
+
+test('paired relay authenticates each route and never forwards the paired-device token', async () => {
+  const token = 'b'.repeat(64)
+  let calls = 0
+  const input = new Request('https://pc.example/api/ankiweb/sync/meta', { method: 'POST', headers: { origin: env.PWA_ORIGIN, authorization: `Bearer ${token}`, 'x-ankiweb-host': 'sync3.ankiweb.net' }, body: 'metadata' })
+  const result = await handlePairedAnkiWebRelay(input, { PWA_ORIGIN: env.PWA_ORIGIN }, (candidate) => candidate === token, async (url, init) => {
+    calls++
+    assert.equal(url, 'https://sync3.ankiweb.net/sync/meta')
+    assert.equal(new Headers(init?.headers).get('authorization'), null)
+    return new Response('ok')
+  })
+  assert.equal(result.status, 200)
+  assert.equal(calls, 1)
+  for (const [origin, authorization, status] of [[env.PWA_ORIGIN, '', 401], ['https://evil.example', `Bearer ${token}`, 403]] as const) {
+    const denied = await handlePairedAnkiWebRelay(new Request(input.url, { method: 'POST', headers: { origin, authorization }, body: 'metadata' }), { PWA_ORIGIN: env.PWA_ORIGIN }, () => true, async () => { calls++; return new Response('unexpected') })
+    assert.equal(denied.status, status)
+  }
+  assert.equal(calls, 1)
 })

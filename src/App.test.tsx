@@ -25,7 +25,9 @@ test('navigation marks the note-type manager as the current page', () => {
 
 test('rotates a paired device key from the visible sync controls', async () => {
   const priorFetch = globalThis.fetch
-  const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ token: 'rotated-device-key' }), { status: 200 }))
+  const fetcher = vi.fn((input: RequestInfo | URL) => String(input).endsWith('/api/backups')
+    ? Promise.resolve(Response.json({ backups: [], retention: { maximum: 14, days: 30 } }))
+    : Promise.resolve(Response.json({ token: 'rotated-device-key' })))
   globalThis.fetch = fetcher as typeof fetch
   await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'old-device-key', cursor: 6 })
   try {

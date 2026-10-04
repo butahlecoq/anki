@@ -11,7 +11,7 @@ export interface NativeFullSyncDecision extends NativeFullSyncPreview { directio
 export function sameRemoteRevision(left: NativeSyncMeta, right: NativeSyncMeta) { return left.mod === right.mod && left.scm === right.scm && left.usn === right.usn }
 export async function nativeSnapshotHash(bytes: Uint8Array) { return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes.slice().buffer))].map((byte) => byte.toString(16).padStart(2, '0')).join('') }
 export class NativeSyncError extends Error {
-  constructor(public readonly code: 'authentication' | 'protocol' | 'upgrade' | 'unsupported' | 'transfer' | 'conflict' | 'cancelled' | 'timeout', message: string) { super(message); this.name = 'NativeSyncError' }
+  constructor(public readonly code: 'authentication' | 'service-authentication' | 'protocol' | 'upgrade' | 'unsupported' | 'transfer' | 'conflict' | 'cancelled' | 'timeout', message: string) { super(message); this.name = 'NativeSyncError' }
 }
 export class NativeSyncConflict extends NativeSyncError {
   constructor(public readonly table: 'notes' | 'cards' | 'revlog' | 'models' | 'decks' | 'dconf', public readonly identity: number, public readonly local: Row, public readonly remote: Row | null) {
@@ -186,6 +186,7 @@ export class NativeAnkiClient {
   static async login(transport: NativeAnkiTransport, username: string, password: string, options: NativeRequestOptions = {}) {
     const client = new NativeAnkiClient(transport, '')
     const value = await client.json('sync/hostKey', { u: username, p: password }, undefined, options)
+    if (isObject(value) && typeof value.err === 'string' && value.err) throw new NativeSyncError('authentication', 'AnkiWeb rejected the username or password. Check them and try again.')
     if (!isObject(value) || typeof value.key !== 'string' || !value.key) throw protocolError()
     client.#key = value.key
     return client
@@ -215,7 +216,8 @@ export class NativeAnkiClient {
       if (this.#key) form.append('k', this.#key)
       if (session) form.append('s', session)
       const response = await wait(this.transport(route, form, this.#hostNumber, { signal: controller.signal }))
-      if (response.status === 401 || response.status === 403) throw new NativeSyncError('authentication', 'Anki account authentication expired or was rejected. Sign in again; the local collection is unchanged.')
+      if (response.headers.get('x-kiroku-relay-error') === 'paired-authentication') throw new NativeSyncError('service-authentication', 'This device is no longer paired with the PC service. Reconnect it, then try again.')
+      if (response.status === 401 || response.status === 403) throw new NativeSyncError('authentication', 'AnkiWeb rejected the account credentials. Check them and try again.')
       if (!response.ok) throw new NativeSyncError('transfer', `Anki account transfer failed (HTTP ${response.status}). Retry without discarding local work.`)
       if (Number(response.headers.get('content-length')) > cap) throw new NativeSyncError('transfer', 'The Anki account response exceeds the 64 MiB transfer limit.')
       reader = response.body?.getReader()
