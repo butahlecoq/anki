@@ -27,6 +27,18 @@ describe('causal sync revisions', () => {
     expect(mergeRevisions([initial, b, resolved, a])).toMatchObject({ heads: ['resolution'], value: a.payload, conflicts: [] })
   })
 
+  test('a newer edit does not erase a conflict between interrupted independent choices', () => {
+    const office = edit('a-office', { fields: { Word: 'ねこ office', Meaning: 'cat' } })
+    const home = edit('z-home', { fields: { Word: 'ネコ home', Meaning: 'cat' } })
+    const officeChoice = edit('a-choice', office.payload, ['a-office', 'z-home'])
+    const homeChoice = edit('b-choice', home.payload, ['a-office', 'z-home'])
+    const laterOfficeEdit = edit('later-office', { fields: { Word: 'ねこ after choice', Meaning: 'cat' } }, ['a-choice'])
+    const merged = mergeRevisions([initial, office, home, officeChoice, homeChoice, laterOfficeEdit])
+    expect(merged.heads).toEqual(['b-choice', 'later-office'])
+    expect(merged.conflicts).toContain('fields.Word')
+    expect(merged.versions.map((version) => (version.value as { fields: { Word: string } }).fields.Word)).toEqual(['ネコ home', 'ねこ after choice'])
+  })
+
   test('deletion wins over stale edits and retains conflicting context', () => {
     const deletion: Revision = { opId: 'delete', parents: ['initial'], action: 'delete', payload: { id: 'note' } }
     const stale = edit('offline', { fields: { Word: '犬', Meaning: 'dog' } })

@@ -62,6 +62,14 @@ function mergeValue(base: unknown, values: unknown[], path: string, conflicts: s
   return changed[0]
 }
 
+function valueAtPath(value: unknown, path: string): unknown {
+  if (!path || path === '$') return value
+  return path.split('.').reduce<unknown>((current, key) => {
+    if (!current || typeof current !== 'object' || Array.isArray(current)) return undefined
+    return (current as Record<string, unknown>)[key]
+  }, value)
+}
+
 export function mergeRevisions(revisions: Revision[]): RevisionMerge {
   const byId = new Map<string, Revision>()
   for (const revision of revisions) {
@@ -79,9 +87,18 @@ export function mergeRevisions(revisions: Revision[]): RevisionMerge {
   const histories = tips.map((tip) => ancestors(tip, byId))
   const common = [...histories[0]].filter((key) => histories.every((history) => history.has(key)) && byId.has(key))
   const bases = revisionHeads(common.map((key) => byId.get(key)!))
-  const base = bases.length ? mergeRevisions(common.map((key) => byId.get(key)!)).value : undefined
+  const baseMerge = bases.length ? mergeRevisions(common.map((key) => byId.get(key)!)) : undefined
+  const base = baseMerge?.value
   const conflicts: string[] = []
   const value = mergeValue(base, tips.map((tip) => tip.payload), '', conflicts)
+  // A conflicted merge base cannot be reduced to its deterministic display value:
+  // doing so makes a branch that kept that value look unchanged and can silently
+  // discard the other branch's explicit choice. Preserve each unresolved path
+  // until all current tips agree on its value.
+  for (const path of baseMerge?.conflicts ?? []) {
+    const values = tips.map((tip) => valueAtPath(tip.action === 'delete' ? null : tip.payload, path))
+    if (!values.every((candidate) => equal(candidate, values[0]))) conflicts.push(path)
+  }
   if (deleted && tips.some((tip) => tip.action !== 'delete')) conflicts.push('$deleted')
   return { heads, value, deleted, conflicts: [...new Set(conflicts)], versions }
 }

@@ -48,7 +48,11 @@ test('partial import is explicit and valid rows create synced notes/cards while 
   expect(await applyTextImport(db, preview, true)).toEqual({ added: 2, updated: 0, ignored: 0, errors: 1 })
   expect((await db.notes.toArray()).map((note) => note.fields.front).sort()).toEqual(['犬', '猫'])
   expect(await db.cards.count()).toBe(2)
-  expect((await db.outbox.toArray()).filter((operation) => operation.entityType === 'note')).toHaveLength(2)
+  const noteOperations = (await db.outbox.toArray()).filter((operation) => operation.entityType === 'note')
+  expect(noteOperations).toHaveLength(2)
+  for (const operation of noteOperations) {
+    expect(await db.syncRevisions.get(operation.opId)).toMatchObject({ ...operation, key: `note:${operation.entityId}`, parents: [] })
+  }
 })
 
 test('stable-ID updates preserve cards and review history; changed previews cannot overwrite later edits', async () => {
