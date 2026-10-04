@@ -6,6 +6,7 @@ import { createBackupStore } from './backups.js'
 import { SERVER_MAX_COLLECTION_SCHEMA_VERSION, SYNC_CHANGE_PAGE_SIZE, SYNC_PROTOCOL_VERSION, type IncompatibleSync, type SyncCapabilities, type SyncHealth } from '../sync-capabilities.js'
 import { schemaRequiredByPayload } from '../schema-ladder.js'
 import { isSupportedMediaType } from '../anki-interchange.js'
+import { collectionGeneration as getCollectionGeneration, requiresCollectionGeneration } from './collection-generation.js'
 
 type ServiceOptions = { databasePath: string; mediaDirectory?: string }
 type PairRequest = { code: string; deviceId: string }
@@ -19,7 +20,7 @@ type SyncOperation = {
   parents?: string[]
   reviewId?: string
 }
-type SyncRequest = SyncCapabilities & { cursor: number; operations: SyncOperation[] }
+type SyncRequest = SyncCapabilities & { collectionGeneration?: string; cursor: number; operations: SyncOperation[] }
 
 type PersistedChange = { entity_type: string; action: string; payload: string; parents: string | null; review_id: string | null }
 
@@ -128,6 +129,7 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
     }, 1)
     collectionSchemaVersion = Math.max(1, typeof persistedWatermark === 'number' && Number.isSafeInteger(persistedWatermark) ? persistedWatermark : 1, inferredWatermark)
     if (!storedWatermark || collectionSchemaVersion !== persistedWatermark) database.prepare("INSERT INTO collection_metadata (key, value) VALUES ('collection_schema_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(collectionSchemaVersion))
+    getCollectionGeneration(database)
     database.exec('COMMIT')
   } catch (error) {
     try { database.exec('ROLLBACK') } catch { /* A failed begin leaves no transaction to roll back. */ }
@@ -141,14 +143,28 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
     return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 ? value : 1
   }
 
-  const backups = createBackupStore({ database, mediaDirectory, backupDirectory: join(dirname(databasePath), 'backups'), collectionSchemaVersion: persistedCollectionSchemaVersion })
+  const backups = createBackupStore({
+    database, mediaDirectory, backupDirectory: join(dirname(databasePath), 'backups'), collectionSchemaVersion: persistedCollectionSchemaVersion,
+    prepareRestoredDatabase(path) { const restored = createSyncService({ databasePath: path, mediaDirectory }); restored.close() },
+  })
   const authenticatedDevice = (accessToken: string) => database.prepare('SELECT devices.id FROM tokens JOIN devices ON devices.id = tokens.device_id WHERE tokens.hash = ? AND devices.revoked_at IS NULL').get(hash(accessToken)) as { id: string } | undefined
-  let syncQueue: Promise<void> = Promise.resolve()
+  let collectionQueue: Promise<void> = Promise.resolve()
+  function withCollectionLock<T>(operation: () => Promise<T> | T): Promise<T> {
+    const previous = collectionQueue
+    let release!: () => void
+    collectionQueue = new Promise<void>((resolve) => { release = resolve })
+    return (async () => {
+      await previous
+      try { return await operation() }
+      finally { release() }
+    })()
+  }
 
   const assertCapabilities = (request: SyncRequest, currentCollectionSchemaVersion: number) => {
     if (request.protocolVersion !== SYNC_PROTOCOL_VERSION) {
       throw compatibilityError('protocol-upgrade-required', 'This PC sync service and this device use incompatible sync protocols. Update both, then try again.')
     }
+    assertCollectionGeneration(request.collectionGeneration)
     if (!Number.isSafeInteger(request.collectionSchemaVersion) || request.collectionSchemaVersion < 1) {
       throw compatibilityError('client-upgrade-required', 'This device did not declare a supported collection schema. Update Kiroku on this device, then try again.', { requiredSchemaVersion: currentCollectionSchemaVersion })
     }
@@ -168,13 +184,18 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
     return Math.max(currentCollectionSchemaVersion, request.collectionSchemaVersion, requestedSchema)
   }
 
+  const assertCollectionGeneration = (generation?: string) => {
+    const current = getCollectionGeneration(database)
+    if ((requiresCollectionGeneration(database) || generation !== undefined) && generation !== current) throw compatibilityError('collection-generation-required', 'The PC collection was replaced from a backup. This device was not changed; export its offline collection and recover or reset it explicitly before syncing.', { collectionGeneration: current })
+  }
+
   const service = {
     authenticateDevice(accessToken: string) {
       return Boolean(authenticatedDevice(accessToken))
     },
 
     health() {
-      return { ready: true, schemaVersion: 1, protocolVersion: SYNC_PROTOCOL_VERSION, collectionSchemaVersion, maximumCollectionSchemaVersion: SERVER_MAX_COLLECTION_SCHEMA_VERSION, store: 'sqlite' as const } satisfies SyncHealth & { schemaVersion: number }
+      return { ready: true, schemaVersion: 1, protocolVersion: SYNC_PROTOCOL_VERSION, collectionSchemaVersion, maximumCollectionSchemaVersion: SERVER_MAX_COLLECTION_SCHEMA_VERSION, collectionGeneration: getCollectionGeneration(database), requiresCollectionGeneration: requiresCollectionGeneration(database), store: 'sqlite' as const } satisfies SyncHealth & { schemaVersion: number }
     },
 
     createPairingCode(now = new Date()) {
@@ -185,7 +206,7 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
 
     async createBackup(accessToken: string) {
       if (!authenticatedDevice(accessToken)) throw new Error('Authentication required.')
-      return backups.create('manual')
+      return withCollectionLock(() => backups.create('manual'))
     },
 
     async listBackups(accessToken: string) {
@@ -203,19 +224,26 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
       return backups.previewRestore(backupId)
     },
 
+    async restoreBackup(accessToken: string, backupId: string, confirmation: string) {
+      if (!authenticatedDevice(accessToken)) throw new Error('Authentication required.')
+      if (confirmation !== 'RESTORE') throw new Error('Type RESTORE to replace the active PC collection from this backup.')
+      return withCollectionLock(async () => {
+        if (!authenticatedDevice(accessToken)) throw new Error('Authentication required.')
+        const result = await backups.restore(backupId)
+        collectionSchemaVersion = persistedCollectionSchemaVersion()
+        return result
+      })
+    },
+
     async syncWithBackup(accessToken: string, request: SyncRequest) {
-      let release!: () => void
-      const previous = syncQueue
-      syncQueue = new Promise<void>((resolve) => { release = resolve })
-      await previous
-      try {
+      return withCollectionLock(async () => {
         if (!authenticatedDevice(accessToken)) throw new Error('Authentication required.')
         if (request.operations.length) {
           try { await backups.create('before-sync') }
           catch (error) { throw new SyncBackupError(error) }
         }
         return this.sync(accessToken, request)
-      } finally { release() }
+      })
     },
 
     listDevices() {
@@ -252,7 +280,7 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
         database.exec('ROLLBACK')
         throw error
       }
-      return { deviceId, token: issuedToken }
+      return { deviceId, token: issuedToken, collectionGeneration: getCollectionGeneration(database) }
     },
 
     rotateCredential(accessToken: string) {
@@ -306,6 +334,7 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
       return {
         protocolVersion: SYNC_PROTOCOL_VERSION,
         collectionSchemaVersion,
+        collectionGeneration: getCollectionGeneration(database),
         accepted,
         cursor,
         hasMore,
@@ -332,9 +361,11 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
       return Number((database.prepare('SELECT COUNT(*) AS count FROM changes').get() as { count: number }).count)
     },
 
-    async putMedia(accessToken: string, digest: string, mimeType: string, bytes: Uint8Array) {
+    async putMedia(accessToken: string, digest: string, mimeType: string, bytes: Uint8Array, generation?: string) {
+      return withCollectionLock(async () => {
       const device = database.prepare('SELECT devices.id FROM tokens JOIN devices ON devices.id = tokens.device_id WHERE tokens.hash = ? AND devices.revoked_at IS NULL').get(hash(accessToken))
       if (!device) throw new Error('Authentication required.')
+      assertCollectionGeneration(generation)
       if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error('Media digest is invalid.')
       if (!isSupportedMediaType(mimeType)) throw new Error('Media type is unsupported.')
       if (!bytes.byteLength || bytes.byteLength > 20 * 1024 * 1024) throw new Error('Media size is invalid.')
@@ -344,17 +375,21 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
       const result = database.prepare('INSERT OR IGNORE INTO media_blobs (digest, byte_length, mime_type, created_at) VALUES (?, ?, ?, ?)').run(digest, bytes.byteLength, mimeType, new Date().toISOString())
       const metadata = database.prepare('SELECT byte_length, mime_type FROM media_blobs WHERE digest = ?').get(digest) as { byte_length: number; mime_type: string }
       return { digest, byteLength: metadata.byte_length, mimeType: metadata.mime_type, deduplicated: !Number(result.changes) }
+      })
     },
 
-    async getMedia(accessToken: string, digest: string) {
+    async getMedia(accessToken: string, digest: string, generation?: string) {
+      return withCollectionLock(async () => {
       const device = database.prepare('SELECT devices.id FROM tokens JOIN devices ON devices.id = tokens.device_id WHERE tokens.hash = ? AND devices.revoked_at IS NULL').get(hash(accessToken))
       if (!device) throw new Error('Authentication required.')
+      assertCollectionGeneration(generation)
       if (!/^[a-f0-9]{64}$/.test(digest)) throw new Error('Media digest is invalid.')
       const metadata = database.prepare('SELECT byte_length, mime_type FROM media_blobs WHERE digest = ?').get(digest) as { byte_length: number; mime_type: string } | undefined
       if (!metadata) throw new Error('Media not found.')
       const bytes = await readFile(join(mediaDirectory, digest.slice(0, 2), digest))
       if (bytes.byteLength !== metadata.byte_length || createHash('sha256').update(bytes).digest('hex') !== digest) throw new Error('Media bytes failed verification.')
       return { digest, byteLength: metadata.byte_length, mimeType: metadata.mime_type, bytes }
+      })
     },
 
     close() { database.close() },

@@ -24,11 +24,14 @@ export interface SyncHealth extends SyncCapabilities {
   ready: true
   maximumCollectionSchemaVersion: number
   store: 'sqlite'
+  collectionGeneration?: string
+  requiresCollectionGeneration?: boolean
 }
 
 export interface IncompatibleSync {
-  code: 'client-upgrade-required' | 'server-upgrade-required' | 'protocol-upgrade-required'
+  code: 'client-upgrade-required' | 'server-upgrade-required' | 'protocol-upgrade-required' | 'collection-generation-required'
   message: string
+  collectionGeneration?: string
   requiredSchemaVersion?: number
   maximumSchemaVersion?: number
   protocolVersion: number

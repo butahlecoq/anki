@@ -1,0 +1,3 @@
+# Collection replacement creates a new sync generation
+
+Replacing a PC-hosted collection from a backup creates a fresh Collection Generation even when that backup came from the same service. Sync clients must present the generation they last confirmed; the service rejects operations and history reads from an older generation before touching either side, because restored cursors can point at unrelated changes and replaying them could merge incompatible histories. Replacement first creates a verified recovery backup, restores the verified collection and media atomically, and leaves the existing device credentials intact; affected devices remain offline and need an explicit local recovery/reset flow before syncing again.

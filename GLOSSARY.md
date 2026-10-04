@@ -79,6 +79,12 @@ maximum a sync service accepts and the minimum a payload requires are all
 derived from it, so a step cannot be added in one place and missed in another.
 _Avoid_: migrations, schema history, version table
 
+**Collection Generation**:
+The identity of one coherent PC-hosted sync history. Replacing that history
+creates a new generation so devices with cursors from the previous history
+cannot silently merge their changes into it.
+_Avoid_: epoch, reset version
+
 **Card Displayability**:
 Whether a card can be shown to a learner. A card is displayable unless its front
 renders to nothing; an image occlusion note has no front template, so its empty
@@ -90,3 +96,4 @@ _Avoid_: emptiness, renderability, visibility
 - [ADR 0001: a Synthesised Deck's identity is derived from its Deck Path](docs/adr/0001-synthesised-deck-identity.md)
 - [ADR 0002: rules live in modules, not in the adapter that stores them](docs/adr/0002-rules-own-modules.md)
 - [ADR 0003: the app is a free web app that anyone can run](docs/adr/0003-a-free-web-app-for-everyone.md)
+- [ADR 0005: collection replacement creates a new sync generation](docs/adr/0005-collection-replacement-creates-new-generation.md)

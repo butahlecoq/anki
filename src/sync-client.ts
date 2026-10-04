@@ -12,10 +12,10 @@ export type SyncProgress =
   | { phase: 'complete'; accepted: number; cursor: number; conflicts: number; media: MediaSyncProgress }
 type Complete = { state: 'complete'; accepted: number; cursor: number; changes: Change[]; hasMore?: boolean; media?: MediaSyncProgress }
 type UpgradeRequired = { state: 'upgrade-required'; target: 'this-device' | 'pc-service'; message: string; requiredSchemaVersion?: number }
-type SyncResult = Complete | UpgradeRequired | BackupFailed | { state: 'authentication-required' } | { state: 'unreachable' } | { state: 'incomplete'; accepted: number; cursor: number; pendingOperations: number; remoteChangesPending: boolean }
+type SyncResult = Complete | UpgradeRequired | BackupFailed | { state: 'collection-generation-required'; message: string } | { state: 'authentication-required' } | { state: 'unreachable' } | { state: 'incomplete'; accepted: number; cursor: number; pendingOperations: number; remoteChangesPending: boolean }
 type PreflightResult = { state: 'ready' } | Exclude<SyncResult, Complete>
-export type PairingResult = { state: 'paired' } | { state: 'pairing-error' } | { state: 'unreachable' }
-export type PcBackup = { format: string; formatVersion: number; id: string; createdAt: string; reason: 'manual' | 'before-sync'; collectionSchemaVersion: number; changeCount: number; latestCursor: number; databaseBytes: number; databaseSha256: string; media: Array<{ digest: string; byteLength: number; mimeType: string }>; archiveSha256: string; archiveBytes: number }
+export type PairingResult = { state: 'paired' } | { state: 'pairing-error' } | { state: 'unreachable' } | { state: 'collection-generation-required' }
+export type PcBackup = { format: string; formatVersion: number; id: string; createdAt: string; reason: 'manual' | 'before-sync' | 'before-restore'; collectionGeneration?: string; collectionSchemaVersion: number; changeCount: number; latestCursor: number; databaseBytes: number; databaseSha256: string; media: Array<{ digest: string; byteLength: number; mimeType: string }>; archiveSha256: string; archiveBytes: number }
 
 export async function listPcBackups(settings: SyncSettings, fetcher: Fetcher = fetch) {
   const response = await fetcher(`${settings.endpoint.replace(/\/$/, '')}/api/backups`, { headers: { authorization: `Bearer ${settings.token}` } })
@@ -50,6 +50,19 @@ export async function createAndDownloadPcBackup(settings: SyncSettings, fetcher:
   return { manifest, bytes }
 }
 
+export async function restorePcBackup(settings: SyncSettings, id: string, fetcher: Fetcher = fetch) {
+  const response = await fetcher(`${settings.endpoint.replace(/\/$/, '')}/api/backups/${id}/restore`, {
+    method: 'POST', headers: { authorization: `Bearer ${settings.token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ confirmation: 'RESTORE' }),
+  })
+  if (!response.ok) {
+    let message = 'The PC collection was not replaced. Keep the current service data and try again.'
+    try { message = (await response.json() as { error?: string }).error ?? message } catch { /* Keep the safe fallback. */ }
+    throw new Error(message)
+  }
+  return response.json() as Promise<{ generation: string; changeCount: number; latestCursor: number; before: PcBackup }>
+}
+
 type BackupFailed = { state: 'backup-failed'; message: string }
 export type CredentialRotationResult = { state: 'rotated'; token: string } | { state: 'authentication-required' } | { state: 'unreachable' } | { state: 'indeterminate' }
 
@@ -60,14 +73,14 @@ class MediaTransferError extends Error {
 }
 
 export async function uploadMedia(settings: SyncSettings, digest: string, blob: Blob, fetcher: Fetcher = fetch) {
-  const response = await fetcher(`${settings.endpoint.replace(/\/$/, '')}/api/media/${digest}`, { method: 'PUT', headers: { authorization: `Bearer ${settings.token}`, 'content-type': blob.type }, body: blob })
+  const response = await fetcher(`${settings.endpoint.replace(/\/$/, '')}/api/media/${digest}`, { method: 'PUT', headers: { authorization: `Bearer ${settings.token}`, 'content-type': blob.type, 'x-collection-generation': settings.collectionGeneration ?? '' }, body: blob })
   if (response.status === 401) throw new MediaTransferError('authentication-required')
   if (!response.ok) throw new MediaTransferError('unreachable')
   return response.json() as Promise<{ digest: string; byteLength: number; mimeType: string; deduplicated: boolean }>
 }
 
 export async function downloadMedia(settings: SyncSettings, digest: string, fetcher: Fetcher = fetch) {
-  const response = await fetcher(`${settings.endpoint.replace(/\/$/, '')}/api/media/${digest}`, { headers: { authorization: `Bearer ${settings.token}` } })
+  const response = await fetcher(`${settings.endpoint.replace(/\/$/, '')}/api/media/${digest}`, { headers: { authorization: `Bearer ${settings.token}`, 'x-collection-generation': settings.collectionGeneration ?? '' } })
   if (response.status === 401) throw new MediaTransferError('authentication-required')
   if (!response.ok || response.headers.get('x-content-sha256') !== digest) throw new MediaTransferError('unreachable')
   return new Blob([await response.arrayBuffer()], { type: response.headers.get('content-type') ?? '' })
@@ -106,6 +119,9 @@ export async function preflightSync(settings: SyncSettings, fetcher: Fetcher = f
     if (health.collectionSchemaVersion > CLIENT_COLLECTION_SCHEMA_VERSION) {
       return upgradeRequired({ code: 'client-upgrade-required', requiredSchemaVersion: health.collectionSchemaVersion }, `This collection requires schema ${health.collectionSchemaVersion}. Update Kiroku on this device, then try again.`)
     }
+    if ((health.requiresCollectionGeneration || settings.collectionGeneration !== undefined) && (!settings.collectionGeneration || settings.collectionGeneration !== health.collectionGeneration)) return { state: 'collection-generation-required', message: !settings.collectionGeneration
+      ? 'The PC collection was replaced from a backup. This device’s offline collection remains unchanged; export it before recovering or resetting it explicitly.'
+      : 'The PC collection was replaced from a backup. Your offline collection and queued changes remain on this device; export this device’s collection, then recover or reset it explicitly before pairing again.' }
     return { state: 'ready' }
   } catch {
     return { state: 'unreachable' }
@@ -116,15 +132,23 @@ export async function pairCollection(collection: Collection, endpoint: string, c
   const serviceEndpoint = endpoint.trim().replace(/\/$/, '')
   if (!isSafeServiceEndpoint(serviceEndpoint)) return { state: 'pairing-error' }
   try {
+    const existing = await collection.syncSettings()
+    if (existing) {
+      const healthResponse = await fetcher(`${serviceEndpoint}/api/health`)
+      if (healthResponse.ok) {
+        const health = await healthResponse.json() as Partial<SyncHealth>
+        if (health.requiresCollectionGeneration && health.collectionGeneration !== existing.collectionGeneration) return { state: 'collection-generation-required' }
+      }
+    }
     const response = await fetcher(`${serviceEndpoint}/api/pair`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ code: code.trim(), deviceId: crypto.randomUUID() }),
     })
     if (!response.ok) return { state: 'pairing-error' }
-    const credential = await response.json() as { token?: unknown }
+    const credential = await response.json() as { token?: unknown; collectionGeneration?: unknown }
     if (typeof credential.token !== 'string' || !credential.token) return { state: 'pairing-error' }
-    await collection.configureSync({ endpoint: serviceEndpoint, token: credential.token, cursor: 0 })
+    await collection.configureSync({ endpoint: serviceEndpoint, token: credential.token, cursor: 0, ...(typeof credential.collectionGeneration === 'string' ? { collectionGeneration: credential.collectionGeneration } : {}) })
     return { state: 'paired' }
   } catch {
     return { state: 'unreachable' }
@@ -153,12 +177,13 @@ export async function foregroundSync(settings: SyncSettings, operations: Partial
     const response = await fetcher(`${settings.endpoint.replace(/\/$/, '')}/api/sync`, {
       method: 'POST',
       headers: { authorization: `Bearer ${settings.token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ protocolVersion: SYNC_PROTOCOL_VERSION, collectionSchemaVersion: CLIENT_COLLECTION_SCHEMA_VERSION, cursor: settings.cursor, operations }),
+      body: JSON.stringify({ protocolVersion: SYNC_PROTOCOL_VERSION, collectionSchemaVersion: CLIENT_COLLECTION_SCHEMA_VERSION, collectionGeneration: settings.collectionGeneration, cursor: settings.cursor, operations }),
     })
     if (response.status === 401) return { state: 'authentication-required' }
     if (response.status === 409) {
       let incompatibility: Partial<IncompatibleSync> = {}
       try { incompatibility = await response.json() as Partial<IncompatibleSync> } catch { /* Keep upgrade guidance useful for a malformed response. */ }
+      if (incompatibility.code === 'collection-generation-required') return { state: 'collection-generation-required', message: typeof incompatibility.message === 'string' ? incompatibility.message : 'The PC collection changed generations. Your local collection remains unchanged; export it before recovering or resetting.' }
       return upgradeRequired(incompatibility, 'This collection cannot sync until Kiroku is updated.')
     }
     if (response.status === 507) {

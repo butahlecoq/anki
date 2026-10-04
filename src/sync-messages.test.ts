@@ -64,6 +64,11 @@ describe('a sync that did not complete', () => {
     expect(syncOutcomeMessage({ state: 'authentication-required' })).toMatch(/paired again/i)
   })
 
+  test('a restored PC generation tells the learner local changes were retained', () => {
+    const message = syncOutcomeMessage({ state: 'collection-generation-required', message: 'The PC collection was replaced. Offline edits remain here.' })
+    expect(message).toMatch(/offline edits remain/i)
+  })
+
   test('a version mismatch names which side needs updating', () => {
     const device = syncOutcomeMessage({ state: 'upgrade-required', target: 'this-device' })
     const service = syncOutcomeMessage({ state: 'upgrade-required', target: 'pc-service' })
