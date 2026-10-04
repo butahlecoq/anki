@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest'
-import { createAndDownloadPcBackup, foregroundSync, pairCollection, preflightSync, rotateCredential, syncCollection } from './sync-client'
+import { createAndDownloadPcBackup, foregroundSync, pairCollection, preflightSync, rotateCredential, syncCollection, type SyncProgress } from './sync-client'
 import { createCollection, DEFAULT_DECK_OPTION_GROUP_ID, Rating } from './collection'
 import { digestMedia } from './media'
 import { CLIENT_COLLECTION_SCHEMA_VERSION, SYNC_OPERATION_BATCH_SIZE, SYNC_REQUESTS_PER_ATTEMPT } from '../sync-capabilities.js'
@@ -209,9 +209,14 @@ test('replays a batch with stable operation IDs after the server commits but its
       return Promise.resolve(new Response(JSON.stringify({ accepted, cursor: committed.size, changes: [], hasMore: false }), { status: 200 }))
     })
 
-    await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'unreachable' })
+    const interruptedProgress: SyncProgress[] = []
+    await expect(syncCollection(collection, fetcher as typeof fetch, (progress) => interruptedProgress.push(progress))).resolves.toMatchObject({ state: 'unreachable' })
+    expect(interruptedProgress).toContainEqual(expect.objectContaining({ phase: 'retry', task: 'records', pending: 1, cursor: 0 }))
+    expect(interruptedProgress.some((progress) => progress.phase === 'complete')).toBe(false)
     await expect(collection.pendingOperations()).resolves.toHaveLength(1)
-    await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'complete', accepted: 0, cursor: 1 })
+    const resumedProgress: SyncProgress[] = []
+    await expect(syncCollection(collection, fetcher as typeof fetch, (progress) => resumedProgress.push(progress))).resolves.toMatchObject({ state: 'complete', accepted: 0, cursor: 1 })
+    expect(resumedProgress.at(-1)).toMatchObject({ phase: 'complete', accepted: 0, cursor: 1, conflicts: 0, media: { pending: 0 } })
     expect(committed).toEqual(new Set(['lost-response-op']))
     await expect(collection.pendingOperations()).resolves.toHaveLength(0)
   } finally { await collection.delete() }
@@ -338,7 +343,10 @@ test('reports a media upload failure separately while syncing card changes', asy
     ? Promise.resolve(new Response('', { status: 503 }))
     : Promise.resolve(new Response(JSON.stringify({ accepted: 3, cursor: 3, changes: [] }), { status: 200 })))
 
-  await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'complete', accepted: 3, media: { uploaded: 0, downloaded: 0, pending: 1, uploadError: 'unreachable' } })
+  const progress: SyncProgress[] = []
+  await expect(syncCollection(collection, fetcher as typeof fetch, (event) => progress.push(event))).resolves.toMatchObject({ state: 'complete', accepted: 3, media: { uploaded: 0, downloaded: 0, pending: 1, uploadError: 'unreachable' } })
+  expect(progress).toContainEqual(expect.objectContaining({ phase: 'retry', task: 'upload', pending: 1 }))
+  expect(progress.at(-1)).toMatchObject({ phase: 'complete', accepted: 3, conflicts: 0, media: { pending: 1 } })
   expect(fetcher).toHaveBeenCalledWith('https://pc.example.test/api/sync', expect.anything())
   await expect(collection.pendingOperations()).resolves.toHaveLength(0)
   await collection.delete()

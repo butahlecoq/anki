@@ -8,7 +8,7 @@ import { SYNC_LOCAL_ONLY, pairOutcomeMessage, pairingClosesOn, syncOutcomeMessag
  * host: the sync service does not start (issue #85).
  */
 
-const complete = (overrides: Partial<Extract<SyncOutcome, { state: 'complete' }>['media']> = {}): SyncOutcome => ({
+const complete = (overrides: Partial<Extract<SyncOutcome, { state: 'complete' }>['media']> = {}): Extract<SyncOutcome, { state: 'complete' }> => ({
   state: 'complete', accepted: 2, media: { uploaded: 3, downloaded: 4, pending: 0, ...overrides },
 })
 
@@ -51,6 +51,11 @@ describe('a completed sync', () => {
 
   test('a download failure is treated the same as an upload failure', () => {
     expect(syncOutcomeMessage(complete({ pending: 1, downloadError: 'unreachable' }))).toBe(syncOutcomeMessage(complete({ pending: 1, uploadError: 'unreachable' })))
+  })
+
+  test('media retry status does not hide unresolved conflicts', () => {
+    expect(syncOutcomeMessage({ ...complete({ pending: 1, uploadError: 'unreachable' }), conflicts: 2 }))
+      .toBe('Card sync complete. 1 media file will retry when the PC is reachable. 2 conflicts need review.')
   })
 })
 

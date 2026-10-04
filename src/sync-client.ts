@@ -5,7 +5,11 @@ import { digestMedia } from './media'
 type Fetcher = typeof fetch
 type Change = { cursor: number; opId: string; entityType: string; entityId: string; action: string; occurredAt: string; payload: unknown }
 export type MediaSyncProgress = { uploaded: number; downloaded: number; pending: number; uploadError?: 'authentication-required' | 'unreachable'; downloadError?: 'authentication-required' | 'unreachable' }
-export type SyncProgress = { phase: 'records' | 'upload' | 'download'; completed: number; pending: number; cursor?: number; remoteChangesPending?: boolean }
+export type SyncProgress =
+  | { phase: 'records'; completed: number; pending: number; cursor: number; remoteChangesPending: boolean }
+  | { phase: 'upload' | 'download'; completed: number; pending: number; cursor?: number }
+  | { phase: 'retry'; task: 'records' | 'upload' | 'download'; completed: number; pending: number; cursor?: number }
+  | { phase: 'complete'; accepted: number; cursor: number; conflicts: number; media: MediaSyncProgress }
 type Complete = { state: 'complete'; accepted: number; cursor: number; changes: Change[]; hasMore?: boolean; media?: MediaSyncProgress }
 type UpgradeRequired = { state: 'upgrade-required'; target: 'this-device' | 'pc-service'; message: string; requiredSchemaVersion?: number }
 type SyncResult = Complete | UpgradeRequired | BackupFailed | { state: 'authentication-required' } | { state: 'unreachable' } | { state: 'incomplete'; accepted: number; cursor: number; pendingOperations: number; remoteChangesPending: boolean }
@@ -192,6 +196,7 @@ export async function syncCollection(collection: Collection, fetcher: Fetcher = 
       uploaded += 1
     } catch (error) {
       uploadError = error instanceof MediaTransferError ? error.state : 'unreachable'
+      if (uploadError === 'unreachable') onProgress?.({ phase: 'retry', task: 'upload', completed: uploaded, pending: localDigests.size - uploaded })
     }
     onProgress?.({ phase: 'upload', completed: uploaded, pending: localDigests.size - uploaded })
   }
@@ -203,7 +208,10 @@ export async function syncCollection(collection: Collection, fetcher: Fetcher = 
   while (rounds < SYNC_REQUESTS_PER_ATTEMPT) {
     const operations = await collection.captureSyncOperations(SYNC_OPERATION_BATCH_SIZE)
     const page = await foregroundSync({ ...settings, cursor }, operations, fetcher)
-    if (page.state !== 'complete') return page
+    if (page.state !== 'complete') {
+      if (page.state === 'unreachable') onProgress?.({ phase: 'retry', task: 'records', completed: accepted, pending: await collection.outbox.count(), cursor })
+      return page
+    }
     await collection.applyRemoteChanges(page.changes as SyncOperation[], page.cursor)
     await collection.acknowledgeOperations(operations.map((operation) => operation.opId))
     cursor = page.cursor
@@ -218,6 +226,7 @@ export async function syncCollection(collection: Collection, fetcher: Fetcher = 
 
   const pendingOperations = await collection.outbox.count()
   if (pendingOperations > 0 || remoteChangesPending) {
+    onProgress?.({ phase: 'retry', task: 'records', completed: accepted, pending: pendingOperations, cursor })
     return { state: 'incomplete', accepted, cursor, pendingOperations, remoteChangesPending }
   }
 
@@ -231,12 +240,16 @@ export async function syncCollection(collection: Collection, fetcher: Fetcher = 
         downloaded += 1
       } catch (error) {
         downloadError = error instanceof MediaTransferError ? error.state : 'unreachable'
+        if (downloadError === 'unreachable') onProgress?.({ phase: 'retry', task: 'download', completed: downloaded, pending: missingDigests.size - downloaded, cursor })
       }
       onProgress?.({ phase: 'download', completed: downloaded, pending: missingDigests.size - downloaded, cursor })
     }
     const missing = new Set((await collection.missingReferencedMedia()).map((reference) => reference.digest)).size
     const pending = (uploadError ? localDigests.size - uploaded : 0) + missing
-    return { ...result, accepted, cursor, hasMore: false, media: { uploaded, downloaded, pending, ...(uploadError ? { uploadError } : {}), ...(downloadError ? { downloadError } : {}) } }
+    const media = { uploaded, downloaded, pending, ...(uploadError ? { uploadError } : {}), ...(downloadError ? { downloadError } : {}) }
+    const conflicts = await collection.syncConflicts.count()
+    onProgress?.({ phase: 'complete', accepted, cursor, conflicts, media })
+    return { ...result, accepted, cursor, hasMore: false, media }
   }
   return { state: 'unreachable' }
 }

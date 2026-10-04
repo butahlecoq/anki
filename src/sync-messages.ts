@@ -28,9 +28,9 @@ export function syncOutcomeMessage(result: SyncOutcome): string {
   if (result.state === 'complete') {
     const media = result.media
     const error = media?.uploadError ?? media?.downloadError
-    if (error === 'authentication-required') return `Card sync complete. ${plural(media?.pending ?? 0, 'media file')} still need pairing.`
-    if (error) return `Card sync complete. ${plural(media?.pending ?? 0, 'media file')} will retry when the PC is reachable.`
     const conflicts = result.conflicts ? ` ${plural(result.conflicts, 'conflict')} need review.` : ''
+    if (error === 'authentication-required') return `Card sync complete. ${plural(media?.pending ?? 0, 'media file')} still need pairing.${conflicts}`
+    if (error) return `Card sync complete. ${plural(media?.pending ?? 0, 'media file')} will retry when the PC is reachable.${conflicts}`
     return `Sync complete. ${plural(result.accepted, 'local change')} sent; ${media?.uploaded ?? 0} uploaded and ${media?.downloaded ?? 0} downloaded.${conflicts}`
   }
   if (result.state === 'incomplete') {

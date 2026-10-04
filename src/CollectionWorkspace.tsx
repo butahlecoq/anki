@@ -264,9 +264,17 @@ function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: boolean 
     setMessage('Syncing your collection…')
     try {
       const result = await syncCollection(collection, fetch.bind(window), (progress) => {
-        if (progress.phase === 'records') setMessage(`Syncing records · ${progress.completed} accepted · ${progress.pending} local changes remain · cursor ${progress.cursor}.${progress.remoteChangesPending ? ' More PC records are queued.' : ''}`)
-        else if (progress.phase === 'upload') setMessage(`Uploading media · ${progress.completed} sent · ${progress.pending} waiting.`)
-        else setMessage(`Downloading media · ${progress.completed} saved · ${progress.pending} waiting.`)
+        switch (progress.phase) {
+          case 'records': setMessage(`Syncing records · ${progress.completed} accepted · ${progress.pending} local changes remain · cursor ${progress.cursor}.${progress.remoteChangesPending ? ' More PC records are queued.' : ''}`); break
+          case 'upload': setMessage(`Uploading media · ${progress.completed} sent · ${progress.pending} waiting.`); break
+          case 'download': setMessage(`Downloading media · ${progress.completed} saved · ${progress.pending} waiting.`); break
+          case 'retry': {
+            const task = progress.task === 'records' ? 'collection changes' : 'media files'
+            setMessage(`Sync saved progress. ${progress.pending} ${task} remain for the next retry.`)
+            break
+          }
+          case 'complete': setMessage(syncOutcomeMessage({ state: 'complete', accepted: progress.accepted, media: progress.media, conflicts: progress.conflicts })); break
+        }
       })
       if (result.state === 'complete') {
         if (settings) void listPcBackups(settings).then(({ backups: latest }) => setBackups(latest)).catch(() => {})
