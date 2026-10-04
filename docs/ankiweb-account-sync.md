@@ -1,6 +1,6 @@
 # Existing AnkiWeb account sync
 
-The user requires two-way synchronization with their existing AnkiWeb account. The supported topology and whether the PC must be running are tracked by #186. This supersedes the original package-only compatibility scope. Issue #56 tracks the complete feature. The current app's **Connect a PC** service uses Kiroku's own protocol and does not synchronize an AnkiWeb account.
+The user requires two-way synchronization with their existing AnkiWeb account. The browser cannot read AnkiWeb's protocol response directly (#179), so the supported relay runs on the learner's own PC as part of the Kiroku service and is reached over the private network. Account synchronization requires that PC to be running and reachable. A downloaded collection remains available for offline study while the PC is off. No always-on third-party relay is operated; an internet-facing relay for PC-off account sync would have to be operated and funded by each learner. ADR 0004 records this topology; #188 wires the first visible account path. Issue #56 tracks the full account-sync feature. The current app's **Connect a PC** service uses Kiroku's own protocol and does not yet synchronize an AnkiWeb account.
 
 ## Protocol and connectivity findings
 
@@ -42,24 +42,15 @@ X-Content-Type-Options: nosniff
 
 The browser's own network observer reported HTTP 400 and `MissingAllowOriginHeader` for both hosts. The earlier OPTIONS-only evidence is superseded by this protocol POST measurement. Direct browser-to-AnkiWeb synchronization therefore requires a CORS-capable intermediary; current architecture and deployment choices remain subject to #186 and #188.
 
-## Private gateway transport (#59)
+## Relay transport component (#59)
 
-`server/ankiweb-gateway.ts` provides a portable Fetch handler. It streams known protocol routes to official `sync.ankiweb.net`/numbered sync hosts, checks a configured HTTPS caller origin and a separate 256-bit key, strips gateway credentials/cookies, refuses redirects, and bounds each direction to 64 MiB and five minutes. It has no collection store and emits no logs. It is not the complete account-sync feature: native collection mapping, incremental merge, full-sync previews, media reconciliation, and visible connection UI remain under #56.
+`server/ankiweb-gateway.ts` is an unmounted, storage-free Fetch request forwarder. It streams known protocol routes to official `sync.ankiweb.net`/numbered sync hosts, checks a configured HTTPS caller origin and a separate 256-bit key, strips gateway credentials/cookies, refuses redirects, and bounds each direction to 64 MiB and five minutes. The supported application path will mount the forwarder inside the learner's PC service and authorize it with that service's existing paired-device credential; the extra gateway key is not part of the learner setup. #188 owns that integration. Native collection mapping, incremental merge, full-sync previews and media reconciliation remain outstanding under #56.
 
-An authenticated personal HTTPS gateway can remain available independently of the PC. A Cloudflare Workers Free deployment is one option; its [documented limits](https://developers.cloudflare.com/workers/platform/limits/) include daily request and resource limits. Keep the account on the Free plan; reaching limits must fail rather than require paid upgrades. Cloudflare processes account traffic in transit, so this is a personal deployment decision. No service is deployed by this repository change.
-
-### Prepare a deployment
-
-1. Set `PWA_ORIGIN` in `wrangler.ankiweb.jsonc` to the exact trusted HTTPS app origin, without a trailing slash or path. It is a public origin, never an account credential.
-2. Generate a random 32-byte hex gateway key locally. Store it as the Worker's `GATEWAY_KEY` secret using `npx wrangler secret put GATEWAY_KEY --config wrangler.ankiweb.jsonc`. Do not use the AnkiWeb password as this key. The app's eventual connection flow must request the gateway key at runtime; it must never be bundled with Vite.
-3. Before publishing, inspect the bundle using `npx wrangler deploy --config wrangler.ankiweb.jsonc --dry-run`. The worker entry imports no `.env`, filesystem, collection or server code.
-4. When deploying the reviewed configuration, use `npx wrangler deploy --config wrangler.ankiweb.jsonc`. Only authenticated requests from the configured origin are accepted. Do not enable request/body/header logging.
-
-Requests use `/ankiweb/sync/<method>` or `/ankiweb/msync/<method>`, the `X-Kiroku-Gateway-Key` header, and optionally `X-AnkiWeb-Host` for a numbered official host returned by protocol negotiation. The gateway forwards only Content-Type, Anki-Sync and Authorization. Native protocol credentials remain in those protocol headers/body; the independent gateway key is never forwarded. Interrupted/oversized response streams fail while being read: a 200 response header alone does not prove a complete transfer. Sync code must await and validate the complete payload before committing changes.
+Requests use `/ankiweb/sync/<method>` or `/ankiweb/msync/<method>` and optionally identify `syncN.ankiweb.net` when protocol negotiation returns a numbered host. The relay forwards only Content-Type, Anki-Sync and Authorization, refuses redirects, and does not retain account data or log requests. Interrupted/oversized response streams fail while being read: a 200 response header alone does not prove a complete transfer. Sync code must await and validate the complete payload before committing changes. The existing separate-key handler must be mounted behind paired-device authentication before it is a supported learner-facing path.
 
 ### Outstanding acceptance
 
 - Implement native identities/revisions and actual two-way account sync; package interchange alone is insufficient.
 - Prove protocol behavior with the official engine and isolated collections, including response loss, concurrent official-client work, media and full-sync direction conflicts.
-- Confirm the personal gateway works from installed iPhone Safari with PC off. Deployment and physical-device evidence are outstanding.
+- Confirm account sync from installed iPhone Safari through the private PC relay while the PC is running. Confirm offline study after the PC is stopped as a separate journey. Deployment and physical-device evidence are outstanding.
 - Provide explicit backups and reviewable direction choices before any real account collection mutation. Development must not overwrite the user's live account.
