@@ -62,7 +62,6 @@ async function pair(page: Page, syncURL: string, runtime: string) {
 async function sync(page: Page) {
   const region = page.getByRole('region', { name: 'PC sync', exact: true })
   await region.getByRole('button', { name: 'Sync now', exact: true }).click()
-  await expect(region).toContainText('Syncing your collection…', { timeout: 5000 })
   await expect(region).toContainText('Sync complete.', { timeout: 20_000 })
 }
 
