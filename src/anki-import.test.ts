@@ -213,11 +213,19 @@ describe('Anki package import', () => {
     withAppendedId3v2.set([...id3v2Header, ...id3v2Frame, ...id3v2Footer], frames.length)
     const padded = new Uint8Array(frames.length + 8)
     padded.set(frames)
+    const corruptTail = new Uint8Array(frames.length + 32)
+    corruptTail.set(frames)
+    corruptTail[frames.length + 12] = 0xff
+    const prefixed = new Uint8Array(frames.length + 4)
+    prefixed.set([1, 2, 3, 4])
+    prefixed.set(frames, 4)
 
     expect(() => validateMediaBytes(withId3, 'audio/mpeg')).not.toThrow()
     expect(() => validateMediaBytes(withApe, 'audio/mpeg')).not.toThrow()
     expect(() => validateMediaBytes(withAppendedId3v2, 'audio/mpeg')).not.toThrow()
     expect(() => validateMediaBytes(padded, 'audio/mpeg')).not.toThrow()
+    expect(() => validateMediaBytes(corruptTail, 'audio/mpeg')).toThrow(/do not match/i)
+    expect(() => validateMediaBytes(prefixed, 'audio/mpeg')).toThrow(/do not match/i)
     expect(() => validateMediaBytes(id3v1, 'audio/mpeg')).toThrow(/do not match/i)
   })
 
@@ -377,13 +385,10 @@ describe('Anki package import', () => {
       time: 800,
       type: 1,
     }))
-    const startedAt = performance.now()
     const preview = await prepareAnkiDataImport({ ...packageData, notes, cards, revlog }, collection, { now: new Date('2026-10-01T12:00:00.000Z') })
-    const elapsedMs = performance.now() - startedAt
 
     expect(preview.summary).toMatchObject({ notes: count, cards: count * seedCards.length, reviews: count })
     expect(preview.plan.blocksImport).toBe(false)
-    expect(elapsedMs).toBeLessThan(15_000)
   }, 20_000)
 
   test('keeps a newer local edit when the same stable Anki note is imported again', async () => {

@@ -276,17 +276,22 @@ function validMp3(bytes: Uint8Array) {
   }
   const end = mp3AudioEnd(bytes)
   if (offset > end) return false
-  const searchEnd = Math.min(end - 8, offset + 1024 * 1024)
-  while (offset < searchEnd) {
-    const frameLength = mp3FrameLength(bytes, offset)
-    if (frameLength && offset + frameLength + 4 <= end) {
-      const nextOffset = offset + frameLength
-      const nextLength = mp3FrameLength(bytes, nextOffset)
-      if (nextLength && mp3FrameFormat(bytes, offset) === mp3FrameFormat(bytes, nextOffset)) return true
-    }
-    offset += 1
+  const frameLength = mp3FrameLength(bytes, offset)
+  if (!frameLength || offset + frameLength + 4 > end) return false
+  const format = mp3FrameFormat(bytes, offset)
+  const nextOffset = offset + frameLength
+  if (format !== mp3FrameFormat(bytes, nextOffset)) return false
+
+  let frameOffset = offset
+  let frames = 0
+  while (frameOffset + 4 <= end) {
+    const length = mp3FrameLength(bytes, frameOffset)
+    if (!length || frameOffset + length > end || mp3FrameFormat(bytes, frameOffset) !== format) break
+    frameOffset += length
+    frames += 1
   }
-  return false
+  const padding = bytes.subarray(frameOffset, end)
+  return frames >= 2 && padding.length <= 8 && padding.every((byte) => byte === 0)
 }
 
 function mp3AudioEnd(bytes: Uint8Array) {
