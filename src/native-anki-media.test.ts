@@ -48,11 +48,12 @@ test('failed media download preserves the previous file and acknowledged cursor 
   const previous = new Uint8Array([1, 2, 3])
   const changed = new Uint8Array([4, 5, 6])
   await media.setFile('cat.png', previous)
-  const client = fakeClient([['cat.png', 1, await sha1(changed)]], new Uint8Array([1, 2, 3]))
+  await media.meta.put({ id: 'media', usn: 1 })
+  const client = fakeClient([['cat.png', 2, await sha1(changed)]], new Uint8Array([1, 2, 3]))
 
   await expect(media.synchronize(client)).rejects.toThrow(/archive|media response is invalid|damaged in transit/i)
 
-  expect(await media.cursor()).toBe(0)
+  expect(await media.cursor()).toBe(1)
   const preserved = await media.files.get('cat.png')
   expect(Array.from(preserved!.bytes!)).toEqual(Array.from(previous))
   expect(preserved).toMatchObject({ pending: true })
@@ -67,14 +68,15 @@ test('download with a mismatched advertised hash preserves the previous file and
   const wrongDigest = await sha1(new Uint8Array([7, 8, 9]))
   const archive = zipSync({ _meta: strToU8(JSON.stringify({ 0: 'cat.png' })), 0: received }, { level: 0 })
   await media.setFile('cat.png', previous)
-  const client = fakeClient([['cat.png', 1, wrongDigest]], archive)
+  await media.meta.put({ id: 'media', usn: 1 })
+  const client = fakeClient([['cat.png', 2, wrongDigest]], archive)
 
   await expect(media.synchronize(client)).rejects.toThrow(/changed or was damaged in transit/i)
 
   const preserved = await media.files.get('cat.png')
   expect(Array.from(preserved!.bytes!)).toEqual(Array.from(previous))
   expect(preserved).toMatchObject({ pending: true })
-  expect(await media.cursor()).toBe(0)
+  expect(await media.cursor()).toBe(1)
 })
 
 test('verified media download stores the exact bytes and advances its cursor', async () => {
