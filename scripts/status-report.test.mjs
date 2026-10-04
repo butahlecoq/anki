@@ -148,6 +148,7 @@ test('a branch is called disposable only when a closed or merged PR is accounted
   const merged = [{ number: 12, headRefName: branch.name, state: 'MERGED', updatedAt: '2026-10-01' }]
   assert.deepEqual(branchDisposition(branch, finding, null, []), { disposition: 'retain', relatedPrNumber: undefined })
   assert.deepEqual(branchDisposition(branch, finding, null, merged), { disposition: 'provably disposable', relatedPrNumber: 12 })
+  assert.deepEqual(branchDisposition({ ...branch, provenOnMain: true }, { check: finding.check }, null, merged), { disposition: 'provably disposable', relatedPrNumber: 12 })
   assert.equal(branchDisposition(branch, finding, { dirtyFiles: ['file'], untrackedFiles: [] }, merged).disposition, 'retain')
   assert.equal(branchDisposition(branch, { check: 'branch-past-merge' }, null, merged).disposition, 'retain')
 })
