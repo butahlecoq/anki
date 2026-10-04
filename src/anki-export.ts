@@ -8,6 +8,7 @@ import { validateAnkiArchive } from './anki-archive'
 import { nativeScheduleFingerprint, nativeReviewFingerprint } from './anki-scheduling-metadata'
 import { validateMediaBytes } from './anki-import'
 import { derivedNativeId, nativeNumberOf } from './anki-identity'
+import { readAnkiExportSnapshot } from './collection-queries'
 
 export interface AnkiExportOptions { deckId?: string; scheduling: boolean; history: boolean; media: boolean; SQL?: SqlJsStatic }
 let sqlPromise: Promise<SqlJsStatic> | undefined
@@ -29,9 +30,7 @@ const nativeOcclusionBody = '{{Header}}<div hidden>{{cloze:Occlusion}}</div><div
 
 export async function exportAnkiPackage(collection: Collection, options: AnkiExportOptions) {
   const { Collection: AnkiCollection, Deck: AnkiDeck, Note: AnkiNote, Notetype, Package } = await import('ankipack')
-  const snapshot = await collection.transaction('r', [collection.decks, collection.notes, collection.noteTypes, collection.cards, collection.reviewEntries, collection.noteMedia, collection.mediaBlobs], async () => ({
-    decks: await collection.decks.toArray(), notes: await collection.notes.toArray(), types: await collection.noteTypes.toArray(), cards: await collection.cards.toArray(), reviews: await collection.reviewEntries.toArray(), references: await collection.noteMedia.toArray(), blobs: await collection.mediaBlobs.toArray(),
-  }))
+  const snapshot = await readAnkiExportSnapshot(collection)
   // Index only this transaction's snapshot so every relationship below observes
   // the same collection state and keeps the source array's first-match order.
   const typesById = new Map(snapshot.types.map((type) => [type.id, type]))
