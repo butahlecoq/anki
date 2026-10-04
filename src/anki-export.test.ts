@@ -80,6 +80,30 @@ test('missing media blocks export before success', async () => {
   await expect(exportAnkiPackage(source, { ...all, SQL })).rejects.toThrow('Missing media')
 })
 
+test('large note, card, and media relationship sets retain exported identities and media metadata', async () => {
+  const source = database()
+  const deck = await source.createDeck('Large relationship set')
+  const notes = []
+  for (let index = 0; index < 128; index++) {
+    const note = await source.createBasicNote(deck.id, { front: `front-${index}`, back: `back-${index}` }, new Date(1_700_000_000_000 + index))
+    notes.push(note)
+    await source.attachMedia(note.id, { file: new File([png], `image-${index}.png`, { type: 'image/png' }), side: 'front' }, new Date(1_700_000_000_000 + index))
+  }
+
+  const native = AnkiCollection.open((await exportAnkiPackage(source, { ...all, SQL })).bytes, SQL)
+  expect(native.data.notes).toHaveLength(notes.length)
+  expect(native.data.cards).toHaveLength(notes.length)
+  expect(native.data.media).toHaveLength(1) // one digest is shared by all references
+  const exportedNotes = new Map(native.data.notes.map((note) => [note.guid, note]))
+  expect(new Set(exportedNotes.keys())).toEqual(new Set(notes.map((note) => note.id)))
+  expect(new Set(native.data.cards.map((card) => card.id)).size).toBe(notes.length)
+  for (const [index, note] of notes.entries()) {
+    const row = exportedNotes.get(note.id)!
+    expect(native.data.cards.filter((card) => card.nid === row.id)).toHaveLength(1)
+    expect(JSON.parse(row.data).kirokuMedia).toMatchObject([{ name: `${(await source.noteMedia.where('noteId').equals(note.id).first())!.digest}.png`, displayName: `image-${index}.png`, side: 'front' }])
+  }
+})
+
 test('multiple templates and cloze ordinals keep their note relationships and native IDs across two exports', async () => {
   const source = database()
   const deck = await source.createDeck('Japanese')
