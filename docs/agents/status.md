@@ -55,7 +55,7 @@ Base commit: `60b5cbb5c0a09cfb63c2ce8f9e4cd52ed288206c` (current `origin/main`).
 
 ### [#87 Generate the status document from Git and the tracker](https://github.com/butahlecoq/anki/issues/87)
 
-- PR [#167](https://github.com/butahlecoq/anki/pull/167) (draft); head `e339158f561f862b58c80ff21f11e9a187264635`; exact-head checks: no hosted checks reported; branch `feat/87-live-status-luna-night`; worktree: D:/work/anki-87-live-status-luna-night; deferred: This remains a draft. `npm run check` was not run because the #85 worker is actively using the shared verification suite; the runbook prohibits competing full browser/unit/oracle runs. Run the complete gate on the final PR head after #85 records its final evidence/checkpoint. No merge-readiness claim is made.
+- PR [#167](https://github.com/butahlecoq/anki/pull/167) (draft); head `b2b63b5a9557b8dfde0dd3d8d8e5d0855ed189c3`; exact-head checks: no hosted checks reported; branch `feat/87-live-status-luna-night`; worktree: D:/work/anki-87-live-status-luna-night; deferred: This remains a draft. `npm run check` was not run because the #85 worker is actively using the shared verification suite; the runbook prohibits competing full browser/unit/oracle runs. Run the complete gate on the final PR head after #85 records its final evidence/checkpoint. No merge-readiness claim is made.
 
 ### [#91 Preserve imported field HTML instead of normalising it to plain text](https://github.com/butahlecoq/anki/issues/91)
 
@@ -67,7 +67,7 @@ Base commit: `60b5cbb5c0a09cfb63c2ce8f9e4cd52ed288206c` (current `origin/main`).
 
 ### [#94 Match Anki review scheduling, state updates, and queue order](https://github.com/butahlecoq/anki/issues/94)
 
-- PR [#168](https://github.com/butahlecoq/anki/pull/168) (draft); head `21388e23f3aff0c0fcee5be4f76129f1ce06bf8c`; exact-head checks: no hosted checks reported; branch `feat/94-official-scheduler-matrix`; worktree: D:/work/anki-94-scheduler-luna-night; deferred: This checkpoint does not complete #94. Direct native/app comparisons for persisted Learning, Review, and Relearning states across all four grades remain, as do the remaining alternate review sort/gather/bury scenarios against Anki. Existing internal state/grade and reload checks are not evidence of exact native parity for those states.; The complete `npm run check` is deferred while the active #85 worker retains the shared full-suite verification capacity. Its latest checkpoint reports 83 Playwright passes, 6 iPhone WebKit failures, and 9 declared skips. This PR remains a draft until the complete gate runs on the final head.
+- PR [#168](https://github.com/butahlecoq/anki/pull/168) (draft); head `4f896cecd46e1ee4aae111914b111d4d2bd706d7`; exact-head checks: no hosted checks reported; branch `feat/94-official-scheduler-matrix`; worktree: D:/work/anki-94-scheduler-luna-night; deferred: This checkpoint does not complete #94. Direct native/app comparisons for persisted Learning, Review, and Relearning states across all four grades remain, as do the remaining alternate review sort/gather/bury scenarios against Anki. Existing internal state/grade and reload checks are not evidence of exact native parity for those states.; The complete `npm run check` is deferred while the active #85 worker retains the shared full-suite verification capacity. Its latest checkpoint reports 83 Playwright passes, 6 iPhone WebKit failures, and 9 declared skips. This PR remains a draft until the complete gate runs on the final head.; - Compare persisted Learning, Review and Relearning outcomes for all four grades directly against the emitted Anki matrix.; - Cover alternate review sort/gather/bury scenarios against the pinned Anki oracle.; - Resolve Review fuzz bounds and compare app/native persisted outcomes.; - Run complete `npm run check` on the final head after #85 releases shared verification capacity.; PR #168 remains a draft and #94 stays open.
 
 ### [#110 First callers move onto named collection queries (expand)](https://github.com/butahlecoq/anki/issues/110)
 
@@ -88,8 +88,7 @@ Base commit: `60b5cbb5c0a09cfb63c2ce8f9e4cd52ed288206c` (current `origin/main`).
 ## Dirty worktrees
 
 - `D:/work/anki` (main): docs/research/why-not-reuse-upstream-anki-clients.md
-- `D:/work/anki-87-live-status-luna-night` (feat/87-live-status-luna-night): scripts/status-report.mjs, scripts/status-report.test.mjs
-- `D:/work/anki-94-scheduler-luna-night` (feat/94-official-scheduler-matrix): docs/scheduler-parity.md, src/anki-parity.test.ts, src/scheduler.ts
+- `D:/work/anki-85-luna` (fix/85-local-gate): CONTRIBUTING.md, docs/agents/ci.md, src/TemplatePreview.tsx, src/hint-compatibility.test.ts, src/template-renderer.test.ts, src/template-renderer.ts, tests/e2e/hint.spec.ts
 - `D:/work/anki-issue-85` (feat/85-local-browser-verification): .runtime/hint-webkit/kiroku-sync.sqlite-shm, .runtime/hint-webkit/kiroku-sync.sqlite-wal, .runtime/sync-shell/kiroku-sync.sqlite-shm, .runtime/sync-shell/kiroku-sync.sqlite-wal, .runtime/sync/kiroku-sync.sqlite-shm, .runtime/sync/kiroku-sync.sqlite-wal, .runtime/sync/media/2e/2eeb55e08e1a51af2003fabdfc8572539de6c3f0fa1c182a5b3d3a4806b84db5, .runtime/sync/media/5f/5fd4d7e331e0d162bd059c7573860f239ea9340d569f8b037de797c7abbf1b9d
 
 ## Branches with work beyond their pull request merge point
