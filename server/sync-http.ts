@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { SyncCompatibilityError, type createSyncService } from './sync-service.js'
+import { SyncBackupError, SyncCompatibilityError, type createSyncService } from './sync-service.js'
 
 type Service = ReturnType<typeof createSyncService>
 
@@ -65,7 +65,33 @@ export function createSyncHttpHandler(service: Service, { allowedOrigin, jsonBod
         if (!authorization?.startsWith('Bearer ')) return reply(401, { error: 'Authentication required.' })
         const payload = await body(request, jsonBodyLimitBytes) as { protocolVersion?: unknown; collectionSchemaVersion?: unknown; cursor?: number; operations?: unknown[] }
         if (typeof payload.cursor !== 'number' || !Array.isArray(payload.operations)) return reply(400, { error: 'A cursor and operations array are required.' })
-        return reply(200, service.sync(authorization.slice(7), payload as Parameters<Service['sync']>[1]))
+        try { return reply(200, await service.syncWithBackup(authorization.slice(7), payload as Parameters<Service['sync']>[1])) }
+        catch (error) {
+          if (error instanceof SyncBackupError) return reply(507, { code: 'backup-failed', error: error.message })
+          throw error
+        }
+      }
+      if (request.method === 'GET' && request.url === '/api/backups') {
+        const authorization = request.headers.authorization
+        if (!authorization?.startsWith('Bearer ')) return reply(401, { error: 'Authentication required.' })
+        return reply(200, { backups: await service.listBackups(authorization.slice(7)), retention: { maximum: 14, days: 30 } })
+      }
+      if (request.method === 'POST' && request.url === '/api/backups') {
+        const authorization = request.headers.authorization
+        if (!authorization?.startsWith('Bearer ')) return reply(401, { error: 'Authentication required.' })
+        return reply(201, await service.createBackup(authorization.slice(7)))
+      }
+      const backup = request.url?.match(/^\/api\/backups\/([a-f0-9-]{36})(?:\/(download|restore-preview))?$/)
+      if (backup) {
+        const authorization = request.headers.authorization
+        if (!authorization?.startsWith('Bearer ')) return reply(401, { error: 'Authentication required.' })
+        if (request.method === 'GET' && backup[2] === 'download') {
+          const { manifest, bytes } = await service.downloadBackup(authorization.slice(7), backup[1])
+          response.writeHead(200, { ...headers, 'content-type': 'application/vnd.kiroku.backup+zip', 'content-length': String(bytes.byteLength), 'content-disposition': `attachment; filename="kiroku-backup-${manifest.createdAt.slice(0, 10)}.zip"`, 'x-content-sha256': manifest.archiveSha256, 'x-content-type-options': 'nosniff', 'cache-control': 'no-store' })
+          response.end(bytes)
+          return
+        }
+        if (request.method === 'POST' && backup[2] === 'restore-preview') return reply(200, await service.previewBackupRestore(authorization.slice(7), backup[1]))
       }
       const media = request.url?.match(/^\/api\/media\/([a-f0-9]{64})$/)
       if (request.method === 'PUT' && media) {

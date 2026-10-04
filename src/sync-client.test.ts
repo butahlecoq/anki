@@ -1,5 +1,5 @@
 import { expect, test, vi } from 'vitest'
-import { foregroundSync, pairCollection, preflightSync, syncCollection } from './sync-client'
+import { createAndDownloadPcBackup, foregroundSync, pairCollection, preflightSync, syncCollection } from './sync-client'
 import { createCollection, Rating } from './collection'
 import { digestMedia } from './media'
 import { CLIENT_COLLECTION_SCHEMA_VERSION } from '../sync-capabilities'
@@ -41,6 +41,26 @@ test('distinguishes authentication and unreachable service failures', async () =
   await expect(foregroundSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 }, [], vi.fn().mockResolvedValue(new Response('', { status: 401 })))).resolves.toEqual({ state: 'authentication-required' })
   await expect(foregroundSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 }, [], vi.fn().mockRejectedValue(new TypeError('network')))).resolves.toEqual({ state: 'unreachable' })
 })
+
+test('surfaces an automatic PC backup failure without misreporting it as a network outage', async () => {
+  const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ code: 'backup-failed', error: 'Media abc is missing. Restore it before syncing.' }), { status: 507 }))
+  await expect(foregroundSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 }, [{ opId: 'one' }], fetcher)).resolves.toEqual({ state: 'backup-failed', message: 'Media abc is missing. Restore it before syncing.' })
+})
+
+for (const [kind, responseBytes] of [
+  ['corrupted', new Uint8Array([1, 2, 99, 4])],
+  ['truncated', new Uint8Array([1, 2])],
+] as const) {
+  test(`rejects a ${kind} PC backup body even when its digest header matches the manifest`, async () => {
+    const originalBytes = new Uint8Array([1, 2, 3, 4])
+    const archiveSha256 = await digestMedia(new Blob([originalBytes]))
+    const manifest = { format: 'kiroku-server-backup', formatVersion: 1, id: crypto.randomUUID(), createdAt: '2026-10-03T10:00:00.000Z', reason: 'manual', collectionSchemaVersion: 16, changeCount: 2, latestCursor: 2, databaseBytes: 1, databaseSha256: 'a'.repeat(64), media: [], archiveSha256, archiveBytes: originalBytes.byteLength }
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(manifest), { status: 201 }))
+      .mockResolvedValueOnce(new Response(responseBytes.slice().buffer as ArrayBuffer, { status: 200, headers: { 'x-content-sha256': archiveSha256 } }))
+    await expect(createAndDownloadPcBackup({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 }, fetcher)).rejects.toThrow(/failed its size or SHA-256 check/i)
+  })
+}
 
 test('invalidates local undo before an in-flight sync can capture review operations', async () => {
   const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)

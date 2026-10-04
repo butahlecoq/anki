@@ -265,7 +265,8 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .workspace-grid.single { grid-template-columns: 1fr; }
 .sync-controls { min-height: 86px; padding: 18px 2px; display: flex; align-items: center; justify-content: space-between; gap: 24px; border-bottom: 1px solid var(--border-subtle); }
 .sync-controls .section-code { margin: 0 0 8px; }
-.sync-controls p { max-width: 610px; margin: 0; color: var(--text-muted); font-family: var(--font-jp); font-size: 10px; line-height: 1.6; }
+.sync-controls > div, .sync-controls p { min-width: 0; max-width: 100%; }
+.sync-controls p { max-width: 610px; margin: 0; color: var(--text-muted); font-family: var(--font-jp); font-size: 10px; line-height: 1.6; overflow-wrap: anywhere; }
 .sync-actions { display: flex; flex: none; gap: 9px; }
 .sync-actions .primary-action { min-width: 140px; justify-content: center; }
 .sync-help { padding: 12px; border-left: 2px solid var(--accent-strong); background: var(--surface-sunken); }
