@@ -69,6 +69,12 @@ function resolveTemplateMedia(template: string, media: RenderOptions['media']) {
   return { html, used }
 }
 
+function removeTemplateResourceElements(template: string): string {
+  return template
+    .replace(/<(script|object|iframe|audio|video)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '')
+    .replace(/<(?:script|object|iframe|audio|video|img|source|track|embed|link|base|meta)\b[^>]*\/?>/gi, '')
+}
+
 function renderField(value: string, media: RenderOptions['media'], preserveHtml = false): string {
   if (!preserveHtml) {
     let html = ''
@@ -174,6 +180,9 @@ export function validateTemplate(template: string, fieldNames: readonly string[]
 
 /** Replace fields without evaluating template text or field contents as code. */
 export function renderTemplate(template: string, fields: Record<string, string>, front?: string, options: RenderOptions = {}): RenderedTemplate {
+  // Strip untrusted template resource loaders before resolving trusted local
+  // media placeholders; CSP remains a second boundary at the preview frame.
+  template = removeTemplateResourceElements(template)
   const templateMedia = resolveTemplateMedia(template, options.media)
   template = templateMedia.html
   const navigation = resolveTemplateNavigation(template, fields)

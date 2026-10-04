@@ -692,7 +692,6 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
       const { Collection: AnkiPackageCollection } = await import('ankipack')
       data = AnkiPackageCollection.open(bytes, SQL).data
     } catch (reason) {
-      console.error('Anki package preview failed', reason)
       throw new Error(`Unable to read “${file!.name}”: ${reason instanceof Error ? reason.message : 'invalid Anki package'}`)
     }
   }

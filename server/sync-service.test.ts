@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
@@ -562,6 +562,21 @@ test('serves health, pairing, and authenticated sync over HTTP', async () => {
   assert.equal(pairingAfterRejection.status, 201)
 
   const code = service.createPairingCode()
+  const protectedBackupId = randomUUID()
+  const protectedMediaDigest = 'a'.repeat(64)
+  const protectedRequests: Array<Promise<Response>> = [
+    fetch(`${origin}/api/sync`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, collectionSchemaVersion: 10, cursor: 0, operations: [] }) }),
+    fetch(`${origin}/api/credential/rotate`, { method: 'POST' }),
+    fetch(`${origin}/api/backups`),
+    fetch(`${origin}/api/backups`, { method: 'POST' }),
+    fetch(`${origin}/api/backups/${protectedBackupId}/download`),
+    fetch(`${origin}/api/backups/${protectedBackupId}/restore-preview`, { method: 'POST' }),
+    fetch(`${origin}/api/backups/${protectedBackupId}/restore`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ confirmation: 'RESTORE' }) }),
+    fetch(`${origin}/api/media/${protectedMediaDigest}`),
+    fetch(`${origin}/api/media/${protectedMediaDigest}`, { method: 'PUT', headers: { 'content-type': 'image/png' }, body: new Uint8Array([1]) }),
+  ]
+  const protectedResponses = await Promise.all(protectedRequests)
+  assert.deepEqual(protectedResponses.map((response) => response.status), Array(protectedRequests.length).fill(401))
   const paired = await fetch(`${origin}/api/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code, deviceId: 'phone-1' }) })
   const credential = await paired.json() as { token: string }
   const denied = await fetch(`${origin}/api/sync`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cursor: 0, operations: [] }) })
