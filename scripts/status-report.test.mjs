@@ -199,3 +199,16 @@ test('open PRs linked to a closed issue remain visible, including fork heads', (
   })
   assert.match(output, /## Open PRs without an open issue[\s\S]*#44[\s\S]*#45/)
 })
+
+test('a fork PR remains under its open issue without claiming a local worktree', () => {
+  const output = renderStatus({
+    issues: [issue],
+    prs: [{ ...pr, headRepositoryOwner: { login: 'contributor' } }],
+    worktrees: [{ branch: pr.headRefName, path: 'D:/work/anki-42', dirtyFiles: [], untrackedFiles: [] }],
+    branches: [],
+    generatedFrom: 'deadbeef',
+    repoOwner: 'butahlecoq',
+  })
+  assert.match(output, /#43[\s\S]*worktree: not registered/)
+  assert.doesNotMatch(output, /## Open PRs without an open issue[\s\S]*#43/)
+})

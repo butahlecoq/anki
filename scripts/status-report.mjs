@@ -93,12 +93,12 @@ function prRow(pr, tree, comments, checks) {
 }
 
 function statusForIssue(issue, prs, worktrees, commentsByIssue, checksByPr, owner) {
-  const issuePrs = prs.filter((pr) => linkedIssue(pr) === issue.number && isLocalHead(pr, owner))
+  const issuePrs = prs.filter((pr) => linkedIssue(pr) === issue.number)
   const issueWorktrees = worktrees.filter((tree) => new RegExp(`(?:^|[/-])${issue.number}(?:-|$)`).test(tree.branch ?? ''))
   if (!issuePrs.length && !issueWorktrees.length) return null
   const rows = []
   for (const pr of issuePrs) {
-    const tree = worktrees.find((item) => item.branch === pr.headRefName)
+    const tree = isLocalHead(pr, owner) ? worktrees.find((item) => item.branch === pr.headRefName) : undefined
     rows.push(prRow(pr, tree, commentsByIssue.get(issue.number) ?? [], checksByPr.get(pr.number)))
   }
   for (const tree of issueWorktrees.filter((item) => !issuePrs.some((pr) => pr.headRefName === item.branch))) {
@@ -110,7 +110,7 @@ function statusForIssue(issue, prs, worktrees, commentsByIssue, checksByPr, owne
 
 export function renderStatus({ issues, prs, worktrees, branches, commentsByIssue = new Map(), checksByPr = new Map(), generatedFrom, repoOwner = '' }) {
   const inFlight = issues.map((issue) => statusForIssue(issue, prs, worktrees, commentsByIssue, checksByPr, repoOwner)).filter(Boolean)
-  const represented = new Set(inFlight.flatMap(({ issue }) => prs.filter((pr) => linkedIssue(pr) === issue.number && isLocalHead(pr, repoOwner)).map((pr) => pr.number)))
+  const represented = new Set(inFlight.flatMap(({ issue }) => prs.filter((pr) => linkedIssue(pr) === issue.number).map((pr) => pr.number)))
   const unlinked = prs.filter((pr) => !represented.has(pr.number))
   const dirty = worktrees.filter((tree) => tree.dirtyFiles?.length || tree.untrackedFiles?.length)
   const superseded = branches.filter((branch) => branch.disposition === 'provably disposable')
