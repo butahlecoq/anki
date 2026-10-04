@@ -144,12 +144,19 @@ test('inline non-zero gate results and outstanding checks remain visible', () =>
 
 test('a branch is called disposable only when a closed or merged PR is accounted for on main and its worktree is clean', () => {
   const branch = { name: 'feat/8-old' }
-  const finding = { check: 'branch-stale-snapshot' }
+  const finding = { check: 'branch-stale-snapshot', provenOnMain: true }
   const merged = [{ number: 12, headRefName: branch.name, state: 'MERGED', updatedAt: '2026-10-01' }]
   assert.deepEqual(branchDisposition(branch, finding, null, []), { disposition: 'retain', relatedPrNumber: undefined })
   assert.deepEqual(branchDisposition(branch, finding, null, merged), { disposition: 'provably disposable', relatedPrNumber: 12 })
   assert.equal(branchDisposition(branch, finding, { dirtyFiles: ['file'], untrackedFiles: [] }, merged).disposition, 'retain')
   assert.equal(branchDisposition(branch, { check: 'branch-past-merge' }, null, merged).disposition, 'retain')
+})
+
+test('deletion-only stale snapshots are retained until their content is proven on main', () => {
+  const branch = { name: 'feat/8-old', additions: 0, deletions: 40, binary: 0 }
+  const merged = [{ number: 12, headRefName: branch.name, state: 'MERGED', updatedAt: '2026-10-01' }]
+  assert.equal(branchDisposition(branch, { check: 'branch-stale-snapshot' }, null, merged).disposition, 'retain')
+  assert.equal(branchDisposition(branch, { check: 'branch-stale-snapshot', provenOnMain: true }, null, merged).disposition, 'provably disposable')
 })
 
 test('the generated report never marks itself dirty in its own worktree', () => {

@@ -64,6 +64,7 @@ export const gitArgs = {
     head,
     ...extra,
   ],
+  revListBeyondPullRequest: (head, name) => ['rev-list', '--count', `${head}..${name}`, '--no-merges'],
   modifiedTracked: () => ['status', '--porcelain', '--untracked-files=all'],
   remoteUrl: () => ['remote', 'get-url', 'origin'],
 }
@@ -175,7 +176,7 @@ export function pullRequestsFor(repo, cwd) {
       '--limit',
       '500',
       '--json',
-      'number,state,mergedAt,headRefName,updatedAt',
+      'number,state,mergedAt,headRefName,headRefOid,updatedAt',
     ],
     cwd,
   )
@@ -257,6 +258,10 @@ export function collectGitFacts({ cwd = process.cwd(), mainBranch = 'main', repo
             ownCommits: Number(revision(tryRun('git', gitArgs.revList(mainBranch, name, base), cwd)) ?? NaN),
           }
     const unsharedBy = countUnsharedByOpenHead({ base, name, openHeads, cwd, mainBranch })
+    const branchPr = livePullRequestPerBranch(pullRequests ?? []).get(name)
+    const postMergeCommits = branchPr?.state === 'MERGED' && branchPr.headRefOid
+      ? Number(revision(tryRun('git', gitArgs.revListBeyondPullRequest(branchPr.headRefOid, name, cwd)) ?? '') ?? NaN)
+      : undefined
     return {
       name,
       ...parseNumstat(tryRun('git', gitArgs.diffAgainstMain(mainBranch, name), cwd) ?? ''),
@@ -265,6 +270,7 @@ export function collectGitFacts({ cwd = process.cwd(), mainBranch = 'main', repo
       isAncestorOfMain: tryRun('git', gitArgs.isAncestor(mainBranch, name), cwd) !== null,
       unsharedBy,
       unsharedCommits: unsharedBy === undefined ? undefined : Math.min(...Object.values(unsharedBy)),
+      postMergeCommits,
       worktree,
     }
   })
@@ -391,6 +397,19 @@ function branchFindings({ branches, pullRequests, mainBranch, inProgress }) {
           subject,
           `its work is on pull request #${holding.number} (${holding.headRefName}), so it carries no unsaved work: it is a workspace for a merge that was started and not finished (${where}).${handOn}`,
           busy ? 'none while an agent is in it' : remedy,
+        ),
+      )
+      continue
+    }
+
+    if (pr?.state === 'MERGED' && (branch.postMergeCommits ?? 0) > 0) {
+      findings.push(
+        finding(
+          'loss',
+          'branch-past-merge',
+          subject,
+          `pull request #${pr.number} merged on ${pr.mergedAt?.slice(0, 10)}, but the branch has ${PLURAL(branch.postMergeCommits, 'commit')} beyond its pull request head (${where}).${handOn}`,
+          busy ? remedy : 'rebase the branch onto origin/main and open a pull request, or confirm the work already reached main',
         ),
       )
       continue

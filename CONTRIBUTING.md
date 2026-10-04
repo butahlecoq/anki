@@ -74,7 +74,10 @@ Each of these is here because it was broken. When one seems inconvenient, the fa
 
 ### `main` is not a notebook
 
-`main` changes only through a reviewed pull request. Status belongs in the tracker and in what `npm run check` prints, not in prose files committed to `main`.
+`main` changes only through a reviewed pull request. Narrative status belongs in the
+tracker and in what `npm run check` prints, not in handoff prose committed to `main`.
+The generated `docs/agents/status.md` snapshot is the deliberate exception: it is
+machine-produced by `npm run status`, linked below, and must not be edited by hand.
 
 **The failure it prevents.** On 2026-10-02, `docs/development-handoff.md` received 24 commits directly on `main` in a single evening. Every one rewrote prose describing worktrees at `C:/work/anki*` — paths that do not exist on this machine, whose real root is `D:/work` — and asserted that the `gh` CLI was not installed when it is. The agent producing those commits never queried the tracker. Writing narrative status into `main` gave it somewhere to record guesses that no check ever challenged, and an audit found every verifiable claim in the file wrong.
 

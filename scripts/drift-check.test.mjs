@@ -238,6 +238,17 @@ describe('branches', () => {
     expect(report.exitCode).toBe(1)
   })
 
+  it('reports commits beyond a merged pull request even when the tree diff only deletes files', () => {
+    const input = withBranch({ name: 'feat/2-pwa-shell', additions: 0, deletions: 4782, postMergeCommits: 1 }, [
+      { number: 27, state: 'MERGED', mergedAt: '2026-09-30T10:00:00Z', headRefName: 'feat/2-pwa-shell' },
+    ])
+    const report = analyseDrift(input)
+    const [finding] = findingsFor(input, 'branch-past-merge')
+    expect(finding.level).toBe('loss')
+    expect(finding.message).toMatch(/1 commit\(s\) beyond its pull request head/)
+    expect(report.exitCode).toBe(2)
+  })
+
   it('reports a branch byte-identical to main as disposable', () => {
     const input = withBranch({ name: 'backup/18-pre-rebase', additions: 0, deletions: 0 })
     const [finding] = findingsFor(input, 'branch-stale-snapshot')
@@ -273,6 +284,12 @@ describe('branches', () => {
       'abc123..feat/9-x',
       '--not',
       'feat/8-y',
+      '--no-merges',
+    ])
+    expect(gitArgs.revListBeyondPullRequest('abc123', 'feat/9-x')).toEqual([
+      'rev-list',
+      '--count',
+      'abc123..feat/9-x',
       '--no-merges',
     ])
   })

@@ -77,7 +77,7 @@ export function branchDisposition(branch, finding, tree, pullRequests) {
     .filter((pr) => pr.headRefName === branch.name && ['MERGED', 'CLOSED'].includes(pr.state))
     .sort((left, right) => (right.updatedAt ?? '').localeCompare(left.updatedAt ?? ''))[0]
   const clean = !tree || (!tree.dirtyFiles.length && !tree.untrackedFiles.length)
-  const alreadyOnMain = ['branch-stale-snapshot', 'branch-closed-superseded'].includes(finding?.check)
+  const alreadyOnMain = finding?.provenOnMain === true
   const disposable = Boolean(related && clean && alreadyOnMain)
   return {
     disposition: disposable ? 'provably disposable' : 'retain',
@@ -162,6 +162,10 @@ function collect() {
       ...branch,
       pastMerge: finding?.check === 'branch-past-merge',
       detail: finding?.message,
+      provenOnMain: finding?.check === 'branch-stale-snapshot' && (
+        branch.isAncestorOfMain === true ||
+        (branch.additions === 0 && branch.deletions === 0 && branch.binary === 0)
+      ),
       ...branchDisposition(branch, finding, tree, facts.pullRequests ?? []),
     }
   })
