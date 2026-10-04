@@ -1,4 +1,5 @@
 import { resolveTemplateNavigation } from './template-navigation'
+import { sanitizeFieldHtml } from './field-html'
 
 export interface RenderedTemplate {
   html: string
@@ -10,6 +11,7 @@ export interface RenderOptions {
   kind?: 'standard' | 'cloze'
   ordinal?: number
   side?: 'front' | 'back'
+  htmlFields?: ReadonlySet<string>
   media?: Record<string, { kind: 'image' | 'audio'; url: string; automatic?: boolean }>
 }
 
@@ -52,20 +54,39 @@ function escapeHtml(value: string): string {
 
 const mediaToken = /\[\[kiroku-media:([^\]]+)]]/g
 
-function renderField(value: string, media: RenderOptions['media']): string {
-  let html = ''
-  let cursor = 0
-  for (const match of value.matchAll(mediaToken)) {
-    html += escapeHtml(value.slice(cursor, match.index))
-    cursor = match.index + match[0].length
-    let name = match[1]
+function renderField(value: string, media: RenderOptions['media'], preserveHtml = false): string {
+  if (!preserveHtml) {
+    let html = ''
+    let cursor = 0
+    for (const match of value.matchAll(mediaToken)) {
+      html += escapeHtml(value.slice(cursor, match.index))
+      cursor = match.index + match[0].length
+      let name = match[1]
+      try { name = decodeURIComponent(name) } catch { /* keep malformed token inert */ }
+      const source = media?.[name]
+      if (!source) html += `<span class="media-pending">[media unavailable: ${escapeHtml(name)}]</span>`
+      else if (source.kind === 'image') html += `<img class="card-image" src="${escapeHtml(source.url)}" alt="${escapeHtml(name)}">`
+      else html += `<audio class="card-audio" controls${source.automatic ? ' autoplay' : ''} src="${escapeHtml(source.url)}">Audio: ${escapeHtml(name)}</audio>`
+    }
+    return html + escapeHtml(value.slice(cursor))
+  }
+  const replacements = new Map<string, string>()
+  let markerBase = '\uE000kiroku-media-slot-'
+  while (value.includes(markerBase)) markerBase += 'x'
+  const marked = value.replace(mediaToken, (_token, encodedName: string) => {
+    let name = encodedName
     try { name = decodeURIComponent(name) } catch { /* keep malformed token inert */ }
     const source = media?.[name]
-    if (!source) html += `<span class="media-pending">[media unavailable: ${escapeHtml(name)}]</span>`
-    else if (source.kind === 'image') html += `<img class="card-image" src="${escapeHtml(source.url)}" alt="${escapeHtml(name)}">`
-    else html += `<audio class="card-audio" controls${source.automatic ? ' autoplay' : ''} src="${escapeHtml(source.url)}">Audio: ${escapeHtml(name)}</audio>`
-  }
-  return html + escapeHtml(value.slice(cursor))
+    const output = !source ? `<span class="media-pending">[media unavailable: ${escapeHtml(name)}]</span>`
+      : source.kind === 'image' ? `<img class="card-image" src="${escapeHtml(source.url)}" alt="${escapeHtml(name)}">`
+        : `<audio class="card-audio" controls${source.automatic ? ' autoplay' : ''} src="${escapeHtml(source.url)}">Audio: ${escapeHtml(name)}</audio>`
+    const marker = `${markerBase}${replacements.size}\uE001`
+    replacements.set(marker, output)
+    return marker
+  })
+  let html = sanitizeFieldHtml(marked).html
+  for (const [marker, replacement] of replacements) html = html.replaceAll(marker, replacement)
+  return html
 }
 
 function renderCloze(value: string, ordinal: number, side: 'front' | 'back'): string {
@@ -171,10 +192,10 @@ export function renderTemplate(template: string, fields: Record<string, string>,
         if (typedAnswer.trim()) visibleField = true
       } else {
         if (value.trim() && name !== 'FrontSide') visibleField = true
-        html += filter === 'hint' ? (value.trim() ? (() => { const id = `kiroku-hint-${hintIndex++}`; return `<div class="card-hint"><input class="card-hint-toggle" type="checkbox" id="${id}"><label for="${id}">Show ${escapeHtml(name)}</label><div class="card-hint-content">${renderField(value, options.media)}</div></div>` })() : '') : name === 'FrontSide' ? value : filter === 'cloze'
+        html += filter === 'text' ? escapeHtml(value) : filter === 'hint' ? (value.trim() ? (() => { const id = `kiroku-hint-${hintIndex++}`; return `<div class="card-hint"><input class="card-hint-toggle" type="checkbox" id="${id}"><label for="${id}">Show ${escapeHtml(name)}</label><div class="card-hint-content">${renderField(value, options.media, options.htmlFields?.has(name))}</div></div>` })() : '') : name === 'FrontSide' ? value : filter === 'cloze'
           ? renderCloze(value, ordinal ?? 0, side)
           : filter === 'furigana' || filter === 'kana' || filter === 'kanji' ? renderReading(value, filter)
-            : renderField(value, options.media)
+            : renderField(value, options.media, options.htmlFields?.has(name))
       }
     }
   }

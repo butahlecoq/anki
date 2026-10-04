@@ -12,7 +12,7 @@ function renderable(row: SearchRow, now: Date) {
   // An occlusion note always has something to show, so skip the render. The rule
 // itself lives in `isRenderedCardDisplayable`; this is only a short-circuit.
   if (row.noteType.kind === 'image-occlusion') return true
-  return isRenderedCardDisplayable(renderNoteCard(row.noteType, template, row.note.fields, row.card.clozeOrdinal), row.noteType.kind)
+  return isRenderedCardDisplayable(renderNoteCard(row.noteType, template, row.note.fields, row.card.clozeOrdinal, undefined, [], row.note.renderedHtmlFields), row.noteType.kind)
 }
 function rank(value: string) {
   let hash = 2166136261

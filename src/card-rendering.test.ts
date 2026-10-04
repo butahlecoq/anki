@@ -63,3 +63,10 @@ test('an empty front with an intact back is still not displayable', () => {
   expect(card.backError).toBeUndefined()
   expect(isRenderedCardDisplayable(card, 'standard')).toBe(false)
 })
+
+test('renders safe imported field HTML only when the note marks its field identity', () => {
+  const type = { kind: 'standard' as const, fields: [{ id: 'expression', name: 'Expression' }] }
+  const template = { front: '{{Expression}}', back: '{{FrontSide}}', css: '' }
+  expect(renderNoteCard(type, template, { expression: '<b>猫</b>' }).front?.html).toBe('&lt;b&gt;猫&lt;/b&gt;')
+  expect(renderNoteCard(type, template, { expression: '<b>猫</b>' }, undefined, undefined, [], ['expression']).front?.html).toBe('<b>猫</b>')
+})
