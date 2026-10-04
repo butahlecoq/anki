@@ -162,6 +162,15 @@ is independently written rather than copied Rust implementation code:
 - [Official media protocol](https://github.com/ankitects/anki/tree/main/rslib/src/sync/media)
 - [Native note caches](https://github.com/ankitects/anki/blob/main/rslib/src/notes/mod.rs)
 
-The verified server/headless wheel version is 26.9.3. Protocol 10 support is a
-verified current interoperability boundary, not a guarantee that upstream will
-keep it indefinitely. Future server upgrade responses must stop safely.
+The pinned server/headless oracle baseline is Anki 26.9.3. Upstream currently
+declares sync protocol versions 8 through 11 and minimum collection schema 11;
+this engine uses protocol 10 with schema 11, which is inside that window. The
+`Latest Anki native sync oracle` workflow installs the newest stable PyPI wheel
+each night and checks the boundary constants in a fresh `ankitects/anki` source
+checkout. A regression opens or updates a tracker issue with the failing check,
+wheel version, and constant diff. This monitor is non-blocking and uses GitHub
+Actions only; no external paid runner is configured. If account billing
+prevents Actions from starting, the scheduled evidence is unavailable until
+that account state changes. Protocol 10 support remains a verified current
+interoperability boundary, not a guarantee that upstream will keep it
+indefinitely. Future server upgrade responses must stop safely.

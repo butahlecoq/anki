@@ -1,7 +1,7 @@
 import type { CardRow, CollectionData, DeckRow, FieldRow, NoteRow, NotetypeRow, RevlogRow, TemplateRow } from 'ankipack'
 import type { Database as SqlDatabase, SqlJsStatic } from 'sql.js'
-import type { CardRecord, CardTemplate, Deck, Note, NoteType, NoteTypeField, ReviewEntry } from './collection'
-import { nativeSnapshotHash } from './native-anki-sync'
+import type { CardRecord, CardTemplate, Deck, Note, NoteType, NoteTypeField, ReviewEntry } from './collection.js'
+import { nativeSnapshotHash } from './native-anki-sync.js'
 
 export interface NativeProjectionMedia { name: string; data: Uint8Array }
 
