@@ -1,13 +1,21 @@
 # Kiroku
 
-Kiroku is a private, offline-first Japanese flashcard workspace with local collection editing, FSRS review scheduling, and PC-to-phone collection sync.
+Kiroku is a private, offline-first Japanese flashcard workspace with local collection editing, FSRS review scheduling, and PC-to-phone collection sync. It is a free web app: see [what it costs](#what-it-costs).
 
 ## Requirements
 
 - Node.js 22 or newer
 - npm 11 or newer
 
-No Mac, Apple Developer membership, or paid service is required.
+## What it costs
+
+Nothing, and it stays nothing. See [ADR 0003](docs/adr/0003-a-free-web-app-for-everyone.md).
+
+- **No Apple Developer membership.** Kiroku is a web app. There is no native build to sign and nothing to install from a store.
+- **No paid hosting.** A personal HTTPS origin and a personal gateway both run on a free tier. Reaching a free tier limit fails; it never asks for money.
+- **No store account and no store listing.** Distribution is a URL.
+
+Anyone can run Kiroku, and anyone can share it. Each learner connects with their own AnkiWeb account, and their credentials stay in that browser's local collection settings. See [the AnkiWeb account notes](docs/ankiweb-account-sync.md).
 
 ## Run locally
 
