@@ -39,7 +39,34 @@ Never run two implementation agents in the same worktree; see [one agent, one wo
 
 There is no GitHub Actions workflow at present, so `npm run check` — typecheck, lint, unit, server, build, and browser — is the only gate, and its result must be recorded on the pull request. See [the CI guide](docs/agents/ci.md) for why the workflow was removed and what restoring it involves.
 
-Note that the browser suite cannot complete a sync pairing on the current host (#85), so six desktop specs fail on clean `main`. Attribute a browser failure to your change only after comparing it against a clean baseline.
+### Local browser verification
+
+Use Node.js 22 or newer and the repository's pinned npm version (`npm@11.16.0`). In a fresh worktree, install dependencies and matching browser engines:
+
+```powershell
+npm ci
+npx playwright install chromium webkit
+```
+
+Run browser verification with isolated ports and a private runtime directory. Choose another unused port pair when these ports are occupied; never kill another agent's server.
+
+```powershell
+$env:KIROKU_WEB_PORT = '4583'
+$env:KIROKU_SYNC_PORT = '4584'
+$env:KIROKU_RUNTIME_DIRECTORY = "$PWD\.runtime\browser-run"
+npx playwright test
+```
+
+The local default runs one worker because Windows WebKit becomes intermittently
+starved when the full suite runs six workers concurrently. This is a resource
+isolation policy, not a test reduction: all projects and journeys still run.
+On a host with measured capacity for parallel WebKit runs, opt in explicitly
+with `npx playwright test --workers=2` (or another tested value), while keeping
+the one-worker result as the local gate evidence.
+
+Playwright's WebKit project emulates a phone-sized browser; it is not installed iOS Safari. Warm offline journeys verify an already loaded application. Fresh offline navigation, service-worker behavior, and audible playback have documented WebKit or physical-device limits. Keep those skips and limitations separate from application failures.
+
+If a browser process fails before the application starts with `spawn UNKNOWN`, capture the Node/npm/Playwright versions, command, exact head, and process-launch context, then compare an unrestricted run with a clean baseline. Do not treat an application assertion, port collision, reused server, or browser automation limitation as the same failure, and do not claim an unproven historical root cause.
 
 ## Rules, and the failures they prevent
 

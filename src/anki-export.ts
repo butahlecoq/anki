@@ -2,7 +2,7 @@ import { blobBytes, extensionForMediaType, DAY_MILLISECONDS, toHex } from '../an
 import type { SqlJsStatic } from 'sql.js'
 import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url'
 import type { Deck as NativeDeck, Notetype as NativeNotetype } from 'ankipack'
-import { State, type Collection, type CardRecord } from './collection'
+import { State, type Collection, type CardRecord, type NoteType } from './collection'
 import { serializeAnkiImageOcclusion } from './image-occlusion-interchange'
 import { validateAnkiArchive } from './anki-archive'
 import { nativeScheduleFingerprint, nativeReviewFingerprint } from './anki-scheduling-metadata'
@@ -14,6 +14,14 @@ let sqlPromise: Promise<SqlJsStatic> | undefined
 const day = DAY_MILLISECONDS
 function escape(value: string) { return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;') }
 function guid(value: string) { return value.startsWith('anki-note:') ? value.slice(10) : value }
+function indexValue<K, V>(index: Map<K, V[]>, key: K, value: V) {
+  const values = index.get(key)
+  if (values) values.push(value)
+  else index.set(key, [value])
+}
+function exportOrdinal(card: CardRecord, type: NoteType) {
+  return type.kind === 'standard' ? type.templates.findIndex((template) => template.id === card.templateId) : (card.clozeOrdinal ?? card.occlusionOrdinal ?? 0) - 1
+}
 // Independently written template invoking the official image occlusion runtime.
 // A plain cloze template only hides the shape description, leaving the image
 // exposed; native mask rendering needs these runtime container identities.
@@ -24,6 +32,14 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
   const snapshot = await collection.transaction('r', [collection.decks, collection.notes, collection.noteTypes, collection.cards, collection.reviewEntries, collection.noteMedia, collection.mediaBlobs], async () => ({
     decks: await collection.decks.toArray(), notes: await collection.notes.toArray(), types: await collection.noteTypes.toArray(), cards: await collection.cards.toArray(), reviews: await collection.reviewEntries.toArray(), references: await collection.noteMedia.toArray(), blobs: await collection.mediaBlobs.toArray(),
   }))
+  // Index only this transaction's snapshot so every relationship below observes
+  // the same collection state and keeps the source array's first-match order.
+  const typesById = new Map(snapshot.types.map((type) => [type.id, type]))
+  const cardsByNote = new Map<string, CardRecord[]>()
+  for (const card of snapshot.cards) indexValue(cardsByNote, card.noteId, card)
+  const referencesByNote = new Map<string, typeof snapshot.references>()
+  for (const reference of snapshot.references) indexValue(referencesByNote, reference.noteId, reference)
+  const blobsByDigest = new Map(snapshot.blobs.map((blob) => [blob.digest, blob]))
   const decksById = new Map(snapshot.decks.map((deck) => [deck.id, deck]))
   function path(id: string, seen = new Set<string>()): string {
     const deck = decksById.get(id)
@@ -36,7 +52,7 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
   const notes = snapshot.notes.filter((note) => selected.has(note.deckId)).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
   if (!notes.length) throw new Error('There are no notes to export in this selection.')
   const noteIds = new Set(notes.map((note) => note.id))
-  for (const card of snapshot.cards.filter((card) => noteIds.has(card.noteId))) selected.add(card.deckId)
+  for (const card of snapshot.cards) if (noteIds.has(card.noteId)) selected.add(card.deckId)
   const references = snapshot.references.filter((reference) => noteIds.has(reference.noteId))
   const names = new Map<string, string>()
   const media = new Map<string, Uint8Array>()
@@ -46,7 +62,7 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
     const name = `${reference.digest}.${extension}`
     names.set(reference.id, name)
     if (media.has(name)) continue
-    const stored = snapshot.blobs.find((blob) => blob.digest === reference.digest)
+    const stored = blobsByDigest.get(reference.digest)
     if (!stored) throw new Error(`Missing media: ${reference.displayName}. Sync or restore it before exporting.`)
     const bytes = await blobBytes(stored.blob)
     if (toHex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))) !== reference.digest) throw new Error(`Damaged media: ${reference.displayName}`)
@@ -55,7 +71,8 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
   }
   const packageFile = new Package()
   const exportedTypes = new Map<string, NativeNotetype>()
-  for (const local of snapshot.types.filter((type) => notes.some((note) => note.typeId === type.id))) {
+  const usedTypeIds = new Set(notes.map((note) => note.typeId))
+  for (const local of snapshot.types.filter((type) => usedTypeIds.has(type.id))) {
     if (new Set(local.templates.map((template) => template.css)).size > 1) throw new Error(`Note type ${local.name} uses different CSS per template, which Anki cannot represent. Use shared CSS before exporting.`)
     const occlusion = local.kind === 'image-occlusion'
     exportedTypes.set(local.id, new Notetype({ id: nativeNumberOf(local.id, 'note-type'), name: local.name, type: local.kind === 'standard' ? 'normal' : 'cloze', css: local.templates[0]?.css ?? '',
@@ -70,7 +87,7 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
     packageFile.addDeck(deck)
   }
   for (const note of notes) {
-    const localType = snapshot.types.find((type) => type.id === note.typeId)
+    const localType = typesById.get(note.typeId)
     const type = exportedTypes.get(note.typeId)
     if (!localType || !type) throw new Error('A note type is missing.')
     if (note.retiredFields && Object.keys(note.retiredFields).length) throw new Error(`Note ${note.id} contains retired fields. Restore or remove them before exporting.`)
@@ -78,7 +95,7 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
       const token = part.match(/^\[\[kiroku-media:([^\]]+)\]\]$/)
       if (!token) return escape(part)
       if (!options.media) return ''
-      const reference = references.find((reference) => reference.noteId === note.id && reference.displayName === token[1])
+      const reference = referencesByNote.get(note.id)?.find((reference) => reference.displayName === token[1])
       if (!reference) throw new Error(`Missing media reference: ${token[1]}`)
       const name = names.get(reference.id)!
       return reference.kind === 'image' ? `<img src="${name}">` : `[sound:${name}]`
@@ -89,7 +106,7 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
       if (!imageName) throw new Error('The image occlusion source media is missing.')
       fields = Object.values(serializeAnkiImageOcclusion({ imageName, header: note.fields.header ?? '', backExtra: note.fields.backExtra ?? '', comments: '', masks: note.imageOcclusion.masks }))
     } else if (options.media) {
-      for (const reference of references.filter((reference) => reference.noteId === note.id && !reference.inline)) {
+      for (const reference of referencesByNote.get(note.id) ?? []) if (!reference.inline) {
         const template = localType.templates.find((template) => !reference.templateId || template.id === reference.templateId)
         const content = reference.side === 'front' ? template?.front : template?.back
         const index = localType.fields.findIndex((field) => content?.includes(`{{${field.name}}}`))
@@ -102,7 +119,9 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
   }
   for (const [name, bytes] of media) packageFile.addMedia(name, bytes)
   const data = await packageFile.toCollection()
-  for (const row of data.notetypes) if (snapshot.types.find((type) => nativeNumberOf(type.id, 'note-type') === row.id)?.kind === 'image-occlusion') {
+  const typesByNativeId = new Map<number, typeof snapshot.types[number]>()
+  for (const type of snapshot.types) if (!typesByNativeId.has(nativeNumberOf(type.id, 'note-type'))) typesByNativeId.set(nativeNumberOf(type.id, 'note-type'), type)
+  for (const row of data.notetypes) if (typesByNativeId.get(row.id)?.kind === 'image-occlusion') {
     // Native Notetype.Config original_stock_kind is protobuf field 9, enum 6.
     // The final occurrence overrides an existing default emitted by ankipack.
     row.config = new Uint8Array([...row.config, 0x48, 0x06])
@@ -115,24 +134,40 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
   const localByGuid = new Map(notes.map((note) => [guid(note.id), note]))
   for (const row of data.notes) {
     const note = localByGuid.get(row.guid)!
-    const type = snapshot.types.find((type) => type.id === note.typeId)!
-    row.data = JSON.stringify({ kirokuNoteTimes: { createdAt: note.createdAt, updatedAt: note.updatedAt }, ...(options.media ? { kirokuMedia: references.filter((reference) => reference.noteId === note.id).map((reference) => ({ name: names.get(reference.id), displayName: reference.displayName, side: reference.side, inline: Boolean(reference.inline), playback: reference.playback, templateOrd: reference.templateId ? type.templates.findIndex((template) => template.id === reference.templateId) : null })) } : {}) })
+    const type = typesById.get(note.typeId)!
+    row.data = JSON.stringify({ kirokuNoteTimes: { createdAt: note.createdAt, updatedAt: note.updatedAt }, ...(options.media ? { kirokuMedia: (referencesByNote.get(note.id) ?? []).map((reference) => ({ name: names.get(reference.id), displayName: reference.displayName, side: reference.side, inline: Boolean(reference.inline), playback: reference.playback, templateOrd: reference.templateId ? type.templates.findIndex((template) => template.id === reference.templateId) : null })) } : {}) })
   }
+  const exportNoteIds = new Map(data.notes.map((row) => [row.guid, row.id]))
+  const noteTypesByNoteId = new Map(notes.map((note) => [note.id, typesById.get(note.typeId)!]))
+  const cardsByNoteAndOrdinal = new Map<string, CardRecord>()
+  for (const card of snapshot.cards) {
+    const type = noteTypesByNoteId.get(card.noteId)
+    if (!type) continue
+    const ordinal = exportOrdinal(card, type)
+    if (ordinal < 0) continue
+    const key = `${card.noteId}\u0000${ordinal}`
+    if (!cardsByNoteAndOrdinal.has(key)) cardsByNoteAndOrdinal.set(key, card)
+  }
+  const existingExportedCardOrdinals = new Set(data.cards.map((row) => `${row.nid}\u0000${row.ord}`))
   for (const note of notes) {
-    const nativeNote = data.notes.find((row) => row.guid === guid(note.id))!
-    const type = snapshot.types.find((type) => type.id === note.typeId)!
-    for (const card of snapshot.cards.filter((card) => card.noteId === note.id)) {
-      const ord = type.kind === 'standard' ? type.templates.findIndex((template) => template.id === card.templateId) : (card.clozeOrdinal ?? card.occlusionOrdinal ?? 0) - 1
+    const nativeNoteId = exportNoteIds.get(guid(note.id))!
+    const type = typesById.get(note.typeId)!
+    for (const card of cardsByNote.get(note.id) ?? []) {
+      const ord = exportOrdinal(card, type)
       if (ord < 0) throw new Error(`Card ${card.id} has no exportable template or ordinal.`)
-      if (!data.cards.some((row) => row.nid === nativeNote.id && row.ord === ord)) data.cards.push({ id: derivedNativeId(`card:${card.id}`), nid: nativeNote.id, did: nativeNumberOf(card.deckId, 'deck'), ord, mod: Math.floor(Date.now() / 1000), usn: -1, type: 0, queue: 0, due: 0, ivl: 0, factor: 0, reps: 0, lapses: 0, left: 0, odue: 0, odid: 0, flags: 0, data: '' })
+      const key = `${nativeNoteId}\u0000${ord}`
+      if (!existingExportedCardOrdinals.has(key)) {
+        existingExportedCardOrdinals.add(key)
+        data.cards.push({ id: derivedNativeId(`card:${card.id}`), nid: nativeNoteId, did: nativeNumberOf(card.deckId, 'deck'), ord, mod: Math.floor(Date.now() / 1000), usn: -1, type: 0, queue: 0, due: 0, ivl: 0, factor: 0, reps: 0, lapses: 0, left: 0, odue: 0, odid: 0, flags: 0, data: '' })
+      }
     }
   }
   const cardsByExport = new Map<number, CardRecord>()
+  const exportedNotesById = new Map(data.notes.map((note) => [note.id, note]))
   data.cards = data.cards.filter((row) => {
-    const sourceNote = data.notes.find((note) => note.id === row.nid)!
+    const sourceNote = exportedNotesById.get(row.nid)!
     const localNote = localByGuid.get(sourceNote.guid)!
-    const type = snapshot.types.find((type) => type.id === localNote.typeId)!
-    const card = snapshot.cards.find((card) => card.noteId === localNote.id && (type.kind === 'standard' ? card.templateId === type.templates[row.ord]?.id : (card.clozeOrdinal ?? card.occlusionOrdinal) === row.ord + 1))
+    const card = cardsByNoteAndOrdinal.get(`${localNote.id}\u0000${row.ord}`)
     if (!card) return false
     row.id = card.ankiId ?? derivedNativeId(`card:${card.id}`)
     row.did = nativeNumberOf(card.deckId, 'deck')
@@ -148,7 +183,7 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
     }
     return true
   })
-  if (data.cards.length !== snapshot.cards.filter((card) => noteIds.has(card.noteId)).length) throw new Error('Some card relationships cannot be represented in this package.')
+  if (data.cards.length !== snapshot.cards.reduce((total, card) => total + Number(noteIds.has(card.noteId)), 0)) throw new Error('Some card relationships cannot be represented in this package.')
   const noteMapping = new Map(data.notes.map((row) => [row.id, localByGuid.get(row.guid)!.ankiId ?? derivedNativeId(`note:${row.guid}`)]))
   for (const row of data.cards) row.nid = noteMapping.get(row.nid)!
   for (const row of data.notes) row.id = noteMapping.get(row.id)!
@@ -157,8 +192,11 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
   }
   if (options.history) {
     const used = new Set<number>()
+    const reviewsByCard = new Map<string, typeof snapshot.reviews>()
+    for (const review of snapshot.reviews) indexValue(reviewsByCard, review.cardId, review)
+    const exportedCardsById = new Map(data.cards.map((row) => [row.id, row]))
     for (const [cid, card] of cardsByExport) {
-      const historyEntries = snapshot.reviews.filter((review) => review.cardId === card.id).sort((a, b) => a.reviewedAt.localeCompare(b.reviewedAt) || a.id.localeCompare(b.id))
+      const historyEntries = [...(reviewsByCard.get(card.id) ?? [])].sort((a, b) => a.reviewedAt.localeCompare(b.reviewedAt) || a.id.localeCompare(b.id))
       for (const [index, review] of historyEntries.entries()) {
       let id = review.id.startsWith('anki-review:') ? Number(review.id.slice(12)) : Date.parse(review.reviewedAt)
       while (used.has(id)) id += 1
@@ -170,7 +208,7 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
       const lastInterval = review.scheduledDays || (previous ? -Math.max(1, Math.round((Date.parse(review.due) - Date.parse(previous.reviewedAt)) / 1000)) : 0)
       const practice = 'rescheduled' in review && review.rescheduled === false
       data.revlog.push({ id, cid, usn: -1, ease: review.rating, ivl: practice ? 0 : interval, lastIvl: lastInterval, factor: Math.round(review.difficulty * 100), time: review.durationMs ?? 0, type: practice ? 3 : review.state === State.New || review.state === State.Learning ? 0 : review.state === State.Relearning ? 2 : 1 })
-      const row = data.cards.find((row) => row.id === cid)!
+      const row = exportedCardsById.get(cid)!
       const metadata = JSON.parse(row.data || '{}') as Record<string, unknown>
       const history = (metadata.kirokuReviews ?? {}) as Record<string, unknown>
       const { rating, state, due, stability, difficulty, elapsedDays, lastElapsedDays, scheduledDays, learningSteps, reviewedAt, durationMs } = review

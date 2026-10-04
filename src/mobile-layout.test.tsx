@@ -24,7 +24,8 @@ describe('iPhone chrome', () => {
 
   test('the phone breakpoint leaves room for the fixed bottom navigation', () => {
     // Content must not hide behind the fixed navigation bar.
-    expect(phone).toMatch(/\.main\s*\{[^}]*padding:\s*0 18px \d+px/)
+    expect(phone).toMatch(/\.main\s*\{[^}]*padding:\s*0 18px calc\(148px \+ var\(--mobile-nav-height\)\)/)
+    expect(phone).toContain('.tile-action { scroll-margin-bottom: 92px; }')
   })
 
   test('the widest table scrolls inside its own box instead of the page', () => {

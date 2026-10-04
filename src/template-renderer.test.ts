@@ -2,17 +2,23 @@ import { describe, expect, test } from 'vitest'
 import { clozeOrdinals, renderTemplate, tryRenderTemplate, validateTemplate } from './template-renderer'
 
 describe('renderTemplate', () => {
-  test('hint fields use native accessible disclosure without executing field markup', () => {
+  test('hint fields use an accessible checkbox disclosure without executing field markup', () => {
     const result = renderTemplate('{{Word}} {{hint:Meaning}}', { Word: '猫', Meaning: '<script>alert(1)</script>cat' })
     const body = new DOMParser().parseFromString(result.html, 'text/html').body
-    expect(body.querySelector('details')?.open).toBe(false)
-    expect(body.querySelector('summary')?.textContent).toBe('Show Meaning')
-    expect(body.querySelector('details div')?.textContent).toBe('<script>alert(1)</script>cat')
+    expect(body.querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(false)
+    expect(body.querySelector('label')?.textContent).toBe('Show Meaning')
+    expect(body.querySelector('.card-hint-content')?.textContent).toBe('<script>alert(1)</script>cat')
+    expect(body.querySelector('label')?.getAttribute('for')).toBe(body.querySelector('input')?.id)
     expect(body.querySelector('script')).toBeNull()
     expect(result.isEmpty).toBe(false)
     expect(renderTemplate('{{hint:Meaning}}', { Meaning: ' ' }).isEmpty).toBe(true)
     expect(renderTemplate('{{hint:Meaning}}', { Meaning: ' ' }).html).toBe('')
     expect(tryRenderTemplate('{{hint:furigana:Word}}', { Word: '猫[ねこ]' }).ok).toBe(false)
+  })
+  test('hint controls have independent stable ids', () => {
+    const body = new DOMParser().parseFromString(renderTemplate('{{hint:First}} {{hint:Second}}', { First: 'one', Second: 'two' }).html, 'text/html').body
+    expect([...body.querySelectorAll<HTMLInputElement>('input')].map((input) => input.id)).toEqual(['kiroku-hint-0', 'kiroku-hint-1'])
+    expect([...body.querySelectorAll('label')].map((label) => label.textContent)).toEqual(['Show First', 'Show Second'])
   })
   test('renders trusted imported media tokens inline and respects surrounding conditionals', () => {
     const fields = { Show: 'yes', Media: 'before [[kiroku-media:cat.png]] after' }

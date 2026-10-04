@@ -16,6 +16,7 @@ import {
   type NoteMediaReference,
 } from './collection'
 import { MediaRenderer } from './MediaRenderer'
+import { replayAudioElements } from './audio-playback'
 import { ImageOcclusionEditor, ImageOcclusionReview } from './ImageOcclusion'
 import { NoteTypeManager } from './NoteTypeManager'
 import { TemplatePreview } from './TemplatePreview'
@@ -871,11 +872,7 @@ function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: string; se
       ...[...surface.querySelectorAll('iframe')].flatMap((frame) => [...(frame.contentDocument?.querySelectorAll('audio') ?? [])]),
     ]
     if (!audio.length) { setAudioMessage('Audio is still loading. Try again in a moment.'); return }
-    const results = await Promise.allSettled(audio.map(async (element) => {
-      element.currentTime = 0
-      await element.play()
-    }))
-    setAudioMessage(results.some((result) => result.status === 'fulfilled') ? 'Audio replayed.' : 'Audio could not play on this device.')
+    setAudioMessage(await replayAudioElements(audio) ? 'Audio replayed.' : 'Audio could not play on this device.')
   }, [])
 
   const deleteCurrentNote = useCallback(async () => {

@@ -17,6 +17,10 @@ export default defineConfig({
   // Windows WebKit can corrupt trace artifacts when multiple contexts in the
   // same file close concurrently. Keep each browser's user journey serial.
   fullyParallel: false,
+  // Windows WebKit becomes intermittently starved when six browser workers
+  // compete for the host. Keep the local gate deterministic; CI may choose
+  // its own worker count.
+  workers: process.env.CI ? undefined : 1,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
   reporter: [['list'], ['html', { open: 'never' }]],
