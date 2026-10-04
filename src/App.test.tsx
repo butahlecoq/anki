@@ -128,11 +128,15 @@ test('waits for service-worker readiness before claiming the offline shell is re
 test('explains the Lockdown Mode offline limit and disables sync when service workers are absent', async () => {
   Reflect.deleteProperty(navigator, 'serviceWorker')
   await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'test-token', cursor: 0 })
-  render(<App />)
-  expect(screen.getByTestId('offline-shell-warning')).toHaveTextContent(/installed Home Screen app/)
-  expect(screen.getByTestId('offline-shell-warning')).toHaveTextContent(/iOS Lockdown Mode can disable it/)
-  expect(await screen.findByRole('button', { name: 'Sync now' })).toBeDisabled()
-  expect(screen.getByRole('button', { name: 'Pair another device' })).toBeEnabled()
+  try {
+    render(<App />)
+    expect(screen.getByTestId('offline-shell-warning')).toHaveTextContent(/installed Home Screen app/)
+    expect(screen.getByTestId('offline-shell-warning')).toHaveTextContent(/iOS Lockdown Mode can disable it/)
+    expect(await screen.findByRole('button', { name: 'Sync now' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Pair another device' })).toBeEnabled()
+  } finally {
+    await collection.settings.delete('sync')
+  }
 })
 
 test('a stale queue entry whose card was deleted completes review', async () => {

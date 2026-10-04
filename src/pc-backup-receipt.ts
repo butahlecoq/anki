@@ -3,7 +3,7 @@ export interface VerifiedPcBackupReceipt {
   backupId: string
   createdAt: string
   verifiedAt: string
-  reason: 'manual' | 'before-sync'
+  reason: 'manual' | 'before-sync' | 'before-restore'
   changeCount: number
   mediaFiles: number
   mediaBytes: number
@@ -19,7 +19,7 @@ export function isVerifiedPcBackupReceipt(value: unknown): value is VerifiedPcBa
   const count = (item: unknown) => typeof item === 'number' && Number.isSafeInteger(item) && item >= 0
   return typeof receipt.backupId === 'string' && Boolean(receipt.backupId)
     && timestamp(receipt.createdAt) && timestamp(receipt.verifiedAt)
-    && (receipt.reason === 'manual' || receipt.reason === 'before-sync')
+    && (receipt.reason === 'manual' || receipt.reason === 'before-sync' || receipt.reason === 'before-restore')
     && count(receipt.changeCount) && count(receipt.mediaFiles) && count(receipt.mediaBytes) && count(receipt.archiveBytes)
     && typeof receipt.archiveSha256 === 'string' && /^[a-f0-9]{64}$/.test(receipt.archiveSha256)
 }

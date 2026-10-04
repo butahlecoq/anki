@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { collection, State, tryRenderNoteTemplate, type Note } from './collection'
+import { collection, State, type Note } from './collection'
 import { userFacingStorageError } from './offline-storage'
 import { collectionDeckPaths, collectionSearchRows, compileCollectionSearch, plainField, SearchSyntaxError, type SearchRow } from './collection-search'
 import { applyBulkAction, applyFieldChanges, previewFieldChanges, selectionSummary, type BrowserSelection, type BulkAction, type FieldChange, type FieldOperation } from './browser-maintenance'
