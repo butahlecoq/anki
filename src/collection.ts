@@ -1,7 +1,7 @@
 import Dexie, { type EntityTable } from 'dexie'
 import { customStudyKey, customStudyMembership, customStudySessions, type CustomStudySession } from './custom-study-state'
 import { createEmptyCard } from 'ts-fsrs'
-import { answerWithSchedule, deserializeCard, eligibleForQueue, eligibleForStudy, isBuried, isInterdayLearning, isLearningCard, nextStudyBoundary, Rating, reviewChoices as previewReviewChoices, schedulerFor, selectDueCards, serializeCard, State, templateSuspended, validateSteps, type Grade } from './scheduler'
+import { answerWithSchedule, deserializeCard, eligibleForQueue, eligibleForStudy, isBuried, isInterdayLearning, isLearningCard, nextStudyBoundary, Rating, reviewChoices as previewReviewChoices, selectDueCards, serializeCard, State, templateSuspended, validateSteps, type Grade } from './scheduler'
 import { SUPPORTED_MEDIA_TYPES } from '../anki-interchange'
 import { digestMedia, validateMedia, type AudioPlayback, type MediaKind, type MediaSide } from './media'
 import { clozeOrdinals, tryRenderTemplate, validateTemplate } from './template-renderer'
@@ -2522,7 +2522,11 @@ export class Collection extends Dexie {
           ...commands.map((command) => ({ at: command.occurredAt, id: command.opId, review: undefined as ReviewEntry | undefined, command })),
         ].sort((a, b) => a.at.localeCompare(b.at) || a.id.localeCompare(b.id))
         for (const event of events) {
-          if (event.review) schedule = schedulerFor(event.review.scheduling!.options, event.review.cardId).next(schedule, new Date(event.at), event.review.rating as Grade).card
+          if (event.review) {
+            const before = serializeCard(schedule, card)
+            const replayed = answerWithSchedule(before, event.review.scheduling!.options, event.review.rating as Grade, new Date(event.at), event.review.id)
+            schedule = deserializeCard(replayed.card)
+          }
           else if (event.command) {
             const commanded = event.command.payload as CardRecord
             schedule = { ...schedule, due: new Date(commanded.due), state: commanded.state }

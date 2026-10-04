@@ -7,6 +7,15 @@ with **FSRS-6** enabled. The oracle uses Anki's built-in 21 default FSRS paramet
 review cards. These settings come from the fresh official Anki 26.9.3 profile.
 The profile's study day rolls over at 4:00 a.m. local time (Anki's default).
 
+Review fuzz uses Anki's deterministic card-ID-plus-review-count seed and the
+`rand 0.9.4` `StdRng` draw (ChaCha12). A persisted New card with ID
+`1234567890000`, zero prior reviews, and the matching default profile previews
+and persists an 8-day Easy interval in both Anki and the app. This checks the
+exact native draw as well as the broader native interval bands below. The oracle
+emits all 64 Easy intervals for IDs `1234567890000`–`1234567890063`; the app test
+uses those same IDs and compares every preview, persisted card interval, and
+persisted review after-state with the native result.
+
 Run the isolated official scheduler oracle with:
 
 ```powershell
@@ -63,7 +72,17 @@ seeds, sibling burial, and statistics. App tests cover all 16 state/grade
 transitions, preview-to-answer agreement, persistence after reload, review sort
 modes, gather modes, and cross-type bury precedence. The pinned native oracle
 checks the default review and new-card schedules plus the queue, limit, and
-burial cases above. It still does not compare all 16 persisted state/grade
-outcomes or every alternate sort/gather mode directly against Anki, so #94 stays
-open for that remaining parity evidence. A user-configured Anki rollover hour is
-not yet a setting in the app; this target currently matches Anki's default.
+burial cases above. It also emits the official persisted card rows (including the
+native card data field) and review-log rows for all 16 state/grade combinations.
+Each outcome also includes the native four-grade preview labels from that same
+pre-answer state.
+Those native outcomes still need to be compared with the app's persisted outputs
+for Learning, Review and Relearning across all four grades, and extended to every
+alternate sort/gather mode directly against Anki, so #94 stays open for that
+remaining parity evidence. Review fuzz bounds use the previous scheduled
+interval before the deterministic draw, matching Anki's lower-bound rule; the
+current tests compare review intervals against native bands, not exact persisted
+outputs for every Review state/grade combination. The native-output matrix must
+be compared before claiming full parity.
+A user-configured Anki rollover hour is not yet a setting in the app; this target
+currently matches Anki's default.

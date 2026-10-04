@@ -1,12 +1,11 @@
 import {
   Rating,
   State,
-  StrategyMode,
   fsrs,
-  type AbstractScheduler,
   type Card as FsrsCard,
   type Grade,
   type ReviewLog as FsrsReviewLog,
+  get_fuzz_range,
 } from 'ts-fsrs'
 import type { CardRecord, Deck, DeckOptionGroup, Note, ReviewChoice, ReviewEntry } from './collection'
 import { studyDayKey, studyDayWindow as localStudyDayWindow } from './study-day'
@@ -110,24 +109,62 @@ function mixQueues<T>(first: readonly T[], second: readonly T[]): T[] {
   return mixed
 }
 
-export function schedulerFor(group: DeckOptionGroup, cardId: string) {
-  const scheduler = fsrs({
+export function schedulerFor(group: DeckOptionGroup) {
+  return fsrs({
     request_retention: group.desiredRetention,
     maximum_interval: 36500,
     // Anki has no fuzz toggle: intervals of 2.5 days or more always carry a
     // random offset. Short-term learning steps are permitted for the same reason.
-    enable_fuzz: true,
+    enable_fuzz: false,
     enable_short_term: true,
     learning_steps: validateSteps(group.learningSteps, 'Learning steps'),
     relearning_steps: validateSteps(group.relearningSteps, 'Relearning steps'),
   })
-  // Anki seeds fuzz from the card's identity, not the wall clock, so a replayed
-  // or synchronised review produces the same schedule on every device while
-  // sibling cards still receive separate offsets. ts-fsrs would otherwise seed
-  // from review time, difficulty and stability.
-  return scheduler.useStrategy(StrategyMode.SEED, function (this: AbstractScheduler) {
-    return `${cardId}_${this.current.reps}`
-  })
+}
+
+/** Port rand 0.9.4's seed_from_u64 + StdRng (ChaCha12) draw used by Anki 26.9.3. */
+function ankiFuzzFactor(seed: bigint): number {
+  const mask64 = (1n << 64n) - 1n
+  const mask32 = 0xffff_ffff
+  let pcgState = seed
+  const key: number[] = []
+  for (let index = 0; index < 8; index += 1) {
+    pcgState = (pcgState * 6_364_136_223_846_793_005n + 11_634_580_027_462_260_723n) & mask64
+    const xorshifted = Number(((pcgState >> 18n) ^ pcgState) >> 27n) >>> 0
+    const rotation = Number(pcgState >> 59n)
+    key.push(((xorshifted >>> rotation) | (xorshifted << ((-rotation) & 31))) & mask32)
+  }
+
+  const state = [0x61707865, 0x3320646e, 0x79622d32, 0x6b206574, ...key, 0, 0, 0, 0]
+  const working = [...state]
+  const rotate = (value: number, bits: number) => (value << bits) | (value >>> (32 - bits))
+  const quarterRound = (a: number, b: number, c: number, d: number) => {
+    working[a] = (working[a] + working[b]) >>> 0
+    working[d] = rotate(working[d] ^ working[a], 16) >>> 0
+    working[c] = (working[c] + working[d]) >>> 0
+    working[b] = rotate(working[b] ^ working[c], 12) >>> 0
+    working[a] = (working[a] + working[b]) >>> 0
+    working[d] = rotate(working[d] ^ working[a], 8) >>> 0
+    working[c] = (working[c] + working[d]) >>> 0
+    working[b] = rotate(working[b] ^ working[c], 7) >>> 0
+  }
+  for (let round = 0; round < 6; round += 1) {
+    quarterRound(0, 4, 8, 12); quarterRound(1, 5, 9, 13)
+    quarterRound(2, 6, 10, 14); quarterRound(3, 7, 11, 15)
+    quarterRound(0, 5, 10, 15); quarterRound(1, 6, 11, 12)
+    quarterRound(2, 7, 8, 13); quarterRound(3, 4, 9, 14)
+  }
+  const firstWord = (working[0] + state[0]) >>> 0
+  return (firstWord >>> 8) / 0x1_000000
+}
+
+function fuzzSeed(card: Pick<CardRecord, 'id' | 'ankiId'>, reps: number) {
+  // Imported cards use composite app IDs; their retained Native Identity is
+  // the identity Anki uses for its deterministic draw.
+  const identity = Number.isSafeInteger(card.ankiId) && card.ankiId! > 0
+    ? BigInt(card.ankiId!)
+    : /^\d+$/.test(card.id) ? BigInt(card.id) : BigInt(stableRank(card.id))
+  return BigInt.asUintN(64, identity + BigInt(reps))
 }
 
 export function serializeCard(card: FsrsCard, identity: Pick<CardRecord, 'id' | 'deckId' | 'noteId' | 'templateId'> & Partial<CardRecord>): CardRecord {
@@ -169,15 +206,15 @@ export function intervalLabel(due: Date, reviewedAt: Date) {
   return `${Math.round(hours / 24)}d`
 }
 
-function nextSchedule(scheduler: ReturnType<typeof schedulerFor>, card: FsrsCard, now: Date, grade: Grade) {
+function nextSchedule(scheduler: ReturnType<typeof schedulerFor>, card: FsrsCard, identity: Pick<CardRecord, 'id' | 'ankiId' | 'scheduledDays'>, now: Date, grade: Grade) {
   const result = scheduler.next(card, now, grade)
-  if (card.state !== State.Review || grade === Rating.Again) return result
-
-  // Anki never fuzzes a successful review below its current scheduled interval.
-  const baseInterval = Math.min(scheduler.parameters.maximum_interval, Math.max(1, Math.round(result.card.stability * scheduler.interval_modifier)))
-  if (baseInterval > card.scheduled_days && result.card.scheduled_days <= card.scheduled_days) {
-    result.card.scheduled_days = card.scheduled_days + 1
-    result.card.due = new Date(now.getTime() + result.card.scheduled_days * 86_400_000)
+  if (result.card.state === State.Review && result.card.scheduled_days >= 2.5) {
+    const previousInterval = card.state === State.Review ? identity.scheduledDays : card.elapsed_days
+    const range = get_fuzz_range(result.card.scheduled_days, previousInterval, scheduler.parameters.maximum_interval)
+    const seed = fuzzSeed(identity, card.reps)
+    const scheduledDays = Math.floor(range.min_ivl + ankiFuzzFactor(seed) * (range.max_ivl - range.min_ivl + 1))
+    result.card.scheduled_days = scheduledDays
+    result.card.due = new Date(now.getTime() + scheduledDays * 86_400_000)
   }
   return result
 }
@@ -190,12 +227,12 @@ export function reviewChoices(card: CardRecord, group: DeckOptionGroup, now: Dat
   return choices.map(([rating, label]) => ({
     rating,
     label,
-    interval: intervalLabel(nextSchedule(schedulerFor(group, card.id), deserializeCard(card), now, rating).card.due, now),
+    interval: intervalLabel(nextSchedule(schedulerFor(group), deserializeCard(card), card, now, rating).card.due, now),
   }))
 }
 
 export function answerWithSchedule(card: CardRecord, group: DeckOptionGroup, rating: Grade, now: Date, reviewId: string) {
-  const result = nextSchedule(schedulerFor(group, card.id), deserializeCard(card), now, rating)
+  const result = nextSchedule(schedulerFor(group), deserializeCard(card), card, now, rating)
   return {
     card: serializeCard(result.card, card),
     review: { ...serializeReview(result.log, { id: reviewId, cardId: card.id, deckId: card.deckId }), scheduling: { before: card, options: group } },
@@ -268,7 +305,7 @@ export function selectDueCards(input: DueSelectionInput): CardRecord[] {
   const retrievability = (card: CardRecord) => {
     let value = reviewRetrievability.get(card.id)
     if (value === undefined) {
-      value = schedulerFor(selectedGroup, card.id).get_retrievability(deserializeCard(card), now, false)
+      value = schedulerFor(selectedGroup).get_retrievability(deserializeCard(card), now, false)
       reviewRetrievability.set(card.id, value)
     }
     return value
