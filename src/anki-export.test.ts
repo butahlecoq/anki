@@ -87,6 +87,8 @@ test('large note, card, and media relationship sets retain exported identities a
   for (let index = 0; index < 128; index++) {
     const note = await source.createBasicNote(deck.id, { front: `front-${index}`, back: `back-${index}` }, new Date(1_700_000_000_000 + index))
     notes.push(note)
+    const card = (await source.cards.where('noteId').equals(note.id).first())!
+    await source.cards.update(card.id, { ankiId: 10_000 + index })
     await source.attachMedia(note.id, { file: new File([png], `image-${index}.png`, { type: 'image/png' }), side: 'front' }, new Date(1_700_000_000_000 + index))
   }
 
@@ -99,7 +101,9 @@ test('large note, card, and media relationship sets retain exported identities a
   expect(new Set(native.data.cards.map((card) => card.id)).size).toBe(notes.length)
   for (const [index, note] of notes.entries()) {
     const row = exportedNotes.get(note.id)!
-    expect(native.data.cards.filter((card) => card.nid === row.id)).toHaveLength(1)
+    const matchingCards = native.data.cards.filter((card) => card.nid === row.id)
+    expect(matchingCards).toHaveLength(1)
+    expect(matchingCards[0]!.id).toBe(10_000 + index)
     expect(JSON.parse(row.data).kirokuMedia).toMatchObject([{ name: `${(await source.noteMedia.where('noteId').equals(note.id).first())!.digest}.png`, displayName: `image-${index}.png`, side: 'front' }])
   }
 })

@@ -2,7 +2,7 @@ import { blobBytes, extensionForMediaType, DAY_MILLISECONDS, toHex } from '../an
 import type { SqlJsStatic } from 'sql.js'
 import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url'
 import type { Deck as NativeDeck, Notetype as NativeNotetype } from 'ankipack'
-import { State, type Collection, type CardRecord } from './collection'
+import { State, type Collection, type CardRecord, type NoteType } from './collection'
 import { serializeAnkiImageOcclusion } from './image-occlusion-interchange'
 import { validateAnkiArchive } from './anki-archive'
 import { nativeScheduleFingerprint, nativeReviewFingerprint } from './anki-scheduling-metadata'
@@ -18,6 +18,9 @@ function indexValue<K, V>(index: Map<K, V[]>, key: K, value: V) {
   const values = index.get(key)
   if (values) values.push(value)
   else index.set(key, [value])
+}
+function exportOrdinal(card: CardRecord, type: NoteType) {
+  return type.kind === 'standard' ? type.templates.findIndex((template) => template.id === card.templateId) : (card.clozeOrdinal ?? card.occlusionOrdinal ?? 0) - 1
 }
 // Independently written template invoking the official image occlusion runtime.
 // A plain cloze template only hides the shape description, leaving the image
@@ -140,8 +143,8 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
   for (const card of snapshot.cards) {
     const type = noteTypesByNoteId.get(card.noteId)
     if (!type) continue
-    const ordinal = type.kind === 'standard' ? type.templates.findIndex((template) => template.id === card.templateId) : (card.clozeOrdinal ?? card.occlusionOrdinal)
-    if (ordinal === undefined || ordinal < 0) continue
+    const ordinal = exportOrdinal(card, type)
+    if (ordinal < 0) continue
     const key = `${card.noteId}\u0000${ordinal}`
     if (!cardsByNoteAndOrdinal.has(key)) cardsByNoteAndOrdinal.set(key, card)
   }
@@ -150,7 +153,7 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
     const nativeNoteId = exportNoteIds.get(guid(note.id))!
     const type = typesById.get(note.typeId)!
     for (const card of cardsByNote.get(note.id) ?? []) {
-      const ord = type.kind === 'standard' ? type.templates.findIndex((template) => template.id === card.templateId) : (card.clozeOrdinal ?? card.occlusionOrdinal ?? 0) - 1
+      const ord = exportOrdinal(card, type)
       if (ord < 0) throw new Error(`Card ${card.id} has no exportable template or ordinal.`)
       const key = `${nativeNoteId}\u0000${ord}`
       if (!existingExportedCardOrdinals.has(key)) {
@@ -164,8 +167,7 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
   data.cards = data.cards.filter((row) => {
     const sourceNote = exportedNotesById.get(row.nid)!
     const localNote = localByGuid.get(sourceNote.guid)!
-    const type = typesById.get(localNote.typeId)!
-    const card = cardsByNoteAndOrdinal.get(`${localNote.id}\u0000${row.ord + (type.kind === 'standard' ? 0 : 1)}`)
+    const card = cardsByNoteAndOrdinal.get(`${localNote.id}\u0000${row.ord}`)
     if (!card) return false
     row.id = card.ankiId ?? derivedNativeId(`card:${card.id}`)
     row.did = nativeNumberOf(card.deckId, 'deck')

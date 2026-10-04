@@ -24,7 +24,7 @@ generator, and command. The baseline run temporarily used `origin/main`'s
 | Version | Samples (ms) | Median (ms) | Notes / Cards / References / Blobs |
 | --- | --- | ---: | --- |
 | Before | 427.9, 437.4, 438.4, 457.9, 466.9 | 438.4 | 2,000 / 2,000 / 2,000 / 1 |
-| After | 312.5, 320.6, 322.3, 333.4, 340.9 | 322.3 | 2,000 / 2,000 / 2,000 / 1 |
+| After | 314.2, 320.3, 327.5, 344.6, 369.3 | 327.5 | 2,000 / 2,000 / 2,000 / 1 |
 
-The measured median decreased by 26.5% on this fixture. These measurements are
+The measured median decreased by 25.3% on this fixture. These measurements are
 descriptive and are not used as a CI threshold.
