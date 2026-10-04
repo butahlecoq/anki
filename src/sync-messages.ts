@@ -9,7 +9,8 @@
 
 /** The sync result shapes the client can report. */
 export type SyncOutcome =
-  | { state: 'complete'; accepted: number; media?: { uploaded: number; downloaded: number; pending: number; uploadError?: string; downloadError?: string } }
+  | { state: 'complete'; accepted: number; media?: { uploaded: number; downloaded: number; pending: number; uploadError?: string; downloadError?: string }; conflicts?: number }
+  | { state: 'incomplete'; accepted: number; pendingOperations: number; remoteChangesPending: boolean }
   | { state: 'authentication-required' }
   | { state: 'upgrade-required'; target: 'this-device' | 'pc-service' }
   | { state: 'backup-failed'; message: string }
@@ -27,9 +28,14 @@ export function syncOutcomeMessage(result: SyncOutcome): string {
   if (result.state === 'complete') {
     const media = result.media
     const error = media?.uploadError ?? media?.downloadError
-    if (error === 'authentication-required') return `Card sync complete. ${plural(media?.pending ?? 0, 'media file')} still need pairing.`
-    if (error) return `Card sync complete. ${plural(media?.pending ?? 0, 'media file')} will retry when the PC is reachable.`
-    return `Sync complete. ${plural(result.accepted, 'local change')} sent; ${media?.uploaded ?? 0} uploaded and ${media?.downloaded ?? 0} downloaded.`
+    const conflicts = result.conflicts ? ` ${plural(result.conflicts, 'conflict')} need review.` : ''
+    if (error === 'authentication-required') return `Card sync complete. ${plural(media?.pending ?? 0, 'media file')} still need pairing.${conflicts}`
+    if (error) return `Card sync complete. ${plural(media?.pending ?? 0, 'media file')} will retry when the PC is reachable.${conflicts}`
+    return `Sync complete. ${plural(result.accepted, 'local change')} sent; ${media?.uploaded ?? 0} uploaded and ${media?.downloaded ?? 0} downloaded.${conflicts}`
+  }
+  if (result.state === 'incomplete') {
+    const remote = result.remoteChangesPending ? ' More changes are waiting from the PC.' : ''
+    return `Sync saved progress after sending ${plural(result.accepted, 'local change')}. ${plural(result.pendingOperations, 'local change')} remain; tap Sync now to continue.${remote}`
   }
   if (result.state === 'authentication-required') return 'This device needs to be paired again before it can sync.'
   if (result.state === 'upgrade-required') {

@@ -8,7 +8,7 @@ import { SYNC_LOCAL_ONLY, pairOutcomeMessage, pairingClosesOn, syncOutcomeMessag
  * host: the sync service does not start (issue #85).
  */
 
-const complete = (overrides: Partial<Extract<SyncOutcome, { state: 'complete' }>['media']> = {}): SyncOutcome => ({
+const complete = (overrides: Partial<Extract<SyncOutcome, { state: 'complete' }>['media']> = {}): Extract<SyncOutcome, { state: 'complete' }> => ({
   state: 'complete', accepted: 2, media: { uploaded: 3, downloaded: 4, pending: 0, ...overrides },
 })
 
@@ -23,6 +23,15 @@ describe('a completed sync', () => {
 
   test('a sync with no media at all still reads as complete', () => {
     expect(syncOutcomeMessage({ state: 'complete', accepted: 0 })).toBe('Sync complete. 0 local changes sent; 0 uploaded and 0 downloaded.')
+  })
+
+  test('a sync with conflicts tells the learner to review them', () => {
+    expect(syncOutcomeMessage({ state: 'complete', accepted: 1, conflicts: 2 })).toBe('Sync complete. 1 local change sent; 0 uploaded and 0 downloaded. 2 conflicts need review.')
+  })
+
+  test('an incomplete sync explains saved progress and remaining work', () => {
+    expect(syncOutcomeMessage({ state: 'incomplete', accepted: 100, pendingOperations: 25, remoteChangesPending: true }))
+      .toBe('Sync saved progress after sending 100 local changes. 25 local changes remain; tap Sync now to continue. More changes are waiting from the PC.')
   })
 
   test('media awaiting pairing is distinguished from media that will retry', () => {
@@ -42,6 +51,11 @@ describe('a completed sync', () => {
 
   test('a download failure is treated the same as an upload failure', () => {
     expect(syncOutcomeMessage(complete({ pending: 1, downloadError: 'unreachable' }))).toBe(syncOutcomeMessage(complete({ pending: 1, uploadError: 'unreachable' })))
+  })
+
+  test('media retry status does not hide unresolved conflicts', () => {
+    expect(syncOutcomeMessage({ ...complete({ pending: 1, uploadError: 'unreachable' }), conflicts: 2 }))
+      .toBe('Card sync complete. 1 media file will retry when the PC is reachable. 2 conflicts need review.')
   })
 })
 

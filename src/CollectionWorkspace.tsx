@@ -261,11 +261,29 @@ function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: boolean 
       return
     }
     setBusy(true)
-    setMessage('Syncing your collection:')
-    const result = await syncCollection(collection)
-    if (result.state === 'complete' && settings) void listPcBackups(settings).then(({ backups: latest }) => setBackups(latest)).catch(() => {})
-    setBusy(false)
-    setMessage(syncOutcomeMessage(result))
+    setMessage('Syncing your collection…')
+    try {
+      const result = await syncCollection(collection, fetch.bind(window), (progress) => {
+        switch (progress.phase) {
+          case 'records': setMessage(`Syncing records · ${progress.completed} accepted · ${progress.pending} local changes remain · cursor ${progress.cursor}.${progress.remoteChangesPending ? ' More PC records are queued.' : ''}`); break
+          case 'upload': setMessage(`Uploading media · ${progress.completed} sent · ${progress.pending} waiting.`); break
+          case 'download': setMessage(`Downloading media · ${progress.completed} saved · ${progress.pending} waiting.`); break
+          case 'retry': {
+            const task = progress.task === 'records' ? 'collection changes' : 'media files'
+            setMessage(`Sync saved progress. ${progress.pending} ${task} remain for the next retry.`)
+            break
+          }
+          case 'complete': setMessage(syncOutcomeMessage({ state: 'complete', accepted: progress.accepted, media: progress.media, conflicts: progress.conflicts })); break
+        }
+      })
+      if (result.state === 'complete') {
+        if (settings) void listPcBackups(settings).then(({ backups: latest }) => setBackups(latest)).catch(() => {})
+        const conflicts = await collection.syncConflicts.count()
+        setMessage(syncOutcomeMessage({ ...result, conflicts }))
+      } else setMessage(syncOutcomeMessage(result))
+    } catch (error) {
+      setMessage(error instanceof Error ? `Sync stopped safely. ${error.message} Your local changes remain on this device; reconnect and retry.` : 'Sync stopped safely. Your local changes remain on this device; reconnect and retry.')
+    } finally { setBusy(false) }
   }
 
   async function backupPcCollection() {
