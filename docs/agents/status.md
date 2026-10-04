@@ -49,7 +49,7 @@ Base commit: `9861cf3db02e0da81c0b261291dbacbbe45dfec9` (current `origin/main`).
 
 ### [#87 Generate the status document from Git and the tracker](https://github.com/butahlecoq/anki/issues/87)
 
-- PR [#167](https://github.com/butahlecoq/anki/pull/167) (draft); head `e7f99630c0e95747e0d1f2c9cfed6659f9f98b42`; exact-head checks: no hosted checks reported; branch `feat/87-live-status-luna-night`; worktree: D:/work/anki-87-live-status-luna-night; deferred: This remains a draft. `npm run check` was not run because the #85 worker is actively using the shared verification suite; the runbook prohibits competing full browser/unit/oracle runs. Run the complete gate on the final PR head after #85 records its final evidence/checkpoint. No merge-readiness claim is made.
+- PR [#167](https://github.com/butahlecoq/anki/pull/167) (open); head `e6531809b28f6730db0f01b6eb5dc39200d4f955`; exact-head checks: no hosted checks reported; branch `feat/87-live-status-luna-night`; worktree: D:/work/anki-87-live-status-luna-night; deferred: none stated in PR or checkpoint comments
 
 ### [#91 Preserve imported field HTML instead of normalising it to plain text](https://github.com/butahlecoq/anki/issues/91)
 
@@ -78,7 +78,6 @@ Base commit: `9861cf3db02e0da81c0b261291dbacbbe45dfec9` (current `origin/main`).
 ## Dirty worktrees
 
 - `D:/work/anki` (main): docs/agents/performance-issues-handoff.md, docs/research/why-not-reuse-upstream-anki-clients.md
-- `D:/work/anki-87-live-status-luna-night` (feat/87-live-status-luna-night): CONTRIBUTING.md, GLOSSARY.md, README.md, docs/adr/0003-a-free-web-app-for-everyone.md, docs/agents/ci.md, docs/performance/172-export-profile.md, docs/performance/173-deck-summary-profile.md, docs/research/why-not-reuse-upstream-anki-clients.md, playwright.config.ts, src/CollectionWorkspace.tsx, src/TemplatePreview.tsx, src/anki-export.profile.test.ts, src/anki-export.test.ts, src/anki-export.ts, src/audio-playback.test.ts, src/audio-playback.ts, src/collection.summaries.profile.test.ts, src/collection.test.ts, src/collection.ts, src/design-tokens.test.ts, src/hint-compatibility.test.ts, src/mobile-layout.test.tsx, src/styles.css, src/template-renderer.test.ts, src/template-renderer.ts, tests/e2e/browser.spec.ts, tests/e2e/collection.spec.ts, tests/e2e/hint.spec.ts
 - `D:/work/anki-issue-85` (feat/85-local-browser-verification): .runtime/hint-webkit/kiroku-sync.sqlite-shm, .runtime/hint-webkit/kiroku-sync.sqlite-wal, .runtime/sync-shell/kiroku-sync.sqlite-shm, .runtime/sync-shell/kiroku-sync.sqlite-wal, .runtime/sync/kiroku-sync.sqlite-shm, .runtime/sync/kiroku-sync.sqlite-wal, .runtime/sync/media/2e/2eeb55e08e1a51af2003fabdfc8572539de6c3f0fa1c182a5b3d3a4806b84db5, .runtime/sync/media/5f/5fd4d7e331e0d162bd059c7573860f239ea9340d569f8b037de797c7abbf1b9d
 
 ## Branches with work beyond their pull request merge point
