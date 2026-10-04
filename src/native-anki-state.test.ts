@@ -4,6 +4,7 @@ import initSqlJs from 'sql.js'
 import type { SqlJsStatic } from 'sql.js'
 import { NativeAnkiState } from './native-anki-state'
 import { NativeAnkiClient, NativeSyncConflict } from './native-anki-sync'
+import { NativeAnkiMedia } from './native-anki-media'
 
 let state: NativeAnkiState
 let SQL: SqlJsStatic
@@ -95,4 +96,25 @@ it('rejects another page sync and collection replacement while the native sessio
   release()
   await running
   expect((await state.checkpoint())?.revision).toBe(1)
+})
+
+it('refuses native account and media sessions without Web Locks and preserves their checkpoints', async () => {
+  const account = await client(), SQL = await initSqlJs()
+  const media = new NativeAnkiMedia(`native-media-locks-${crypto.randomUUID()}`)
+  await media.setFile('猫.png', new Uint8Array([1, 2, 3]))
+  const originalCheckpoint = await state.checkpoint()
+  vi.stubGlobal('navigator', {})
+  try {
+    await expect(state.synchronize(account, SQL)).rejects.toMatchObject({ name: 'NativeSyncError', code: 'unsupported', message: expect.stringContaining('Web Locks API') })
+    await expect(media.synchronize({} as NativeAnkiClient)).rejects.toMatchObject({ name: 'NativeSyncError', code: 'unsupported', message: expect.stringContaining('Web Locks API') })
+    expect(await state.checkpoint()).toEqual(originalCheckpoint)
+    expect(await state.recovery()).toBeUndefined()
+    expect(await media.cursor()).toBe(0)
+    const retained = await media.files.get('猫.png')
+    expect(retained?.pending).toBe(true)
+    expect(Array.from(retained?.bytes ?? [])).toEqual([1, 2, 3])
+    expect(await media.attempts.get('active')).toBeUndefined()
+  } finally {
+    await media.delete()
+  }
 })

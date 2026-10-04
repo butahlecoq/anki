@@ -11,7 +11,7 @@ export interface NativeFullSyncDecision extends NativeFullSyncPreview { directio
 export function sameRemoteRevision(left: NativeSyncMeta, right: NativeSyncMeta) { return left.mod === right.mod && left.scm === right.scm && left.usn === right.usn }
 export async function nativeSnapshotHash(bytes: Uint8Array) { return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes.slice().buffer))].map((byte) => byte.toString(16).padStart(2, '0')).join('') }
 export class NativeSyncError extends Error {
-  constructor(public readonly code: 'authentication' | 'protocol' | 'upgrade' | 'transfer' | 'conflict' | 'cancelled' | 'timeout', message: string) { super(message); this.name = 'NativeSyncError' }
+  constructor(public readonly code: 'authentication' | 'protocol' | 'upgrade' | 'unsupported' | 'transfer' | 'conflict' | 'cancelled' | 'timeout', message: string) { super(message); this.name = 'NativeSyncError' }
 }
 export class NativeSyncConflict extends NativeSyncError {
   constructor(public readonly table: 'notes' | 'cards' | 'revlog' | 'models' | 'decks' | 'dconf', public readonly identity: number, public readonly local: Row, public readonly remote: Row | null) {

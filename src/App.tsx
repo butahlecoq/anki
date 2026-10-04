@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { OFFLINE_READY_EVENT, OFFLINE_UNAVAILABLE_EVENT, UPDATE_READY_EVENT } from './appEvents'
 import { chooseAppearance, readAppearance, watchAppearance, type Appearance } from './appearance'
 import { CollectionWorkspace } from './CollectionWorkspace'
+import { supportsServiceWorkers } from './browser-capabilities'
 
 function useOnlineStatus() {
   const [online, setOnline] = useState(() => navigator.onLine)
@@ -18,9 +19,9 @@ function useOnlineStatus() {
 }
 
 function useOfflineShellStatus() {
-  const [status, setStatus] = useState<'checking' | 'ready' | 'unavailable'>(() => 'serviceWorker' in navigator ? 'checking' : 'unavailable')
+  const [status, setStatus] = useState<'checking' | 'ready' | 'unavailable' | 'unsupported'>(() => supportsServiceWorkers() ? 'checking' : 'unsupported')
   useEffect(() => {
-    if (!('serviceWorker' in navigator)) return
+    if (!supportsServiceWorkers()) return
     const ready = () => setStatus('ready')
     const unavailable = () => setStatus('unavailable')
     window.addEventListener(OFFLINE_READY_EVENT, ready)
@@ -105,7 +106,13 @@ export function App() {
             </label>
           </div>
         </header>
-        <CollectionWorkspace />
+        {(offlineStatus === 'unavailable' || offlineStatus === 'unsupported') && <aside className="system-note offline-capability-warning" role="alert" data-testid="offline-shell-warning">
+          <span>OFFLINE MODE UNAVAILABLE</span>
+          <p>{offlineStatus === 'unsupported'
+            ? 'Offline review after closing or restarting needs the installed Home Screen app and a browser configuration with service-worker support. This browser does not expose that feature. iOS Lockdown Mode can disable it; Kiroku cannot detect that setting directly. Sync is paused here so you can finish your study session safely. Local review remains available while this page stays open.'
+            : 'Kiroku could not prepare its offline app shell. Check the app installation and connection before relying on a cold offline launch. Sync is paused here so you can finish your study session safely. Local review remains available while this page stays open.'}</p>
+        </aside>}
+        <CollectionWorkspace offlineSyncAvailable={offlineStatus === 'ready'} />
         <footer className="footer-line"><span>KIROKU / PRIVATE WORKSPACE</span><span>BUILD 0002</span></footer>
       </main>
       <nav className="mobile-nav" aria-label="Mobile navigation">

@@ -192,6 +192,8 @@ npm run check
 
 The browser suite builds the production app, starts it locally, then verifies desktop Chromium and phone-sized WebKit. Offline evidence distinguishes warm sessions, fresh documents, and restarted persistent profiles. Chromium fresh-document tests require successful service-worker navigation and loss of a previous-document marker; restarted-profile tests start at `about:blank` and read Japanese cards, scheduling, and media from persisted storage. Statistics additionally opens a fresh page offline and reads saved answers. Navigation errors fail those tests instead of leaving assertions on the old page. Both engines cover warm offline interactions. Playwright service-worker automation is supported only in Chromium, so fresh offline WebKit tests are explicitly skipped; phone-sized WebKit results do not prove installed Safari cold reopening. See [the offline evidence and physical iPhone checklist](docs/offline-verification.md).
 
+Offline review after closing or restarting requires the installed Home Screen app and a browser configuration that supports Service Workers. iOS Lockdown Mode disables Service Workers and Web Locks; Kiroku does not sniff for Lockdown Mode, but reports unavailable offline-shell support and pauses collection sync until the shell is ready. Native Anki account/media synchronization also stops with a typed error when Web Locks are missing, preserving its local checkpoint. Do not rely on cold offline use while Lockdown Mode is enabled.
+
 ## Privacy
 
 Imported packages, Anki databases, media, runtime data, backups, environment secrets, and generated certificates are ignored by Git. Do not commit a real collection or identity-bearing fixture.

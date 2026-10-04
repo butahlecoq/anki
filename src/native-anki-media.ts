@@ -2,6 +2,7 @@ import { Dexie, type Table } from 'dexie'
 import { strToU8, unzipSync, zipSync } from 'fflate'
 import { validateAnkiArchive } from './anki-archive.js'
 import { NativeAnkiClient, NativeSyncError, type NativeRequestOptions } from './native-anki-sync.js'
+import { requireWebLocks } from './native-sync-capability.js'
 
 const maxBytes = 63 * 1024 * 1024
 const targetBytes = 2.5 * 1024 * 1024
@@ -46,8 +47,7 @@ export class NativeAnkiMedia extends Dexie {
     })
   }
   async synchronize(client: NativeAnkiClient, recover = false, options: NativeRequestOptions = {}) {
-    if (typeof navigator === 'undefined' || !navigator.locks) throw new NativeSyncError('upgrade', 'Native media sync requires exclusive browser storage operations.')
-    return navigator.locks.request(`${this.name}:sync`, { mode: 'exclusive', ifAvailable: true }, async (lock) => {
+    return requireWebLocks('Anki media').request(`${this.name}:sync`, { mode: 'exclusive', ifAvailable: true }, async (lock) => {
       if (!lock) throw new NativeSyncError('transfer', 'Another page is synchronizing native media.')
       await this.transaction('rw', this.attempts, this.conflicts, async () => {
         const attempt = await this.attempts.get('active')
