@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
-import { createServer } from 'node:http'
+import { createServer, request as httpRequest } from 'node:http'
 import { DatabaseSync } from 'node:sqlite'
 import { createPairingCode, startSyncServer } from './index.js'
 import { createSyncService } from './sync-service.js'
@@ -230,7 +230,7 @@ for (const metadataColumn of ['parents', 'review_id']) {
 test('serves health, pairing, and authenticated sync over HTTP', async () => {
   runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
   const service = createSyncService({ databasePath: join(runtimeDirectory, 'collection.sqlite') })
-  const server = createServer(createSyncHttpHandler(service, { allowedOrigin: 'http://127.0.0.1:4173' }))
+  const server = createServer(createSyncHttpHandler(service, { allowedOrigin: 'http://127.0.0.1:4173', jsonBodyLimitBytes: 4096 }))
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const address = server.address()
   assert.ok(address && typeof address !== 'string')
@@ -248,6 +248,21 @@ test('serves health, pairing, and authenticated sync over HTTP', async () => {
   assert.match(preflight.headers.get('access-control-expose-headers') ?? '', /x-content-sha256/)
   const rejectedOrigin = await fetch(`${origin}/api/health`, { headers: { origin: 'https://untrusted.example.test' } })
   assert.equal(rejectedOrigin.headers.get('access-control-allow-origin'), null)
+
+  const oversizedCode = service.createPairingCode()
+  const oversizedPairing = await fetch(`${origin}/api/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: oversizedCode, deviceId: 'x'.repeat(5000) }) })
+  assert.equal(oversizedPairing.status, 413)
+  const streamedOversizedStatus = await new Promise<number>((resolve, reject) => {
+    const request = httpRequest(`${origin}/api/pair`, { method: 'POST', headers: { 'content-type': 'application/json' } }, (response) => {
+      response.resume()
+      response.on('end', () => resolve(response.statusCode ?? 0))
+    })
+    request.on('error', reject)
+    request.end(JSON.stringify({ code: oversizedCode, deviceId: 'x'.repeat(5000) }))
+  })
+  assert.equal(streamedOversizedStatus, 413)
+  const pairingAfterRejection = await fetch(`${origin}/api/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: oversizedCode, deviceId: 'phone-after-rejection' }) })
+  assert.equal(pairingAfterRejection.status, 201)
 
   const code = service.createPairingCode()
   const paired = await fetch(`${origin}/api/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code, deviceId: 'phone-1' }) })
