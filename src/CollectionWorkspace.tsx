@@ -311,8 +311,10 @@ function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: boolean 
       }
     } else if (result.state === 'authentication-required') {
       setMessage('This device key has expired or was already rotated. Pair this device again to reconnect.')
+    } else if (result.state === 'indeterminate') {
+      setMessage('The PC may have rotated this device key, but confirmation was lost. Create a new pairing code on the PC and pair this device again before syncing.')
     } else {
-      setMessage('The PC could not be reached. The current device key is unchanged.')
+      setMessage('This PC address is not safe for key rotation. Check its HTTPS address; no request was sent.')
     }
     setBusy(false)
   }

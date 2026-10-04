@@ -46,7 +46,7 @@ export async function createAndDownloadPcBackup(settings: SyncSettings, fetcher:
 }
 
 type BackupFailed = { state: 'backup-failed'; message: string }
-export type CredentialRotationResult = { state: 'rotated'; token: string } | { state: 'authentication-required' } | { state: 'unreachable' }
+export type CredentialRotationResult = { state: 'rotated'; token: string } | { state: 'authentication-required' } | { state: 'unreachable' } | { state: 'indeterminate' }
 
 class MediaTransferError extends Error {
   constructor(readonly state: 'authentication-required' | 'unreachable') {
@@ -134,11 +134,11 @@ export async function rotateCredential(settings: SyncSettings, fetcher: Fetcher 
       headers: { authorization: `Bearer ${settings.token}` },
     })
     if (response.status === 401) return { state: 'authentication-required' }
-    if (!response.ok) return { state: 'unreachable' }
+    if (!response.ok) return { state: 'indeterminate' }
     const credential = await response.json() as { token?: unknown }
-    return typeof credential.token === 'string' && credential.token ? { state: 'rotated', token: credential.token } : { state: 'unreachable' }
+    return typeof credential.token === 'string' && credential.token ? { state: 'rotated', token: credential.token } : { state: 'indeterminate' }
   } catch {
-    return { state: 'unreachable' }
+    return { state: 'indeterminate' }
   }
 }
 
