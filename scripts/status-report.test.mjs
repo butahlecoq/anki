@@ -89,6 +89,40 @@ test('deferred work is limited to explicit PR evidence and checkpoint comment se
   assert.deepEqual(deferredLines({ body: 'A summary mentions deferred acceptance comments.\n\n## Deferred acceptance\n- Run the final local gate.\n\n## Verification\n- focused checks passed.' }), ['- Run the final local gate.'])
 })
 
+test('outstanding sections include all issue acceptance without matching completed pending-file coverage', () => {
+  const result = deferredLines(
+    { body: '## Coverage\n- Malformed ZIP rejection preserves the pending file and cursor.\n\n## Outstanding #56 work\n- Add visible account status and logout.\n- Verify writeback recovery after restart.\n\n## Verification\n- Focused tests passed.' },
+    [{ body: '## Remaining #94 acceptance\n- Compare persisted Learning, Review, and Relearning outcomes against native Anki.\n\n## Deferred gate\n- Run the full local gate after #85 releases capacity.' }],
+  )
+  assert.deepEqual(result, [
+    '- Add visible account status and logout.',
+    '- Verify writeback recovery after restart.',
+    '- Compare persisted Learning, Review, and Relearning outcomes against native Anki.',
+    '- Run the full local gate after #85 releases capacity.',
+  ])
+})
+
+test('historical acceptance sections do not leak generic open lines or truncate later criteria', () => {
+  const comments = [
+    { body: '## Outstanding acceptance\n- First criterion.\n- Second criterion.\n- Third criterion.\n- Fourth criterion.\n- Fifth criterion.\n- Sixth criterion.\n- Seventh criterion.\n- Eighth criterion.\n- Ninth criterion.\n- Tenth criterion.\n- Eleventh criterion.\nIssue #56 remains open after checkpoint merge.\n\n## Evidence\n- Five focused tests passed.' },
+  ]
+  const result = deferredLines({}, comments)
+  assert.equal(result.length, 11)
+  assert.ok(result.includes('- Eleventh criterion.'))
+  assert.ok(result.every((line) => !/^Issue #\d+ remains open/.test(line)))
+  assert.ok(result.every((line) => !/focused tests passed/.test(line)))
+})
+
+test('explicit acceptance sections keep a separate inline full-gate deferral', () => {
+  const result = deferredLines({
+    body: '## Verification\n- The complete npm run check is deferred until verification capacity is released.\n\n## Outstanding #56 work\n- Add visible account status and logout.',
+  })
+  assert.deepEqual(result, [
+    '- Add visible account status and logout.',
+    '- The complete npm run check is deferred until verification capacity is released.',
+  ])
+})
+
 test('a branch is called disposable only when a closed or merged PR is accounted for on main and its worktree is clean', () => {
   const branch = { name: 'feat/8-old' }
   const finding = { check: 'branch-stale-snapshot' }

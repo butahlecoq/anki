@@ -33,27 +33,29 @@ function linkedIssue(pr) {
 }
 
 export function deferredLines(pr, comments = []) {
-  const markers = /defer|remains? open|does not close|doesn't close|not yet|still required|blocked|pending/i
+  const markers = /\b(?:remains? open|does not close|doesn't close|not yet|still required|blocked|pending (?:review|verification|acceptance|evidence|decision|device|human|full gate))\b|\b(?:is|are|was|were|remains?|remain) deferred\b/i
   const prLines = (pr.body ?? '').split('\n')
-  const prHeading = prLines.findIndex((line) => /^#{1,4}\s+.*(?:defer|remaining acceptance)/i.test(line.trim()))
-  const prTail = prHeading >= 0 ? prLines.slice(prHeading + 1) : prLines
-  const nextHeading = prTail.findIndex((line) => /^#{1,4}\s/.test(line.trim()))
-  const fromPr = (prHeading >= 0 ? prTail.slice(0, nextHeading < 0 ? undefined : nextHeading) : prTail.filter((line) => markers.test(line)))
-    .map((line) => line.trim()).filter(Boolean).slice(0, 6)
+  const extractSections = (lines) => {
+    const selected = []
+    for (let index = 0; index < lines.length; index += 1) {
+      if (!/^#{1,4}\s+(?:deferred?|remaining|outstanding)\b/i.test(lines[index].trim())) continue
+      for (let next = index + 1; next < lines.length && !/^#{1,4}\s/.test(lines[next].trim()); next += 1) {
+        const trimmed = lines[next].trim()
+        if (trimmed && !/^Issue #\d+ remains open\b/i.test(trimmed)) selected.push(trimmed)
+      }
+    }
+    return selected
+  }
+  const prSections = extractSections(prLines)
+  const inlineDeferrals = prLines.filter((line) => !/^#{1,4}\s/.test(line.trim()) && markers.test(line))
+  const fromPr = [...prSections, ...inlineDeferrals]
+    .map((line) => line.trim()).filter(Boolean)
   const fromComments = []
   for (const comment of [...comments].reverse()) {
     const lines = (comment.body ?? '').split('\n')
-    const heading = lines.findIndex((line) => /^#{1,4}\s+(?:deferred|remaining acceptance)/i.test(line.trim()))
-    if (heading < 0) continue
-    for (const line of lines.slice(heading + 1)) {
-      const trimmed = line.trim()
-      if (/^#{1,4}\s/.test(trimmed)) break
-      if (trimmed && !/^[-*]\s*Issue #\d+ remains open/i.test(trimmed)) fromComments.push(trimmed)
-      if (fromComments.length >= 6) break
-    }
-    if (fromComments.length >= 6) break
+    fromComments.push(...extractSections(lines))
   }
-  return [...new Set([...fromPr, ...fromComments])].slice(0, 8)
+  return [...new Set([...fromPr, ...fromComments])]
 }
 
 export function checkState(pr, checkSnapshot) {
