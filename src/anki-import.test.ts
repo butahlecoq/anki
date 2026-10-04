@@ -3,7 +3,7 @@ import initSqlJs, { type SqlJsStatic } from 'sql.js'
 import { Collection as AnkiCollection, Deck, Note as AnkiNote, Notetype, Package } from 'ankipack'
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest'
 import { DEFAULT_DECK_OPTION_GROUP_ID, createCollection, tryRenderNoteTemplate, State, type Collection } from './collection'
-import { prepareAnkiDataImport, prepareAnkiImport } from './anki-import'
+import { prepareAnkiDataImport, prepareAnkiImport, validateMediaBytes } from './anki-import'
 import { zipSync } from 'fflate'
 import { ANKI_ARCHIVE_LIMITS } from './anki-archive'
 
@@ -92,6 +92,7 @@ async function japanesePackage() {
   firstCard.lapses = 1
   firstCard.data = '{"s":12.5,"d":4.25}'
   opened.data.revlog.push({ id: 1_725_192_000_000, cid: firstCard.id, usn: -1, ease: 3, ivl: 12, lastIvl: 5, factor: 425, time: 1200, type: 1 })
+  opened.data.revlog.push({ id: 1_725_192_060_000, cid: firstCard.id, usn: -1, ease: 4, ivl: 30, lastIvl: 12, factor: 425, time: 900, type: 0 })
   return new File([(await opened.toUint8Array(SQL)).slice().buffer as ArrayBuffer], 'japanese.apkg', { type: 'application/octet-stream' })
 }
 
@@ -187,6 +188,47 @@ async function executableTemplatePackage() {
 }
 
 describe('Anki package import', () => {
+  test('accepts MPEG audio frames with common trailing metadata and padding', () => {
+    const frames = new Uint8Array(365 * 2)
+    for (let offset = 0; offset < frames.length; offset += 365) frames.set([0xff, 0xfb, 0x80, 0x64], offset)
+    const tagPlus = new Uint8Array(227)
+    tagPlus.set([0x54, 0x41, 0x47, 0x2b])
+    const id3v1 = new Uint8Array(128)
+    id3v1.set([0x54, 0x41, 0x47])
+    const apev2 = new Uint8Array(32)
+    apev2.set([0x41, 0x50, 0x45, 0x54, 0x41, 0x47, 0x45, 0x58])
+    new DataView(apev2.buffer).setUint32(12, 32, true)
+    const withId3 = new Uint8Array(frames.length + tagPlus.length + id3v1.length)
+    withId3.set(frames)
+    withId3.set(tagPlus, frames.length)
+    withId3.set(id3v1, frames.length + tagPlus.length)
+    const withApe = new Uint8Array(frames.length + apev2.length)
+    withApe.set(frames)
+    withApe.set(apev2, frames.length)
+    const id3v2Header = [0x49, 0x44, 0x33, 4, 0, 0x10, 0, 0, 0, 13]
+    const id3v2Frame = [0x54, 0x49, 0x54, 0x32, 0, 0, 0, 3, 0, 0, 0, 0x78, 0x79]
+    const id3v2Footer = [0x33, 0x44, 0x49, 4, 0, 0x10, 0, 0, 0, 13]
+    const withAppendedId3v2 = new Uint8Array(frames.length + id3v2Header.length + id3v2Frame.length + id3v2Footer.length)
+    withAppendedId3v2.set(frames)
+    withAppendedId3v2.set([...id3v2Header, ...id3v2Frame, ...id3v2Footer], frames.length)
+    const padded = new Uint8Array(frames.length + 8)
+    padded.set(frames)
+    const corruptTail = new Uint8Array(frames.length + 32)
+    corruptTail.set(frames)
+    corruptTail[frames.length + 12] = 0xff
+    const prefixed = new Uint8Array(frames.length + 4)
+    prefixed.set([1, 2, 3, 4])
+    prefixed.set(frames, 4)
+
+    expect(() => validateMediaBytes(withId3, 'audio/mpeg')).not.toThrow()
+    expect(() => validateMediaBytes(withApe, 'audio/mpeg')).not.toThrow()
+    expect(() => validateMediaBytes(withAppendedId3v2, 'audio/mpeg')).not.toThrow()
+    expect(() => validateMediaBytes(padded, 'audio/mpeg')).not.toThrow()
+    expect(() => validateMediaBytes(corruptTail, 'audio/mpeg')).toThrow(/do not match/i)
+    expect(() => validateMediaBytes(prefixed, 'audio/mpeg')).toThrow(/do not match/i)
+    expect(() => validateMediaBytes(id3v1, 'audio/mpeg')).toThrow(/do not match/i)
+  })
+
   test.each(['apkg', 'colpkg'])('rejects hostile %s archives without collection or outbox mutation', async (extension) => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const hugeEntry = zipSync({ 'collection.anki2': new Uint8Array(1) })
@@ -223,7 +265,7 @@ describe('Anki package import', () => {
     collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
     const prepared = await prepareAnkiImport(await japanesePackage(), collection, { SQL, now: new Date('2026-10-01T12:00:00.000Z') })
 
-    expect(prepared.summary).toMatchObject({ decks: 2, noteTypes: 2, notes: 2, cards: 4, reviews: 1, media: 2 })
+    expect(prepared.summary).toMatchObject({ decks: 2, noteTypes: 2, notes: 2, cards: 4, reviews: 2, media: 2 })
     expect(prepared.duplicates).toEqual({ create: 2, update: 0, keepLocal: 0, unchanged: 0 })
     expect(structuredClone(prepared.plan)).toMatchObject({
       blocksImport: false,
@@ -232,12 +274,16 @@ describe('Anki package import', () => {
         noteTypes: expect.arrayContaining([expect.objectContaining({ action: 'create', value: expect.objectContaining({ id: 'anki-note-type:1700000000001' }) })]),
         notes: expect.arrayContaining([expect.objectContaining({ action: 'create', value: expect.objectContaining({ id: 'anki-note:stable-vocabulary-guid' }) })]),
         cards: expect.arrayContaining([expect.objectContaining({ action: 'create', value: expect.objectContaining({ id: expect.any(String) }) })]),
-        reviews: [expect.objectContaining({ action: 'create', value: expect.objectContaining({ id: 'anki-review:1725192000000' }) })],
+        reviews: expect.arrayContaining([
+          expect.objectContaining({ action: 'create', value: expect.objectContaining({ id: 'anki-review:1725192000000', afterState: State.Learning }) }),
+          expect.objectContaining({ action: 'create', value: expect.objectContaining({ id: 'anki-review:1725192060000', afterState: State.Review }) }),
+        ]),
         references: expect.arrayContaining([expect.objectContaining({ action: 'create', value: expect.objectContaining({ noteId: 'anki-note:stable-vocabulary-guid' }) })]),
       },
       decisions: expect.arrayContaining([
         { entity: 'note', id: 'anki-note:stable-vocabulary-guid', action: 'create' },
         { entity: 'review', id: 'anki-review:1725192000000', action: 'create' },
+        { entity: 'review', id: 'anki-review:1725192060000', action: 'create' },
       ]),
     })
     expect(prepared.plan).not.toHaveProperty('collection')
@@ -288,17 +334,20 @@ describe('Anki package import', () => {
     expect(notes.find((note) => note.id === 'anki-note:stable-cloze-guid')?.fields).toEqual(expect.objectContaining({ 'anki-field:1700000000002:0': '{{c1::東京}}へ{{c2::行く}}' }))
     const scheduled = (await collection.cards.toArray()).find((card) => card.reps === 5)
     expect(scheduled).toMatchObject({ state: State.Review, stability: 12.5, difficulty: 4.25, scheduledDays: 12, lapses: 1 })
-    await expect(collection.reviewEntries.toArray()).resolves.toEqual([expect.objectContaining({
-      id: 'anki-review:1725192000000',
-      reviewedAt: '2024-09-01T12:00:00.000Z',
-      durationMs: 1200,
-      due: '2024-09-01T12:00:00.000Z',
-      scheduledDays: 5,
-      afterDue: '2024-09-13T12:00:00.000Z',
-      afterScheduledDays: 12,
-      afterState: State.Review,
-      elapsedDays: 0,
-    })])
+    await expect(collection.reviewEntries.toArray()).resolves.toEqual([
+      expect.objectContaining({
+        id: 'anki-review:1725192000000',
+        reviewedAt: '2024-09-01T12:00:00.000Z',
+        durationMs: 1200,
+        due: '2024-09-01T12:00:00.000Z',
+        scheduledDays: 5,
+        afterDue: '2024-09-13T12:00:00.000Z',
+        afterScheduledDays: 12,
+        afterState: State.Learning,
+        elapsedDays: 0,
+      }),
+      expect.objectContaining({ id: 'anki-review:1725192060000', afterState: State.Review, lastElapsedDays: 0 }),
+    ])
     const media = await collection.mediaForNote('anki-note:stable-vocabulary-guid')
     expect(media).toEqual(expect.arrayContaining([
       expect.objectContaining({ displayName: 'cat.png', kind: 'image', side: 'front' }),
@@ -315,6 +364,32 @@ describe('Anki package import', () => {
       expect(await collection.syncRevisions.get(operation.opId)).toMatchObject({ ...operation, key: `${operation.entityType}:${operation.entityId}` })
     }
   })
+
+  test('previews a large collection history without changing per-row semantics', async () => {
+    collection = createCollection(`kiroku-import-scale-${crypto.randomUUID()}`)
+    const packageData = AnkiCollection.open(await fileBytes(await japanesePackage()), SQL).data
+    const seed = packageData.notes.find((note) => note.guid === 'stable-vocabulary-guid')
+    if (!seed) throw new Error('scale fixture note missing')
+    const seedCards = packageData.cards.filter((card) => card.nid === seed.id)
+    const count = 3_000
+    const notes = Array.from({ length: count }, (_, index) => ({ ...seed, id: 1_000_000_000 + index, guid: `scale-guid-${index}` }))
+    const cards = notes.flatMap((note, index) => seedCards.map((card, ordinal) => ({ ...card, id: 2_000_000_000 + index * seedCards.length + ordinal, nid: note.id })))
+    const revlog = notes.map((_, index) => ({
+      id: 1_800_000_000_000 + index * 60_000,
+      cid: cards[index * seedCards.length].id,
+      usn: -1,
+      ease: 3,
+      ivl: 12,
+      lastIvl: 5,
+      factor: 425,
+      time: 800,
+      type: 1,
+    }))
+    const preview = await prepareAnkiDataImport({ ...packageData, notes, cards, revlog }, collection, { now: new Date('2026-10-01T12:00:00.000Z') })
+
+    expect(preview.summary).toMatchObject({ notes: count, cards: count * seedCards.length, reviews: count })
+    expect(preview.plan.blocksImport).toBe(false)
+  }, 20_000)
 
   test('keeps a newer local edit when the same stable Anki note is imported again', async () => {
     collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
@@ -340,7 +415,7 @@ describe('Anki package import', () => {
     await prepared.commit()
     await expect(collection.notes.get(note.id)).resolves.toMatchObject({ fields: { 'anki-field:1700000000001:2': 'feline' } })
     await expect(collection.mediaForNote(note.id)).resolves.toEqual(existingMedia)
-    await expect(collection.reviewEntries.count()).resolves.toBe(1)
+    await expect(collection.reviewEntries.count()).resolves.toBe(2)
   })
 
   test('plans suspension only for local cards absent from the package and keeps present local card state', async () => {
@@ -600,16 +675,19 @@ describe('Anki package import', () => {
     }))
   })
 
-  test('blocks executable templates and malformed media bytes with detailed errors', async () => {
+  test('blocks executable templates but isolates malformed media to the affected attachment', async () => {
     collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
     const executable = await prepareAnkiImport(await executableTemplatePackage(), collection, { SQL })
     expect(executable.plan.blocksImport).toBe(true)
     expect(executable.issues).toEqual(expect.arrayContaining([expect.objectContaining({ severity: 'error', code: 'unsupported-note-type', subject: 'Executable template', detail: expect.stringMatching(/executable/i) })]))
     await expect(executable.commit()).rejects.toThrow(/resolve package errors/i)
     const malformed = await prepareAnkiImport(await malformedMediaPackage(), collection, { SQL })
-    expect(malformed.plan.blocksImport).toBe(true)
-    expect(malformed.issues).toEqual(expect.arrayContaining([expect.objectContaining({ severity: 'error', code: 'media-malformed', subject: 'broken.png' })]))
-    await expect(malformed.commit()).rejects.toThrow(/resolve package errors/i)
+    expect(malformed.plan.blocksImport).toBe(false)
+    expect(malformed.issues).toEqual(expect.arrayContaining([expect.objectContaining({ severity: 'warning', code: 'media-malformed', subject: 'broken.png' })]))
+    await malformed.commit()
+    await expect(collection.notes.count()).resolves.toBe(1)
+    await expect(collection.cards.count()).resolves.toBe(1)
+    await expect(collection.mediaBlobs.count()).resolves.toBe(0)
   })
 
 })

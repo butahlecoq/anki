@@ -1,10 +1,11 @@
 import 'fake-indexeddb/auto'
 import initSqlJs, { type SqlJsStatic } from 'sql.js'
-import { Collection as AnkiCollection } from 'ankipack'
+import { Collection as AnkiCollection, Deck, Note as AnkiNote, Notetype, Package } from 'ankipack'
 import { afterEach, beforeAll, expect, test } from 'vitest'
 import { createCollection, Rating, State, type Collection } from './collection'
 import { exportAnkiPackage } from './anki-export'
 import { prepareAnkiImport } from './anki-import'
+import { digestMedia } from './media'
 
 let SQL: SqlJsStatic
 const databases: Collection[] = []
@@ -55,6 +56,65 @@ test('Japanese native package preserves field meaning, tags, decks, templates, s
   expect((await target.mediaBlobs.toArray()).map((blob) => blob.digest)).toEqual((await source.mediaBlobs.toArray()).map((blob) => blob.digest))
   expect((await target.noteMedia.toArray())[0]).toMatchObject({ displayName: 'cat.png', side: 'front', inline: false, playback: 'manual' })
 })
+
+test('exports and reimports media whose original filename contains Japanese and spaces', async () => {
+  const source = database()
+  const displayName = '猫 image.png'
+  const type = new Notetype({
+    id: 1_700_000_000_060,
+    name: 'Japanese image card',
+    fields: [{ name: 'Front' }, { name: 'Back' }],
+    templates: [{ name: 'Card', questionFormat: '{{Front}}', answerFormat: '{{FrontSide}}<hr>{{Back}}' }],
+  })
+  const deck = new Deck({ id: 1_700_000_000_061, name: '日本語' })
+  deck.addNote(new AnkiNote({ notetype: type, guid: 'unicode-media-guid', fields: [`<img src="${displayName}">`, 'vocabulary'] }))
+  const nativePackage = new Package()
+  nativePackage.addDeck(deck)
+  nativePackage.addMedia(displayName, png)
+  const firstPreview = await prepareAnkiImport(new File([(await nativePackage.toUint8Array(SQL)).slice().buffer], 'japanese-source.apkg'), source, { SQL })
+  expect(firstPreview.issues.filter((issue) => issue.severity === 'error')).toEqual([])
+  await firstPreview.commit()
+
+  const output = await exportAnkiPackage(source, { ...all, SQL })
+  const target = database()
+  const preview = await prepareAnkiImport(new File([output.bytes.slice().buffer], 'japanese-media.apkg'), target, { SQL })
+  expect(preview.issues.filter((issue) => issue.severity === 'error')).toEqual([])
+  await preview.commit()
+
+  const restored = (await target.notes.toArray())[0]
+  expect(restored).toBeDefined()
+  expect(Object.values(restored?.fields ?? {}).join(' ')).toContain(`[[kiroku-media:${encodeURIComponent(displayName)}]]`)
+  await expect(target.mediaForNote(restored!.id)).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ displayName, kind: 'image' })]))
+  const secondExport = await exportAnkiPackage(target, { ...all, SQL })
+  expect(AnkiCollection.open(secondExport.bytes, SQL).data.media).toHaveLength(1)
+})
+
+test('exports packages with thousands of distinct media windows inside the archive decoder budget', async () => {
+  const source = database()
+  const deck = await source.createDeck('Many audio files')
+  const note = await source.createBasicNote(deck.id, { front: '音声', back: 'audio' })
+  const count = 2_100
+  const now = new Date('2026-10-01T12:00:00.000Z').toISOString()
+  const references = []
+  const blobs = []
+  for (let index = 0; index < count; index += 1) {
+    const bytes = new Uint8Array(46)
+    bytes.set([0x52, 0x49, 0x46, 0x46, 38, 0, 0, 0, 0x57, 0x41, 0x56, 0x45, 0x66, 0x6d, 0x74, 0x20, 16, 0, 0, 0, 1, 0, 1, 0, 0x40, 0x1f, 0, 0, 0x40, 0x1f, 0, 0, 1, 0, 8, 0, 0x64, 0x61, 0x74, 0x61, 2, 0, 0, 0])
+    bytes[44] = index & 0xff
+    bytes[45] = index >>> 8
+    const payload = bytes.slice().buffer as ArrayBuffer
+    const digest = await digestMedia(payload)
+    references.push({ id: `many-audio-${index}`, noteId: note.id, digest, kind: 'audio' as const, mimeType: 'audio/wav', displayName: `audio-${index}.wav`, side: 'front' as const, playback: 'manual' as const, createdAt: now, updatedAt: now })
+    blobs.push({ digest, blob: payload, byteLength: bytes.length, mimeType: 'audio/wav', verifiedAt: now })
+  }
+  await source.noteMedia.bulkAdd(references)
+  await source.mediaBlobs.bulkAdd(blobs)
+
+  const output = await exportAnkiPackage(source, { ...all, SQL })
+  expect(output.media).toBe(count)
+  expect(AnkiCollection.open(output.bytes, SQL).data.media).toHaveLength(count)
+}, 20_000)
+
 test('selected deck includes descendants and options reset cards and omit media and history', async () => {
   const source = database()
   const parent = await source.createDeck('Japanese')

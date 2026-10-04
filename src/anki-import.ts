@@ -266,19 +266,70 @@ export function validateMediaBytes(bytes: Uint8Array, mime: string) {
 
 function validMp3(bytes: Uint8Array) {
   let offset = 0
-  if (textDecoder.decode(bytes.slice(0, 3)) === 'ID3') {
-    if (bytes.length < 10 || bytes.slice(6, 10).some((byte) => byte > 0x7f)) return false
-    offset = 10 + bytes.slice(6, 10).reduce((size, byte) => size * 128 + byte, 0) + (bytes[5] & 0x10 ? 10 : 0)
+  while (textDecoder.decode(bytes.slice(offset, offset + 3)) === 'ID3') {
+    if (offset + 10 > bytes.length) return false
+    const header = bytes.slice(offset, offset + 10)
+    if (header.slice(6, 10).some((byte) => byte > 0x7f)) return false
+    const tagSize = header.slice(6, 10).reduce((size, byte) => size * 128 + byte, 0)
+    offset += 10 + tagSize + (header[5] & 0x10 ? 10 : 0)
+    if (offset > bytes.length) return false
   }
+  const end = mp3AudioEnd(bytes)
+  if (offset > end) return false
+  const frameLength = mp3FrameLength(bytes, offset)
+  if (!frameLength || offset + frameLength + 4 > end) return false
+  const format = mp3FrameFormat(bytes, offset)
+  const nextOffset = offset + frameLength
+  if (format !== mp3FrameFormat(bytes, nextOffset)) return false
+
+  let frameOffset = offset
   let frames = 0
-  while (offset < bytes.length) {
-    if (bytes.length - offset === 128 && textDecoder.decode(bytes.slice(offset, offset + 3)) === 'TAG') return frames > 0
-    const frameLength = mp3FrameLength(bytes, offset)
-    if (!frameLength || offset + frameLength > bytes.length) return false
-    offset += frameLength
+  while (frameOffset + 4 <= end) {
+    const length = mp3FrameLength(bytes, frameOffset)
+    if (!length || frameOffset + length > end || mp3FrameFormat(bytes, frameOffset) !== format) break
+    frameOffset += length
     frames += 1
   }
-  return frames > 0
+  const padding = bytes.subarray(frameOffset, end)
+  return frames >= 2 && padding.length <= 8 && padding.every((byte) => byte === 0)
+}
+
+function mp3AudioEnd(bytes: Uint8Array) {
+  let end = bytes.length
+  let changed = true
+  while (changed) {
+    changed = false
+    if (end >= 128 && textDecoder.decode(bytes.slice(end - 128, end - 125)) === 'TAG') {
+      end -= 128
+      changed = true
+      continue
+    }
+    if (end >= 227 && textDecoder.decode(bytes.slice(end - 227, end - 223)) === 'TAG+') {
+      end -= 227
+      changed = true
+      continue
+    }
+    if (end >= 32 && textDecoder.decode(bytes.slice(end - 32, end - 24)) === 'APETAGEX') {
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+      const tagSize = view.getUint32(end - 20, true)
+      if (tagSize < 32 || tagSize > end) return end
+      let tagStart = end - tagSize
+      if (tagStart >= 32 && textDecoder.decode(bytes.slice(tagStart - 32, tagStart - 24)) === 'APETAGEX') tagStart -= 32
+      end = tagStart
+      changed = true
+      continue
+    }
+    if (end >= 10 && textDecoder.decode(bytes.slice(end - 10, end - 7)) === '3DI') {
+      const footer = bytes.slice(end - 10, end)
+      if (footer.slice(6, 10).some((byte) => byte > 0x7f)) return end
+      const tagSize = footer.slice(6, 10).reduce((size, byte) => size * 128 + byte, 0)
+      const totalSize = tagSize + 20
+      if (totalSize > end) return end
+      end -= totalSize
+      changed = true
+    }
+  }
+  return end
 }
 
 function mp3FrameLength(bytes: Uint8Array, offset: number) {
@@ -302,6 +353,13 @@ function mp3FrameLength(bytes: Uint8Array, offset: number) {
   return layer === 3
     ? Math.floor((12 * bitrate / sampleRate) + padding) * 4
     : Math.floor(((layer === 1 && version !== 3 ? 72 : 144) * bitrate / sampleRate) + padding)
+}
+
+function mp3FrameFormat(bytes: Uint8Array, offset: number) {
+  const version = (bytes[offset + 1] >> 3) & 0x03
+  const layer = (bytes[offset + 1] >> 1) & 0x03
+  const sampleRate = (bytes[offset + 2] >> 2) & 0x03
+  return `${version}:${layer}:${sampleRate}`
 }
 
 function validOgg(bytes: Uint8Array) {
@@ -370,6 +428,10 @@ function importedField(value: string) {
   const withMedia = value
     .replace(/<img\b[^>]*\bsrc\s*=\s*["']([^"'<>]+)["'][^>]*>/gi, (_tag, name: string) => `[[kiroku-media:${encodeURIComponent(name)}]]`)
     .replace(/\[sound:([^\]]+)\]/gi, (_tag, name: string) => `[[kiroku-media:${encodeURIComponent(name)}]]`)
+  if (!/[<&]/.test(withMedia)) {
+    const text = withMedia.trim() ? withMedia : ''
+    return { html: text || (mediaNames(value).length ? '\u200b' : ''), hadMarkup: false, preservedMarkup: false, removed: [] }
+  }
   const sanitized = sanitizeFieldHtml(withMedia)
   if (!sanitized.hadMarkup) sanitized.html = decodeFieldText(withMedia)
   if (!sanitized.html.trim() && mediaNames(value).length) sanitized.html = '\u200b'
@@ -584,9 +646,19 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
   const cards: CardRecord[] = []
   const reviews: ReviewEntry[] = []
   const references: NoteMediaReference[] = []
+  const referencesByNoteId = new Map<string, NoteMediaReference[]>()
+  const addReference = (reference: NoteMediaReference) => {
+    references.push(reference)
+    const noteReferences = referencesByNoteId.get(reference.noteId) ?? []
+    noteReferences.push(reference)
+    referencesByNoteId.set(reference.noteId, noteReferences)
+  }
   const nativeReferencedNames = new Set<string>()
   const blobs = new Map<string, StoredMedia>()
   const sourceCardIds = new Map<number, string>()
+  const sourceCardsById = new Map(data.cards.map((card) => [card.id, card]))
+  const latestReviewByCard = new Map<number, number>()
+  for (const review of data.revlog) latestReviewByCard.set(review.cid, Math.max(latestReviewByCard.get(review.cid) ?? 0, review.id))
   const imageOcclusionTypes = new Set<number>()
 
   for (const row of data.notes) {
@@ -636,7 +708,7 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
         noteTypeId = 'image-occlusion'
         fields = { header: parsed.header, backExtra: [parsed.backExtra, parsed.comments].filter(Boolean).join('\n') }
         imageOcclusion = { version: 1, sourceMediaId: referenceId, imageWidth: dimensions.width, imageHeight: dimensions.height, nextOrdinal: Math.max(...parsed.masks.map((mask) => mask.ordinal)) + 1, masks: parsed.masks }
-        references.push({ id: referenceId, noteId, digest, kind: 'image', mimeType: mime, displayName: media.name, side: 'front', playback: 'manual', createdAt: noteCreatedAt, updatedAt: referenceUpdatedAt })
+        addReference({ id: referenceId, noteId, digest, kind: 'image', mimeType: mime, displayName: media.name, side: 'front', playback: 'manual', createdAt: noteCreatedAt, updatedAt: referenceUpdatedAt })
         blobs.set(digest, { digest, blob: ownedBuffer(media.data), byteLength: media.data.byteLength, mimeType: mime, verifiedAt: importedAt })
         imageOcclusionTypes.add(sourceType.id)
       } catch (reason) {
@@ -664,8 +736,8 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
             issues.push({ severity: 'warning', code: 'media-unsupported', subject: name, detail: reason instanceof Error ? reason.message : 'Media is unsupported' })
             continue
           }
-          try { validateMediaBytes(media.data, mime) } catch (reason) {
-            issues.push({ severity: 'error', code: 'media-malformed', subject: name, detail: reason instanceof Error ? reason.message : 'Media bytes are malformed' })
+          try { validateMediaBytes(media.data, mime) } catch {
+            issues.push({ severity: 'warning', code: 'media-malformed', subject: name, detail: 'Referenced media failed format validation and was excluded; the rest of its note remains available.' })
             continue
           }
           const digest = await digestMedia(mediaFile)
@@ -676,7 +748,7 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
             if (fieldName && fieldUsed(template.back, fieldName)) placements.push({ side: 'back', templateId: template.id })
           }
           if (!placements.length) placements.push({ side: 'front' })
-          for (const { side, templateId } of placements) references.push({
+          for (const { side, templateId } of placements) addReference({
             id: `${noteId}:media:${templateId ?? 'all'}:${side}:${encodeURIComponent(name)}`,
             noteId,
             digest,
@@ -693,7 +765,8 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
         }
       }
     }
-    for (const reference of references.filter((reference) => reference.noteId === noteId)) nativeReferencedNames.add(reference.displayName)
+    const noteReferences = referencesByNoteId.get(noteId) ?? []
+    for (const reference of noteReferences) nativeReferencedNames.add(reference.displayName)
     // Native markup remains portable; Kiroku exports also retain attachment
     // placement/playback so a clean re-import restores the original editor data.
     try {
@@ -710,13 +783,14 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
           if (!hint || typeof hint !== 'object') throw new Error('Invalid exported media placement')
           const value = hint as Record<string, unknown>
           if (typeof value.name !== 'string' || typeof value.displayName !== 'string' || !value.displayName || (value.inline && /[<>[\]\r\n]/.test(value.displayName)) || !['front', 'back'].includes(String(value.side)) || typeof value.inline !== 'boolean' || !['manual', 'automatic'].includes(String(value.playback)) || !(value.templateOrd === null || (typeof value.templateOrd === 'number' && Number.isInteger(value.templateOrd) && value.templateOrd >= 0 && value.templateOrd < sourceType.templates.length))) throw new Error('Invalid exported media placement')
-          for (const reference of references.filter((reference) => reference.noteId === noteId && reference.displayName === value.name && reference.side === value.side && (value.templateOrd === null || reference.templateId === sourceType.templates[value.templateOrd as number]?.id))) {
+          for (const reference of noteReferences) {
+            if (reference.displayName !== value.name || reference.side !== value.side || (value.templateOrd !== null && reference.templateId !== sourceType.templates[value.templateOrd as number]?.id)) continue
             reference.displayName = value.displayName
             reference.inline = value.inline
             reference.playback = value.playback as 'manual' | 'automatic'
             if (value.templateOrd === null) delete reference.templateId
           }
-          for (const key of Object.keys(note.fields)) note.fields[key] = note.fields[key].split(`[[kiroku-media:${value.name}]]`).join(value.inline ? `[[kiroku-media:${value.displayName}]]` : '')
+          for (const key of Object.keys(note.fields)) note.fields[key] = note.fields[key].split(`[[kiroku-media:${value.name}]]`).join(value.inline ? `[[kiroku-media:${encodeURIComponent(value.displayName)}]]` : '')
         }
       }
     } catch (reason) {
@@ -724,8 +798,6 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
       if (row.data.includes('kirokuMedia') || row.data.includes('kirokuNoteTimes')) issues.push({ severity: 'error', code: 'invalid-export-media', subject: row.guid, detail: reason instanceof Error ? reason.message : 'Invalid exported media metadata' })
     }
 
-    const latestReviewByCard = new Map<number, number>()
-    for (const review of data.revlog) latestReviewByCard.set(review.cid, Math.max(latestReviewByCard.get(review.cid) ?? 0, review.id))
     for (const sourceCard of sourceCards) {
       if (![0, 1, 2, 3].includes(sourceCard.type)) {
         issues.push({ severity: 'error', code: 'unsupported-card-state', subject: String(sourceCard.id), detail: `Card type ${sourceCard.type} is not supported.` })
@@ -789,9 +861,18 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
 
   const previousReviewByCard = new Map<number, { reviewedAt: number; elapsedDays: number }>()
   const orderedReviewRows = [...data.revlog].sort((left, right) => left.id - right.id)
-  for (const [reviewIndex, row] of orderedReviewRows.entries()) {
+  const nextReviewById = new Map<number, typeof orderedReviewRows[number]>()
+  const nextReviewForCard = new Map<number, typeof orderedReviewRows[number]>()
+  for (let index = orderedReviewRows.length - 1; index >= 0; index -= 1) {
+    const row = orderedReviewRows[index]
+    const next = nextReviewForCard.get(row.cid)
+    if (next) nextReviewById.set(row.id, next)
+    nextReviewForCard.set(row.cid, row)
+  }
+  const importedCardsById = new Map(cards.map((card) => [card.id, card]))
+  for (const row of orderedReviewRows) {
     const cardId = sourceCardIds.get(row.cid)
-    const card = cards.find((candidate) => candidate.id === cardId)
+    const card = cardId ? importedCardsById.get(cardId) : undefined
     if (!cardId || !card || row.ease < 1 || row.ease > 4) {
       issues.push({ severity: 'warning', code: 'review-unsupported', subject: String(row.id), detail: card ? 'Manual or malformed review entry was not imported.' : 'Review belongs to a card that could not be imported.' })
       continue
@@ -801,7 +882,7 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
     const elapsedDays = previous ? Math.max(0, Math.floor((row.id - previous.reviewedAt) / day)) : 0
     const scheduledDays = intervalDays(row.lastIvl)
     let exportedReview: Partial<ReviewEntry> = {}
-    try { exportedReview = readKirokuReview(data.cards.find((card) => card.id === row.cid)?.data ?? '', row) } catch (reason) {
+    try { exportedReview = readKirokuReview(sourceCardsById.get(row.cid)?.data ?? '', row) } catch (reason) {
       issues.push({ severity: 'error', code: 'invalid-export-review', subject: String(row.id), detail: reason instanceof Error ? reason.message : 'Invalid exported review' })
     }
     reviews.push({
@@ -820,7 +901,7 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
       reviewedAt,
       ...(Number.isFinite(row.time) && row.time >= 0 ? { durationMs: row.time } : {}),
       ...(row.type === 3 ? { rescheduled: false } : {}),
-      afterState: resultingReviewState(orderedReviewRows.slice(reviewIndex + 1).find((candidate) => candidate.cid === row.cid), card),
+      afterState: resultingReviewState(nextReviewById.get(row.id), card),
       afterDue: new Date(row.id + intervalMilliseconds(row.ivl)).toISOString(), afterScheduledDays: intervalDays(row.ivl),
       ...exportedReview,
     })
@@ -839,6 +920,28 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
   const localNotes = await collection.notes.toArray()
   const localCards = await collection.cards.toArray()
   const localReviews = await collection.reviewEntries.toArray()
+  const localNoteTypes = await collection.noteTypes.toArray()
+  const localReferences = await collection.noteMedia.toArray()
+  const localRowsByTable = {
+    decks: new Map(localDecks.map((value) => [value.id, value])),
+    noteTypes: new Map(localNoteTypes.map((value) => [value.id, value])),
+    notes: new Map(localNotes.map((value) => [value.id, value])),
+    cards: new Map(localCards.map((value) => [value.id, value])),
+    reviewEntries: new Map(localReviews.map((value) => [value.id, value])),
+    noteMedia: new Map(localReferences.map((value) => [value.id, value])),
+  }
+  const localCardsByNoteId = new Map<string, CardRecord[]>()
+  for (const card of localCards) {
+    const noteCards = localCardsByNoteId.get(card.noteId) ?? []
+    noteCards.push(card)
+    localCardsByNoteId.set(card.noteId, noteCards)
+  }
+  const localReferencesByNoteId = new Map<string, NoteMediaReference[]>()
+  for (const reference of localReferences) {
+    const noteReferences = localReferencesByNoteId.get(reference.noteId) ?? []
+    noteReferences.push(reference)
+    localReferencesByNoteId.set(reference.noteId, noteReferences)
+  }
   const writes: ImportWrites = { decks: [], noteTypes: [], notes: [], cards: [], reviews: [], updatedReviews: [], references: [], deletedReferences: [], deletedDecks: [], undoSettings: [], blobs: [] }
   const snapshots: Snapshot[] = []
 const decisions: AnkiImportDecision[] = []
@@ -901,8 +1004,8 @@ const decisions: AnkiImportDecision[] = []
     }
   }
   const duplicates: AnkiDuplicateSummary = { create: 0, update: 0, keepLocal: 0, unchanged: 0 }
-  async function decide<T extends { id: string; updatedAt?: string }>(table: 'decks' | 'noteTypes' | 'notes' | 'noteMedia', value: T) {
-    const existing = await collection[table].get(value.id as never) as T | undefined
+  function decide<T extends { id: string; updatedAt?: string }>(table: 'decks' | 'noteTypes' | 'notes' | 'noteMedia', value: T) {
+    const existing = localRowsByTable[table].get(value.id) as T | undefined
     snapshots.push({ table, id: value.id, value: fingerprint(existing) })
     if (!existing) return 'create' as const
     if (fingerprint(existing) === fingerprint(value)) return 'unchanged' as const
@@ -913,13 +1016,13 @@ const decisions: AnkiImportDecision[] = []
   const reparented = new Set(writes.decks.map(({ value }) => value.id))
   for (const value of decks) {
     if (reparented.has(value.id)) continue
-    const action = await decide('decks', value)
+    const action = decide('decks', value)
     recordDecision('deck', value.id, action)
     if (action === 'create' || action === 'update') writes.decks.push({ value, action })
   }
   const noteTypeDecisions = new Map<string, 'create' | 'update' | 'keepLocal' | 'unchanged'>()
   for (const value of noteTypes) {
-    const action = await decide('noteTypes', value)
+    const action = decide('noteTypes', value)
     recordDecision('noteType', value.id, action)
     noteTypeDecisions.set(value.id, action)
     if (action === 'create' || action === 'update') writes.noteTypes.push({ value, action })
@@ -927,9 +1030,9 @@ const decisions: AnkiImportDecision[] = []
   const noteDecisions = new Map<string, 'create' | 'update' | 'keepLocal' | 'unchanged'>()
   const keptAggregateNoteIds = new Set<string>()
   for (const value of notes) {
-    const proposedAction = await decide('notes', value)
+    const proposedAction = decide('notes', value)
     const localTypeWins = noteTypeDecisions.get(value.typeId) === 'keepLocal'
-    const existing = localTypeWins ? await collection.notes.get(value.id) : undefined
+    const existing = localTypeWins ? localRowsByTable.notes.get(value.id) : undefined
     const action = localTypeWins ? 'keepLocal' as const : proposedAction
     if (localTypeWins) {
       keptAggregateNoteIds.add(value.id)
@@ -947,7 +1050,7 @@ const decisions: AnkiImportDecision[] = []
   }
   for (const value of cards) {
     if (keptAggregateNoteIds.has(value.noteId)) { recordDecision('card', value.id, 'keepLocal'); continue }
-    const existing = await collection.cards.get(value.id)
+    const existing = localRowsByTable.cards.get(value.id)
     snapshots.push({ table: 'cards', id: value.id, value: fingerprint(existing) })
     if (!existing) { writes.cards.push({ value, action: 'create' }); recordDecision('card', value.id, 'create') }
     else {
@@ -965,7 +1068,7 @@ const decisions: AnkiImportDecision[] = []
   const incomingCardIds = new Set(cards.map(({ id }) => id))
   const reconcilableNoteIds = new Set(notes.filter((note) => noteDecisions.get(note.id) !== 'keepLocal' && noteTypeDecisions.get(note.typeId) !== 'keepLocal').map(({ id }) => id))
   for (const noteId of reconcilableNoteIds) {
-    for (const existing of await collection.cards.where('noteId').equals(noteId).toArray()) {
+    for (const existing of localCardsByNoteId.get(noteId) ?? []) {
       if (incomingCardIds.has(existing.id) || existing.suspended) continue
       snapshots.push({ table: 'cards', id: existing.id, value: fingerprint(existing) })
       writes.cards.push({ value: { ...existing, suspended: true, templateSuspended: true }, action: 'update' })
@@ -973,9 +1076,9 @@ const decisions: AnkiImportDecision[] = []
     }
   }
   for (const value of reviews) {
-    const importedCard = cards.find((card) => card.id === value.cardId)
+    const importedCard = importedCardsById.get(value.cardId)
     if (importedCard && keptAggregateNoteIds.has(importedCard.noteId)) { recordDecision('review', value.id, 'keepLocal'); continue }
-    const existing = await collection.reviewEntries.get(value.id)
+    const existing = localRowsByTable.reviewEntries.get(value.id)
     snapshots.push({ table: 'reviewEntries', id: value.id, value: fingerprint(existing) })
     if (!existing) { writes.reviews.push(value); recordDecision('review', value.id, 'create') }
     else recordDecision('review', value.id, 'unchanged')
@@ -987,13 +1090,13 @@ const decisions: AnkiImportDecision[] = []
   for (const value of references) {
     const noteAction = noteDecisions.get(value.noteId)
     if (!mediaReconcileNoteIds.has(value.noteId) || noteAction === 'keepLocal') { recordDecision('mediaReference', value.id, 'keepLocal'); continue }
-    const action = await decide('noteMedia', value)
+    const action = decide('noteMedia', value)
     recordDecision('mediaReference', value.id, action)
     if (action === 'create' || action === 'update') writes.references.push({ value, action })
   }
   const incomingReferenceIds = new Set(references.map(({ id }) => id))
   for (const noteId of mediaReconcileNoteIds) {
-    for (const existing of await collection.noteMedia.where('noteId').equals(noteId).toArray()) {
+    for (const existing of localReferencesByNoteId.get(noteId) ?? []) {
       const importedReference = existing.id.startsWith(`${noteId}:media:`) || existing.id === `${noteId}:image-occlusion-source`
       if (!importedReference || incomingReferenceIds.has(existing.id)) continue
       snapshots.push({ table: 'noteMedia', id: existing.id, value: fingerprint(existing) })
@@ -1002,9 +1105,10 @@ const decisions: AnkiImportDecision[] = []
     }
   }
   const eligibleMediaDigests = new Set(references.filter((reference) => !keptAggregateNoteIds.has(reference.noteId)).map((reference) => reference.digest))
-  for (const value of blobs.values()) {
-    if (!eligibleMediaDigests.has(value.digest)) continue
-    const existing = await collection.mediaBlobs.get(value.digest)
+  const eligibleBlobs = [...blobs.values()].filter((value) => eligibleMediaDigests.has(value.digest))
+  const existingBlobs = await collection.mediaBlobs.bulkGet(eligibleBlobs.map((value) => value.digest))
+  for (const [index, value] of eligibleBlobs.entries()) {
+    const existing = existingBlobs[index]
     snapshots.push({ table: 'mediaBlobs', id: value.digest, value: fingerprint(existing) })
     if (!existing) writes.blobs.push(value)
   }
