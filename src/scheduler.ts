@@ -158,8 +158,12 @@ function ankiFuzzFactor(seed: bigint): number {
   return (firstWord >>> 8) / 0x1_000000
 }
 
-function fuzzSeed(cardId: string, reps: number) {
-  const identity = /^\d+$/.test(cardId) ? BigInt(cardId) : BigInt(stableRank(cardId))
+function fuzzSeed(card: Pick<CardRecord, 'id' | 'ankiId'>, reps: number) {
+  // Imported cards use composite app IDs; their retained Native Identity is
+  // the identity Anki uses for its deterministic draw.
+  const identity = Number.isSafeInteger(card.ankiId) && card.ankiId! > 0
+    ? BigInt(card.ankiId!)
+    : /^\d+$/.test(card.id) ? BigInt(card.id) : BigInt(stableRank(card.id))
   return BigInt.asUintN(64, identity + BigInt(reps))
 }
 
@@ -202,11 +206,11 @@ export function intervalLabel(due: Date, reviewedAt: Date) {
   return `${Math.round(hours / 24)}d`
 }
 
-function nextSchedule(scheduler: ReturnType<typeof schedulerFor>, card: FsrsCard, cardId: string, now: Date, grade: Grade) {
+function nextSchedule(scheduler: ReturnType<typeof schedulerFor>, card: FsrsCard, identity: Pick<CardRecord, 'id' | 'ankiId'>, now: Date, grade: Grade) {
   const result = scheduler.next(card, now, grade)
   if (result.card.state === State.Review && result.card.scheduled_days >= 2.5) {
     const range = get_fuzz_range(result.card.scheduled_days, card.elapsed_days, scheduler.parameters.maximum_interval)
-    const seed = fuzzSeed(cardId, card.reps)
+    const seed = fuzzSeed(identity, card.reps)
     const scheduledDays = Math.floor(range.min_ivl + ankiFuzzFactor(seed) * (range.max_ivl - range.min_ivl + 1))
     result.card.scheduled_days = scheduledDays
     result.card.due = new Date(now.getTime() + scheduledDays * 86_400_000)
@@ -230,12 +234,12 @@ export function reviewChoices(card: CardRecord, group: DeckOptionGroup, now: Dat
   return choices.map(([rating, label]) => ({
     rating,
     label,
-    interval: intervalLabel(nextSchedule(schedulerFor(group), deserializeCard(card), card.id, now, rating).card.due, now),
+    interval: intervalLabel(nextSchedule(schedulerFor(group), deserializeCard(card), card, now, rating).card.due, now),
   }))
 }
 
 export function answerWithSchedule(card: CardRecord, group: DeckOptionGroup, rating: Grade, now: Date, reviewId: string) {
-  const result = nextSchedule(schedulerFor(group), deserializeCard(card), card.id, now, rating)
+  const result = nextSchedule(schedulerFor(group), deserializeCard(card), card, now, rating)
   return {
     card: serializeCard(result.card, card),
     review: { ...serializeReview(result.log, { id: reviewId, cardId: card.id, deckId: card.deckId }), scheduling: { before: card, options: group } },

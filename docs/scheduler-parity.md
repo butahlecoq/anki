@@ -76,8 +76,12 @@ burial cases above. It also emits the official persisted card rows (including th
 native card data field) and review-log rows for all 16 state/grade combinations.
 Each outcome also includes the native four-grade preview labels from that same
 pre-answer state.
-Those native outcomes still need to be run,
-compared with the app's persisted outputs, and extended to every alternate
-sort/gather mode directly against Anki, so #94 stays open for that remaining
-parity evidence. A user-configured Anki rollover hour is not yet a setting in
-the app; this target currently matches Anki's default.
+Those native outcomes still need to be compared with the app's persisted outputs
+for Learning, Review and Relearning across all four grades, and extended to every
+alternate sort/gather mode directly against Anki, so #94 stays open for that
+remaining parity evidence. The current Review fuzz path also remains approximate:
+Anki constrains its draw using the previous scheduled interval before drawing,
+while the app uses stored elapsed days and clamps the sampled result afterward.
+The native-output matrix must compare those Review cases before claiming parity.
+A user-configured Anki rollover hour is not yet a setting in the app; this target
+currently matches Anki's default.
