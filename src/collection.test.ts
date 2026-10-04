@@ -3,6 +3,7 @@ import Dexie from 'dexie'
 import { afterEach, describe, expect, test } from 'vitest'
 import { BASIC_NOTE_TYPE_ID, createCollection, Rating, State, type CardRecord, type Collection, type DeckOptionSettings } from './collection'
 import { intervalLabel } from './scheduler'
+import { customStudyKey } from './custom-study-state'
 
 let collection: Collection | undefined
 
@@ -865,17 +866,33 @@ describe('local collection', () => {
     await expect(collection.dueCards(child.id, now)).resolves.toHaveLength(3)
   })
 
-  test('summaries aggregate a parent deck with every descendant', async () => {
+  test('summaries preserve nested totals, empty decks, reviews, and custom study membership', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const parent = await collection.createDeck('Japanese')
     const child = await collection.createDeck('Verbs', { parentId: parent.id })
-    await collection.createBasicNote(parent.id, { front: '読む', back: 'read' })
-    await collection.createBasicNote(child.id, { front: '書く', back: 'write' })
+    const grandchild = await collection.createDeck('Godan', { parentId: child.id })
+    const empty = await collection.createDeck('Empty')
+    const parentNote = await collection.createBasicNote(parent.id, { front: '読む', back: 'read' })
+    const childNote = await collection.createBasicNote(child.id, { front: '書く', back: 'write' })
+    const grandchildNote = await collection.createBasicNote(grandchild.id, { front: '泳ぐ', back: 'swim' })
+    const parentCard = (await collection.cards.where('noteId').equals(parentNote.id).first())!
+    const childCard = (await collection.cards.where('noteId').equals(childNote.id).first())!
+    const grandchildCard = (await collection.cards.where('noteId').equals(grandchildNote.id).first())!
+    await collection.cards.update(childCard.id, { state: State.Learning })
+    await collection.cards.update(grandchildCard.id, { state: State.Review })
+    await collection.reviewEntries.bulkPut([
+      { id: 'parent-review', cardId: parentCard.id, deckId: parent.id },
+      { id: 'grandchild-review', cardId: grandchildCard.id, deckId: grandchild.id },
+    ] as never[])
+    await collection.settings.put({ key: customStudyKey, value: [{ id: 'session', name: 'Practice', cardIds: [parentCard.id, grandchildCard.id] }] })
 
     const summaries = await collection.summaries()
-    const parentSummary = summaries.find((summary) => summary.id === parent.id)!
+    const byId = new Map(summaries.map((summary) => [summary.id, summary]))
 
-    expect(parentSummary).toMatchObject({ noteCount: 2, counts: { new: 2, learning: 0, review: 0 } })
+    expect(byId.get(parent.id)).toMatchObject({ noteCount: 3, reviewCount: 2, sessionCount: 2, counts: { new: 1, learning: 1, review: 1 } })
+    expect(byId.get(child.id)).toMatchObject({ noteCount: 2, reviewCount: 1, sessionCount: 1, counts: { new: 0, learning: 1, review: 1 } })
+    expect(byId.get(grandchild.id)).toMatchObject({ noteCount: 1, reviewCount: 1, sessionCount: 1, counts: { new: 0, learning: 0, review: 1 } })
+    expect(byId.get(empty.id)).toMatchObject({ noteCount: 0, reviewCount: 0, sessionCount: 0, counts: { new: 0, learning: 0, review: 0 } })
   })
 
   test('returns an empty queue when an active deck has been deleted in another tab', async () => {
