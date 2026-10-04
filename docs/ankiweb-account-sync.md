@@ -1,12 +1,46 @@
 # Existing AnkiWeb account sync
 
-The user requires two-way synchronization with their existing AnkiWeb account while the Windows PC is off. This supersedes the original package-only compatibility scope. Issue #56 tracks the complete feature. The current app's **Connect a PC** service uses Kiroku's own protocol and does not synchronize an AnkiWeb account.
+The user requires two-way synchronization with their existing AnkiWeb account. The supported topology and whether the PC must be running are tracked by #186. This supersedes the original package-only compatibility scope. Issue #56 tracks the complete feature. The current app's **Connect a PC** service uses Kiroku's own protocol and does not synchronize an AnkiWeb account.
 
 ## Protocol and connectivity findings
 
 The [official client](https://github.com/ankitects/anki/blob/main/rslib/src/sync/http_client/mod.rs) uses native HTTPS requests with a protocol header and separate collection/media routes. The [official sync manual](https://docs.ankiweb.net/syncing.html) describes initial one-way synchronization, subsequent merges, and format conflicts that can require replacing one side. The app must preserve native IDs and sync revision metadata, not merely translate an exported package on each sync.
 
 On 2026-10-01, a credential-free OPTIONS probe to `https://sync.ankiweb.net/sync/meta` with an unrelated Origin returned 405 and no Access-Control-Allow-Origin. This demonstrates a CORS obstacle for that transport; it does not establish that every endpoint or protocol version was probed. A separate read-only hostKey login succeeded with credentials from ignored local `.env`; its token was discarded without collection requests or writes. No credentials are included in this document.
+
+### Browser POST measurement (2026-10-04, issue #179)
+
+Reproduce from the repository root with `node scripts/probe-ankiweb-browser-cors.mjs`. The script opens a headless Chromium page on an ephemeral localhost origin and POSTs only unauthenticated protocol metadata (`v`, client version, and continuation flag) to `/sync/meta`. It sets no cookies, account key, session key, or collection data and discards response bodies. It also sends the same multipart POST through Node HTTPS with the exact browser Origin so the complete response header names, values and order can be retained even when Chromium correctly hides the response from page JavaScript.
+
+Both the base provider host and numbered provider `sync1.ankiweb.net` returned HTTP 400. Chromium observed `MissingAllowOriginHeader` on each response and rejected `fetch()` with `TypeError: Failed to fetch`. Thus a page cannot read the protocol response directly: no `Access-Control-Allow-Origin` permitting the calling origin is present. The failed metadata request is unauthenticated and contains no collection data; HTTP 400 reflects request rejection and does not imply account access.
+
+Captured complete response headers from the direct HTTPS POST to `sync.ankiweb.net`:
+
+```text
+Server: nginx
+Date: Sun, 04 Oct 2026 19:25:03 GMT
+Content-Type: text/plain; charset=utf-8
+Content-Length: 3
+Connection: keep-alive
+X-Frame-Options: SAMEORIGIN
+Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
+X-Content-Type-Options: nosniff
+```
+
+Captured complete response headers from the direct HTTPS POST to `sync1.ankiweb.net`:
+
+```text
+Server: nginx
+Date: Sun, 04 Oct 2026 19:25:04 GMT
+Content-Type: text/plain; charset=utf-8
+Content-Length: 3
+Connection: keep-alive
+X-Frame-Options: SAMEORIGIN
+Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
+X-Content-Type-Options: nosniff
+```
+
+The browser's own network observer reported HTTP 400 and `MissingAllowOriginHeader` for both hosts. The earlier OPTIONS-only evidence is superseded by this protocol POST measurement. Direct browser-to-AnkiWeb synchronization therefore requires a CORS-capable intermediary; current architecture and deployment choices remain subject to #186 and #188.
 
 ## Private gateway transport (#59)
 
