@@ -141,6 +141,40 @@ describe('pure scheduling rules', () => {
       scheduledDays: 1, learningSteps: 0, reviewedAt: now.toISOString(),
     }
     expect(select(cards.filter((entry) => entry.state === State.New), [reviewedToday]).map((entry) => entry.id)).toEqual(['new-a'])
+
+    const selectWithReviewLimit = (dueCards: CardRecord[], dailyReviewLimit: number) => selectDueCards({
+      deckId: deck.id, now, decks: [deck], groups: [{ ...options, dailyReviewLimit }],
+      notes: [], cards: dueCards, reviews: [], sessionCardIds: new Set<string>(),
+    }).map((entry) => entry.id)
+    expect(selectWithReviewLimit([cards[0], cards[2]], 2)).toEqual(['review', 'new-a'])
+    expect(selectWithReviewLimit([cards[0], card('review-2', State.Review), cards[2]], 2)).toEqual(['review', 'review-2'])
+    expect(selectWithReviewLimit([cards[0], cards[2]], 0)).toEqual([])
+  })
+
+  test('selected-deck limits and default queue mixing match the native queue oracle', () => {
+    const child: Deck = { ...deck, id: 'child', name: 'Child', parentId: deck.id, optionGroupId: 'child-options' }
+    const childOptions = { ...options, id: 'child-options', dailyNewLimit: 3, dailyReviewLimit: 200 }
+    const childNews = [1, 2, 3].map((position) => card(`child-new-${position}`, State.New, {
+      deckId: child.id, newPosition: position, due: '2026-10-03T12:00:00.000Z',
+    }))
+    const selectNew = (selectedDeck: Deck) => selectDueCards({
+      deckId: selectedDeck.id, now, decks: [deck, child],
+      groups: [{ ...options, dailyNewLimit: 2 }, childOptions], notes: [],
+      cards: childNews, reviews: [], sessionCardIds: new Set<string>(),
+    }).filter((entry) => entry.state === State.New).map((entry) => entry.id)
+    expect(selectNew(deck)).toHaveLength(2)
+    expect(selectNew(child)).toHaveLength(3)
+
+    const mixed = selectDueCards({
+      deckId: deck.id, now, decks: [deck], groups: [options], notes: [], reviews: [], sessionCardIds: new Set<string>(),
+      cards: [
+        ...[1, 2].map((index) => card(`new-${index}`, State.New, { newPosition: index })),
+        ...[1, 2, 3, 4, 5].map((index) => card(`review-${index}`, State.Review, { scheduledDays: index, due: `2026-10-03T${String(7 + index).padStart(2, '0')}:00:00.000Z` })),
+      ],
+    })
+    expect(mixed.map((entry) => entry.state === State.New ? 'new' : 'review')).toEqual([
+      'review', 'review', 'new', 'review', 'review', 'new', 'review',
+    ])
   })
 
   test('answering is a pure, deterministic schedule transition with an explicit review identity', () => {

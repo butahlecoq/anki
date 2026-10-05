@@ -86,9 +86,11 @@ native preview and persisted outcomes.
 
 The alternate queue oracle now emits native orders for due-then-deck,
 deck-then-due, interval ascending/descending, and retrievability
-ascending/descending, plus deck, ascending-position, and descending-position new
-card gathering. App tests use the same synthetic parent/child cases and compare
-all those ordered IDs. Anki's random-note and random-card gather modes use
-collection randomness; the oracle reports their observations but they are not
-compared as fixed sequences. A user-configured Anki rollover hour is not yet a
-setting in the app; this target matches Anki's default.
+ascending/descending, plus deck, ascending-position, descending-position,
+random-note, random-card, and deck-then-random-note new-card gathering. App tests
+compare the deterministic orderings and the native scenarios for parent/child
+limits, shared review limits, zero limits, and default review/new mixing. Random
+gather tests check the native ordering invariants (complete membership and
+same-note grouping); their exact order changes with collection randomness. A
+user-configured Anki rollover hour is not yet a setting in the app; this target
+matches Anki's default.
