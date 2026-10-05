@@ -76,6 +76,14 @@ async function edit(page: Page, front: string, back: string) {
   await expect(page.getByTestId('note-front')).toHaveText(front)
 }
 
+async function addNote(page: Page, front: string, back: string) {
+  await page.getByRole('button', { name: 'Add note', exact: true }).click()
+  await page.getByLabel('Front', { exact: true }).fill(front)
+  await page.getByLabel('Back', { exact: true }).fill(back)
+  await page.getByRole('button', { name: 'Save note', exact: true }).click()
+  await expect(page.getByTestId('note-front').filter({ hasText: front })).toBeVisible()
+}
+
 test('independent offline clients merge fields, retain conflicts through reload, and converge after an offline choice', async ({ page: pc, context, browser }) => {
   test.setTimeout(120_000)
   const phoneContext = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
@@ -193,6 +201,56 @@ test('independent offline clients merge fields, retain conflicts through reload,
       const history = page.getByRole('region', { name: 'Card review history' })
       await expect(history.getByRole('listitem')).toHaveCount(2)
       await expect(history).toContainText('Good'); await expect(history).toContainText('Easy')
+    }
+    expect(errors).toEqual([])
+  } finally {
+    await Promise.allSettled([context.setOffline(false), phoneContext.close()])
+    await syncService.close()
+  }
+})
+
+test('queued offline writes converge after a network interruption', async ({ page: pc, context, browser }) => {
+  test.setTimeout(120_000)
+  const phoneContext = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
+  const phone = await phoneContext.newPage()
+  const syncService = await isolatedSyncService()
+  const deckName = `Restart recovery ${Date.now()}`
+  const errors: string[] = []
+  for (const page of [pc, phone]) page.on('pageerror', (error) => errors.push(error.message))
+  try {
+    await pc.goto(webURL)
+    await phone.goto(webURL)
+    await pc.getByRole('button', { name: 'New deck', exact: true }).click()
+    await pc.getByLabel('Deck name').fill(deckName)
+    await pc.getByRole('button', { name: 'Create deck', exact: true }).click()
+    await pc.getByRole('button', { name: `Open ${deckName}`, exact: true }).click()
+    await addNote(pc, '猫', 'cat')
+    await pair(pc, syncService.url, syncService.runtime)
+    await pair(phone, syncService.url, syncService.runtime)
+    await sync(pc)
+    await sync(phone)
+    await phone.getByRole('button', { name: `Open ${deckName}`, exact: true }).click()
+
+    let networkAvailable = true
+    await context.route(`${syncService.url}/api/**`, (route) => networkAvailable ? route.continue() : route.abort('failed'))
+    await phoneContext.route(`${syncService.url}/api/**`, (route) => networkAvailable ? route.continue() : route.abort('failed'))
+    networkAvailable = false
+    await addNote(pc, '鳥', 'bird')
+    await addNote(phone, '魚', 'fish')
+    for (const page of [pc, phone]) {
+      const region = page.getByRole('region', { name: 'PC sync', exact: true })
+      await region.getByRole('button', { name: 'Sync now', exact: true }).click()
+      await expect(region).toContainText(/could not be reached|retry/i)
+    }
+    await expect(pc.getByTestId('note-front').filter({ hasText: '鳥' })).toBeVisible()
+    await expect(phone.getByTestId('note-front').filter({ hasText: '魚' })).toBeVisible()
+
+    networkAvailable = true
+    await sync(pc)
+    await sync(phone)
+    await sync(pc)
+    for (const [page, fronts] of [[pc, ['猫', '鳥', '魚']], [phone, ['猫', '鳥', '魚']]] as const) {
+      for (const front of fronts) await expect(page.getByTestId('note-front').filter({ hasText: front })).toBeVisible()
     }
     expect(errors).toEqual([])
   } finally {

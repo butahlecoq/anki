@@ -375,6 +375,43 @@ test('caps one sync attempt and reports remote work that must resume on the next
   } finally { await collection.delete() }
 })
 
+test('resumes a long paginated backlog from its durable cursor after the client restarts', async () => {
+  const databaseName = `kiroku-test-${crypto.randomUUID()}`
+  let collection = createCollection(databaseName)
+  let online = true
+  try {
+    await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 })
+    const fetcher = vi.fn((url: string, init?: RequestInit) => {
+      if (!online) return Promise.reject(new TypeError('network offline'))
+      if (url.endsWith('/api/health')) return Promise.resolve(health())
+      const request = JSON.parse(String(init?.body)) as { cursor: number }
+      const cursor = request.cursor + 1
+      const occurredAt = new Date(1_800_000_000_000 + cursor).toISOString()
+      return Promise.resolve(new Response(JSON.stringify({
+        accepted: 0,
+        cursor,
+        changes: [{ opId: `remote-${cursor}`, entityType: 'deck', entityId: `remote-${cursor}`, action: 'create', occurredAt, payload: { id: `remote-${cursor}`, name: `Remote ${cursor}`, parentId: null, optionGroupId: DEFAULT_DECK_OPTION_GROUP_ID, createdAt: occurredAt, updatedAt: occurredAt } }],
+        hasMore: cursor < SYNC_REQUESTS_PER_ATTEMPT + 1,
+      }), { status: 200 }))
+    })
+
+    await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'incomplete', cursor: SYNC_REQUESTS_PER_ATTEMPT, pendingOperations: 0, remoteChangesPending: true })
+    await expect(collection.decks.get(`remote-${SYNC_REQUESTS_PER_ATTEMPT}`)).resolves.toMatchObject({ name: `Remote ${SYNC_REQUESTS_PER_ATTEMPT}` })
+    await expect(collection.syncSettings()).resolves.toMatchObject({ cursor: SYNC_REQUESTS_PER_ATTEMPT })
+
+    collection.close()
+    collection = createCollection(databaseName)
+    online = false
+    await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'unreachable' })
+    await expect(collection.syncSettings()).resolves.toMatchObject({ cursor: SYNC_REQUESTS_PER_ATTEMPT })
+
+    online = true
+    await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'complete', cursor: SYNC_REQUESTS_PER_ATTEMPT + 1 })
+    await expect(collection.decks.get(`remote-${SYNC_REQUESTS_PER_ATTEMPT + 1}`)).resolves.toMatchObject({ name: `Remote ${SYNC_REQUESTS_PER_ATTEMPT + 1}` })
+    await expect(collection.syncSettings()).resolves.toMatchObject({ cursor: SYNC_REQUESTS_PER_ATTEMPT + 1 })
+  } finally { await collection.delete() }
+})
+
 test('reports a media upload failure separately while syncing card changes', async () => {
   const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
   await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 })
@@ -443,6 +480,47 @@ test('does not expose downloaded media when its content digest fails verificatio
   await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'complete', media: { downloaded: 0, pending: 1, downloadError: 'unreachable' } })
   await expect(collection.verifiedMediaBlob(expectedDigest)).resolves.toBeUndefined()
   await collection.delete()
+})
+
+test('resumes an interrupted remote media download after a client restart', async () => {
+  const databaseName = `kiroku-test-${crypto.randomUUID()}`
+  let collection = createCollection(databaseName)
+  try {
+    await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 })
+    const deck = await collection.createDeck('Japanese foundations')
+    const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
+    const remoteBytes = new TextEncoder().encode('verified remote media')
+    const remoteBlob = new Blob([remoteBytes], { type: 'image/png' })
+    const remoteDigest = await digestMedia(remoteBlob)
+    const createdAt = '2026-10-01T12:00:00.000Z'
+    const reference = { id: 'interrupted-remote-media', noteId: note.id, digest: remoteDigest, kind: 'image' as const, mimeType: 'image/png', displayName: 'cat.png', side: 'front' as const, playback: 'manual' as const, createdAt, updatedAt: createdAt }
+    let loseFirstDownload = true
+    const fetcher = vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith('/api/health')) return Promise.resolve(health())
+      if (url.endsWith(`/api/media/${remoteDigest}`)) {
+        if (loseFirstDownload) { loseFirstDownload = false; return Promise.reject(new TypeError('network dropped during download')) }
+        return Promise.resolve(new Response(remoteBytes, { status: 200, headers: { 'x-content-sha256': remoteDigest, 'content-type': 'image/png' } }))
+      }
+      const request = JSON.parse(String(init?.body)) as { operations: { opId: string }[]; cursor: number }
+      return Promise.resolve(new Response(JSON.stringify({
+        accepted: request.operations.length,
+        cursor: 1,
+        changes: request.cursor === 0 ? [{ cursor: 1, opId: 'remote-media-reference', entityType: 'noteMedia', entityId: reference.id, action: 'create', occurredAt: createdAt, payload: reference }] : [],
+        hasMore: false,
+      }), { status: 200 }))
+    })
+
+    await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'complete', cursor: 1, media: { downloaded: 0, pending: 1, downloadError: 'unreachable' } })
+    await expect(collection.syncSettings()).resolves.toMatchObject({ cursor: 1 })
+    await expect(collection.noteMedia.get(reference.id)).resolves.toMatchObject({ digest: remoteDigest })
+    await expect(collection.verifiedMediaBlob(remoteDigest)).resolves.toBeUndefined()
+
+    collection.close()
+    collection = createCollection(databaseName)
+    await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'complete', cursor: 1, media: { downloaded: 1, pending: 0 } })
+    await expect(collection.verifiedMediaBlob(remoteDigest)).resolves.toMatchObject({ digest: remoteDigest, byteLength: remoteBytes.byteLength })
+    await expect(collection.noteMedia.get(reference.id)).resolves.toMatchObject({ digest: remoteDigest })
+  } finally { await collection.delete() }
 })
 
 test('downloads remote media even when an unrelated local upload fails', async () => {
