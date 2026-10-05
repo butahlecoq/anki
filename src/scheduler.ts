@@ -167,6 +167,47 @@ function fuzzSeed(card: Pick<CardRecord, 'id' | 'ankiId'>, reps: number) {
   return BigInt.asUintN(64, identity + BigInt(reps))
 }
 
+/** Port Anki 26.9.3's constrained_fuzz_bounds(), including its two-day minimum range. */
+function ankiFuzzBounds(interval: number, minimum: number, maximum: number) {
+  const boundedMinimum = Math.min(minimum, maximum)
+  const boundedInterval = Math.max(boundedMinimum, Math.min(interval, maximum))
+  let delta = 1
+  for (const range of [{ start: 2.5, end: 7, factor: 0.15 }, { start: 7, end: 20, factor: 0.1 }, { start: 20, end: Infinity, factor: 0.05 }]) {
+    delta += range.factor * Math.max(Math.min(boundedInterval, range.end) - range.start, 0)
+  }
+  const lower = Math.max(boundedMinimum, Math.min(Math.round(boundedInterval - delta), maximum))
+  let upper = Math.max(boundedMinimum, Math.min(Math.round(boundedInterval + delta), maximum))
+  if (upper === lower && upper > 2 && upper < maximum) upper = lower + 1
+  return { lower, upper }
+}
+
+/** Apply the pinned Anki V3 Review fuzz bounds to an unfuzzed FSRS interval. */
+function ankiReviewFuzz(interval: number, minimum: number, maximum: number, factor: number) {
+  const { lower, upper } = ankiFuzzBounds(interval, minimum, maximum)
+  return Math.floor(lower + factor * (1 + upper - lower))
+}
+
+function minimumReviewFuzzInterval(interval: number, previousInterval: number, maximum: number) {
+  const rounded = Math.round(interval)
+  const { upper } = ankiFuzzBounds(interval, 1, maximum)
+  if (rounded > previousInterval) return previousInterval + 1
+  return previousInterval <= upper ? previousInterval : 1
+}
+
+function reviewIntervals(scheduler: ReturnType<typeof schedulerFor>, card: FsrsCard, identity: Pick<CardRecord, 'id' | 'ankiId' | 'scheduledDays'>, now: Date) {
+  const previousInterval = identity.scheduledDays
+  const factor = ankiFuzzFactor(fuzzSeed(identity, card.reps))
+  const grades = [Rating.Hard, Rating.Good, Rating.Easy] as const
+  const states = grades.map((grade) => scheduler.next(card, now, grade).card)
+  const intervals: number[] = []
+  for (const next of states) {
+    const interval = next.stability * scheduler.interval_modifier
+    const minimum = Math.max(minimumReviewFuzzInterval(interval, previousInterval, scheduler.parameters.maximum_interval), (intervals.at(-1) ?? 0) + 1, 1)
+    intervals.push(ankiReviewFuzz(interval, minimum, scheduler.parameters.maximum_interval, factor))
+  }
+  return { hard: intervals[0], good: intervals[1], easy: intervals[2] }
+}
+
 export function serializeCard(card: FsrsCard, identity: Pick<CardRecord, 'id' | 'deckId' | 'noteId' | 'templateId'> & Partial<CardRecord>): CardRecord {
   return {
     manualSuspended: false, templateSuspended: false, buriedUntil: null, suspended: false,
@@ -220,7 +261,12 @@ function nextSchedule(scheduler: ReturnType<typeof schedulerFor>, card: FsrsCard
     const minutes = amount * (unit === 'h' ? 60 : unit === 'd' ? 1440 : 1)
     result.card.due = new Date(now.getTime() + minutes * 60_000)
   }
-  if (result.card.state === State.Review && result.card.scheduled_days >= 2.5) {
+  if (card.state === State.Review && result.card.state === State.Review) {
+    const intervals = reviewIntervals(scheduler, card, identity, now)
+    const scheduledDays = grade === Rating.Hard ? intervals.hard : grade === Rating.Good ? intervals.good : intervals.easy
+    result.card.scheduled_days = scheduledDays
+    result.card.due = new Date(now.getTime() + scheduledDays * 86_400_000)
+  } else if (result.card.state === State.Review && result.card.scheduled_days >= 2.5) {
     const previousInterval = card.state === State.Review ? identity.scheduledDays : card.elapsed_days
     const range = get_fuzz_range(result.card.scheduled_days, previousInterval, scheduler.parameters.maximum_interval)
     const seed = fuzzSeed(identity, card.reps)

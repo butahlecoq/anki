@@ -78,15 +78,19 @@ Each outcome also includes the native four-grade preview labels from that same
 pre-answer state. The normalized output is checked in at
 `tests/fixtures/anki-26.9.3-scheduler-matrix.json`; refresh it with
 `uv run --with anki==26.9.3 python scripts/verify-scheduler-oracle.py --write-matrix-fixture`.
-The app compares persisted outputs for New, Learning and Relearning across all
-four grades. Learning's final-step Hard interval uses Anki's current step instead
-of the generic midpoint between steps.
+The app compares persisted outputs for all four grades in all four states.
+Learning's final-step Hard interval uses Anki's current step instead of the
+generic midpoint between steps. Review fuzz ports Anki's constrained interval
+bounds and sequential Hard/Good/Easy minimums; the strict test compares all 16
+native preview and persisted outcomes.
 
-Review-state exact previews and persisted intervals still differ from the pinned
-oracle for some grades. For the fixed Review row, the oracle emits Hard/Good/Easy
-intervals of 10/9/14 days while the app emits 9/9/13 days; keep this matrix row
-unclaimed until the fuzz draw matches. The oracle also needs direct comparisons
-for alternate review sort and new-card gather settings. Existing app-only tests
-cover their behavior but do not establish parity with Anki. These gaps keep #94
-open. A user-configured Anki rollover hour is not yet a setting in the app; this
-target currently matches Anki's default.
+The alternate queue oracle now emits native orders for due-then-deck,
+deck-then-due, interval ascending/descending, and retrievability
+ascending/descending, plus deck, ascending-position, descending-position,
+random-note, random-card, and deck-then-random-note new-card gathering. App tests
+compare the deterministic orderings and the native scenarios for parent/child
+limits, shared review limits, zero limits, and default review/new mixing. Random
+gather tests check the native ordering invariants (complete membership and
+same-note grouping); their exact order changes with collection randomness. A
+user-configured Anki rollover hour is not yet a setting in the app; this target
+matches Anki's default.

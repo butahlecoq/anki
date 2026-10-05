@@ -53,28 +53,29 @@ describe('pure scheduling rules', () => {
     expect(result.map((entry) => entry.id)).toEqual(['review-due', 'new-b'])
   })
 
-  test('review sort modes order gathered cards by due, deck, interval, or retrievability', () => {
+  test('review sort modes match the pinned Anki 26.9.3 queue fixture', () => {
     const child: Deck = { ...deck, id: 'child', name: 'Child', parentId: deck.id, createdAt: '2026-01-01', updatedAt: '2026-01-01' }
     const optionsFor = (reviewCardOrder: DeckOptionGroup['reviewCardOrder']) => ({ ...options, reviewCardOrder })
     const cards = [
-      card('long', State.Review, { scheduledDays: 30, due: '2026-10-02T12:00:00.000Z', stability: 3, lastReview: '2026-09-03T12:00:00.000Z' }),
-      card('short', State.Review, { scheduledDays: 3, due: '2026-10-02T12:00:00.000Z', stability: 30, lastReview: '2026-10-01T12:00:00.000Z' }),
-      card('child-due-first', State.Review, { id: 'child-due-first', noteId: 'child-note', deckId: child.id, due: '2026-10-01T12:00:00.000Z', scheduledDays: 5 }),
+      card('parent-due-tie-short', State.Review, { scheduledDays: 4, due: '2026-10-03T12:00:00.000Z', stability: 4, difficulty: 8, elapsedDays: 2, lastReview: '2026-10-01T12:00:00.000Z' }),
+      card('parent-due-tie-long', State.Review, { scheduledDays: 30, due: '2026-10-03T12:00:00.000Z', stability: 30, difficulty: 4, elapsedDays: 30, lastReview: '2026-09-03T12:00:00.000Z' }),
+      card('parent-overdue', State.Review, { scheduledDays: 10, due: '2026-10-01T12:00:00.000Z', stability: 10, difficulty: 6, elapsedDays: 12, lastReview: '2026-09-21T12:00:00.000Z' }),
+      card('child-due-tie', State.Review, { id: 'child-due-tie', noteId: 'child-note', deckId: child.id, due: '2026-10-03T12:00:00.000Z', scheduledDays: 7, stability: 7, difficulty: 5, elapsedDays: 8, lastReview: '2026-09-25T12:00:00.000Z' }),
     ]
     const select = (order: DeckOptionGroup['reviewCardOrder'], selectedDeck = deck) => selectDueCards({
       deckId: selectedDeck.id, now, decks: [deck, child], groups: [optionsFor(order)], notes: [], cards,
       reviews: [], sessionCardIds: new Set<string>(),
     }).map((entry) => entry.id)
 
-    expect(select('due-then-deck')).toEqual(['child-due-first', 'long', 'short'])
-    expect(select('deck-then-due', deck)).toEqual(['long', 'short', 'child-due-first'])
-    expect(select('interval-ascending')).toEqual(['short', 'child-due-first', 'long'])
-    expect(select('interval-descending')).toEqual(['long', 'child-due-first', 'short'])
-    expect(select('retrievability-ascending')[0]).toBe('long')
-    expect(select('retrievability-descending')[0]).toBe('short')
+    expect(select('due-then-deck')).toEqual(['parent-overdue', 'parent-due-tie-long', 'parent-due-tie-short', 'child-due-tie'])
+    expect(select('deck-then-due', deck)).toEqual(['parent-overdue', 'parent-due-tie-long', 'parent-due-tie-short', 'child-due-tie'])
+    expect(select('interval-ascending')).toEqual(['parent-due-tie-short', 'child-due-tie', 'parent-overdue', 'parent-due-tie-long'])
+    expect(select('interval-descending')).toEqual(['parent-due-tie-long', 'parent-overdue', 'child-due-tie', 'parent-due-tie-short'])
+    expect(select('retrievability-ascending')).toEqual(['parent-overdue', 'child-due-tie', 'parent-due-tie-long', 'parent-due-tie-short'])
+    expect(select('retrievability-descending')).toEqual(['parent-due-tie-short', 'parent-due-tie-long', 'child-due-tie', 'parent-overdue'])
   })
 
-  test('new-card gathering applies deck quotas before sorting the gathered cards', () => {
+  test('new-card gather modes match the pinned Anki 26.9.3 queue fixture', () => {
     const child: Deck = { ...deck, id: 'child', name: 'Child', parentId: deck.id }
     const childCard = (id: string, newPosition: number, templateOrdinal: number, noteId = `note-${id}`) => card(id, State.New, {
       deckId: child.id, noteId, newPosition, templateOrdinal, due: '2026-10-03T12:00:00.000Z',
@@ -83,7 +84,7 @@ describe('pure scheduling rules', () => {
       noteId, newPosition, templateOrdinal, due: '2026-10-03T12:00:00.000Z',
     })
     const cards = [
-      parentCard('parent-2', 2, 1), parentCard('parent-9', 9, 0),
+      parentCard('parent-position-2', 2, 1), parentCard('parent-position-3', 3, 0),
       childCard('child-1', 1, 0), childCard('child-4', 4, 1),
     ]
     const select = (newCardGatherOrder: DeckOptionGroup['newCardGatherOrder'], newCardSortOrder: DeckOptionGroup['newCardSortOrder'] = 'gathered', dailyNewLimit = 20) => selectDueCards({
@@ -92,12 +93,12 @@ describe('pure scheduling rules', () => {
       notes: [], cards, reviews: [], sessionCardIds: new Set<string>(),
     }).map((entry) => entry.id)
 
-    expect(select('deck')).toEqual(['parent-2', 'parent-9', 'child-1', 'child-4'])
-    expect(select('ascending-position')).toEqual(['child-1', 'parent-2', 'child-4', 'parent-9'])
-    expect(select('descending-position')).toEqual(['parent-9', 'child-4', 'parent-2', 'child-1'])
-    expect(select('deck', 'template')).toEqual(['parent-9', 'child-1', 'parent-2', 'child-4'])
-    expect(select('ascending-position', 'gathered', 2)).toEqual(['child-1', 'parent-2'])
-    expect(select('deck', 'template-random').sort()).toEqual(['child-1', 'child-4', 'parent-2', 'parent-9'])
+    expect(select('deck')).toEqual(['parent-position-2', 'parent-position-3', 'child-1', 'child-4'])
+    expect(select('ascending-position')).toEqual(['child-1', 'parent-position-2', 'parent-position-3', 'child-4'])
+    expect(select('descending-position')).toEqual(['child-4', 'parent-position-3', 'parent-position-2', 'child-1'])
+    expect(select('deck', 'template')).toEqual(['parent-position-3', 'child-1', 'parent-position-2', 'child-4'])
+    expect(select('ascending-position', 'gathered', 2)).toEqual(['child-1', 'parent-position-2'])
+    expect(select('deck', 'template-random').sort()).toEqual(['child-1', 'child-4', 'parent-position-2', 'parent-position-3'])
 
     const siblingCards = [
       parentCard('sibling-a-0', 5, 0, 'sibling-a'), parentCard('sibling-a-1', 5, 1, 'sibling-a'),
@@ -140,6 +141,40 @@ describe('pure scheduling rules', () => {
       scheduledDays: 1, learningSteps: 0, reviewedAt: now.toISOString(),
     }
     expect(select(cards.filter((entry) => entry.state === State.New), [reviewedToday]).map((entry) => entry.id)).toEqual(['new-a'])
+
+    const selectWithReviewLimit = (dueCards: CardRecord[], dailyReviewLimit: number) => selectDueCards({
+      deckId: deck.id, now, decks: [deck], groups: [{ ...options, dailyReviewLimit }],
+      notes: [], cards: dueCards, reviews: [], sessionCardIds: new Set<string>(),
+    }).map((entry) => entry.id)
+    expect(selectWithReviewLimit([cards[0], cards[2]], 2)).toEqual(['review', 'new-a'])
+    expect(selectWithReviewLimit([cards[0], card('review-2', State.Review), cards[2]], 2)).toEqual(['review', 'review-2'])
+    expect(selectWithReviewLimit([cards[0], cards[2]], 0)).toEqual([])
+  })
+
+  test('selected-deck limits and default queue mixing match the native queue oracle', () => {
+    const child: Deck = { ...deck, id: 'child', name: 'Child', parentId: deck.id, optionGroupId: 'child-options' }
+    const childOptions = { ...options, id: 'child-options', dailyNewLimit: 3, dailyReviewLimit: 200 }
+    const childNews = [1, 2, 3].map((position) => card(`child-new-${position}`, State.New, {
+      deckId: child.id, newPosition: position, due: '2026-10-03T12:00:00.000Z',
+    }))
+    const selectNew = (selectedDeck: Deck) => selectDueCards({
+      deckId: selectedDeck.id, now, decks: [deck, child],
+      groups: [{ ...options, dailyNewLimit: 2 }, childOptions], notes: [],
+      cards: childNews, reviews: [], sessionCardIds: new Set<string>(),
+    }).filter((entry) => entry.state === State.New).map((entry) => entry.id)
+    expect(selectNew(deck)).toHaveLength(2)
+    expect(selectNew(child)).toHaveLength(3)
+
+    const mixed = selectDueCards({
+      deckId: deck.id, now, decks: [deck], groups: [options], notes: [], reviews: [], sessionCardIds: new Set<string>(),
+      cards: [
+        ...[1, 2].map((index) => card(`new-${index}`, State.New, { newPosition: index })),
+        ...[1, 2, 3, 4, 5].map((index) => card(`review-${index}`, State.Review, { scheduledDays: index, due: `2026-10-03T${String(7 + index).padStart(2, '0')}:00:00.000Z` })),
+      ],
+    })
+    expect(mixed.map((entry) => entry.state === State.New ? 'new' : 'review')).toEqual([
+      'review', 'review', 'new', 'review', 'review', 'new', 'review',
+    ])
   })
 
   test('answering is a pure, deterministic schedule transition with an explicit review identity', () => {
