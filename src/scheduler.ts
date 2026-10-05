@@ -208,6 +208,18 @@ export function intervalLabel(due: Date, reviewedAt: Date) {
 
 function nextSchedule(scheduler: ReturnType<typeof schedulerFor>, card: FsrsCard, identity: Pick<CardRecord, 'id' | 'ankiId' | 'scheduledDays'>, now: Date, grade: Grade) {
   const result = scheduler.next(card, now, grade)
+  // Anki's V3 scheduler keeps Hard on the current learning step. ts-fsrs
+  // computes the average of the first and next step (6m for [1m, 10m]), which
+  // is right for a New card but differs once the learner is already on the
+  // final step: Anki previews the current 10m step before graduating on Good.
+  const steps = card.state === State.Relearning ? scheduler.parameters.relearning_steps : scheduler.parameters.learning_steps
+  if (grade === Rating.Hard && card.state !== State.New && card.state !== State.Review && steps.length > 1 && card.learning_steps >= steps.length - 1) {
+    const currentStep = steps[steps.length - 1]
+    const amount = Number.parseFloat(currentStep)
+    const unit = currentStep.slice(-1)
+    const minutes = amount * (unit === 'h' ? 60 : unit === 'd' ? 1440 : 1)
+    result.card.due = new Date(now.getTime() + minutes * 60_000)
+  }
   if (result.card.state === State.Review && result.card.scheduled_days >= 2.5) {
     const previousInterval = card.state === State.Review ? identity.scheduledDays : card.elapsed_days
     const range = get_fuzz_range(result.card.scheduled_days, previousInterval, scheduler.parameters.maximum_interval)

@@ -75,14 +75,18 @@ checks the default review and new-card schedules plus the queue, limit, and
 burial cases above. It also emits the official persisted card rows (including the
 native card data field) and review-log rows for all 16 state/grade combinations.
 Each outcome also includes the native four-grade preview labels from that same
-pre-answer state.
-Those native outcomes still need to be compared with the app's persisted outputs
-for Learning, Review and Relearning across all four grades, and extended to every
-alternate sort/gather mode directly against Anki, so #94 stays open for that
-remaining parity evidence. Review fuzz bounds use the previous scheduled
-interval before the deterministic draw, matching Anki's lower-bound rule; the
-current tests compare review intervals against native bands, not exact persisted
-outputs for every Review state/grade combination. The native-output matrix must
-be compared before claiming full parity.
-A user-configured Anki rollover hour is not yet a setting in the app; this target
-currently matches Anki's default.
+pre-answer state. The normalized output is checked in at
+`tests/fixtures/anki-26.9.3-scheduler-matrix.json`; refresh it with
+`uv run --with anki==26.9.3 python scripts/verify-scheduler-oracle.py --write-matrix-fixture`.
+The app compares persisted outputs for New, Learning and Relearning across all
+four grades. Learning's final-step Hard interval uses Anki's current step instead
+of the generic midpoint between steps.
+
+Review-state exact previews and persisted intervals still differ from the pinned
+oracle for some grades. For the fixed Review row, the oracle emits Hard/Good/Easy
+intervals of 10/9/14 days while the app emits 9/9/13 days; keep this matrix row
+unclaimed until the fuzz draw matches. The oracle also needs direct comparisons
+for alternate review sort and new-card gather settings. Existing app-only tests
+cover their behavior but do not establish parity with Anki. These gaps keep #94
+open. A user-configured Anki rollover hour is not yet a setting in the app; this
+target currently matches Anki's default.

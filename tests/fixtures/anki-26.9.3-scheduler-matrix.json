@@ -1,0 +1,424 @@
+{
+  "ankiVersion": "26.9.3",
+  "scheduler": "V3",
+  "algorithm": "FSRS-6",
+  "reviewedAt": "2026-10-05T04:15:00+00:00",
+  "matrix": [
+    {
+      "before": "New",
+      "grade": "Again",
+      "previewLabels": [
+        "<1m",
+        "<6m",
+        "<10m",
+        "10d"
+      ],
+      "queue": 1,
+      "card": {
+        "type": 1,
+        "queue": 1,
+        "intervalDays": 0,
+        "reps": 1,
+        "lapses": 0,
+        "stability": 0.212,
+        "difficulty": 6.413
+      },
+      "review": {
+        "grade": 1,
+        "intervalDays": -60,
+        "previousIntervalDays": 0,
+        "type": 0
+      }
+    },
+    {
+      "before": "New",
+      "grade": "Hard",
+      "previewLabels": [
+        "<1m",
+        "<6m",
+        "<10m",
+        "7d"
+      ],
+      "queue": 1,
+      "card": {
+        "type": 1,
+        "queue": 1,
+        "intervalDays": 0,
+        "reps": 1,
+        "lapses": 0,
+        "stability": 1.2931,
+        "difficulty": 5.112
+      },
+      "review": {
+        "grade": 2,
+        "intervalDays": -330,
+        "previousIntervalDays": 0,
+        "type": 0
+      }
+    },
+    {
+      "before": "New",
+      "grade": "Good",
+      "previewLabels": [
+        "<1m",
+        "<6m",
+        "<10m",
+        "8d"
+      ],
+      "queue": 1,
+      "card": {
+        "type": 1,
+        "queue": 1,
+        "intervalDays": 0,
+        "reps": 1,
+        "lapses": 0,
+        "stability": 2.3065,
+        "difficulty": 2.118
+      },
+      "review": {
+        "grade": 3,
+        "intervalDays": -600,
+        "previousIntervalDays": 0,
+        "type": 0
+      }
+    },
+    {
+      "before": "New",
+      "grade": "Easy",
+      "previewLabels": [
+        "<1m",
+        "<6m",
+        "<10m",
+        "8d"
+      ],
+      "queue": 2,
+      "card": {
+        "type": 2,
+        "queue": 2,
+        "intervalDays": 8,
+        "reps": 1,
+        "lapses": 0,
+        "stability": 8.2956,
+        "difficulty": 1.0
+      },
+      "review": {
+        "grade": 4,
+        "intervalDays": 8,
+        "previousIntervalDays": 0,
+        "type": 0
+      }
+    },
+    {
+      "before": "Learning",
+      "grade": "Again",
+      "previewLabels": [
+        "<1m",
+        "<10m",
+        "2d",
+        "6d"
+      ],
+      "queue": 1,
+      "card": {
+        "type": 1,
+        "queue": 1,
+        "intervalDays": 0,
+        "reps": 1,
+        "lapses": 0,
+        "stability": 0.212,
+        "difficulty": 6.413
+      },
+      "review": {
+        "grade": 1,
+        "intervalDays": -60,
+        "previousIntervalDays": -600,
+        "type": 0
+      }
+    },
+    {
+      "before": "Learning",
+      "grade": "Hard",
+      "previewLabels": [
+        "<1m",
+        "<10m",
+        "2d",
+        "8d"
+      ],
+      "queue": 1,
+      "card": {
+        "type": 1,
+        "queue": 1,
+        "intervalDays": 0,
+        "reps": 1,
+        "lapses": 0,
+        "stability": 1.2931,
+        "difficulty": 5.112
+      },
+      "review": {
+        "grade": 2,
+        "intervalDays": -600,
+        "previousIntervalDays": -600,
+        "type": 0
+      }
+    },
+    {
+      "before": "Learning",
+      "grade": "Good",
+      "previewLabels": [
+        "<1m",
+        "<10m",
+        "2d",
+        "7d"
+      ],
+      "queue": 2,
+      "card": {
+        "type": 2,
+        "queue": 2,
+        "intervalDays": 2,
+        "reps": 1,
+        "lapses": 0,
+        "stability": 2.3065,
+        "difficulty": 2.118
+      },
+      "review": {
+        "grade": 3,
+        "intervalDays": 2,
+        "previousIntervalDays": -600,
+        "type": 0
+      }
+    },
+    {
+      "before": "Learning",
+      "grade": "Easy",
+      "previewLabels": [
+        "<1m",
+        "<10m",
+        "2d",
+        "10d"
+      ],
+      "queue": 2,
+      "card": {
+        "type": 2,
+        "queue": 2,
+        "intervalDays": 10,
+        "reps": 1,
+        "lapses": 0,
+        "stability": 8.2956,
+        "difficulty": 1.0
+      },
+      "review": {
+        "grade": 4,
+        "intervalDays": 10,
+        "previousIntervalDays": -600,
+        "type": 0
+      }
+    },
+    {
+      "before": "Review",
+      "grade": "Again",
+      "previewLabels": [
+        "<10m",
+        "8d",
+        "9d",
+        "11d"
+      ],
+      "queue": 1,
+      "card": {
+        "type": 3,
+        "queue": 1,
+        "intervalDays": 2,
+        "reps": 3,
+        "lapses": 1,
+        "stability": 2.4771,
+        "difficulty": 9.985
+      },
+      "review": {
+        "grade": 1,
+        "intervalDays": -600,
+        "previousIntervalDays": 8,
+        "type": 1
+      }
+    },
+    {
+      "before": "Review",
+      "grade": "Hard",
+      "previewLabels": [
+        "<10m",
+        "10d",
+        "13d",
+        "16d"
+      ],
+      "queue": 2,
+      "card": {
+        "type": 2,
+        "queue": 2,
+        "intervalDays": 10,
+        "reps": 3,
+        "lapses": 0,
+        "stability": 8.0,
+        "difficulty": 9.985
+      },
+      "review": {
+        "grade": 2,
+        "intervalDays": 10,
+        "previousIntervalDays": 8,
+        "type": 1
+      }
+    },
+    {
+      "before": "Review",
+      "grade": "Good",
+      "previewLabels": [
+        "<10m",
+        "8d",
+        "9d",
+        "10d"
+      ],
+      "queue": 2,
+      "card": {
+        "type": 2,
+        "queue": 2,
+        "intervalDays": 9,
+        "reps": 3,
+        "lapses": 0,
+        "stability": 8.0,
+        "difficulty": 9.985
+      },
+      "review": {
+        "grade": 3,
+        "intervalDays": 9,
+        "previousIntervalDays": 8,
+        "type": 1
+      }
+    },
+    {
+      "before": "Review",
+      "grade": "Easy",
+      "previewLabels": [
+        "<10m",
+        "9d",
+        "11d",
+        "14d"
+      ],
+      "queue": 2,
+      "card": {
+        "type": 2,
+        "queue": 2,
+        "intervalDays": 14,
+        "reps": 3,
+        "lapses": 0,
+        "stability": 12.6113,
+        "difficulty": 9.985
+      },
+      "review": {
+        "grade": 4,
+        "intervalDays": 14,
+        "previousIntervalDays": 8,
+        "type": 1
+      }
+    },
+    {
+      "before": "Relearning",
+      "grade": "Again",
+      "previewLabels": [
+        "<10m",
+        "<15m",
+        "10d",
+        "15d"
+      ],
+      "queue": 1,
+      "card": {
+        "type": 3,
+        "queue": 1,
+        "intervalDays": 2,
+        "reps": 3,
+        "lapses": 1,
+        "stability": 2.4771,
+        "difficulty": 9.985
+      },
+      "review": {
+        "grade": 1,
+        "intervalDays": -600,
+        "previousIntervalDays": -600,
+        "type": 2
+      }
+    },
+    {
+      "before": "Relearning",
+      "grade": "Hard",
+      "previewLabels": [
+        "<10m",
+        "<15m",
+        "10d",
+        "15d"
+      ],
+      "queue": 1,
+      "card": {
+        "type": 3,
+        "queue": 1,
+        "intervalDays": 8,
+        "reps": 3,
+        "lapses": 1,
+        "stability": 8.0,
+        "difficulty": 9.985
+      },
+      "review": {
+        "grade": 2,
+        "intervalDays": -900,
+        "previousIntervalDays": -600,
+        "type": 2
+      }
+    },
+    {
+      "before": "Relearning",
+      "grade": "Good",
+      "previewLabels": [
+        "<10m",
+        "<15m",
+        "9d",
+        "14d"
+      ],
+      "queue": 2,
+      "card": {
+        "type": 2,
+        "queue": 2,
+        "intervalDays": 9,
+        "reps": 3,
+        "lapses": 1,
+        "stability": 8.0,
+        "difficulty": 9.985
+      },
+      "review": {
+        "grade": 3,
+        "intervalDays": 9,
+        "previousIntervalDays": -600,
+        "type": 2
+      }
+    },
+    {
+      "before": "Relearning",
+      "grade": "Easy",
+      "previewLabels": [
+        "<10m",
+        "<15m",
+        "7d",
+        "12d"
+      ],
+      "queue": 2,
+      "card": {
+        "type": 2,
+        "queue": 2,
+        "intervalDays": 12,
+        "reps": 3,
+        "lapses": 1,
+        "stability": 12.6113,
+        "difficulty": 9.985
+      },
+      "review": {
+        "grade": 4,
+        "intervalDays": 12,
+        "previousIntervalDays": -600,
+        "type": 2
+      }
+    }
+  ]
+}
