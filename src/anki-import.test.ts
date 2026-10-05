@@ -1,9 +1,13 @@
 import 'fake-indexeddb/auto'
+import { readFile } from 'node:fs/promises'
 import initSqlJs, { type SqlJsStatic } from 'sql.js'
 import { Collection as AnkiCollection, Deck, Note as AnkiNote, Notetype, Package } from 'ankipack'
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest'
-import { DEFAULT_DECK_OPTION_GROUP_ID, createCollection, tryRenderNoteTemplate, State, type Collection } from './collection'
+import { DEFAULT_DECK_OPTION_GROUP_ID, createCollection, tryRenderNoteTemplate, State, Rating, type Collection } from './collection'
 import { prepareAnkiDataImport, prepareAnkiImport, validateMediaBytes } from './anki-import'
+import { exportAnkiPackage } from './anki-export'
+import { renderNoteCard } from './card-rendering'
+import { digestMedia } from './media'
 import { zipSync } from 'fflate'
 import { ANKI_ARCHIVE_LIMITS } from './anki-archive'
 
@@ -188,6 +192,79 @@ async function executableTemplatePackage() {
 }
 
 describe('Anki package import', () => {
+  test.skipIf(!process.env.KIROKU_ANKI_COMPAT_PACKAGE)('Anki 26.09.3 official export imports, renders, studies, exports, and reimports with media semantics intact', async () => {
+    const packagePath = process.env.KIROKU_ANKI_COMPAT_PACKAGE!
+    const manifest = JSON.parse(await readFile(packagePath.replace(/\.colpkg$/i, '.json'), 'utf8')) as {
+      format: string; ankiRelease: string; ankiSourceCommit: string; contentLicense: string;
+      sourceDeck: string; filteredDeck: { name: string; cardCount: number; originDeck: string }
+      notes: { front: string; back: string }[]; media: { name: string; sha256: string; byteLength: number; mimeType: string }[]
+    }
+    expect(manifest).toMatchObject({ format: 'colpkg', ankiRelease: '26.09.3', ankiSourceCommit: '29bb700' })
+    expect(manifest.contentLicense).toContain('CC0-1.0')
+    expect(manifest.filteredDeck).toMatchObject({ name: 'Kiroku Corpus::Filtered Practice', originDeck: 'Kiroku Corpus::Source' })
+    expect(manifest.filteredDeck.cardCount).toBe(4)
+    expect(manifest.sourceDeck).toBe('Kiroku Corpus::Source')
+    collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
+    const sourceBytes = await readFile(packagePath)
+    const prepared = await prepareAnkiImport(new File([sourceBytes], 'anki-26.09.3.colpkg'), collection, { SQL })
+    expect(prepared.issues.filter((issue) => issue.severity === 'error')).toEqual([])
+    expect(prepared.summary).toMatchObject({ notes: 2, cards: 4, media: 1 })
+    await prepared.commit()
+
+    const sourceNotes = await collection.notes.toArray()
+    const sourceTypes = await collection.noteTypes.toArray()
+    const sourceType = sourceTypes.find((type) => type.name.includes('Kiroku corpus reverse card'))!
+    const catNote = sourceNotes.find((note) => Object.values(note.fields).includes('猫'))!
+    const sourceMedia = await collection.mediaForNote(catNote.id)
+    expect(sourceMedia).toHaveLength(1)
+    const allMediaReferences = (await Promise.all(sourceNotes.map((note) => collection!.mediaForNote(note.id)))).flat()
+    expect(allMediaReferences).toHaveLength(2)
+    const blob = await collection.mediaBlobs.get(sourceMedia[0].digest)
+    expect(blob).toBeDefined()
+    expect(await digestMedia(blob!.blob)).toBe(manifest.media[0].sha256)
+    expect(blob!.byteLength).toBe(manifest.media[0].byteLength)
+
+    const fields = Object.fromEntries(sourceType.fields.map((field) => [field.name, catNote.fields[field.id] ?? '']))
+    const rendered = renderNoteCard(sourceType, sourceType.templates[0], catNote.fields, undefined, {
+      'generated-tone.wav': { kind: 'audio', url: 'blob:compatibility-tone', automatic: true },
+    }, [{ id: sourceMedia[0].id, kind: 'audio', displayName: 'generated-tone.wav', side: 'front', playback: 'automatic', url: 'blob:compatibility-tone' }])
+    expect(fields).toMatchObject({ Front: '猫', Back: 'ねこ' })
+    expect(rendered.front?.html).toContain('blob:compatibility-tone')
+    expect(rendered.front?.html).toContain('<audio')
+    expect(rendered.media).toContainEqual(expect.objectContaining({ kind: 'audio', displayName: 'generated-tone.wav', playback: 'automatic' }))
+    const reversed = renderNoteCard(sourceType, sourceType.templates[1], catNote.fields)
+    expect(reversed.front?.html).toBe('ねこ')
+
+    const originalDecks = await collection.decks.toArray()
+    const sourceDeck = originalDecks.find((deck) => deck.name === 'Source')!
+    expect(sourceDeck.parentId).toBe(originalDecks.find((deck) => deck.name === 'Kiroku Corpus')!.id)
+    expect(originalDecks.some((deck) => deck.name === 'Filtered Practice')).toBe(false)
+    expect((await collection.cards.toArray()).every((card) => card.deckId === sourceDeck.id)).toBe(true)
+    const sourceCard = (await collection.cards.toArray()).find((card) => card.noteId === catNote.id)!
+    await collection.answer(sourceCard.id, Rating.Good, new Date('2026-10-01T12:00:00Z'))
+    expect(await collection.reviewEntries.where('cardId').equals(sourceCard.id).count()).toBe(1)
+
+    const exported = await exportAnkiPackage(collection, { scheduling: true, history: true, media: true, SQL })
+    const clean = createCollection(`kiroku-import-${crypto.randomUUID()}`)
+    syncReplica = clean
+    const roundtrip = await prepareAnkiImport(new File([exported.bytes.slice().buffer], 'roundtrip.apkg'), clean, { SQL })
+    expect(roundtrip.issues.filter((issue) => issue.severity === 'error')).toEqual([])
+    await roundtrip.commit()
+    const cleanType = (await clean.noteTypes.toArray())[0]
+    expect((await clean.notes.toArray()).map((note) => cleanType.fields.map((field) => note.fields[field.id] ?? '').slice(0, 2)).sort()).toEqual(manifest.notes.map(({ front, back }) => [front, back]).sort())
+    const cleanCards = await clean.cards.toArray()
+    expect(cleanCards).toHaveLength(4)
+    expect((await clean.reviewEntries.toArray())).toHaveLength(1)
+    const cleanDecks = await clean.decks.toArray()
+    const cleanSourceDeck = cleanDecks.find((deck) => deck.name === 'Source')!
+    expect(cleanCards.every((card) => card.deckId === cleanSourceDeck.id)).toBe(true)
+    expect(cleanDecks.some((deck) => deck.name === 'Filtered Practice')).toBe(false)
+    expect((await Promise.all((await clean.notes.toArray()).map((note) => clean.mediaForNote(note.id)))).flat()).toHaveLength(2)
+    expect(await clean.mediaBlobs.count()).toBe(1)
+    const roundtripDigests = await Promise.all((await clean.mediaBlobs.toArray()).map((entry) => digestMedia(entry.blob)))
+    expect(roundtripDigests).toEqual([manifest.media[0].sha256])
+  })
+
   test('accepts MPEG audio frames with common trailing metadata and padding', () => {
     const frames = new Uint8Array(365 * 2)
     for (let offset = 0; offset < frames.length; offset += 365) frames.set([0xff, 0xfb, 0x80, 0x64], offset)

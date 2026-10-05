@@ -25,6 +25,7 @@
     "server:revoke": "npm run server:build && node --enable-source-maps dist-server/server/index.js --revoke-device",
     "test:server": "npm run server:build && node --test dist-server/server/**/*.test.js",
     "test:e2e": "playwright test",
+    "test:anki-compatibility": "node scripts/test-anki-compatibility.mjs",
     "check": "npm run typecheck && npm run lint && npm run test && npm run test:status && npm run test:server && npm run build && npm run test:e2e"
   },
   "dependencies": {
