@@ -19,6 +19,8 @@ test('Anki 26.09.3 package renders reversed cards and plays generated audio thro
   const review = page.frameLocator('iframe[title="Review card"]')
   const questions: string[] = []
   for (let index = 0; index < 4; index += 1) {
+    const showAnswer = page.getByRole('button', { name: 'Show answer', exact: true })
+    await expect(showAnswer).toBeVisible()
     const question = (await review.locator('body').innerText()).trim()
     questions.push(question)
     const audio = review.locator('audio')
@@ -28,7 +30,8 @@ test('Anki 26.09.3 package renders reversed cards and plays generated audio thro
       await page.getByRole('button', { name: 'Replay audio' }).click()
       await expect(page.getByText('Audio replayed.', { exact: true })).toBeVisible()
     }
-    await page.getByRole('button', { name: 'Show answer' }).click()
+    await showAnswer.click()
+    await expect(page.getByRole('button', { name: /^Good · / })).toBeVisible()
     await page.getByRole('button', { name: /^Good · / }).click()
   }
   const renderedSession = questions.join('\n')
