@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto'
-import { afterEach, expect, test } from 'vitest'
+import { afterEach, expect, test, vi } from 'vitest'
 import { BASIC_NOTE_TYPE_ID, createCollection, Rating, State, type Collection } from './collection'
 import { answerCustomStudy, changeCustomStudy, createCustomStudy, customPreset, customStudyQueue, previewCustomStudy, undoCustomStudy } from './custom-study'
 import { customStudySessions } from './custom-study-state'
@@ -14,6 +14,21 @@ async function fixture() {
   return { deck, note, card }
 }
 const definition = { name: 'Focus', search: 'deck:*', limit: 20, order: 'due' as const, reschedule: false }
+test('custom-study mutations own bounded named transaction scopes', async () => {
+  const { card } = await fixture()
+  const transaction = vi.spyOn(db, 'transaction')
+  const session = await createCustomStudy(db, definition, now)
+  expect(transaction.mock.calls[0]?.slice(0, 2)).toEqual(['rw', [db.decks, db.notes, db.cards, db.noteTypes, db.reviewEntries, db.settings]])
+
+  transaction.mockClear()
+  await answerCustomStudy(db, session.id, card.id, Rating.Good, now)
+  expect(transaction.mock.calls[0]?.slice(0, 2)).toEqual(['rw', [db.decks, db.deckOptionGroups, db.notes, db.cards, db.noteTypes, db.reviewEntries, db.outbox, db.syncRevisions, db.settings]])
+
+  transaction.mockClear()
+  await undoCustomStudy(db, session.id)
+  expect(transaction.mock.calls[0]?.slice(0, 2)).toEqual(['rw', [db.settings, db.cards, db.notes, db.noteTypes, db.decks, db.reviewEntries, db.noteMedia, db.outbox, db.syncRevisions, db.deletedEntities]])
+})
+
 test('validated search reserves membership without changing home identity; empty/delete return home', async () => {
   const { deck, card } = await fixture()
   await expect(previewCustomStudy(db, { ...definition, search: 'unknown:value' }, now)).rejects.toThrow()

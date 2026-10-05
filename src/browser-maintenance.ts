@@ -1,5 +1,7 @@
-import type { CardRecord, Collection, Note, NoteType } from './collection'
+import type { Collection, Note, NoteType } from './collection'
 import fieldPreviewWorkerUrl from './field-preview-worker.ts?worker&url'
+import { readBrowserDestinationDeck, readBrowserFieldState, readBrowserSelectionSnapshot } from './collection-queries'
+import { runBrowserBulkAction, runBrowserFieldChanges } from './collection-mutations'
 
 export type BrowserSelection = { view: 'cards' | 'notes'; ids: string[] }
 export type BulkAction =
@@ -9,40 +11,17 @@ export type BulkAction =
   | { kind: 'flag'; flag: number }
   | { kind: 'delete' }
 
-async function resolveSelection(db: Collection, selection: BrowserSelection) {
-  const ids = [...new Set(selection.ids)]
-  if (!ids.length) throw new Error('Select at least one record.')
-  let cards: CardRecord[], notes: Note[]
-  if (selection.view === 'cards') {
-    const stored = await db.cards.bulkGet(ids)
-    if (stored.some((card) => !card)) throw new Error('A selected card no longer exists. Refresh the results before applying this action.')
-    cards = stored as CardRecord[]
-    const storedNotes = await db.notes.bulkGet([...new Set(cards.map((card) => card.noteId))])
-    if (storedNotes.some((note) => !note)) throw new Error('A selected card no longer has a note.')
-    notes = storedNotes as Note[]
-  } else {
-    const stored = await db.notes.bulkGet(ids)
-    if (stored.some((note) => !note)) throw new Error('A selected note no longer exists. Refresh the results before applying this action.')
-    notes = stored as Note[]
-    cards = await db.cards.where('noteId').anyOf(ids).toArray()
-  }
-  return { cards, notes }
-}
-
 export async function selectionSummary(db: Collection, selection: BrowserSelection) {
-  return db.transaction('r', db.notes, db.cards, async () => {
-    const { cards, notes } = await resolveSelection(db, selection)
-    const allCards = await db.cards.where('noteId').anyOf(notes.map((note) => note.id)).count()
-    return { selectedCards: cards.length, notes: notes.length, generatedCards: allCards }
-  })
+  const snapshot = await readBrowserSelectionSnapshot(db, selection)
+  return { selectedCards: snapshot.cards.length, notes: snapshot.notes.length, generatedCards: snapshot.generatedCards }
 }
 
 /** All selected records and outbox mutations commit together or roll back together. */
 export async function applyBulkAction(db: Collection, selection: BrowserSelection, action: BulkAction, now = new Date(), expected?: { notes: number; selectedCards: number; generatedCards: number }) {
-  return db.transaction('rw', db.tables, async () => {
-    const { cards, notes } = await resolveSelection(db, selection)
-    if (expected && (notes.length !== expected.notes || cards.length !== expected.selectedCards || await db.cards.where('noteId').anyOf(notes.map((note) => note.id)).count() !== expected.generatedCards)) throw new Error('The affected counts changed. Review a fresh confirmation before applying.')
-    if (action.kind === 'move' && !await db.decks.get(action.deckId)) throw new Error('Destination deck no longer exists.')
+  return runBrowserBulkAction(db, async () => {
+    const { cards, notes, generatedCards } = await readBrowserSelectionSnapshot(db, selection)
+    if (expected && (notes.length !== expected.notes || cards.length !== expected.selectedCards || generatedCards !== expected.generatedCards)) throw new Error('The affected counts changed. Review a fresh confirmation before applying.')
+    if (action.kind === 'move' && !await readBrowserDestinationDeck(db, action.deckId)) throw new Error('Destination deck no longer exists.')
     if (action.kind === 'tags') {
       const remove = new Set(action.tags.map((tag) => tag.trim()).filter(Boolean))
       if (!remove.size) throw new Error('Enter at least one tag.')
@@ -118,12 +97,15 @@ export function fieldChangePreview(notes: Note[], types: NoteType[], operation: 
 
 export async function applyFieldChanges(db: Collection, changes: FieldChange[], now = new Date()) {
   if (!changes.length) throw new Error('There are no field changes to apply.')
-  return db.transaction('rw', db.tables, async () => {
+  return runBrowserFieldChanges(db, async () => {
     // Validate the entire concrete preview before the first mutation.
     const fields = new Map<string, Record<string, string>>()
+    const state = await readBrowserFieldState(db, changes)
+    const notes = new Map(state.notes.map((note) => [note.id, note]))
+    const types = new Map(state.noteTypes.map((type) => [type.id, type]))
     for (const change of changes) {
-      const note = await db.notes.get(change.noteId)
-      const type = await db.noteTypes.get(change.typeId)
+      const note = notes.get(change.noteId)
+      const type = types.get(change.typeId)
       if (!note || JSON.stringify(note) !== JSON.stringify(change.expectedNote) || !type || JSON.stringify(type) !== JSON.stringify(change.expectedType)) throw new Error('A previewed note or note type changed. Generate a fresh preview before applying.')
       if (note.typeId !== type.id || !type.fields.some((field) => field.id === change.fieldId) || (note.fields[change.fieldId] ?? '') !== change.before) throw new Error('The preview no longer matches the selected fields.')
       fields.set(note.id, { ...(fields.get(note.id) ?? note.fields), [change.fieldId]: change.after })
