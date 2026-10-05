@@ -54,6 +54,21 @@ function escapeHtml(value: string): string {
 
 const mediaToken = /\[\[kiroku-media:([^\]]+)]]/g
 
+function resolveTemplateMedia(template: string, media: RenderOptions['media']) {
+  let used = false
+  const html = template.replace(/\[\[kiroku-media:([^\]]+)]]/g, (_token, encodedName: string) => {
+    let name = encodedName
+    try { name = decodeURIComponent(name) } catch { /* keep malformed marker inert */ }
+    const source = media?.[name]
+    if (!source) return `<span class="media-pending">[media unavailable: ${escapeHtml(name)}]</span>`
+    used = true
+    return source.kind === 'image'
+      ? `<img class="card-image" src="${escapeHtml(source.url)}" alt="${escapeHtml(name)}">`
+      : `<audio class="card-audio" controls${source.automatic ? ' autoplay' : ''} src="${escapeHtml(source.url)}">Audio: ${escapeHtml(name)}</audio>`
+  })
+  return { html, used }
+}
+
 function renderField(value: string, media: RenderOptions['media'], preserveHtml = false): string {
   if (!preserveHtml) {
     let html = ''
@@ -159,6 +174,8 @@ export function validateTemplate(template: string, fieldNames: readonly string[]
 
 /** Replace fields without evaluating template text or field contents as code. */
 export function renderTemplate(template: string, fields: Record<string, string>, front?: string, options: RenderOptions = {}): RenderedTemplate {
+  const templateMedia = resolveTemplateMedia(template, options.media)
+  template = templateMedia.html
   const navigation = resolveTemplateNavigation(template, fields)
   template = navigation.markup
   const side = options.side ?? (front === undefined ? 'front' : 'back')
@@ -166,7 +183,7 @@ export function renderTemplate(template: string, fields: Record<string, string>,
   let html = ''
   let cursor = 0
   let section: { name: string; enabled: boolean } | undefined
-  let visibleField = navigation.hasContent
+  let visibleField = navigation.hasContent || templateMedia.used
   let typedAnswer: string | undefined
   let hintIndex = 0
   for (const match of template.matchAll(token)) {

@@ -42,6 +42,12 @@ function allowExclusiveStorage() {
   })
 }
 
+test('rejects an oversized native media file explicitly without storing it', async () => {
+  const media = store()
+  await expect(media.setFile('large.bin', new Uint8Array(63 * 1024 * 1024 + 1))).rejects.toThrow(/at most 63 MiB/i)
+  expect(await media.files.get('large.bin')).toBeUndefined()
+})
+
 test('failed media download preserves the previous file and acknowledged cursor for recovery', async () => {
   allowExclusiveStorage()
   const media = store()

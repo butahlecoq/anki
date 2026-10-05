@@ -41,6 +41,15 @@ export function describeCardMedia(reference: NoteMediaReference, url?: string): 
   }
 }
 
+function resolvedCss(css: string, media: RenderOptions['media']) {
+  return css.replace(/url\(\s*(["'])?kiroku-media:([^"')\s]+)\1\s*\)/gi, (_match, _quote: string | undefined, encodedName: string) => {
+    let name = encodedName
+    try { name = decodeURIComponent(name) } catch { return 'none' }
+    const source = media?.[name]
+    return source?.kind === 'image' ? `url("${source.url}")` : 'none'
+  })
+}
+
 export function renderCard(
   template: Pick<CardTemplate, 'front' | 'back' | 'css'>,
   fields: Record<string, string>,
@@ -48,14 +57,14 @@ export function renderCard(
   attachments: CardMediaDescription[] = [],
 ): RenderedCard {
   const front = tryRenderTemplate(template.front, fields, undefined, { ...options, side: 'front' })
-  if (!front.ok) return { isEmpty: false, css: template.css, media: attachments, error: front.error }
+  if (!front.ok) return { isEmpty: false, css: resolvedCss(template.css, options.media), media: attachments, error: front.error }
   const back = tryRenderTemplate(template.back, fields, front.value.html, { ...options, side: 'back' })
   return {
     front: front.value,
     ...(back.ok ? { back: back.value } : { backError: back.error }),
     ...(front.value.typedAnswer !== undefined ? { typedAnswer: front.value.typedAnswer } : {}),
     isEmpty: front.value.isEmpty,
-    css: template.css,
+    css: resolvedCss(template.css, options.media),
     media: attachments,
   }
 }

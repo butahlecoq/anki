@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { mediaTypeForFilename } from '../anki-interchange'
 import type { SyncSettings } from './collection.js'
 import { NativeSyncError } from './native-anki-sync.js'
 import { collection } from './collection.js'
@@ -6,6 +7,21 @@ import { connectNativeAnkiAccount, prepareNativeAccountImport, type NativeAnkiAc
 import { ImportSkipReport } from './ImportSkipReport.js'
 import { isSafeServiceEndpoint } from './sync-client.js'
 import { useDialogKeyboard } from './use-dialog-keyboard.js'
+
+function AccountMediaVersion({ label, name, bytes }: { label: string; name: string; bytes: Uint8Array | null }) {
+  const host = useRef<HTMLSpanElement>(null)
+  const mime = mediaTypeForFilename(name)
+  useEffect(() => {
+    if (!bytes || !mime) return
+    const objectUrl = URL.createObjectURL(new Blob([bytes.slice().buffer as ArrayBuffer], { type: mime }))
+    host.current?.querySelector('img, audio')?.setAttribute('src', objectUrl)
+    return () => URL.revokeObjectURL(objectUrl)
+  }, [bytes, mime])
+  if (!bytes || !mime) return <span>{label}: content unavailable for preview</span>
+  return mime.startsWith('image/')
+    ? <span ref={host}>{label}: <img className="account-media-conflict-image" alt={`${label} ${name}`} /></span>
+    : <span ref={host}>{label}: <audio controls preload="metadata">{name}</audio></span>
+}
 
 async function pcServiceIsReachable(endpoint: string) {
   try {
@@ -28,6 +44,10 @@ export function AnkiWebAccountDialog({ settings, onClose }: { settings: SyncSett
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [session, setSession] = useState<NativeAnkiAccountSession>()
+  const [accountMediaFiles, setAccountMediaFiles] = useState(0)
+  const [accountMediaCursor, setAccountMediaCursor] = useState(0)
+  const [mediaRecoveryRequired, setMediaRecoveryRequired] = useState(false)
+  const [mediaConflicts, setMediaConflicts] = useState<Awaited<ReturnType<NativeAnkiAccountSession['media']['unresolvedConflicts']>>>([])
   const [accountPlan, setAccountPlan] = useState<PreparedNativeAccountImport>()
   const [importRepresentableOnly, setImportRepresentableOnly] = useState(false)
   const [importCommitted, setImportCommitted] = useState(false)
@@ -35,6 +55,19 @@ export function AnkiWebAccountDialog({ settings, onClose }: { settings: SyncSett
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const dialogKeyboard = useDialogKeyboard(onClose, true)
+
+  async function refreshAccountMedia(account: NativeAnkiAccountSession) {
+    const [files, cursor, attempt, conflicts] = await Promise.all([
+      account.media.files.filter((file) => file.bytes !== null).count(),
+      account.media.cursor(),
+      account.media.attempts.get('active'),
+      account.media.unresolvedConflicts(),
+    ])
+    setAccountMediaFiles(files)
+    setAccountMediaCursor(cursor)
+    setMediaRecoveryRequired(Boolean(attempt))
+    setMediaConflicts(conflicts)
+  }
 
   useEffect(() => () => {
     sessionRef.current?.disconnect()
@@ -53,6 +86,7 @@ export function AnkiWebAccountDialog({ settings, onClose }: { settings: SyncSett
       const account = await connectNativeAnkiAccount(settings, username, password)
       sessionRef.current = account
       setSession(account)
+      await refreshAccountMedia(account)
       setMessage('Account connected. No notes, cards, or study history were uploaded.')
     } catch (error) {
       if (error instanceof TypeError) {
@@ -67,11 +101,43 @@ export function AnkiWebAccountDialog({ settings, onClose }: { settings: SyncSett
     }
   }
 
+  async function downloadAccountMedia() {
+    if (!session) return
+    setBusy(true)
+    setMessage(mediaRecoveryRequired ? 'Resuming account media synchronization…' : 'Downloading and verifying account media…')
+    try {
+      const recovery = Boolean(await session.media.attempts.get('active'))
+      const result = await session.media.synchronize(session.client, recovery)
+      setAccountPlan(undefined)
+      await refreshAccountMedia(session)
+      setMessage(`${result.files} verified account media files are stored on this device. Preview the account collection again to include them.`)
+    } catch (error) {
+      await refreshAccountMedia(session)
+      setMessage(error instanceof Error ? error.message : 'Account media could not be verified. Existing verified files remain available.')
+    } finally { setBusy(false) }
+  }
+
+  async function chooseMediaConflict(name: string, choice: 'local' | 'remote') {
+    if (!session) return
+    setBusy(true)
+    try {
+      await session.media.resolve(name, choice)
+      await refreshAccountMedia(session)
+      setMessage(`${name}: ${choice === 'local' ? 'device' : 'AnkiWeb'} media version selected. Continue synchronization to converge the account copies.`)
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'The media version could not be selected.')
+    } finally { setBusy(false) }
+  }
+
   function disconnect() {
     sessionRef.current?.disconnect()
     sessionRef.current = undefined
     setSession(undefined)
     setAccountPlan(undefined)
+    setAccountMediaFiles(0)
+    setAccountMediaCursor(0)
+    setMediaRecoveryRequired(false)
+    setMediaConflicts([])
     setImportRepresentableOnly(false)
     setImportCommitted(false)
     setUsername('')
@@ -128,6 +194,23 @@ export function AnkiWebAccountDialog({ settings, onClose }: { settings: SyncSett
             <p role="status" aria-live="polite">Connected as {session.username}. {message}</p>
             <h3>Decks</h3>
             {session.decks.length ? <ul className="ankiweb-deck-list">{session.decks.map((deck) => <li key={deck.id}><strong>{deck.name}</strong><span>{deck.path}</span></li>)}</ul> : <p>This account has no decks.</p>}
+            <section className="account-media-status" aria-label="Account media">
+              <h3>Account media</h3>
+              <p>{accountMediaFiles} verified files stored on this device · media revision {accountMediaCursor}.</p>
+              <button className="text-button" type="button" disabled={busy || mediaConflicts.length > 0} onClick={() => void downloadAccountMedia()}>{busy ? 'Synchronizing media…' : mediaRecoveryRequired ? 'Continue account media sync' : 'Download and verify account media'}</button>
+              {mediaConflicts.length > 0 && <section className="import-report" aria-label="Account media choices">
+                <h4>Choose which verified version to keep</h4>
+                <ul>{mediaConflicts.map((conflict) => <li key={conflict.name}>
+                  <strong>{conflict.name}</strong>
+                  <AccountMediaVersion label="Device" name={conflict.name} bytes={conflict.local.bytes} />
+                  <span>Device SHA-256: {conflict.local.sha256}</span>
+                  <AccountMediaVersion label="AnkiWeb" name={conflict.name} bytes={conflict.remote.bytes} />
+                  <span>AnkiWeb SHA-256: {conflict.remote.sha256}</span>
+                  <button className="text-button" type="button" disabled={busy} onClick={() => void chooseMediaConflict(conflict.name, 'local')}>Use device version</button>
+                  <button className="text-button" type="button" disabled={busy} onClick={() => void chooseMediaConflict(conflict.name, 'remote')}>Use AnkiWeb version</button>
+                </li>)}</ul>
+              </section>}
+            </section>
             <button className="text-button" type="button" disabled={busy} onClick={() => void previewAccountCollection()}>{busy && !accountPlan ? 'Preparing…' : 'Preview account collection'}</button>
             {accountPlan && <section className="import-summary" aria-label="Account Import Plan">
               <h3>Account Import Plan · revision {accountPlan.revision}</h3>

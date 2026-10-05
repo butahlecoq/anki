@@ -89,7 +89,9 @@ export async function prepareNativeAccountImport(session: NativeAnkiAccountSessi
   if (manifest.snapshotHash !== snapshotHash) throw new Error('The account snapshot changed before its Import Plan was prepared. Preview it again.')
   const data = nativeAnkiProjectionData(SQL, checkpoint.collection)
   if (!data.notes.length || !data.cards.length) throw new Error('The account collection is empty. Nothing was copied into this device.')
-  const prepared = await prepareAnkiDataImport(data, collection, { SQL, sourceIdentity: session.sourceIdentity, sourceFingerprint: snapshotHash })
+  const media = await session.media?.verifiedFiles() ?? []
+  const projection = media.length ? nativeAnkiProjectionData(SQL, checkpoint.collection, media) : data
+  const prepared = await prepareAnkiDataImport(projection, collection, { SQL, sourceIdentity: session.sourceIdentity, sourceFingerprint: snapshotHash })
   return {
     revision: checkpoint.revision,
     snapshotHash,

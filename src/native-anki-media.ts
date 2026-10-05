@@ -6,7 +6,8 @@ import { requireWebLocks } from './native-sync-capability.js'
 
 const maxBytes = 63 * 1024 * 1024
 const targetBytes = 2.5 * 1024 * 1024
-interface MediaFile { name: string; bytes: Uint8Array | null; sha1: string; sha256: string; pending: boolean; overrideRemoteSha1?: string }
+export interface NativeAnkiMediaFile { name: string; bytes: Uint8Array | null; sha1: string; sha256: string; pending: boolean; overrideRemoteSha1?: string }
+type MediaFile = NativeAnkiMediaFile
 interface MediaMeta { id: 'media'; usn: number }
 interface MediaAttempt { id: 'active'; startedAt: number; status: 'running' | 'recovery-required' }
 interface MediaConflict { name: string; local: MediaFile; remote: MediaFile; resolved?: boolean }
@@ -39,6 +40,21 @@ export class NativeAnkiMedia extends Dexie {
     this.version(1).stores({ files: 'name', meta: 'id', attempts: 'id', conflicts: 'name' })
   }
   async cursor() { return (await this.meta.get('media'))?.usn ?? 0 }
+  async verifiedFiles(): Promise<Array<{ name: string; data: Uint8Array }>> {
+    const result: Array<{ name: string; data: Uint8Array }> = []
+    for (const file of await this.files.toArray()) {
+      if (!file.bytes) continue
+      const checked = await record(file.name, file.bytes, file.pending)
+      if (checked.sha1 !== file.sha1 || checked.sha256 !== file.sha256) {
+        throw new NativeSyncError('transfer', `Account media “${file.name}” changed or was damaged in local storage. Its saved bytes were not used.`)
+      }
+      result.push({ name: file.name, data: checked.bytes! })
+    }
+    return result
+  }
+  async unresolvedConflicts(): Promise<MediaConflict[]> {
+    return this.conflicts.filter((conflict) => conflict.resolved !== true).toArray()
+  }
   async setFile(name: string, bytes: Uint8Array | null) {
     const file = await record(name, bytes, true)
     await this.transaction('rw', this.files, this.attempts, this.conflicts, async () => {
