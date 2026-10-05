@@ -1,4 +1,5 @@
 import { collection } from './collection'
+import { readNoteTypeUsage, readSampleDeckSnapshot } from './collection-queries'
 
 export const SAMPLE_DECK_NAME = 'Sample — Japanese Starter'
 const SAMPLE_NOTE_TYPE_NAME = 'Sample Japanese Cloze'
@@ -23,7 +24,7 @@ async function fixtureFile(name: string, type: string) {
 }
 
 export async function loadSampleDeck() {
-  if (await collection.decks.where('name').equals(SAMPLE_DECK_NAME).count()) return
+  if ((await readSampleDeckSnapshot(collection, SAMPLE_DECK_NAME, SAMPLE_NOTE_TYPE_NAME)).deck) return
 
   const [audio, image] = await Promise.all([
     fixtureFile('cat.wav', 'audio/wav'),
@@ -62,7 +63,7 @@ export async function loadSampleDeck() {
     }
   } catch (error) {
     if (deckId) await collection.deleteDeck(deckId, { mode: 'delete-subtree' })
-    if (noteTypeId && await collection.notes.where('typeId').equals(noteTypeId).count() === 0) {
+    if (noteTypeId && (await readNoteTypeUsage(collection, noteTypeId)).count === 0) {
       await collection.deleteNoteType(noteTypeId).catch(() => undefined)
     }
     throw error
@@ -71,8 +72,8 @@ export async function loadSampleDeck() {
 
 export async function removeSampleDeck(deckId: string) {
   await collection.deleteDeck(deckId, { mode: 'delete-subtree' })
-  const noteType = await collection.noteTypes.where('name').equals(SAMPLE_NOTE_TYPE_NAME).first()
-  if (noteType && await collection.notes.where('typeId').equals(noteType.id).count() === 0) {
+  const { noteType } = await readSampleDeckSnapshot(collection, SAMPLE_DECK_NAME, SAMPLE_NOTE_TYPE_NAME)
+  if (noteType && (await readNoteTypeUsage(collection, noteType.id)).count === 0) {
     await collection.deleteNoteType(noteType.id).catch(() => undefined)
   }
 }

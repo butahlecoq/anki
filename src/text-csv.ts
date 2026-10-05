@@ -1,4 +1,5 @@
 import { type Collection, type Deck, type Note, type NoteType } from './collection'
+import { readTextExportSnapshot, readTextImportSnapshot } from './collection-queries'
 
 export const TEXT_BYTE_LIMIT = 16 * 1024 * 1024
 export const TEXT_ROW_LIMIT = 20_000
@@ -109,7 +110,7 @@ function deckPathParts(path: string): string[] {
 }
 
 async function snapshot(db: Collection) {
-  const [notes, decks, types, graves] = await Promise.all([db.notes.toArray(), db.decks.toArray(), db.noteTypes.toArray(), db.deletedEntities.toArray()])
+  const { notes, decks, noteTypes: types, deleted: graves } = await readTextImportSnapshot(db)
   return { notes, decks, types, graves, revision: JSON.stringify([notes, decks, types, graves]) }
 }
 
@@ -131,7 +132,7 @@ export async function previewTextImport(db: Collection, document: CsvDocument, o
   if (options.header && document.rows[0]?.error) throw new Error(`Header row is invalid: ${document.rows[0].error}`)
   const roles = options.mapping.filter((role) => role !== 'ignore')
   if (new Set(roles).size !== roles.length) throw new Error('Map each field and metadata role only once.')
-  const state = await db.transaction('r', db.notes, db.decks, db.noteTypes, db.deletedEntities, () => snapshot(db))
+  const state = await snapshot(db)
   const paths = pathsForDecks(state.decks)
   const noteIds = new Set([...state.notes.map((note) => note.id), ...state.graves.filter((grave) => grave.entityType === 'note').map((grave) => grave.entityId)])
   const deletedNotes = new Set(state.graves.filter((grave) => grave.entityType === 'note').map((grave) => grave.entityId))
@@ -255,8 +256,7 @@ export async function applyTextImport(db: Collection, preview: TextPreview, part
 
 export type TextExportOptions = { mode: 'notes' | 'cards'; deckId?: string; fields: string[]; tags: boolean; deck: boolean; type: boolean; identifiers: boolean; html: 'keep' | 'strip'; header: boolean; delimiter: Delimiter; bom: boolean }
 export async function exportTextCollection(db: Collection, options: TextExportOptions) {
-  return db.transaction('r', db.notes, db.decks, db.noteTypes, db.cards, async () => {
-    const [notes, decks, types, cards] = await Promise.all([db.notes.toArray(), db.decks.toArray(), db.noteTypes.toArray(), db.cards.toArray()])
+    const { notes, decks, noteTypes: types, cards } = await readTextExportSnapshot(db)
     const paths = pathsForDecks(decks), typesById = new Map(types.map((type) => [type.id, type]))
     const scope = new Set<string>(options.deckId ? [options.deckId] : decks.map((deck) => deck.id))
     if (options.deckId) for (let changed = true; changed;) { changed = false; for (const deck of decks) if (deck.parentId && scope.has(deck.parentId) && !scope.has(deck.id)) { scope.add(deck.id); changed = true } }
@@ -278,7 +278,6 @@ export async function exportTextCollection(db: Collection, options: TextExportOp
     if (options.mode === 'notes') notes.filter((note) => scope.has(note.deckId)).forEach((note) => append(note))
     else cards.filter((card) => scope.has(card.deckId)).forEach((card) => { const note = notesById.get(card.noteId); if (!note) throw new Error('A card has no note.'); append(note, card) })
     return { text: `${options.bom ? '\ufeff' : ''}${serializeDelimited(options.header ? [header, ...rows] : rows, options.delimiter)}`, count: rows.length }
-  })
 }
 
 export function defaultMapping(document: CsvDocument, type: NoteType, header: boolean): ColumnMapping[] {

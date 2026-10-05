@@ -11,6 +11,7 @@ import {
 import { validateMedia } from './media'
 import { useDialogKeyboard } from './use-dialog-keyboard'
 import { userFacingStorageError } from './offline-storage'
+import { readDeckList, readNoteMediaReference } from './collection-queries'
 
 type DraftMask = OcclusionMaskDraft & { localId: string }
 type Point = { x: number; y: number }
@@ -190,12 +191,12 @@ export function ImageOcclusionEditor({ deckId, note, onClose }: { deckId: string
   const dialogKeyboard = useDialogKeyboard(onClose)
   const source = useLiveQuery(async () => {
     if (!note?.imageOcclusion) return undefined
-    const reference = await collection.noteMedia.get(note.imageOcclusion.sourceMediaId)
+    const reference = await readNoteMediaReference(collection, note.imageOcclusion.sourceMediaId)
     if (!reference) return undefined
     return { reference, blob: await collection.verifiedMediaBlob(reference.digest) }
   }, [note?.id, note?.imageOcclusion?.sourceMediaId])
   const [image, setImage] = useState<File>()
-  const decks = useLiveQuery(() => collection.decks.orderBy('name').toArray(), [], [])
+  const decks = useLiveQuery(() => readDeckList(collection), [], [])
   const [destinationDeckId, setDestinationDeckId] = useState(deckId)
   const [width, setWidth] = useState(note?.imageOcclusion?.imageWidth ?? 0)
   const [height, setHeight] = useState(note?.imageOcclusion?.imageHeight ?? 0)

@@ -23,6 +23,7 @@ import { loadSampleDeck, removeSampleDeck, SAMPLE_DECK_NAME } from './sample-dec
 import { useRoute } from './route'
 import { useDialogKeyboard } from './use-dialog-keyboard'
 import { useDialogSubmit } from './use-dialog-submit'
+import { readCardsForNote, readDeckList, readDeckMediaReferences, readDeckMediaSnapshot, readDeckWorkspaceSnapshot } from './collection-queries'
 import { SyncControls } from './SyncControls'
 import { ImportDialog } from './ImportDialog'
 import { MoveNoteDialog, NoteDialog, ReviewSession } from './ReviewSession'
@@ -174,7 +175,7 @@ function settingsFromGroup(group: DeckOptionGroup): DeckOptionSettings {
 
 function MoveDeckDialog({ deck, onClose }: { deck: Deck; onClose: () => void }) {
   const dialogKeyboard = useDialogKeyboard(onClose)
-  const decks = useLiveQuery(() => collection.decks.orderBy('name').toArray(), [], [])
+  const decks = useLiveQuery(() => readDeckList(collection), [], [])
   const [parentId, setParentId] = useState(deck.parentId ?? '')
   const { error, submitting, submit: submitAction } = useDialogSubmit()
   const blocked = new Set([deck.id])
@@ -201,7 +202,7 @@ function MoveDeckDialog({ deck, onClose }: { deck: Deck; onClose: () => void }) 
 
 function DeleteDeckDialog({ deck, onClose, onDeleted }: { deck: Deck; onClose: () => void; onDeleted: () => void }) {
   const dialogKeyboard = useDialogKeyboard(onClose)
-  const decks = useLiveQuery(() => collection.decks.orderBy('name').toArray(), [], [])
+  const decks = useLiveQuery(() => readDeckList(collection), [], [])
   const [mode, setMode] = useState<'delete-subtree' | 'relocate'>('delete-subtree')
   const [destinationId, setDestinationId] = useState('')
   const { error, submitting, submit: submitAction } = useDialogSubmit()
@@ -236,7 +237,7 @@ function DeleteDeckDialog({ deck, onClose, onDeleted }: { deck: Deck; onClose: (
 function DeckOptionsDialog({ deck, onClose }: { deck: Deck; onClose: () => void }) {
   const dialogKeyboard = useDialogKeyboard(onClose)
   const groups = useLiveQuery(() => collection.deckOptionGroups.orderBy('name').toArray(), [], [])
-  const decks = useLiveQuery(() => collection.decks.orderBy('name').toArray(), [], [])
+  const decks = useLiveQuery(() => readDeckList(collection), [], [])
   const [groupId, setGroupId] = useState(deck.optionGroupId)
   const [creating, setCreating] = useState(false)
   const [name, setName] = useState('')
@@ -318,7 +319,7 @@ function cardStatus(card: CardRecord) {
 
 function CardManagementDialog({ note, onClose }: { note: Note; onClose: () => void }) {
   const dialogKeyboard = useDialogKeyboard(onClose)
-  const cards = useLiveQuery(() => collection.cards.where('noteId').equals(note.id).sortBy('templateId'), [note.id], [])
+  const cards = useLiveQuery(() => readCardsForNote(collection, note.id), [note.id], [])
   const [dueByCard, setDueByCard] = useState<Record<string, string>>({})
   const [busyCardId, setBusyCardId] = useState<string | null>(null)
   const [error, setError] = useState('')
@@ -364,16 +365,15 @@ function CardManagementDialog({ note, onClose }: { note: Note; onClose: () => vo
 }
 
 function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () => void; onStudy: () => void }) {
-  const deck = useLiveQuery(() => collection.decks.get(deckId), [deckId])
-  const notes = useLiveQuery(() => collection.notes.where('deckId').equals(deckId).sortBy('createdAt'), [deckId], [])
-  const noteTypes = useLiveQuery(() => collection.noteTypes.toArray(), [], [])
+  const workspace = useLiveQuery(() => readDeckWorkspaceSnapshot(collection, deckId), [deckId])
+  const deck = workspace?.deck
+  const notes = workspace?.notes ?? []
+  const noteTypes = workspace?.noteTypes ?? []
   const summary = useLiveQuery(async () => (await collection.summaries()).find((item) => item.id === deckId), [deckId])
   const due = useLiveQuery(() => collection.dueCards(deckId, new Date()), [deckId], [])
   const offlineReadiness = useLiveQuery(async () => {
-    const noteIds = (await collection.notes.where('deckId').equals(deckId).primaryKeys()).map(String)
-    const references = noteIds.length ? await collection.noteMedia.where('noteId').anyOf(noteIds).toArray() : []
+    const { references, blobs } = await readDeckMediaSnapshot(collection, deckId)
     const digests = [...new Set(references.map((reference) => reference.digest))]
-    const blobs = digests.length ? await collection.mediaBlobs.bulkGet(digests) : []
     const available = await Promise.all(blobs.map(async (blob, index) => {
       return Boolean(blob && await digestMedia(blob.blob) === digests[index])
     }))
@@ -404,15 +404,13 @@ function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () =>
     setPreparingOffline(true)
     setOfflineMessage('Syncing the collection to download this deck’s missing media…')
     try {
-      const noteIds = await collection.notes.where('deckId').equals(deckId).primaryKeys()
-      const references = noteIds.length ? await collection.noteMedia.where('noteId').anyOf(noteIds.map(String)).toArray() : []
+      const references = await readDeckMediaReferences(collection, deckId)
       for (const digest of new Set(references.map((reference) => reference.digest))) {
         const blob = await collection.verifiedMediaBlob(digest)
         if (blob && await digestMedia(blob.blob) !== digest) await collection.mediaBlobs.delete(digest)
       }
       const result = await syncCollection(collection)
-      const current = await collection.notes.where('deckId').equals(deckId).primaryKeys()
-      const latestReferences = current.length ? await collection.noteMedia.where('noteId').anyOf(current.map(String)).toArray() : []
+      const latestReferences = await readDeckMediaReferences(collection, deckId)
       const missing = new Set((await collection.missingReferencedMedia()).map((reference) => reference.digest))
       const deckMissing = new Set(latestReferences.map((reference) => reference.digest).filter((digest) => missing.has(digest))).size
       if (deckMissing === 0) setOfflineMessage('This deck is ready for offline review. All referenced media is stored on this device.')

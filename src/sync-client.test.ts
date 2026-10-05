@@ -208,7 +208,7 @@ test('sends pending collection changes in bounded batches and acknowledges each 
   const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
   try {
     await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 })
-    await collection.outbox.bulkAdd(Array.from({ length: SYNC_OPERATION_BATCH_SIZE * 2 + 5 }, (_, index) => ({
+    await collection.enqueueOperations(Array.from({ length: SYNC_OPERATION_BATCH_SIZE * 2 + 5 }, (_, index) => ({
       opId: `batch-${index}`, entityType: 'note', entityId: `note-${index}`, action: 'update',
       occurredAt: new Date(1_800_000_000_000 + index).toISOString(), payload: { id: `note-${index}`, value: index },
     })))
@@ -235,7 +235,7 @@ test('replays a batch with stable operation IDs after the server commits but its
   let collection = createCollection(databaseName)
   try {
     await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 })
-    await collection.outbox.add({ opId: 'lost-response-op', entityType: 'note', entityId: 'note-1', action: 'update', occurredAt: '2026-10-01T12:00:00.000Z', payload: { id: 'note-1', value: true } })
+    await collection.enqueueOperation({ opId: 'lost-response-op', entityType: 'note', entityId: 'note-1', action: 'update', occurredAt: '2026-10-01T12:00:00.000Z', payload: { id: 'note-1', value: true } })
     const committed = new Set<string>()
     const fetcher = vi.fn((url: string, init?: RequestInit) => {
       if (url.endsWith('/api/health')) return Promise.resolve(health())
@@ -270,7 +270,7 @@ test('resumes at the acknowledged batch when a later committed batch loses its r
   const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
   try {
     await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 })
-    await collection.outbox.bulkAdd(Array.from({ length: SYNC_OPERATION_BATCH_SIZE * 2 + 5 }, (_, index) => ({
+    await collection.enqueueOperations(Array.from({ length: SYNC_OPERATION_BATCH_SIZE * 2 + 5 }, (_, index) => ({
       opId: `resume-${index}`, entityType: 'note' as const, entityId: `note-${index}`, action: 'update' as const,
       occurredAt: new Date(1_800_000_000_000 + index).toISOString(), payload: { id: `note-${index}`, value: index },
     })))

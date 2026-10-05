@@ -6,6 +6,7 @@ import { changeCustomStudy, createCustomStudy, customPreset, customStudyQueue, p
 import { customStudySessions, type CustomStudyOrder, type CustomStudySession } from './custom-study-state'
 import { useDialogKeyboard } from './use-dialog-keyboard'
 import { userFacingStorageError } from './offline-storage'
+import { readCardIds, readDeckList } from './collection-queries'
 
 export function CustomStudy({ onStudy }: { onStudy: (id: string) => void }) {
   const [preset, setPreset] = useState('catch-up')
@@ -20,8 +21,8 @@ export function CustomStudy({ onStudy }: { onStudy: (id: string) => void }) {
   const confirmationKeyboard = useDialogKeyboard(() => setConfirmation(null), Boolean(confirmation))
   const data = useLiveQuery(async () => {
     const sessions = await customStudySessions(collection)
-    const cards = new Set(await collection.cards.toCollection().primaryKeys())
-    return { decks: await collection.decks.toArray(), sessions: await Promise.all(sessions.map(async (session) => ({ session, remaining: session.cardIds.filter((id) => cards.has(id)).length, available: (await customStudyQueue(collection, session.id)).length }))) }
+    const cards = new Set(await readCardIds(collection))
+    return { decks: await readDeckList(collection), sessions: await Promise.all(sessions.map(async (session) => ({ session, remaining: session.cardIds.filter((id) => cards.has(id)).length, available: (await customStudyQueue(collection, session.id)).length }))) }
   }, [])
   function update<K extends keyof CustomStudyDefinition>(key: K, value: CustomStudyDefinition[K]) { setDefinition((current) => ({ ...current, [key]: value })); setPreview(null); setError('') }
   function focusQuery(deck: string, tag: string) {

@@ -4,11 +4,11 @@ import { collection, State, type Note } from './collection'
 import { userFacingStorageError } from './offline-storage'
 import { collectionDeckPaths, collectionSearchRows, compileCollectionSearch, plainField, SearchSyntaxError, type SearchRow } from './collection-search'
 import { applyBulkAction, applyFieldChanges, previewFieldChanges, selectionSummary, type BrowserSelection, type BulkAction, type FieldChange, type FieldOperation } from './browser-maintenance'
-import { customStudyMembership } from './custom-study-state'
 import { unavailableReason } from './scheduler'
 import { ImageOcclusionEditor } from './ImageOcclusion'
 import { isRenderedCardDisplayable, renderNoteCard } from './card-rendering'
 import { useDialogKeyboard } from './use-dialog-keyboard'
+import { readBrowserCollectionSnapshot, readBrowserEditorSnapshot, readDeckList, readNoteType } from './collection-queries'
 
 type View = 'cards' | 'notes'
 type Sort = { key: string; descending: boolean }
@@ -29,7 +29,7 @@ const rowId = (row: SearchRow, view: View) => view === 'cards' ? row.card!.id : 
 
 function NoteEditor({ note, onClose }: { note: Note; onClose: () => void }) {
   const dialogKeyboard = useDialogKeyboard(onClose)
-  const type = useLiveQuery(() => collection.noteTypes.get(note.typeId), [note.typeId])
+  const type = useLiveQuery(() => readNoteType(collection, note.typeId), [note.typeId])
   const [fields, setFields] = useState(note.fields)
   const [error, setError] = useState('')
   if (type?.kind === 'image-occlusion') return <ImageOcclusionEditor note={note} deckId={note.deckId} onClose={onClose} />
@@ -43,7 +43,7 @@ function NoteEditor({ note, onClose }: { note: Note; onClose: () => void }) {
 function BulkDialog({ selection, kind, onClose, onApplied }: { selection: BrowserSelection; kind: BulkAction['kind']; onClose: () => void; onApplied: (message: string) => void }) {
   const dialogKeyboard = useDialogKeyboard(onClose)
   const summary = useLiveQuery(() => selectionSummary(collection, selection).catch(() => null), [selection])
-  const decks = useLiveQuery(() => collection.decks.orderBy('name').toArray(), [], [])
+  const decks = useLiveQuery(() => readDeckList(collection), [], [])
   const deckPaths = collectionDeckPaths(decks)
   const [tags, setTags] = useState('')
   const [tagMode, setTagMode] = useState<'add' | 'remove'>('add')
@@ -80,11 +80,8 @@ function BulkDialog({ selection, kind, onClose, onApplied }: { selection: Browse
 function FieldDialog({ selection, onClose, onApplied }: { selection: BrowserSelection; onClose: () => void; onApplied: (message: string) => void }) {
   const dialogKeyboard = useDialogKeyboard(onClose)
   const data = useLiveQuery(async () => {
-    const cards = selection.view === 'cards' ? await collection.cards.bulkGet(selection.ids) : []
-    const ids = selection.view === 'cards' ? [...new Set(cards.filter((card) => !!card).map((card) => card!.noteId))] : selection.ids
-    const notes = (await collection.notes.bulkGet(ids)).filter((note): note is Note => Boolean(note))
-    const types = await collection.noteTypes.bulkGet([...new Set(notes.map((note) => note.typeId))])
-    return { notes, types: types.filter((type) => Boolean(type) && type!.kind !== 'image-occlusion').map((type) => type!) }
+    const snapshot = await readBrowserEditorSnapshot(collection, selection)
+    return { notes: snapshot.notes, types: snapshot.types }
   }, [selection])
   const [fieldKey, setFieldKey] = useState('')
   const [mode, setMode] = useState<FieldOperation['mode']>('literal')
@@ -135,7 +132,11 @@ export function CollectionBrowser() {
   const [fields, setFields] = useState<BrowserSelection | null>(null)
   const [editing, setEditing] = useState<Note | null>(null)
   const [now, setNow] = useState(() => new Date())
-  const data = useLiveQuery(() => collection.transaction('r', [collection.decks, collection.notes, collection.cards, collection.noteTypes, collection.reviewEntries, collection.settings], async () => ({ temporary: await customStudyMembership(collection), decks: await collection.decks.toArray(), notes: await collection.notes.toArray(), cards: await collection.cards.toArray(), noteTypes: await collection.noteTypes.toArray(), reviews: await collection.reviewEntries.toArray() })), [])
+  const data = useLiveQuery(async () => {
+    const snapshot = await readBrowserCollectionSnapshot(collection)
+    const temporary = new Map(snapshot.sessions.flatMap((session) => session.cardIds.map((id) => [id, session.name] as const)))
+    return { ...snapshot, temporary }
+  }, [])
   useEffect(() => {
     if (!data) return
     const cards = new Set(data.cards.map((card) => card.id)), notes = new Set(data.notes.map((note) => note.id))

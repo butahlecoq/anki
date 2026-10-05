@@ -1,6 +1,7 @@
 import type { Collection, SyncOperation, SyncSettings } from './collection'
 import { CLIENT_COLLECTION_SCHEMA_VERSION, SYNC_OPERATION_BATCH_SIZE, SYNC_REQUESTS_PER_ATTEMPT, SYNC_PROTOCOL_VERSION, type IncompatibleSync, type SyncHealth } from '../sync-capabilities.js'
 import { digestMedia } from './media'
+import { readSyncMediaReferences, readSyncProgressCounts } from './collection-queries'
 
 type Fetcher = typeof fetch
 type Change = { cursor: number; opId: string; entityType: string; entityId: string; action: string; occurredAt: string; payload: unknown }
@@ -210,7 +211,7 @@ export async function syncCollection(collection: Collection, fetcher: Fetcher = 
   let downloaded = 0
   let uploadError: MediaSyncProgress['uploadError']
   let downloadError: MediaSyncProgress['downloadError']
-  const references = await collection.noteMedia.toArray()
+  const references = await readSyncMediaReferences(collection)
   const localDigests = new Set(references.map((reference) => reference.digest))
   onProgress?.({ phase: 'upload', completed: 0, pending: localDigests.size })
   for (const digest of localDigests) {
@@ -234,7 +235,7 @@ export async function syncCollection(collection: Collection, fetcher: Fetcher = 
     const operations = await collection.captureSyncOperations(SYNC_OPERATION_BATCH_SIZE)
     const page = await foregroundSync({ ...settings, cursor }, operations, fetcher)
     if (page.state !== 'complete') {
-      if (page.state === 'unreachable') onProgress?.({ phase: 'retry', task: 'records', completed: accepted, pending: await collection.outbox.count(), cursor })
+      if (page.state === 'unreachable') onProgress?.({ phase: 'retry', task: 'records', completed: accepted, pending: (await readSyncProgressCounts(collection)).pending, cursor })
       return page
     }
     await collection.applyRemoteChanges(page.changes as SyncOperation[], page.cursor)
@@ -244,12 +245,12 @@ export async function syncCollection(collection: Collection, fetcher: Fetcher = 
     remoteChangesPending = page.hasMore === true
     result = page
     rounds += 1
-    const pending = await collection.outbox.count()
+    const pending = (await readSyncProgressCounts(collection)).pending
     onProgress?.({ phase: 'records', completed: accepted, pending, cursor, remoteChangesPending })
     if (!remoteChangesPending && pending === 0) break
   }
 
-  const pendingOperations = await collection.outbox.count()
+  const pendingOperations = (await readSyncProgressCounts(collection)).pending
   if (pendingOperations > 0 || remoteChangesPending) {
     onProgress?.({ phase: 'retry', task: 'records', completed: accepted, pending: pendingOperations, cursor })
     return { state: 'incomplete', accepted, cursor, pendingOperations, remoteChangesPending }
@@ -272,7 +273,7 @@ export async function syncCollection(collection: Collection, fetcher: Fetcher = 
     const missing = new Set((await collection.missingReferencedMedia()).map((reference) => reference.digest)).size
     const pending = (uploadError ? localDigests.size - uploaded : 0) + missing
     const media = { uploaded, downloaded, pending, ...(uploadError ? { uploadError } : {}), ...(downloadError ? { downloadError } : {}) }
-    const conflicts = await collection.syncConflicts.count()
+    const conflicts = (await readSyncProgressCounts(collection)).conflicts
     onProgress?.({ phase: 'complete', accepted, cursor, conflicts, media })
     return { ...result, accepted, cursor, hasMore: false, media }
   }

@@ -7,22 +7,21 @@ import { supportsServiceWorkers } from './browser-capabilities'
 import { useDialogKeyboard } from './use-dialog-keyboard'
 import { AnkiWebAccountDialog } from './AnkiWebAccountDialog'
 import { pairOutcomeMessage, pairingClosesOn, SYNC_LOCAL_ONLY, syncOutcomeMessage } from './sync-messages'
+import { readSyncProgressCounts, readSyncStatusSnapshot } from './collection-queries'
 export function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: boolean }) {
   const settings = useLiveQuery(() => collection.syncSettings(), [], undefined)
   const offlineInventory = useLiveQuery(async () => {
-    const [notes, cards, media, missing, pending, backup] = await Promise.all([
-      collection.notes.count(),
-      collection.cards.count(),
-      collection.mediaBlobs.toArray(),
+    const [status, missing, pending, backup] = await Promise.all([
+      readSyncStatusSnapshot(collection),
       collection.missingReferencedMedia(),
       collection.pendingOperations(),
       collection.lastVerifiedPcBackup(),
     ])
     return {
-      notes,
-      cards,
-      mediaFiles: media.length,
-      mediaBytes: media.reduce((total, item) => total + item.byteLength, 0),
+      notes: status.notes,
+      cards: status.cards,
+      mediaFiles: status.media.length,
+      mediaBytes: status.media.reduce((total, item) => total + item.byteLength, 0),
       missingMedia: missing.length,
       pending: pending.length,
       backup,
@@ -105,7 +104,7 @@ export function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: b
       })
       if (result.state === 'complete') {
         if (settings) void listPcBackups(settings).then(({ backups: latest }) => setBackups(latest)).catch(() => {})
-        const conflicts = await collection.syncConflicts.count()
+        const { conflicts } = await readSyncProgressCounts(collection)
         setMessage(syncOutcomeMessage({ ...result, conflicts }))
       } else setMessage(syncOutcomeMessage(result))
     } catch (error) {

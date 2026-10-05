@@ -19,11 +19,12 @@ import { TemplatePreview } from './TemplatePreview'
 import { useDialogKeyboard } from './use-dialog-keyboard'
 import { useDialogSubmit } from './use-dialog-submit'
 import { userFacingStorageError } from './offline-storage'
+import { readCard, readCardReviewHistory, readDeckList, readNote, readNoteType, readNoteTypeList } from './collection-queries'
 type PendingAttachment = { file: File; side: 'front' | 'back'; playback: 'automatic' | 'manual' }
 
 export function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: Note; onClose: () => void }) {
   const dialogKeyboard = useDialogKeyboard(onClose)
-  const noteTypes = useLiveQuery(() => collection.noteTypes.orderBy('name').toArray(), [], [])
+  const noteTypes = useLiveQuery(() => readNoteTypeList(collection), [], [])
   const [typeId, setTypeId] = useState(note?.typeId ?? BASIC_NOTE_TYPE_ID)
   const [imageEditor, setImageEditor] = useState(note?.typeId === IMAGE_OCCLUSION_NOTE_TYPE_ID)
   const noteType = noteTypes.find((type) => type.id === typeId)
@@ -141,7 +142,7 @@ function ExistingMedia({ media }: { media: NoteMediaReference }) {
 
 export function MoveNoteDialog({ note, onClose }: { note: Note; onClose: () => void }) {
   const dialogKeyboard = useDialogKeyboard(onClose)
-  const decks = useLiveQuery(() => collection.decks.orderBy('name').toArray(), [], [])
+  const decks = useLiveQuery(() => readDeckList(collection), [], [])
   const [destinationId, setDestinationId] = useState('')
   const { error, submitting, submit: submitAction } = useDialogSubmit()
   function submit(event: FormEvent) {
@@ -208,14 +209,14 @@ export function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: str
   const cardId = queue?.[0]?.id
   const showAnswer = shownAnswerCardId === cardId
   const typedInput = typedDraft.cardId === cardId ? typedDraft.value : ''
-  const card = useLiveQuery(async () => cardId ? await collection.cards.get(cardId) ?? null : undefined, [cardId])
-  const note = useLiveQuery(async () => card ? await collection.notes.get(card.noteId) ?? null : undefined, [card?.noteId])
-  const noteType = useLiveQuery(async () => note ? await collection.noteTypes.get(note.typeId) ?? null : undefined, [note?.typeId])
+  const card = useLiveQuery(async () => cardId ? await readCard(collection, cardId) ?? null : undefined, [cardId])
+  const note = useLiveQuery(async () => card ? await readNote(collection, card.noteId) ?? null : undefined, [card?.noteId])
+  const noteType = useLiveQuery(async () => note ? await readNoteType(collection, note.typeId) ?? null : undefined, [note?.typeId])
   const mediaQuery = useLiveQuery(() => card ? collection.mediaForNote(card.noteId) : [], [card?.noteId])
   // A live query returns a new array identity on ordinary reviewer renders. Stable
   // identities keep the review timer effect and prepared media sources from restarting.
   const media = useMemo(() => mediaQuery ?? [], [mediaQuery])
-  const reviewCount = useLiveQuery(() => card ? collection.reviewEntries.where('cardId').equals(card.id).count() : 0, [card?.id], 0)
+  const reviewCount = useLiveQuery(async () => card ? (await readCardReviewHistory(collection, card.id)).length : 0, [card?.id], 0)
   // One subscription for one undo. A review belonging to another custom session
   // is not this session's to offer.
   const pendingUndo = useLiveQuery(async () => {
@@ -379,7 +380,7 @@ export function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: str
       else if (key === 'r' && media.some((reference) => reference.kind === 'audio')) { event.preventDefault(); void replayAudio() }
       else if (key === 's') { event.preventDefault(); void updateCurrentCard((id) => collection.suspendCard(id), 'Card suspended.') }
       else if (key === 'b') { event.preventDefault(); void updateCurrentCard((id) => collection.buryCard(id), 'Card buried.') }
-      else if (key === 'f') { event.preventDefault(); void updateCurrentCard((id) => collection.setCardFlag(id, ((card?.flag ?? 0) + 1) % 8), `Flag set to ${((card?.flag ?? 0) + 1) % 8}.`) }
+      else if (key === 'f') { event.preventDefault(); void updateCurrentCard(async (id) => { const current = await readCard(collection, id); await collection.setCardFlag(id, ((current?.flag ?? 0) + 1) % 8) }, 'Card flag advanced.') }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)

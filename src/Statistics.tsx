@@ -3,6 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { collection, Rating, State, type CardRecord } from './collection'
 import { useDialogKeyboard } from './use-dialog-keyboard'
 import { localDayKey, periodWindow, reviewHeatmap, reviewStatistics, schedulingStatistics, type StatisticsPeriod } from './progress-statistics'
+import { readDeckList, readReviewHistory, readStatisticsSnapshot, readCardReviewHistory } from './collection-queries'
 
 function useStatisticsClock() {
   const [now, setNow] = useState(() => new Date())
@@ -19,7 +20,7 @@ function useStatisticsClock() {
 export function TodayWorkload({ deckId = '', showLink = true }: { deckId?: string; showLink?: boolean }) {
   const now = useStatisticsClock()
   const data = useLiveQuery(async () => {
-    const decks = await collection.decks.toArray()
+    const decks = await readDeckList(collection)
     const targets = deckId ? decks.filter((deck) => deck.id === deckId) : decks.filter((deck) => !deck.parentId)
     const cards = (await Promise.all(targets.map((deck) => collection.reviewQueue(deck.id, now)))).flat()
     const included = new Set(targets.map((deck) => deck.id))
@@ -27,7 +28,7 @@ export function TodayWorkload({ deckId = '', showLink = true }: { deckId?: strin
       changed = false
       for (const deck of decks) if (deck.parentId && included.has(deck.parentId) && !included.has(deck.id)) { included.add(deck.id); changed = true }
     }
-    const today = reviewStatistics((await collection.reviewEntries.toArray()).filter((entry) => !deckId || included.has(entry.deckId)), 'day', now)
+    const today = reviewStatistics((await readReviewHistory(collection)).filter((entry) => !deckId || included.has(entry.deckId)), 'day', now)
     return { cards, today }
   }, [now.getTime(), deckId])
   return <section className="today-workload" aria-label="Today's workload">
@@ -45,7 +46,7 @@ function Bars({ values }: { values: { label: string; count: number }[] }) {
 
 export function CardHistory({ card }: { card: CardRecord }) {
   const [visible, setVisible] = useState(30)
-  const entries = useLiveQuery(() => collection.reviewEntries.where('cardId').equals(card.id).toArray(), [card.id], [])
+  const entries = useLiveQuery(() => readCardReviewHistory(collection, card.id), [card.id], [])
   const reviews = reviewStatistics(entries, 'all', new Date()).reviews
   return <section className="card-history" aria-label="Card review history">
     <dl className="review-card-info"><div><dt>State</dt><dd>{State[card.state]}</dd></div><div><dt>Interval</dt><dd>{card.scheduledDays} days</dd></div><div><dt>Difficulty</dt><dd>{card.reps ? card.difficulty.toFixed(2) : 'Not yet measured'}</dd></div><div><dt>Stability</dt><dd>{card.reps ? `${card.stability.toFixed(2)} days` : 'Not yet measured'}</dd></div></dl>
@@ -61,11 +62,7 @@ export function Statistics() {
   const [selectedCard, setSelectedCard] = useState<string | null>(null)
   const cardDialogKeyboard = useDialogKeyboard(() => setSelectedCard(null), Boolean(selectedCard))
   const anchor = anchorKey ? new Date(`${anchorKey}T12:00:00`) : now
-  const data = useLiveQuery(async () => {
-    return collection.transaction('r', collection.decks, collection.cards, collection.notes, collection.reviewEntries, async () => ({
-      decks: await collection.decks.toArray(), cards: await collection.cards.toArray(), notes: await collection.notes.toArray(), reviews: await collection.reviewEntries.toArray(),
-    }))
-  }, [])
+  const data = useLiveQuery(() => readStatisticsSnapshot(collection), [])
   if (!data) return <p role="status">Loading progress…</p>
   const deckIds = new Set([deckId])
   if (deckId) for (let changed = true; changed;) {
@@ -101,4 +98,3 @@ export function Statistics() {
     {card && <div className="dialog-backdrop"><section {...cardDialogKeyboard} className="dialog" role="dialog" aria-modal="true" aria-labelledby="statistics-card-title"><h2 id="statistics-card-title">Card progress</h2><p>Due {new Date(card.due).toLocaleString()} · {card.reps} answers · {card.lapses} lapses{card.manualSuspended || card.suspended || card.templateSuspended ? ' · Suspended' : ''}</p><CardHistory card={card} /><button className="primary-action" type="button" onClick={() => setSelectedCard(null)}>Close</button></section></div>}
   </div>
 }
-

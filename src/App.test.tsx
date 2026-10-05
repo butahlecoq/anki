@@ -1,6 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { State } from 'ts-fsrs'
 import { App } from './App'
 import { collection } from './collection'
 import { CollectionWorkspace } from './CollectionWorkspace'
@@ -361,7 +360,7 @@ test('a synced reschedule removes the current reviewer card when it is no longer
   const deck = await collection.createDeck(`Synced reschedule ${crypto.randomUUID()}`)
   const note = await collection.createBasicNote(deck.id, { front: '予定', back: 'schedule' })
   const card = (await collection.cards.where('noteId').equals(note.id).first())!
-  await collection.cards.update(card.id, { due: new Date(Date.now() - 60 * 1000).toISOString(), state: State.Review })
+  await collection.rescheduleCard(card.id, new Date(Date.now() - 60 * 1000))
   window.location.hash = `#review/${deck.id}`
   render(<CollectionWorkspace />)
   try {
@@ -378,7 +377,7 @@ test('a synced reschedule in a child deck removes the current parent review card
   const child = await collection.createDeck('Child', { parentId: parent.id })
   const note = await collection.createBasicNote(child.id, { front: '子', back: 'child' })
   const card = (await collection.cards.where('noteId').equals(note.id).first())!
-  await collection.cards.update(card.id, { due: new Date(Date.now() - 60 * 1000).toISOString(), state: State.Review })
+  await collection.rescheduleCard(card.id, new Date(Date.now() - 60 * 1000))
   window.location.hash = `#review/${parent.id}`
   render(<CollectionWorkspace />)
   try {
