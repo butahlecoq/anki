@@ -4,11 +4,15 @@ import { State } from 'ts-fsrs'
 import { App } from './App'
 import { collection } from './collection'
 import { CollectionWorkspace } from './CollectionWorkspace'
+import { setActivateWaitingWorker } from './service-worker-update'
+import { announceUpdateReady, clearUpdateWaiting } from './appEvents'
 
 const serviceWorkerDescriptor = Object.getOwnPropertyDescriptor(navigator, 'serviceWorker')
 
 afterEach(() => {
   cleanup()
+  clearUpdateWaiting()
+  setActivateWaitingWorker(undefined)
   window.location.hash = ''
   if (serviceWorkerDescriptor) Object.defineProperty(navigator, 'serviceWorker', serviceWorkerDescriptor)
   else Reflect.deleteProperty(navigator, 'serviceWorker')
@@ -81,6 +85,32 @@ describe('application shell', () => {
     expect(screen.getByRole('button', { name: /new deck/i })).toBeEnabled()
     expect(screen.getByRole('button', { name: 'Connect a PC' })).toBeEnabled()
   })
+
+  test('activates a waiting service worker when the learner accepts an update', async () => {
+    const activate = vi.fn().mockResolvedValue(undefined)
+    setActivateWaitingWorker(activate)
+    render(<App />)
+    announceUpdateReady()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Update app' }))
+    await waitFor(() => expect(activate).toHaveBeenCalledWith(true))
+    expect(await screen.findByText('Updating the app…')).toBeVisible()
+  })
+
+  test('does not reload the page when the waiting update is unavailable', async () => {
+    render(<App />)
+    announceUpdateReady()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Update app' }))
+    expect(await screen.findByText(/This update is no longer waiting/)).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Reload to check' })).toBeVisible()
+  })
+
+  test('shows an update announced before the workspace mounts', () => {
+    announceUpdateReady()
+    render(<App />)
+    expect(screen.getByRole('button', { name: 'Update app' })).toBeVisible()
+  })
 })
 
 test('waits for service-worker readiness before claiming the offline shell is ready', () => {
@@ -98,11 +128,15 @@ test('waits for service-worker readiness before claiming the offline shell is re
 test('explains the Lockdown Mode offline limit and disables sync when service workers are absent', async () => {
   Reflect.deleteProperty(navigator, 'serviceWorker')
   await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'test-token', cursor: 0 })
-  render(<App />)
-  expect(screen.getByTestId('offline-shell-warning')).toHaveTextContent(/installed Home Screen app/)
-  expect(screen.getByTestId('offline-shell-warning')).toHaveTextContent(/iOS Lockdown Mode can disable it/)
-  expect(await screen.findByRole('button', { name: 'Sync now' })).toBeDisabled()
-  expect(screen.getByRole('button', { name: 'Pair another device' })).toBeEnabled()
+  try {
+    render(<App />)
+    expect(screen.getByTestId('offline-shell-warning')).toHaveTextContent(/installed Home Screen app/)
+    expect(screen.getByTestId('offline-shell-warning')).toHaveTextContent(/iOS Lockdown Mode can disable it/)
+    expect(await screen.findByRole('button', { name: 'Sync now' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Pair another device' })).toBeEnabled()
+  } finally {
+    await collection.settings.delete('sync')
+  }
 })
 
 test('a stale queue entry whose card was deleted completes review', async () => {
@@ -159,6 +193,52 @@ test('a learner creates a child deck from its parent', async () => {
     await waitFor(async () => expect(await collection.decks.where('parentId').equals(parent.id).first()).toMatchObject({ name: 'Verbs' }))
   } finally {
     await collection.deleteDeck(parent.id, { mode: 'delete-subtree' })
+  }
+})
+
+test('a learner can prepare a deck and see that its local media is ready for offline review', async () => {
+  const deck = await collection.createDeck(`Offline preparation ${crypto.randomUUID()}`)
+  window.location.hash = `#deck/${deck.id}`
+  render(<CollectionWorkspace />)
+  try {
+    fireEvent.click(await screen.findByRole('button', { name: 'Prepare this deck for offline use' }))
+    expect(await screen.findByText(/This deck is ready for offline review/)).toBeVisible()
+  } finally {
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+  }
+})
+
+test('offline deck preparation explains when missing media needs a PC connection', async () => {
+  const deck = await collection.createDeck(`Offline media ${crypto.randomUUID()}`)
+  const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
+  const media = await collection.attachMedia(note.id, { file: new File(['cat image'], 'cat.png', { type: 'image/png' }), side: 'front' })
+  await collection.mediaBlobs.delete(media.digest)
+  window.location.hash = `#deck/${deck.id}`
+  render(<CollectionWorkspace />)
+  try {
+    fireEvent.click(await screen.findByRole('button', { name: 'Prepare this deck for offline use' }))
+    expect(await screen.findByText(/needs 1 media file from the paired PC/)).toBeVisible()
+  } finally {
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+  }
+})
+
+test('offline deck preparation refuses to report readiness for media with a bad content hash', async () => {
+  const deck = await collection.createDeck(`Damaged offline media ${crypto.randomUUID()}`)
+  const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
+  const media = await collection.attachMedia(note.id, { file: new File(['cat image'], 'cat.png', { type: 'image/png' }), side: 'front' })
+  const storedMedia = await collection.mediaBlobs.get(media.digest)
+  const damagedBytes = new Uint8Array(storedMedia!.byteLength).fill(0)
+  await collection.mediaBlobs.update(media.digest, { blob: damagedBytes.buffer })
+  window.location.hash = `#deck/${deck.id}`
+  render(<CollectionWorkspace />)
+  try {
+    fireEvent.click(await screen.findByRole('button', { name: 'Prepare this deck for offline use' }))
+    expect(await screen.findByText(/needs 1 media file from the paired PC/)).toBeVisible()
+    await waitFor(async () => expect(await collection.mediaBlobs.get(media.digest)).toBeUndefined())
+    expect(screen.queryByText(/This deck is ready for offline review/)).not.toBeInTheDocument()
+  } finally {
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
   }
 })
 
@@ -570,6 +650,8 @@ test('reviewer flag control and keyboard shortcut update the current card', asyn
     const flagControl = await screen.findByRole('combobox', { name: 'Card flag' })
     fireEvent.change(flagControl, { target: { value: '1' } })
     await waitFor(async () => expect(await collection.cards.get(card.id)).toMatchObject({ flag: 1 }))
+    await waitFor(() => expect(flagControl).toBeEnabled())
+    flagControl.blur()
     expect(screen.getByRole('button', { name: 'Show answer' })).toBeVisible()
     fireEvent.keyDown(window, { key: 'f' })
     await waitFor(async () => expect(await collection.cards.get(card.id)).toMatchObject({ flag: 2 }))

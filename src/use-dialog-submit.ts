@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
+import { userFacingStorageError } from './offline-storage'
 
 /**
  * One guarded submit lifecycle for collection dialogs: ignore duplicate submits,
@@ -23,7 +24,7 @@ export function useDialogSubmit() {
       await action()
       onSuccess?.()
     } catch (reason) {
-      setError(reason instanceof Error && reason.message ? reason.message : fallback)
+      setError(userFacingStorageError(reason, fallback))
     } finally {
       inFlight.current = false
       setSubmitting(false)

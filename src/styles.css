@@ -268,9 +268,17 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .mobile-nav { display: none; }
 .update-toast { position: fixed; right: 20px; bottom: 20px; z-index: 20; padding: 13px 14px; display: flex; align-items: center; gap: 14px; border: 1px solid var(--border-default); background: var(--surface-toast); box-shadow: var(--shadow-toast); font-size: 10px; }
 .update-toast button { padding: 7px 10px; border: 1px solid var(--accent-strong); background: transparent; color: var(--accent); cursor: pointer; }
+.startup-state { box-sizing: border-box; min-height: 100svh; display: grid; align-content: center; gap: 18px; width: min(100%, 720px); margin-inline: auto; padding: clamp(24px, 7vw, 72px); color: var(--text-primary); background: var(--surface-page); }
+.startup-state h1, .startup-state p { margin: 0; }
+.startup-state h1 { font-family: var(--font-jp); font-size: clamp(28px, 7vw, 44px); line-height: 1.2; }
+.startup-state p, .startup-state details { color: var(--text-secondary); font-size: 13px; line-height: 1.7; }
+.startup-state summary { width: fit-content; cursor: pointer; color: var(--text-primary); }
+.startup-state .primary-action { width: fit-content; min-height: 44px; }
 
 .workspace-grid.single { grid-template-columns: 1fr; }
-.sync-controls { min-height: 86px; padding: 18px 2px; display: flex; align-items: center; justify-content: space-between; gap: 24px; border-bottom: 1px solid var(--border-subtle); }
+.sync-controls { min-height: 86px; padding: 18px 2px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 24px; border-bottom: 1px solid var(--border-subtle); }
+.sync-backup-status { flex: 1 1 100%; display: grid; gap: 8px; }
+.sync-controls > .offline-storage-status { flex: 1 1 100%; }
 .sync-controls .section-code { margin: 0 0 8px; }
 .sync-controls > div, .sync-controls p { min-width: 0; max-width: 100%; }
 .sync-controls p { max-width: 610px; margin: 0; color: var(--text-muted); font-family: var(--font-jp); font-size: 10px; line-height: 1.6; overflow-wrap: anywhere; }

@@ -16,8 +16,11 @@ test('load, review, and remove the Japanese sample deck without changing other d
   if (browserName === 'chromium') await page.context().setOffline(true)
   await sampleTile.getByRole('button', { name: 'Open Sample — Japanese Starter' }).click()
   await expect(page.getByText('A small sample collection for trying Japanese review.')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Prepare this deck for offline use' })).toBeEnabled()
   if (browserName === 'webkit') await page.context().setOffline(true)
-  await page.getByRole('button', { name: 'Study now' }).click()
+  const studyButton = page.getByRole('button', { name: 'Study now' })
+  await studyButton.evaluate((button) => button.scrollIntoView({ block: 'center', inline: 'nearest' }))
+  await studyButton.click()
 
   let sawFurigana = false
   let sawCloze = false
@@ -56,7 +59,9 @@ test('load, review, and remove the Japanese sample deck without changing other d
   expect(sawImage).toBe(true)
 
   await page.getByRole('button', { name: 'Back to deck' }).click()
-  await page.getByRole('button', { name: 'All decks' }).click()
+  const allDecksButton = page.getByRole('button', { name: /All decks/ })
+  await expect(allDecksButton).toBeVisible()
+  await allDecksButton.click()
   await page.getByRole('button', { name: 'New deck' }).click()
   await page.getByLabel('Deck name').fill('My notes')
   await page.getByRole('button', { name: 'Create deck' }).click()

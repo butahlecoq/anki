@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { collection } from './collection'
+import { formatStorageBytes, requestPersistentStorage, type PersistenceResult } from './offline-storage'
 import { createAndDownloadPcBackup, listPcBackups, pairCollection, previewPcBackupRestore, restorePcBackup, syncCollection, type PcBackup, rotateCredential } from './sync-client'
 import { supportsServiceWorkers } from './browser-capabilities'
 import { useDialogKeyboard } from './use-dialog-keyboard'
@@ -8,6 +9,25 @@ import { AnkiWebAccountDialog } from './AnkiWebAccountDialog'
 import { pairOutcomeMessage, pairingClosesOn, SYNC_LOCAL_ONLY, syncOutcomeMessage } from './sync-messages'
 export function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: boolean }) {
   const settings = useLiveQuery(() => collection.syncSettings(), [], undefined)
+  const offlineInventory = useLiveQuery(async () => {
+    const [notes, cards, media, missing, pending, backup] = await Promise.all([
+      collection.notes.count(),
+      collection.cards.count(),
+      collection.mediaBlobs.toArray(),
+      collection.missingReferencedMedia(),
+      collection.pendingOperations(),
+      collection.lastVerifiedPcBackup(),
+    ])
+    return {
+      notes,
+      cards,
+      mediaFiles: media.length,
+      mediaBytes: media.reduce((total, item) => total + item.byteLength, 0),
+      missingMedia: missing.length,
+      pending: pending.length,
+      backup,
+    }
+  }, [], undefined)
   const [pairing, setPairing] = useState(false)
   const [endpoint, setEndpoint] = useState('')
   const [code, setCode] = useState('')
@@ -19,6 +39,17 @@ export function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: b
   const [restorePreview, setRestorePreview] = useState<{ backupId: string; summary: string; available: boolean }>()
   const [restoreConfirmation, setRestoreConfirmation] = useState('')
   const [ankiWebOpen, setAnkiWebOpen] = useState(false)
+  const [persistence, setPersistence] = useState<PersistenceResult>('unsupported')
+  const [storageEstimate, setStorageEstimate] = useState<{ usage?: number; quota?: number }>()
+
+  useEffect(() => {
+    let active = true
+    void requestPersistentStorage().then((result) => { if (active) setPersistence(result) })
+    void navigator.storage?.estimate().then((estimate) => {
+      if (active) setStorageEstimate({ usage: estimate.usage, quota: estimate.quota })
+    }).catch(() => {})
+    return () => { active = false }
+  }, [])
 
   useEffect(() => {
     if (!settings) return
@@ -87,6 +118,18 @@ export function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: b
     setBusy(true)
     try {
       const { manifest, bytes } = await createAndDownloadPcBackup(settings)
+      const mediaBytes = manifest.media.reduce((total, item) => total + item.byteLength, 0)
+      await collection.recordVerifiedPcBackup({
+        backupId: manifest.id,
+        createdAt: manifest.createdAt,
+        verifiedAt: new Date().toISOString(),
+        reason: manifest.reason,
+        changeCount: manifest.changeCount,
+        mediaFiles: manifest.media.length,
+        mediaBytes,
+        archiveBytes: manifest.archiveBytes,
+        archiveSha256: manifest.archiveSha256,
+      })
       const url = URL.createObjectURL(bytes)
       const anchor = document.createElement('a')
       anchor.href = url
@@ -94,7 +137,6 @@ export function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: b
       anchor.click()
       window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
       setBackups((current) => [manifest, ...current.filter((backup) => backup.id !== manifest.id)])
-      const mediaBytes = manifest.media.reduce((total, item) => total + item.byteLength, 0)
       setMessage(`Verified backup downloaded · ${manifest.changeCount} sync changes · ${manifest.media.length} media files (${(mediaBytes / 1024 / 1024).toFixed(1)} MiB) · ${new Date(manifest.createdAt).toLocaleString()}.`)
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'PC backup failed. The active collection was left unchanged.')
@@ -151,6 +193,14 @@ export function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: b
   return (
     <section className="sync-controls" aria-label="PC sync">
       <div><span className="section-code">SYNC // {settings ? 'PAIRED' : 'LOCAL ONLY'}</span><p aria-live="polite">{settings && !offlineSyncAvailable ? 'Sync is paused until Kiroku confirms its offline app shell is ready.' : message}</p></div>
+      <details className="offline-storage-status">
+        <summary data-testid="offline-storage-summary">Offline storage and local collection</summary>
+        <p>{persistence === 'granted' ? 'Persistent storage is enabled for this app.' : persistence === 'denied' ? 'The browser may clear this app’s local data to free space. Keep a verified backup.' : 'This browser cannot protect local storage from automatic cleanup.'}</p>
+        {storageEstimate && <p>Browser storage estimate: {storageEstimate.usage === undefined ? 'unknown' : formatStorageBytes(storageEstimate.usage)} used of {storageEstimate.quota === undefined ? 'unknown' : formatStorageBytes(storageEstimate.quota)} available.</p>}
+        {offlineInventory && <p>{offlineInventory.notes} notes · {offlineInventory.cards} cards · {offlineInventory.mediaFiles} media files ({formatStorageBytes(offlineInventory.mediaBytes)}) · {offlineInventory.missingMedia} media files missing · {offlineInventory.pending} changes waiting to sync.</p>}
+        {offlineInventory?.missingMedia ? <p role="alert">Some referenced media is not stored on this device. Connect to the PC and sync before relying on offline access.</p> : offlineInventory && <p>All referenced media is available on this device.</p>}
+        <p className="sync-help" data-testid="backup-receipt">{offlineInventory?.backup ? `Last PC backup received and verified on this device: ${new Date(offlineInventory.backup.verifiedAt).toLocaleString()} · ${offlineInventory.backup.changeCount} sync changes · ${offlineInventory.backup.mediaFiles} media files (${formatStorageBytes(offlineInventory.backup.mediaBytes)}).` : 'No PC backup has been received and verified on this device yet.'}</p>
+      </details>
       <div className="sync-actions">
         {settings && <button className="text-button" type="button" disabled={busy} onClick={() => setAnkiWebOpen(true)}>Connect AnkiWeb account</button>}
         {settings && <button className="text-button" type="button" disabled={busy || !offlineSyncAvailable || !offlineShellSupported} onClick={() => void sync()}>{busy ? 'Syncing…' : 'Sync now'}</button>}
@@ -158,7 +208,7 @@ export function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: b
         {settings && <button className="text-button" type="button" disabled={busy} title="Invalidates this device’s previous key immediately" onClick={() => void rotateDeviceCredential()}>{busy ? 'Working…' : 'Rotate device key'}</button>}
         <button className="primary-action" type="button" disabled={busy} onClick={() => setPairing(true)}>{settings ? 'Pair another device' : 'Connect a PC'}</button>
       </div>
-      {settings && backups[0] && <p className="sync-help">Latest verified PC backup: {new Date(backups[0].createdAt).toLocaleString()} · {backups[0].changeCount} sync changes · {backups[0].media.length} media files · {backups[0].reason === 'manual' ? 'manual' : 'before sync'}.</p>}
+      {settings && backups[0] && <p className="sync-help">Latest backup currently listed by the PC: {new Date(backups[0].createdAt).toLocaleString()} · {backups[0].changeCount} sync changes · {backups[0].media.length} media files · {backups[0].reason === 'manual' ? 'manual' : 'before sync'}.</p>}
       {settings && backups[0] && <div className="sync-help"><button className="text-button" type="button" disabled={busy} onClick={() => void previewPcRestore(backups[0])}>Preview latest backup</button>{restorePreview && <><p role="status">{restorePreview.summary}</p>{restorePreview.available && <><label>Type RESTORE to replace the active PC collection<input value={restoreConfirmation} onChange={(event) => setRestoreConfirmation(event.target.value)} autoComplete="off" /></label><button className="text-button" type="button" disabled={busy || restoreConfirmation !== 'RESTORE'} onClick={() => void restorePcCollection()}>Restore this PC collection</button></>}</>}</div>}
       {ankiWebOpen && settings && <AnkiWebAccountDialog settings={settings} onClose={() => setAnkiWebOpen(false)} />}
       {pairing && (
