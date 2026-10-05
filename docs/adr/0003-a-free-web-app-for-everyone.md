@@ -1,9 +1,10 @@
 # The app is a free web app that anyone can run
 
-kiroku ships as a web app added to the iPhone Home Screen, and using it costs its
-learners nothing, forever. No one buys an Apple Developer membership, no one buys a
-paid hosting plan on our behalf, and no learner's collection or credentials pass
-through infrastructure we operate. Each learner runs the app and connects with
+Kiroku is source code that a learner obtains and runs on their own machine. They
+also run the PC service that relays their account traffic; no service is operated
+on their behalf. Using Kiroku costs its learners nothing. No one buys an Apple
+Developer membership or a paid hosting plan, and no learner's collection or
+credentials pass through infrastructure we operate. Each learner connects with
 their own AnkiWeb account. Account relay topology is recorded in ADR 0004.
 
 ## Context
@@ -56,6 +57,10 @@ chosen.
   private network. A separate always-on hosted gateway is not part of the supported
   topology. A shared gateway is not a feature we may add later without reopening
   this decision.
+- **The PC relay is a pass-through.** It accepts account requests only from the
+  configured app origin and an authenticated paired device, forwards supported
+  protocol traffic to AnkiWeb, and does not store or log account traffic. Only the
+  learner's paired devices use this relay.
 - **Money is a permanent engineering constraint, not a launch-phase one.** Every
   future proposal has a cost line, and a proposal whose running cost is non-zero is
   out of scope. This is the reason the free tier of every dependency is a hard
@@ -74,8 +79,10 @@ chosen.
   protocol change must assume it will meet clients that are months behind, which
   raises the value of the version tripwire in #150 and of the Schema Ladder's
   declared minimums.
-- **Distribution is a URL.** Anyone can obtain kiroku and connect their own account.
-  There is no listing, no install count and no review gate. This is the point.
+- **Distribution is source-based.** The earlier statement that distribution is a
+  URL described an app that was not hosted. A URL alone cannot give a learner the
+  application: they obtain the source and run the app and relay on their own
+  machine. There is no listing, install count, or review gate.
 - **Push is best-effort only.** Daily review is unaffected, because the learner opens
   the app. Due-count badges are not, and we do not claim them.
 - **The offline-first promise is conditional.** It holds for an installed Home Screen
@@ -84,8 +91,10 @@ chosen.
 
 ## Revisiting this
 
-The fee is the whole decision. If an Apple Developer membership ever becomes
-available to the owner, the question to reopen is not "can we ship native" - the
-answer is yes - but "is native storage and real push worth a recurring fee for a
-private single-learner tool". Answer that question on its merits, not as a
-reflex. Do not reopen this ADR to add a paid dependency.
+Reopen this decision if the owner changes the requirement that Kiroku and its
+required services cost nothing to operate, or decides that the learner must use a
+hosted service rather than run the app and relay themselves. An Apple Developer
+membership becoming available is not by itself enough; decide explicitly whether
+native storage and real push justify the recurring fee for a private
+single-learner tool. Do not reopen this ADR to add a paid dependency while the
+no-cost requirement remains in force.

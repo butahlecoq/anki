@@ -13,7 +13,7 @@ Nothing, and it stays nothing. See [ADR 0003](docs/adr/0003-a-free-web-app-for-e
 
 - **No Apple Developer membership.** Kiroku is a web app. There is no native build to sign and nothing to install from a store.
 - **No third-party sync service.** The AnkiWeb relay runs on the learner's own PC, is reached over the private network, and requires that PC to be running for account synchronization. Offline study from the phone's downloaded collection does not require the PC. Syncing AnkiWeb while the PC is off would require each learner to operate and fund an always-internet-facing relay; that topology is not currently supported.
-- **No store account and no store listing.** Distribution is a URL.
+- **No store account and no store listing.** Learners obtain the source and run Kiroku and its PC relay on their own machine; a URL alone does not distribute the application.
 
 Anyone can run Kiroku, and anyone can share it. The **Connect AnkiWeb account** flow uses a relay on the learner's own PC, reached over the private network; the PC must be running and reachable to download the account collection and list its Decks. Two-way account synchronization is still being implemented. Offline study from the phone's downloaded collection does not require the PC. Syncing AnkiWeb while the PC is off would require each learner to operate and fund an always-internet-facing relay, so that topology is not currently supported. See [the AnkiWeb account notes](docs/ankiweb-account-sync.md) and [ADR 0004](docs/adr/0004-ankiweb-relay-runs-on-the-pc.md).
 
