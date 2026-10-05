@@ -2,7 +2,7 @@ import initSqlJs, { type SqlJsStatic } from 'sql.js'
 import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url'
 import type { SyncSettings } from './collection.js'
 import type { Collection } from './collection.js'
-import { prepareAnkiDataImport, type PreparedAnkiImport } from './anki-import.js'
+import { prepareAnkiDataImport, type AnkiImportCommitOptions, type PreparedAnkiImport } from './anki-import.js'
 import { createPairedAnkiWebTransport } from './native-anki-account-client.js'
 import { openNativeAnkiAccountStores } from './native-anki-account.js'
 import { nativeAnkiProjectionData } from './native-anki-projection.js'
@@ -14,6 +14,7 @@ export interface NativeAnkiAccountSession {
   client: NativeAnkiClient
   state: Awaited<ReturnType<typeof openNativeAnkiAccountStores>>['state']
   media: Awaited<ReturnType<typeof openNativeAnkiAccountStores>>['media']
+  sourceIdentity: string
   decks: NativeAnkiAccountDeck[]
   disconnect(): void
 }
@@ -22,7 +23,7 @@ export interface PreparedNativeAccountImport {
   readonly revision: number
   readonly snapshotHash: string
   readonly prepared: PreparedAnkiImport
-  commit(): Promise<void>
+  commit(options?: AnkiImportCommitOptions): Promise<void>
 }
 
 let sqlPromise: Promise<SqlJsStatic> | undefined
@@ -62,6 +63,7 @@ export async function connectNativeAnkiAccount(
       client,
       state: stores.state,
       media: stores.media,
+      sourceIdentity: stores.identity,
       decks,
       disconnect() {
         stores.state.close()
@@ -87,17 +89,17 @@ export async function prepareNativeAccountImport(session: NativeAnkiAccountSessi
   if (manifest.snapshotHash !== snapshotHash) throw new Error('The account snapshot changed before its Import Plan was prepared. Preview it again.')
   const data = nativeAnkiProjectionData(SQL, checkpoint.collection)
   if (!data.notes.length || !data.cards.length) throw new Error('The account collection is empty. Nothing was copied into this device.')
-  const prepared = await prepareAnkiDataImport(data, collection, { SQL })
+  const prepared = await prepareAnkiDataImport(data, collection, { SQL, sourceIdentity: session.sourceIdentity, sourceFingerprint: snapshotHash })
   return {
     revision: checkpoint.revision,
     snapshotHash,
     prepared,
-    async commit() {
+    async commit(options) {
       const current = await session.state.checkpoint()
       if (!current || current.revision !== checkpoint.revision || await nativeSnapshotHash(current.collection) !== snapshotHash) {
         throw new Error('The account snapshot changed after this Import Plan was prepared. Preview the latest snapshot before importing.')
       }
-      await prepared.commit()
+      await prepared.commit(options)
     },
   }
 }

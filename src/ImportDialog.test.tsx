@@ -9,15 +9,15 @@ function prepared(commit: () => Promise<void> = async () => {}) {
   const summary = { decks: 1, noteTypes: 1, notes: 2, cards: 2, reviews: 0, media: 0 }
   const duplicates = { create: 2, update: 0, keepLocal: 0, unchanged: 0 }
   return {
-    filename: 'sample.apkg', summary, duplicates, issues: [],
-    plan: { summary, duplicates, issues: [], blocksImport: false, decisions: [], writes: {} }, commit,
+    filename: 'sample.apkg', summary, duplicates, issues: [], skipped: [],
+    plan: { summary, duplicates, issues: [], blocksImport: false, canImportRepresentable: false, requiresPartialChoice: false, skipped: [], savedPartialChoice: false, decisions: [], writes: {} }, commit,
   }
 }
 
 describe('Anki import dialog', () => {
   afterEach(() => { cleanup(); vi.clearAllMocks() })
   const chooseFile = (name: string) => fireEvent.change(document.querySelector('input[type="file"]')!, { target: { files: [new File(['x'], name)] } })
-  test('previews and commits a package', async () => {
+  test('previews and commits a package, then closes when there are no skipped rows', async () => {
     const commit = vi.fn().mockResolvedValue(undefined)
     prepareAnkiImport.mockResolvedValueOnce(prepared(commit))
     const onClose = vi.fn()
@@ -26,6 +26,24 @@ describe('Anki import dialog', () => {
     expect(await screen.findByText('sample.apkg')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Import package' }))
     await waitFor(() => expect(commit).toHaveBeenCalledOnce())
+    expect(onClose).toHaveBeenCalledOnce()
+  })
+
+  test('keeps the completed partial import open so skipped rows remain discoverable', async () => {
+    const commit = vi.fn().mockResolvedValue(undefined)
+    const value = prepared(commit)
+    const skipped = [{ guid: 'omitted-guid', noteId: 'anki-note:omitted-guid', ankiNoteId: 7, noteType: 'Unsupported', cardIds: [8], reviewIds: [], mediaNames: [], reasons: ['Unsupported template'] }]
+    Object.assign(value, { skipped })
+    Object.assign(value.plan, { skipped })
+    prepareAnkiImport.mockResolvedValueOnce(value)
+    const onClose = vi.fn()
+    render(<ImportDialog onClose={onClose} />)
+    chooseFile('sample.apkg')
+    fireEvent.click(await screen.findByRole('button', { name: 'Import package' }))
+    await waitFor(() => expect(commit).toHaveBeenCalledOnce())
+    expect(screen.getByRole('status')).toHaveTextContent('Import complete')
+    expect(screen.getByRole('region', { name: 'Skipped import rows' })).toHaveTextContent('omitted-guid')
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
     expect(onClose).toHaveBeenCalledOnce()
   })
 

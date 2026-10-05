@@ -1,12 +1,15 @@
 import { useState } from 'react'
 import { collection } from './collection'
 import { prepareAnkiImport, type PreparedAnkiImport } from './anki-import'
+import { ImportSkipReport } from './ImportSkipReport'
 import { useDialogKeyboard } from './use-dialog-keyboard'
 export function ImportDialog({ onClose }: { onClose: () => void }) {
   const dialogKeyboard = useDialogKeyboard(onClose)
   const [prepared, setPrepared] = useState<PreparedAnkiImport>()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [importRepresentableOnly, setImportRepresentableOnly] = useState(false)
+  const [committed, setCommitted] = useState(false)
 
   async function selectPackage(files: FileList | null) {
     const file = files?.[0]
@@ -14,6 +17,8 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
     setBusy(true)
     setError('')
     setPrepared(undefined)
+    setImportRepresentableOnly(false)
+    setCommitted(false)
     try {
       setPrepared(await prepareAnkiImport(file, collection))
     } catch (reason) {
@@ -28,8 +33,9 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
     setBusy(true)
     setError('')
     try {
-      await prepared.commit()
-      onClose()
+      await prepared.commit({ importRepresentableOnly })
+      if (prepared.skipped.length > 0) setCommitted(true)
+      else onClose()
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Unable to import package')
     } finally {
@@ -73,12 +79,19 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
           <h3>Import report</h3>
           <ul>{prepared.issues.map((issue, index) => <li className={`import-${issue.severity}`} key={`${issue.code}-${issue.subject}-${index}`}><strong>{issue.subject}</strong><span>{issue.detail}</span></li>)}</ul>
         </section>}
+        {prepared.plan.canImportRepresentable && prepared.plan.requiresPartialChoice && <label className="export-option import-partial-choice">
+          <input type="checkbox" checked={importRepresentableOnly} disabled={busy || committed} onChange={(event) => setImportRepresentableOnly(event.target.checked)} />
+          Import {prepared.summary.notes} representable notes and skip {prepared.skipped.length} unsupported notes with {prepared.skipped.reduce((sum, note) => sum + note.cardIds.length, 0)} cards. Save this choice for future imports of this source.
+        </label>}
+        {prepared.plan.savedPartialChoice && <p className="import-warning" role="status">This source has a saved representable-only choice. The same note omissions remain in effect on refresh.</p>}
+        <ImportSkipReport skipped={prepared.skipped} />
+        {committed && <p className="import-complete" role="status">Import complete. {prepared.summary.notes} representable notes are in the collection; the listed notes remain omitted.</p>}
       </>}
-      {prepared?.plan.blocksImport && <p className="form-error" role="alert">This package has unsupported content. Nothing will be imported until the reported errors are resolved.</p>}
+      {prepared?.plan.blocksImport && !prepared.plan.canImportRepresentable && <p className="form-error" role="alert">Some unsupported rows cannot be isolated safely. Nothing will be imported.</p>}
       {error && <p className="form-error" role="alert">{error}</p>}
       <div className="dialog-actions">
-        <button className="text-button" type="button" disabled={busy} onClick={onClose}>Cancel</button>
-        <button className="primary-action" type="button" disabled={!prepared || busy || prepared.plan.blocksImport} onClick={() => void commit()}>{busy && prepared ? 'Importing…' : 'Import package'}</button>
+        <button className="text-button" type="button" disabled={busy} onClick={onClose}>{committed ? 'Done' : 'Cancel'}</button>
+        <button className="primary-action" type="button" disabled={!prepared || busy || committed || (prepared.plan.blocksImport && !importRepresentableOnly)} onClick={() => void commit()}>{busy && prepared ? 'Importing…' : importRepresentableOnly ? 'Import representable notes' : 'Import package'}</button>
       </div>
     </section>
   </div>

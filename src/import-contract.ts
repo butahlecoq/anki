@@ -41,6 +41,8 @@ export interface ImportedPackageWrites {
   undoSettings: Array<{ key: string; value: unknown }>
 }
 
+export interface ImportedPartialChoice { key: string; value: unknown }
+
 /**
  * How a row is compared for the stale-preview check. Media is fingerprinted by
  * its stored identity rather than its bytes, so re-encoding a blob does not read
