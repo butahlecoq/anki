@@ -8,6 +8,7 @@
     "node": ">=22"
   },
   "scripts": {
+    "prepare": "node scripts/install-git-hooks.mjs",
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
@@ -26,6 +27,7 @@
     "test:server": "npm run server:build && node --test dist-server/server/**/*.test.js",
     "test:e2e": "playwright test",
     "test:anki-compatibility": "node scripts/test-anki-compatibility.mjs",
+    "check:push": "npm run typecheck && npm run lint && npm run test && npm run test:status && npm run test:server",
     "check": "npm run typecheck && npm run lint && npm run test && npm run test:status && npm run test:server && npm run build && npm run test:e2e"
   },
   "dependencies": {

@@ -1,0 +1,10 @@
+#!/usr/bin/env sh
+set -eu
+
+# Git exports repository-local variables to hooks. The gate creates temporary
+# repositories in tests, so let those Git commands discover their own checkout.
+for name in $(git rev-parse --local-env-vars); do
+  unset "$name"
+done
+
+npm run check:push

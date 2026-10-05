@@ -25,9 +25,16 @@ test('navigation marks the note-type manager as the current page', () => {
 
 test('rotates a paired device key from the visible sync controls', async () => {
   const priorFetch = globalThis.fetch
-  const fetcher = vi.fn((input: RequestInfo | URL) => String(input).endsWith('/api/backups')
-    ? Promise.resolve(Response.json({ backups: [], retention: { maximum: 14, days: 30 } }))
-    : Promise.resolve(Response.json({ token: 'rotated-device-key' })))
+  const fetcher = vi.fn((input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.endsWith('/api/backups')) {
+      return Promise.resolve(Response.json({ backups: [], retention: { maximum: 14, days: 30 } }))
+    }
+    if (url.endsWith('/api/credential/rotate')) {
+      return Promise.resolve(Response.json({ token: 'rotated-device-key' }))
+    }
+    throw new Error(`Unexpected fetch in credential rotation test: ${url}`)
+  })
   globalThis.fetch = fetcher as typeof fetch
   await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'old-device-key', cursor: 6 })
   try {
