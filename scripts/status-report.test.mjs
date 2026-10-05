@@ -32,6 +32,20 @@ test('status names the matching issue PR, current-head checks, deferral, and wor
   assert.equal(renderStatus(input), output)
 })
 
+test('status reports evidenced and remaining criteria for each open issue plus numbered-story coverage', () => {
+  const output = renderStatus({
+    issues: [
+      { number: 1, title: 'Parent', url: 'https://example.test/1', body: '## User Stories\n1. As the learner, I want a shell.\n2. As the learner, I want offline study.', state: 'OPEN' },
+      { number: 42, title: 'Shell', url: 'https://example.test/42', state: 'OPEN', body: '## Parent specification stories\n- #1 Story 1 — Shell\n\n## Acceptance criteria\n- [x] AC-01: Shell loads — Evidence: command: `npm run build`' },
+      { number: 43, title: 'Storage', url: 'https://example.test/43', state: 'OPEN', body: '## Acceptance criteria\n- [ ] AC-01: Storage is persistent — Evidence: pending' },
+    ],
+    prs: [], worktrees: [], branches: [], generatedFrom: 'deadbeef',
+  })
+  assert.match(output, /Open issues: 1\/2 criteria evidenced; 1 remain/)
+  assert.match(output, /Parent specification story coverage: 1\/2/)
+  assert.match(output, /AC-01: Storage is persistent/)
+})
+
 test('status check detects when the report base no longer matches origin/main', () => {
   const current = renderStatus({ issues: [], prs: [], worktrees: [], branches: [], generatedFrom: 'remote-main-new' })
   const stale = renderStatus({ issues: [], prs: [], worktrees: [], branches: [], generatedFrom: 'remote-main-old' })
