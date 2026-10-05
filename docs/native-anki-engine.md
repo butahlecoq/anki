@@ -24,7 +24,9 @@ columns. The official server supports a protocol 10 full download from a modern
 collection and supplies this schema. Download verifies SQLite/schema and the
 delivered revision against post-download metadata: the download itself advances
 the official server's mod/usn. Schema changes produce an explicit full-sync
-result; no automatic destructive direction is chosen.
+result; no automatic destructive direction is chosen. A typed upstream
+`upgrade` boundary is shown in the account dialog as “AnkiWeb needs an update”
+with a local-data safety message instead of exposing protocol details.
 
 Incremental sync applies graves, native configuration and objects, bounded
 chunks, sanity checks and finish/abort to a private database copy. Outbound

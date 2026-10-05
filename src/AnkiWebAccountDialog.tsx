@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { mediaTypeForFilename } from '../anki-interchange'
 import type { SyncSettings } from './collection.js'
-import { NativeSyncError } from './native-anki-sync.js'
+import { nativeAnkiAccountErrorMessage } from './native-anki-account-message.js'
 import { collection } from './collection.js'
 import { connectNativeAnkiAccount, prepareNativeAccountImport, type NativeAnkiAccountSession, type PreparedNativeAccountImport } from './native-anki-account-session.js'
 import { ImportSkipReport } from './ImportSkipReport.js'
@@ -28,16 +28,6 @@ async function pcServiceIsReachable(endpoint: string) {
     await fetch(`${endpoint.replace(/\/$/, '')}/api/health`, { mode: 'no-cors', credentials: 'omit', signal: AbortSignal.timeout(5000) })
     return true
   } catch { return false }
-}
-
-function connectionError(error: unknown) {
-  if (error instanceof NativeSyncError) {
-    if (error.code === 'authentication') return 'AnkiWeb rejected the username or password. Check them and try again.'
-    if (error.code === 'service-authentication') return 'This device is no longer paired with the PC service. Reconnect it, then try again.'
-    if (error.code === 'transfer' && /unavailable|interrupted/i.test(error.message)) return 'The PC relay could not reach AnkiWeb or the transfer was interrupted. Check connectivity and retry.'
-    return error.message
-  }
-  return 'The AnkiWeb connection could not be completed.'
 }
 
 export function AnkiWebAccountDialog({ settings, onClose }: { settings: SyncSettings; onClose: () => void }) {
@@ -94,7 +84,7 @@ export function AnkiWebAccountDialog({ settings, onClose }: { settings: SyncSett
         setMessage(reachable
           ? 'The PC service is reachable but rejected this app origin. Check its trusted application origin setting.'
           : 'The PC service could not be reached. Check the private network and make sure the PC service is running.')
-      } else setMessage(connectionError(error))
+      } else setMessage(nativeAnkiAccountErrorMessage(error))
     } finally {
       setPassword('')
       setBusy(false)
