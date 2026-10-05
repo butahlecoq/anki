@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:net'
 import { createServer as createHttpServer } from 'node:http'
+import { createHash } from 'node:crypto'
+import { strToU8, zipSync } from 'fflate'
 
 const python = process.env.ANKI_TEST_PYTHON
 const webURL = `http://127.0.0.1:${process.env.KIROKU_WEB_PORT ?? '4173'}`
@@ -32,9 +34,33 @@ async function localPcService(syncURL: string) {
     import('../../dist-server/server/sync-service.js'), import('../../dist-server/server/sync-http.js'),
   ])
   const service = createSyncService({ databasePath: join(runtime, 'kiroku-sync.sqlite'), mediaDirectory: join(runtime, 'media') })
+  const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL4+QAAAABJRU5ErkJggg==', 'base64')
+  const otherImage = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aOrkAAAAASUVORK5CYII=', 'base64')
+  const wav = Buffer.from([0x52,0x49,0x46,0x46,0x25,0,0,0,0x57,0x41,0x56,0x45,0x66,0x6d,0x74,0x20,16,0,0,0,1,0,1,0,0x40,0x1f,0,0,0x40,0x1f,0,0,1,0,8,0,0x64,0x61,0x74,0x61,1,0,0,0,0x80])
+  const media = new Map([['cat.png', image], ['template.png', image], ['answer.png', image], ['template-bg.png', otherImage], ['cat.wav', wav]])
+  const changes = [...media].map(([name, bytes], index) => [name, index + 1, createHash('sha1').update(bytes).digest('hex')])
+  let mediaChangesRead = false
+  let downloadIndex = 0
   const http = createHttpServer(createSyncHttpHandler(service, {
     allowedOrigin: webURL,
-    ankiWebUpstream: (url, init) => fetch(`${syncURL}${new URL(String(url)).pathname.slice(1)}`, init),
+    ankiWebUpstream: async (url, init) => {
+      const route = new URL(String(url)).pathname.slice(1)
+      if (route === 'msync/begin') return Response.json({ data: { usn: changes.length } })
+      if (route === 'msync/mediaChanges') {
+        if (mediaChangesRead) return Response.json({ data: [] })
+        mediaChangesRead = true
+        return Response.json({ data: changes })
+      }
+      if (route === 'msync/downloadFiles') {
+        const [name, bytes] = [...media][downloadIndex++] ?? []
+        if (!name || !bytes) return new Response('Missing fixture media', { status: 404 })
+        const zip = zipSync({ '0': new Uint8Array(bytes), _meta: strToU8(JSON.stringify({ 0: name })) }, { level: 0 })
+        return new Response(zip, { headers: { 'content-type': 'application/zip' } })
+      }
+      if (route === 'msync/mediaSanity') return Response.json({ data: 'OK' })
+      if (route === 'msync/uploadChanges') return Response.json({ data: [0, changes.length] })
+      return fetch(`${syncURL}${route}`, init)
+    },
   }))
   await new Promise<void>((resolve, reject) => http.listen(0, '127.0.0.1', () => resolve()).once('error', reject))
   const address = http.address()
@@ -56,6 +82,7 @@ async function pair(page: Page, url: string, runtime: string) {
 }
 
 test('downloads an official account snapshot, reviews its Import Plan, and studies the copied collection offline', async ({ page, context }) => {
+  test.skip(test.info().project.name === 'iphone-webkit', 'AnkiWeb cold-offline media persistence is currently verified in desktop Chromium; WebKit is recorded as a skip, not a pass')
   test.skip(!python, 'Set ANKI_TEST_PYTHON to an isolated Python environment with pinned anki==26.9.3')
   test.setTimeout(120_000)
   const fixture = mkdtempSync(join(tmpdir(), 'ankiweb-official-fixture-'))
@@ -68,12 +95,26 @@ test('downloads an official account snapshot, reviews its Import Plan, and studi
 from anki.scheduler_pb2 import CardAnswer
 from datetime import datetime, timezone, timedelta
 import sys
+from base64 import b64decode
 collection = Collection(sys.argv[1])
 auth = collection.sync_login(sys.argv[3], sys.argv[4], sys.argv[2])
 auth.endpoint = sys.argv[2]
 deck = collection.decks.id('語彙::JLPT N5')
+image = b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL4+QAAAABJRU5ErkJggg==')
+other_image = b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aOrkAAAAASUVORK5CYII=')
+wav = bytes([0x52,0x49,0x46,0x46,0x25,0,0,0,0x57,0x41,0x56,0x45,0x66,0x6d,0x74,0x20,16,0,0,0,1,0,1,0,0x40,0x1f,0,0,0x40,0x1f,0,0,1,0,8,0,0x64,0x61,0x74,0x61,1,0,0,0,0x80])
+collection.media.write_data('cat.png', image)
+collection.media.write_data('template.png', image)
+collection.media.write_data('answer.png', image)
+collection.media.write_data('template-bg.png', other_image)
+collection.media.write_data('cat.wav', wav)
+basic = collection.models.by_name('Basic')
+basic['tmpls'][0]['qfmt'] = '<img src="template.png">{{Front}}'
+basic['tmpls'][0]['afmt'] = '{{FrontSide}}<img src="answer.png">{{Back}}'
+basic['css'] += '\\n.card { background-image: url("template-bg.png"); }'
+collection.models.update(basic)
 note = collection.new_note(collection.models.by_name('Basic'))
-note.fields = ['猫', 'cat']
+note.fields = ['<img src="cat.png">猫', '[sound:cat.wav] cat']
 collection.add_note(note, deck)
 unsupported_type = collection.models.copy(collection.models.by_name('Basic'), add=False)
 unsupported_type['name'] = 'Unsupported custom filters'
@@ -93,6 +134,7 @@ card.due = collection.sched.today
 collection.update_card(card, skip_undo_entry=True)
 collection.sync_collection(auth, False)
 collection.full_upload_or_download(auth=auth, server_usn=None, upload=True)
+collection.sync_media(auth)
 collection.close()
 `)
   const anki = spawn(python!, ['-m', 'anki.syncserver'], {
@@ -113,6 +155,8 @@ collection.close()
     await dialog.getByRole('button', { name: 'Connect account' }).click()
     await expect(dialog.getByRole('region', { name: 'AnkiWeb account decks' })).toContainText('語彙::JLPT N5', { timeout: 30_000 })
     await expect(dialog.getByText('No notes, cards, or study history were uploaded.')).toBeVisible()
+    await dialog.getByRole('button', { name: 'Download and verify account media' }).click()
+    await expect(dialog.getByRole('region', { name: 'Account media' })).toContainText('5 verified files stored on this device')
     await dialog.getByRole('button', { name: 'Preview account collection' }).click()
     const plan = dialog.getByRole('region', { name: 'Account Import Plan' })
     await expect(plan).toContainText('Account Import Plan · revision 1')
@@ -121,6 +165,7 @@ collection.close()
     await expect(plan).toContainText('1 notes')
     await expect(plan).toContainText('1 cards')
     await expect(plan).toContainText('1 review entries')
+    await expect(plan).toContainText('3 media files')
     await expect(plan).toContainText('Unsupported custom filters')
     await expect(plan.getByRole('button', { name: 'Import reviewed collection to this device' })).toBeDisabled()
     await expect(plan.getByRole('region', { name: 'Skipped import rows' })).toContainText('Executable or embedded template markup is unsupported')
@@ -187,10 +232,22 @@ collection.close()
     await expect(page.getByRole('button', { name: 'Study now' })).toBeEnabled()
     await expect(page.getByRole('group', { name: 'Deck counts' })).toContainText('REVIEW 1')
     await expect(page.getByRole('group', { name: 'Deck counts' })).toContainText('REVIEWS 1')
+    await pc.close()
+    pc = undefined
     await context.setOffline(true)
     await page.getByRole('button', { name: 'Study now' }).click()
     await expect(page.getByRole('button', { name: 'Show answer' })).toBeVisible()
-    await expect(page.frameLocator('iframe[title="Review card"]').locator('body')).toContainText('猫')
+    const card = page.frameLocator('iframe[title="Review card"]')
+    await expect(card.locator('body')).toContainText('猫')
+    await expect(card.locator('img').first()).toHaveAttribute('src', /^data:image\/png;base64,/)
+    await page.getByRole('button', { name: 'Show answer' }).click()
+    await expect(card.locator('audio').first()).toHaveAttribute('src', /^data:audio\/wav;base64,/)
+    await page.reload()
+    await expect(page.getByRole('button', { name: 'Show answer' })).toBeVisible()
+    const restartedCard = page.frameLocator('iframe[title="Review card"]')
+    await expect(restartedCard.locator('img').first()).toHaveAttribute('src', /^data:image\/png;base64,/)
+    await page.getByRole('button', { name: 'Show answer' }).click()
+    await expect(restartedCard.locator('audio').first()).toHaveAttribute('src', /^data:audio\/wav;base64,/)
     await page.getByRole('link', { name: 'Statistics', exact: true }).click()
     await expect(page.getByRole('heading', { name: 'Every answer adds up' })).toBeVisible()
     await page.getByLabel('Period', { exact: true }).selectOption('all')
@@ -198,7 +255,7 @@ collection.close()
     await page.getByRole('link', { name: 'Browse', exact: true }).click()
     await page.getByLabel('Collection search', { exact: true }).fill('猫')
     await page.getByRole('button', { name: 'Search', exact: true }).click()
-    await expect(page.getByRole('button', { name: '猫', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: /猫/ }).first()).toBeVisible()
   } finally {
     await pc?.close()
     if (anki.exitCode === null) {

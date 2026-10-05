@@ -152,11 +152,13 @@ conflicts currently require an explicit backed-up full-direction decision.
 
 The native projection and writeback boundary in
 `src/native-anki-projection.ts` and `src/native-anki-writeback.ts` is implemented
-and verified by `src/native-anki-projection.test.ts`. The visible #188 flow
-connects an account, downloads a snapshot, and copies a user-selected
-representable portion for offline study; it does not upload notes, cards or
-study history. Issue #56 still needs incremental synchronization wired into the
-collection workflow and installed-iPhone/offline evidence. No real-account
+and verified by `src/native-anki-projection.test.ts`. The visible account flow
+connects an account, downloads a snapshot and verified media, and copies a
+user-selected representable portion for offline study; it does not upload
+notes, cards or study history. Media imports retain filename-specific bytes,
+deduplicate identical content, and include static template assets in the local
+review-media map. Issue #56 still needs incremental synchronization wired into
+the collection workflow and installed-iPhone/offline evidence. No real-account
 writes have been used as development evidence.
 
 ## Primary protocol references

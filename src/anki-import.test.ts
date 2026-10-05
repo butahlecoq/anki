@@ -7,6 +7,7 @@ import { DEFAULT_DECK_OPTION_GROUP_ID, createCollection, tryRenderNoteTemplate, 
 import { prepareAnkiDataImport, prepareAnkiImport, validateMediaBytes } from './anki-import'
 import { exportAnkiPackage } from './anki-export'
 import { renderNoteCard } from './card-rendering'
+import { prepareReviewMedia } from './review-media'
 import { digestMedia } from './media'
 import { zipSync } from 'fflate'
 import { ANKI_ARCHIVE_LIMITS } from './anki-archive'
@@ -98,6 +99,25 @@ async function japanesePackage() {
   opened.data.revlog.push({ id: 1_725_192_000_000, cid: firstCard.id, usn: -1, ease: 3, ivl: 12, lastIvl: 5, factor: 425, time: 1200, type: 1 })
   opened.data.revlog.push({ id: 1_725_192_060_000, cid: firstCard.id, usn: -1, ease: 4, ivl: 30, lastIvl: 12, factor: 425, time: 900, type: 0 })
   return new File([(await opened.toUint8Array(SQL)).slice().buffer as ArrayBuffer], 'japanese.apkg', { type: 'application/octet-stream' })
+}
+
+async function templateMediaPackage() {
+  const type = new Notetype({
+    id: 1_700_000_000_030,
+    name: 'Template media',
+    fields: [{ name: 'Front' }, { name: 'Back' }],
+    templates: [
+      { name: 'Image front', questionFormat: '<img src="static.png">{{Front}}', answerFormat: '{{FrontSide}}<audio src="tone.wav"></audio>{{Back}}' },
+    ],
+    css: '.card { background-image: url("static.png"); }',
+  })
+  const deck = new Deck({ id: 1_700_000_000_031, name: 'Template assets' })
+  deck.addNote(new AnkiNote({ notetype: type, guid: 'template-media-guid', fields: ['猫', 'cat'] }))
+  const pkg = new Package()
+  pkg.addDeck(deck)
+  pkg.addMedia('static.png', png)
+  pkg.addMedia('tone.wav', wav)
+  return new File([(await pkg.toUint8Array(SQL)).slice().buffer as ArrayBuffer], 'template-media.apkg', { type: 'application/octet-stream' })
 }
 
 async function imageOcclusionPackage() {
@@ -440,6 +460,30 @@ describe('Anki package import', () => {
     for (const operation of pending) {
       expect(await collection.syncRevisions.get(operation.opId)).toMatchObject({ ...operation, key: `${operation.entityType}:${operation.entityId}` })
     }
+  })
+
+  test('imports local template media for front and answer with digest deduplication', async () => {
+    collection = createCollection(`kiroku-template-media-${crypto.randomUUID()}`)
+    const prepared = await prepareAnkiImport(await templateMediaPackage(), collection, { SQL })
+    expect(prepared.issues.filter((issue) => issue.severity === 'error')).toEqual([])
+    expect(prepared.summary.media).toBe(2)
+    await prepared.commit()
+
+    const note = await collection.notes.get('anki-note:template-media-guid')
+    const type = await collection.noteTypes.get(note!.typeId)
+    const references = await collection.mediaForNote(note!.id)
+    expect(references).toEqual(expect.arrayContaining([
+      expect.objectContaining({ displayName: 'static.png', side: 'front', inline: true }),
+      expect.objectContaining({ displayName: 'static.png', side: 'back', inline: true }),
+      expect.objectContaining({ displayName: 'tone.wav', side: 'back', kind: 'audio', inline: true, playback: 'automatic' }),
+    ]))
+    expect(await collection.mediaBlobs.count()).toBe(2)
+    const sources = await prepareReviewMedia(references, new AbortController().signal, (digest) => collection!.verifiedMediaBytes(digest))
+    expect(sources.byName).toHaveProperty('static.png')
+    const rendered = renderNoteCard(type!, type!.templates[0], note!.fields, undefined, sources.byName)
+    expect(rendered.front?.html).toContain('src="data:image/png;base64,')
+    expect(rendered.back?.html).toContain('src="data:audio/wav;base64,')
+    expect(rendered.css).toContain('background-image: url("data:image/png;base64,')
   })
 
   test('previews a large collection history without changing per-row semantics', async () => {

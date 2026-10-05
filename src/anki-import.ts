@@ -228,7 +228,7 @@ interface SourceType {
   updatedAt: string
 }
 
-function decodeTypes(data: CollectionData, fallback: Date, issues: AnkiImportIssue[], referencedTypeIds: ReadonlySet<number>): Map<number, SourceType> {
+function decodeTypes(data: CollectionData, fallback: Date, issues: AnkiImportIssue[], referencedTypeIds: ReadonlySet<number>, media: ReadonlyMap<string, CollectionData['media'][number]>): Map<number, SourceType> {
   const result = new Map<number, SourceType>()
   for (const row of data.notetypes) {
     if (!referencedTypeIds.has(row.id)) continue
@@ -255,7 +255,10 @@ function decodeTypes(data: CollectionData, fallback: Date, issues: AnkiImportIss
       for (const template of templates) {
         validateTemplate(template.front, fields.map((field) => field.name), 'front', kind)
         validateTemplate(template.back, fields.map((field) => field.name), 'back', kind)
-        validateSupportedTemplateMarkup(template.front, template.back, template.css)
+        validateSupportedTemplateMarkup(template.front, template.back, template.css, media)
+        template.front = rewriteTemplateMedia(template.front)
+        template.back = rewriteTemplateMedia(template.back)
+        template.css = rewriteTemplateCssMedia(template.css)
       }
       result.set(row.id, {
         id: row.id,
@@ -423,7 +426,37 @@ function validWav(bytes: Uint8Array) {
   return format && audio && offset >= bytes.length
 }
 
-function validateSupportedTemplateMarkup(front: string, back: string, css: string) {
+function templateMediaNames(front: string, back: string, css: string) {
+  const markup = `${front}\n${back}`
+  const found = [
+    ...[...markup.matchAll(/<(?:img|audio|source)\b[^>]*\bsrc\s*=\s*["']([^"'<>]+)["'][^>]*>/gi)].map((match) => match[1]),
+    ...[...markup.matchAll(/\[sound:([^\]]+)\]/gi)].map((match) => match[1]),
+    ...[...css.matchAll(/url\(\s*["']?([^"')]+)["']?\s*\)/gi)].map((match) => match[1].trim()),
+  ].filter((name) => name && !name.startsWith('data:'))
+  return [...new Set(found)]
+}
+
+function rewriteTemplateMedia(value: string) {
+  return value
+    .replace(/<(?:img|audio|source)\b[^>]*\bsrc\s*=\s*(["'])([^"'<>]+)\1[^>]*>/gi, (_tag, _quote: string, name: string) => `[[kiroku-media:${encodeURIComponent(name)}]]`)
+    .replace(/\[sound:([^\]]+)\]/gi, (_tag, name: string) => `[[kiroku-media:${encodeURIComponent(name)}]]`)
+}
+
+function rewriteTemplateCssMedia(css: string) {
+  return css.replace(/url\(\s*(?:"([^"]+)"|'([^']+)'|([^)]*))\s*\)/gi, (whole, doubleQuoted: string | undefined, singleQuoted: string | undefined, unquoted: string | undefined) => {
+    const name = (doubleQuoted ?? singleQuoted ?? unquoted ?? '').trim()
+    return !name || name.startsWith('data:') ? whole : `url("kiroku-media:${encodeURIComponent(name)}")`
+  })
+}
+
+function rewrittenTemplateMediaNames(value: string, css = false) {
+  const pattern = css ? /kiroku-media:([^\s)"']+)/g : /\[\[kiroku-media:([^\]]+)]]/g
+  return [...value.matchAll(pattern)].flatMap((match) => {
+    try { return [decodeURIComponent(match[1])] } catch { return [] }
+  })
+}
+
+function validateSupportedTemplateMarkup(front: string, back: string, css: string, media: ReadonlyMap<string, CollectionData['media'][number]>) {
   const html = `${front}\n${back}`
   const document = new DOMParser().parseFromString(html, 'text/html')
   for (const element of document.querySelectorAll('*')) {
@@ -434,11 +467,28 @@ function validateSupportedTemplateMarkup(front: string, back: string, css: strin
         if (!supportedNavigationTemplate(value)) throw new Error('Navigation links must use HTTPS URLs without credentials')
         continue
       }
-      if (value && !value.toLocaleLowerCase().startsWith('data:')) throw new Error('Template-static or remote resource references are unsupported; media must come from note fields')
+      if (value && !value.toLocaleLowerCase().startsWith('data:')) {
+        if (attribute !== 'src' || !['IMG', 'AUDIO', 'SOURCE'].includes(element.tagName) || !media.has(value)) {
+          throw new Error('Template-static or remote resources must name a verified local image or audio file')
+        }
+        const asset = media.get(value)!
+        const mime = mediaTypeForFilename(asset.name)
+        if (!mime) throw new Error(`Template media “${value}” has an unsupported file type`)
+        validateMedia(new File([ownedBuffer(asset.data)], asset.name, { type: mime }))
+        validateMediaBytes(asset.data, mime)
+      }
     }
     if (/url\s*\(/i.test(element.getAttribute('style') ?? '')) throw new Error('Inline style resource URLs are unsupported')
   }
-  if (/@import/i.test(css) || /url\s*\(\s*["']?(?!data:)/i.test(css)) throw new Error('Template CSS resource URLs are unsupported unless embedded as data')
+  if (/@import/i.test(css)) throw new Error('Template CSS imports are unsupported')
+  for (const name of templateMediaNames(front, back, css)) {
+    const asset = media.get(name)
+    if (!asset) throw new Error(`Template media “${name}” is missing from the collection`)
+    const mime = mediaTypeForFilename(name)
+    if (!mime) throw new Error(`Template media “${name}” has an unsupported file type`)
+    validateMedia(new File([ownedBuffer(asset.data)], name, { type: mime }))
+    validateMediaBytes(asset.data, mime)
+  }
 }
 
 function mediaKind(mime: string): MediaKind { return mime.startsWith('image/') ? 'image' : 'audio' }
@@ -656,8 +706,9 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
     ? candidateChoice as PersistedPartialChoice
     : undefined
   const issues: AnkiImportIssue[] = []
+  const sourceMedia = new Map(data.media.map((media) => [media.name, media]))
   const referencedTypeIds = new Set(data.notes.map((note) => note.mid))
-  const types = decodeTypes(data, now, issues, referencedTypeIds)
+  const types = decodeTypes(data, now, issues, referencedTypeIds, sourceMedia)
 
   const sourceCardsByNote = new Map<number, CardRow[]>()
   for (const card of data.cards) {
@@ -717,7 +768,6 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
     if (segments.length > 1) issues.push({ severity: 'info', code: 'deck-hierarchy', subject: fullName, detail: `Preserved nested deck path ${fullName}.` })
   }
   let decks = [...deckRecords.values()]
-  const sourceMedia = new Map(data.media.map((media) => [media.name, media]))
   let noteTypes: NoteType[] = [...types.values()].map((type) => ({ id: type.localId, name: type.name, kind: type.kind, fields: type.fields, templates: type.templates, protected: false, createdAt: type.createdAt, updatedAt: type.updatedAt }))
   let notes: Note[] = []
   let cards: CardRecord[] = []
@@ -841,6 +891,39 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
           })
         }
       }
+    }
+    const staticPlacements = new Map<string, { name: string; side: MediaSide; templateId: string }>()
+    for (const template of sourceType.templates) {
+      for (const name of rewrittenTemplateMediaNames(template.front)) staticPlacements.set(`${template.id}:front:${name}`, { name, side: 'front', templateId: template.id })
+      for (const name of rewrittenTemplateMediaNames(template.back)) staticPlacements.set(`${template.id}:back:${name}`, { name, side: 'back', templateId: template.id })
+      for (const name of rewrittenTemplateMediaNames(template.css, true)) {
+        staticPlacements.set(`${template.id}:front:${name}`, { name, side: 'front', templateId: template.id })
+        staticPlacements.set(`${template.id}:back:${name}`, { name, side: 'back', templateId: template.id })
+      }
+    }
+    for (const { name, side, templateId } of staticPlacements.values()) {
+      const media = sourceMedia.get(name)
+      const mime = media && mediaTypeForFilename(media.name)
+      if (!media || !mime) {
+        issues.push({ severity: 'error', code: 'template-media-missing', subject: row.guid, detail: `Template media “${name}” is missing or unsupported; the containing note cannot be imported whole.` })
+        continue
+      }
+      const digest = await digestMedia(new Blob([ownedBuffer(media.data)], { type: mime }))
+      blobs.set(digest, { digest, blob: ownedBuffer(media.data), byteLength: media.data.byteLength, mimeType: mime, verifiedAt: importedAt })
+      addReference({
+        id: `${noteId}:template-media:${templateId}:${side}:${encodeURIComponent(name)}`,
+        noteId,
+        digest,
+        kind: mediaKind(mime),
+        mimeType: mime,
+        displayName: name,
+        side,
+        templateId,
+        inline: true,
+        playback: mime.startsWith('audio/') ? 'automatic' : 'manual',
+        createdAt: note.createdAt,
+        updatedAt: referenceUpdatedAt,
+      })
     }
     const noteReferences = referencesByNoteId.get(noteId) ?? []
     for (const reference of noteReferences) nativeReferencedNames.add(reference.displayName)

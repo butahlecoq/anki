@@ -28,6 +28,13 @@ describe('renderTemplate', () => {
       .toBe('before <img class="card-image" src="blob:cat" alt="cat.png"> after')
     expect(renderTemplate('{{#Show}}{{Media}}{{/Show}}', { ...fields, Show: '' }, undefined, { media }).html).toBe('')
   })
+  test('renders media embedded directly in a template without a network URL', () => {
+    const media = { '猫.png': { kind: 'image' as const, url: 'data:image/png;base64,AQID' } }
+    expect(renderTemplate('[[kiroku-media:%E7%8C%AB.png]]', {}, undefined, { media })).toEqual({
+      html: '<img class="card-image" src="data:image/png;base64,AQID" alt="猫.png">',
+      isEmpty: false,
+    })
+  })
 
   test('masks only the active cloze ordinal, using hints and one card for repeated ordinals', () => {
     const fields = { Text: '{{c1::東京::city}}と{{c2::大阪}}へ{{c1::行く}}' }
