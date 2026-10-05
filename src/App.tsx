@@ -3,6 +3,7 @@ import { OFFLINE_READY_EVENT, OFFLINE_UNAVAILABLE_EVENT, UPDATE_READY_EVENT } fr
 import { chooseAppearance, readAppearance, watchAppearance, type Appearance } from './appearance'
 import { CollectionWorkspace } from './CollectionWorkspace'
 import { supportsServiceWorkers } from './browser-capabilities'
+import { useRoute } from './route'
 
 function useOnlineStatus() {
   const [online, setOnline] = useState(() => navigator.onLine)
@@ -50,11 +51,11 @@ export function App() {
   const appearance = useAppearance()
   const offlineStatus = useOfflineShellStatus()
   const [updateReady, setUpdateReady] = useState(false)
-  const [hash, setHash] = useState(() => window.location.hash)
-  const onStatistics = hash === '#statistics'
-  const onNoteTypes = hash === '#note-types'
-  const onBrowse = hash === '#browse'
-  const onStudy = hash === '#study' || hash.startsWith('#custom-review/')
+  const [route] = useRoute()
+  const onStatistics = route.view === 'statistics'
+  const onNoteTypes = route.view === 'note-types'
+  const onBrowse = route.view === 'browse'
+  const onStudy = route.view === 'study' || route.view === 'custom-review'
   const connection = online
     ? offlineStatus === 'ready' ? 'Offline shell ready' : offlineStatus === 'checking' ? 'Preparing offline shell' : 'Offline cache unavailable'
     : offlineStatus === 'ready' ? 'Offline shell active' : 'Offline shell unavailable'
@@ -63,12 +64,6 @@ export function App() {
     const show = () => setUpdateReady(true)
     window.addEventListener(UPDATE_READY_EVENT, show)
     return () => window.removeEventListener(UPDATE_READY_EVENT, show)
-  }, [])
-
-  useEffect(() => {
-    const update = () => setHash(window.location.hash)
-    window.addEventListener('hashchange', update)
-    return () => window.removeEventListener('hashchange', update)
   }, [])
 
   return (
