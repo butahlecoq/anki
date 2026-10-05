@@ -202,9 +202,10 @@ interface SourceType {
   updatedAt: string
 }
 
-function decodeTypes(data: CollectionData, fallback: Date, issues: AnkiImportIssue[]): Map<number, SourceType> {
+function decodeTypes(data: CollectionData, fallback: Date, issues: AnkiImportIssue[], referencedTypeIds: ReadonlySet<number>): Map<number, SourceType> {
   const result = new Map<number, SourceType>()
   for (const row of data.notetypes) {
+    if (!referencedTypeIds.has(row.id)) continue
     try {
       const config = protobufFields(row.config)
       const fields = data.fields.filter((field) => field.ntid === row.id).sort((a, b) => a.ord - b.ord)
@@ -578,9 +579,8 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
     }
   }
   const issues: AnkiImportIssue[] = []
-  const types = decodeTypes(data, now, issues)
   const referencedTypeIds = new Set(data.notes.map((note) => note.mid))
-  for (const typeId of [...types.keys()]) if (!referencedTypeIds.has(typeId)) types.delete(typeId)
+  const types = decodeTypes(data, now, issues, referencedTypeIds)
 
   const sourceCardsByNote = new Map<number, CardRow[]>()
   for (const card of data.cards) {
@@ -841,7 +841,10 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
         templateOrdinal: Math.max(0, sourceCard.ord),
         due: cardDue(sourceCard, data, now),
         stability: memory.stability ?? (sourceCard.type === 2 ? Math.max(0, sourceCard.ivl) : 0),
-        difficulty: memory.difficulty ?? (sourceCard.factor >= 100 && sourceCard.factor <= 1100 ? sourceCard.factor / 100 : 0),
+        // Legacy Anki ease factors are outside FSRS' 1–10 difficulty range.
+        // Use neutral difficulty for those cards so an imported Review card is
+        // valid input to the app's FSRS scheduler instead of storing 0.
+        difficulty: memory.difficulty ?? (sourceCard.factor >= 100 && sourceCard.factor <= 1100 ? sourceCard.factor / 100 : sourceCard.type === 2 ? 5 : 0),
         elapsedDays: lastReviewMs ? Math.max(0, Math.floor((now.getTime() - lastReviewMs) / day)) : 0,
         scheduledDays: Math.max(0, sourceCard.ivl),
         learningSteps: Math.max(0, sourceCard.left % 1000),
@@ -1158,4 +1161,3 @@ function imageDimensions(bytes: Uint8Array): { width: number; height: number } |
   }
   return undefined
 }
-

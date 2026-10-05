@@ -2,7 +2,8 @@ import 'fake-indexeddb/auto'
 import { afterEach, expect, it } from 'vitest'
 import initSqlJs from 'sql.js'
 import { Collection } from './collection'
-import { prepareAnkiDataImport } from './anki-import'
+import { prepareAnkiDataImport, prepareAnkiImport } from './anki-import'
+import { exportAnkiPackage } from './anki-export'
 import { nativeAnkiProjectionData, nativeAnkiProjectionEntityMap, nativeAnkiProjectionManifest } from './native-anki-projection'
 import { prepareNativeAnkiWriteback } from './native-anki-writeback'
 
@@ -99,6 +100,13 @@ it('projects schema-11 note, card, deck, and review identities without rewriting
   expect(entityMap.templates.get('100:1')?.id).toBe('anki-template:100:1')
   expect(entityMap.unmapped.notes).toEqual([])
   expect(entityMap.unmapped.decks).toEqual([1])
+  const packageFile = await exportAnkiPackage(collection, { scheduling: true, history: true, media: true, SQL })
+  const reimported = await prepareAnkiImport(new File([packageFile.bytes.slice().buffer], 'account-copy.apkg'), collection, { SQL })
+  expect(reimported.issues.filter((issue) => issue.severity === 'error')).toEqual([])
+  await reimported.commit()
+  expect(await collection.notes.get(`anki-note:${originalNote.guid}`)).toMatchObject({ ankiId: noteId })
+  expect((await collection.cards.toArray()).map(({ ankiId }) => ankiId).sort()).toEqual([firstCardId, secondCardId])
+  expect(await collection.reviewEntries.get(`anki-review:${reviewId}`)).toMatchObject({ cardId: cards[0].id, rating: 4 })
   expect(() => nativeAnkiProjectionEntityMap(manifest, {
     ...entities,
     cards: [...entities.cards, { ...cards[0], id: 'duplicate-native-card' }],
