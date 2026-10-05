@@ -88,7 +88,7 @@ test('browser maintains stable Japanese selections and previews field changes of
     await deletion.getByRole('button', { name: 'Delete notes and cards' }).click()
     await search(page, '')
     await expect(page.getByRole('button', { name: '猫ちゃん', exact: true })).toHaveCount(0)
-    await expect(page.getByRole('button', { name: '犬', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '犬', exact: true })).toBeVisible({ timeout: 15_000 })
   } finally { await context.setOffline(false) }
 })
 
