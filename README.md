@@ -35,6 +35,8 @@ npm start
 
 `npm start` type-checks and builds the application before serving it at `http://localhost:4173`. Localhost is suitable for desktop verification. Installing the PWA on an iPhone will require trusted HTTPS; that production deployment is tracked by [Issue #24](https://github.com/butahlecoq/anki/issues/24).
 
+The measured learner path from source checkout through private iPhone setup and offline study is recorded in [the setup measurement](docs/learner-setup-path.md), including required accounts, manual decisions, and items not independently verified.
+
 ## Run the sync service
 
 For local desktop verification, start the durable SQLite-backed service and print a one-time pairing code in a second terminal:
