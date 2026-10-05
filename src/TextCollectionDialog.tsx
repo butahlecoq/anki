@@ -4,6 +4,7 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { BASIC_NOTE_TYPE_ID, collection } from './collection'
 import { userFacingStorageError } from './offline-storage'
 import { applyTextImport, defaultMapping, exportTextCollection, pathsForDecks, previewTextImport, readTextDocument, serializeDelimited, TEXT_BYTE_LIMIT, type ColumnMapping, type CsvDocument, type Delimiter, type ImportOptions, type TextEncoding, type TextPreview } from './text-csv'
+import { readTextExchangeChoices } from './collection-queries'
 
 function downloadText(text: string, filename: string) {
   const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }))
@@ -14,7 +15,10 @@ function downloadText(text: string, filename: string) {
 
 export function TextCollectionDialog({ onClose }: { onClose: () => void }) {
   const dialogKeyboard = useDialogKeyboard(onClose)
-  const data = useLiveQuery(async () => ({ decks: await collection.decks.toArray(), types: await collection.noteTypes.toArray() }), [])
+  const data = useLiveQuery(async () => {
+    const choices = await readTextExchangeChoices(collection)
+    return { decks: choices.decks, types: choices.noteTypes }
+  }, [])
   const [tab, setTab] = useState<'import' | 'export'>('import')
   const [source, setSource] = useState<'file' | 'paste'>('file')
   const [bytes, setBytes] = useState<Uint8Array>()

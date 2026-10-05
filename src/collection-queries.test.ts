@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto'
 import { readFile } from 'node:fs/promises'
 import { afterEach, expect, test, vi } from 'vitest'
 import { createCollection, type Collection } from './collection'
-import { readAnkiExportSnapshot, readAnkiImportMediaBlobs, readAnkiImportSnapshot, readBrowserFieldState, readBrowserSelectionSnapshot, readCustomStudyQueueSnapshot, readCustomStudySessions, readCustomStudySnapshot } from './collection-queries'
+import { readAnkiExportSnapshot, readAnkiImportMediaBlobs, readAnkiImportSnapshot, readBrowserFieldState, readBrowserSelectionSnapshot, readCardsForNote, readCustomStudyQueueSnapshot, readCustomStudySessions, readCustomStudySnapshot } from './collection-queries'
 
 const collections: Collection[] = []
 function database() {
@@ -47,31 +47,28 @@ test('Anki import reads one consistent named snapshot and only looks up requeste
   expect(transaction.mock.calls[0]?.slice(0, 2)).toEqual(['r', collection.mediaBlobs])
 })
 
-test('browser and custom-study named queries declare their smallest read sets', async () => {
+test('browser live queries keep tracked reads while stable custom-study snapshots own their read sets', async () => {
   const collection = database()
   const deck = await collection.createDeck('日本語')
   const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
-  const card = (await collection.cards.where('noteId').equals(note.id).first())!
+  const card = (await readCardsForNote(collection, note.id))[0]!
   const transaction = vi.spyOn(collection, 'transaction')
 
   await expect(readBrowserSelectionSnapshot(collection, { view: 'cards', ids: [card.id] })).resolves.toMatchObject({ notes: [note], cards: [card], generatedCards: 1 })
-  expect(transaction.mock.calls[0]?.slice(0, 2)).toEqual(['r', [collection.notes, collection.cards]])
+  expect(transaction).not.toHaveBeenCalled()
 
-  transaction.mockClear()
-  await readBrowserFieldState(collection, [{ noteId: note.id, typeId: note.typeId }])
-  expect(transaction.mock.calls[0]?.slice(0, 2)).toEqual(['r', [collection.notes, collection.noteTypes]])
+  await expect(readBrowserFieldState(collection, [{ noteId: note.id, typeId: note.typeId }])).resolves.toMatchObject({ notes: [note] })
+  expect(transaction).not.toHaveBeenCalled()
 
-  transaction.mockClear()
   await readCustomStudySnapshot(collection, 'customStudySessions')
   expect(transaction.mock.calls[0]?.slice(0, 2)).toEqual(['r', [collection.decks, collection.notes, collection.cards, collection.noteTypes, collection.reviewEntries, collection.settings]])
 
   transaction.mockClear()
-  await readCustomStudyQueueSnapshot(collection, 'customStudySessions', 'missing-session')
-  expect(transaction.mock.calls[0]?.slice(0, 2)).toEqual(['r', [collection.settings, collection.cards, collection.notes, collection.noteTypes]])
+  await expect(readCustomStudyQueueSnapshot(collection, 'customStudySessions', 'missing-session')).resolves.toMatchObject({ session: undefined, cards: [] })
+  expect(transaction).not.toHaveBeenCalled()
 
-  transaction.mockClear()
-  await readCustomStudySessions(collection, 'customStudySessions')
-  expect(transaction.mock.calls[0]?.slice(0, 2)).toEqual(['r', collection.settings])
+  await expect(readCustomStudySessions(collection, 'customStudySessions')).resolves.toEqual([])
+  expect(transaction).not.toHaveBeenCalled()
 })
 
 test('the four first callers use named reads and mutations instead of raw table queries', async () => {
@@ -91,5 +88,18 @@ test('the four first callers use named reads and mutations instead of raw table 
   }
   for (const source of [importer, exporter, browser, customStudy]) {
     expect(source).not.toMatch(/\b(?:collection|db)\.(?:decks|noteTypes|notes|cards|reviewEntries|noteMedia|mediaBlobs|settings)\.(?:toArray|bulkGet|where|get|put)\s*\(/)
+  }
+})
+
+test('remaining production callers keep table reads inside named collection queries', async () => {
+  const paths = [
+    'CollectionBrowser.tsx', 'CollectionWorkspace.tsx', 'CustomStudy.tsx', 'ImageOcclusion.tsx', 'NoteTypeManager.tsx',
+    'ReviewSession.tsx', 'Statistics.tsx', 'SyncConflicts.tsx', 'SyncControls.tsx', 'TextCollectionDialog.tsx',
+    'native-anki-writeback.ts', 'sample-deck.ts', 'sync-client.ts', 'text-csv.ts',
+  ]
+  const sources = await Promise.all(paths.map((path) => readFile(new URL(path, import.meta.url), 'utf8')))
+  const rawRead = /\b(?:collection|db)\.(?:decks|notes|cards|noteTypes|reviewEntries|settings|mediaBlobs|noteMedia|outbox|syncRevisions|syncConflicts|receivedOperations|deletedEntities)\.(?:toArray|get|bulkGet|where|filter|count|first|orderBy|offset|limit|each|keys|primaryKeys|toCollection)\s*\(/
+  for (const [index, source] of sources.entries()) {
+    expect(source, paths[index]).not.toMatch(rawRead)
   }
 })

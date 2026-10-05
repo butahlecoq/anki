@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { collection, type SyncConflict } from './collection'
 import { userFacingStorageError } from './offline-storage'
+import { readDeck, readNote, readNoteType, readSyncConflicts } from './collection-queries'
 
 const recordValue = (value: unknown): Record<string, unknown> | undefined => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
 
@@ -15,7 +16,7 @@ function Version({ value, fieldNames }: { value: unknown; fieldNames: Record<str
 }
 
 export function SyncConflicts() {
-  const conflicts = useLiveQuery(() => collection.syncConflicts.toArray(), [], [])
+  const conflicts = useLiveQuery(() => readSyncConflicts(collection), [], [])
   const [selected, setSelected] = useState<SyncConflict | null>(null)
   const [choice, setChoice] = useState('')
   const [busy, setBusy] = useState(false)
@@ -35,10 +36,10 @@ export function SyncConflicts() {
   const context = useLiveQuery(async () => {
     if (!selected) return undefined
     const version = selected.versions.map((version) => recordValue(version.value)).find(Boolean)
-    const note = selected.entityType === 'note' ? version : typeof version?.noteId === 'string' ? await collection.notes.get(version.noteId) : undefined
-    const type = typeof note?.typeId === 'string' ? await collection.noteTypes.get(note.typeId) : undefined
+    const note = selected.entityType === 'note' ? version : typeof version?.noteId === 'string' ? await readNote(collection, version.noteId) : undefined
+    const type = typeof note?.typeId === 'string' ? await readNoteType(collection, note.typeId) : undefined
     const deckId = typeof version?.deckId === 'string' ? version.deckId : typeof note?.deckId === 'string' ? note.deckId : undefined
-    const deck = deckId ? await collection.decks.get(deckId) : undefined
+    const deck = deckId ? await readDeck(collection, deckId) : undefined
     const fields = recordValue(note?.fields)
     const expression = type && fields ? fields[type.fields[0]?.id] : undefined
     return { name: typeof expression === 'string' ? expression.slice(0, 100) : typeof version?.name === 'string' ? version.name : selected.entityId, type: type?.name, deck: deck?.name, fieldNames: Object.fromEntries(type?.fields.map((field) => [field.id, field.name]) ?? []) }

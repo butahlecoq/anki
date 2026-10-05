@@ -6,6 +6,7 @@ import { TemplatePreview } from './TemplatePreview'
 import { clozeOrdinals } from './template-renderer'
 import { fieldsByName, renderCard } from './card-rendering'
 import { useDialogKeyboard } from './use-dialog-keyboard'
+import { readNoteTypeList, readNoteTypeUsage } from './collection-queries'
 
 type DraftField = { key: string; id?: string; name: string }
 type DraftTemplate = { key: string; id?: string; name: string; front: string; back: string; css: string }
@@ -27,7 +28,8 @@ function TypeEditor({ noteType, onClose }: { noteType?: NoteType; onClose: () =>
   const [previewOrdinal, setPreviewOrdinal] = useState(1)
   const [sampleOverrides, setSampleOverrides] = useState<Record<string, string>>({})
   const [error, setError] = useState('')
-  const exampleNote = useLiveQuery(() => noteType ? collection.notes.where('typeId').equals(noteType.id).first() : undefined, [noteType?.id])
+  const usage = useLiveQuery(async () => noteType ? await readNoteTypeUsage(collection, noteType.id) : undefined, [noteType?.id])
+  const exampleNote = usage?.example
 
   function moveField(index: number, delta: number) {
     const next = [...fields]
@@ -152,7 +154,8 @@ function TypeEditor({ noteType, onClose }: { noteType?: NoteType; onClose: () =>
 
 function DeleteTypeDialog({ noteType, types, onClose }: { noteType: NoteType; types: NoteType[]; onClose: () => void }) {
   const dialogKeyboard = useDialogKeyboard(onClose)
-  const count = useLiveQuery(() => collection.notes.where('typeId').equals(noteType.id).count(), [noteType.id])
+  const usage = useLiveQuery(() => readNoteTypeUsage(collection, noteType.id), [noteType.id])
+  const count = usage?.count
   const [replacementId, setReplacementId] = useState('')
   const [mapping, setMapping] = useState<Record<string, string>>({})
   const [error, setError] = useState('')
@@ -184,7 +187,7 @@ function DeleteTypeDialog({ noteType, types, onClose }: { noteType: NoteType; ty
 }
 
 export function NoteTypeManager({ onNewDeck }: { onNewDeck: () => void }) {
-  const types = useLiveQuery(() => collection.noteTypes.orderBy('name').toArray(), [], [])
+  const types = useLiveQuery(() => readNoteTypeList(collection), [], [])
   const [editor, setEditor] = useState<NoteType | 'new' | null>(null)
   const [deleting, setDeleting] = useState<NoteType | null>(null)
   const [error, setError] = useState('')

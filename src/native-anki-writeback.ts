@@ -4,6 +4,7 @@ import { prepareAnkiDataImport, type AnkiImportIssue } from './anki-import'
 import { nativeAnkiProjectionData, nativeAnkiProjectionEntityMap, type NativeAnkiProjectionManifest, type NativeProjectionMedia } from './native-anki-projection'
 import { rebuildNativeNoteCaches } from './native-anki-cache'
 import { nativeSnapshotHash } from './native-anki-sync'
+import { readNativeWritebackSnapshot } from './collection-queries'
 
 export interface NativeWritebackChange {
   noteId: number
@@ -71,14 +72,7 @@ export async function prepareNativeAnkiWriteback(
   const base = prepared.projectedEntities()
   let current
   try {
-    current = await collection.transaction('r', [collection.decks, collection.noteTypes, collection.notes, collection.cards, collection.reviewEntries, collection.noteMedia], async () => ({
-      decks: await collection.decks.toArray(),
-      notetypes: await collection.noteTypes.toArray(),
-      notes: await collection.notes.toArray(),
-      cards: await collection.cards.toArray(),
-      reviews: await collection.reviewEntries.toArray(),
-      references: await collection.noteMedia.toArray(),
-    }))
+    current = await readNativeWritebackSnapshot(collection)
   } catch {
     return { status: 'blocked', changes: [], blocked: ['The app collection could not be read consistently.'] }
   }
