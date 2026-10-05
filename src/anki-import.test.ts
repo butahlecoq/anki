@@ -63,7 +63,7 @@ async function japanesePackage() {
     fields: [{ name: 'Expression' }, { name: 'Reading' }, { name: 'Meaning' }, { name: 'Media' }],
     templates: [
       { name: 'Recognition', questionFormat: '<b>{{Expression}}</b><br>{{furigana:Reading}}{{Media}}', answerFormat: '{{FrontSide}}<hr>{{Meaning}}' },
-      { name: 'Production', questionFormat: '{{Meaning}}', answerFormat: '{{Expression}}<br>{{kana:Reading}}' },
+      { name: 'Production', questionFormat: '{{type:Meaning}}', answerFormat: '{{Expression}}<br>{{kana:Reading}}' },
     ],
     css: '.card { color: rgb(30, 40, 50); }',
   })
@@ -213,6 +213,60 @@ async function executableTemplatePackage() {
 }
 
 describe('Anki package import', () => {
+  test('takes the redistributable synthetic compatibility corpus through import, render/study, export, and clean re-import', async () => {
+    collection = createCollection(`kiroku-compatibility-corpus-${crypto.randomUUID()}`)
+    for (const file of [await japanesePackage(), await imageOcclusionPackage()]) {
+      const prepared = await prepareAnkiImport(file, collection, { SQL, now: new Date('2026-10-01T12:00:00.000Z') })
+      expect(prepared.issues.filter((issue) => issue.severity === 'error')).toEqual([])
+      await prepared.commit()
+    }
+
+    const notes = await collection.notes.toArray()
+    const noteTypes = new Map((await collection.noteTypes.toArray()).map((type) => [type.id, type]))
+    for (const note of notes) {
+      const type = noteTypes.get(note.typeId)!
+      if (type.kind === 'image-occlusion') {
+        expect(note.imageOcclusion?.masks.length).toBeGreaterThan(0)
+        continue
+      }
+      for (const template of type.templates) {
+        const card = (await collection.cards.where('noteId').equals(note.id).toArray()).find((candidate) => candidate.templateId === template.id)
+        if (!card) continue
+        const rendered = renderNoteCard(type, template, note.fields, card.clozeOrdinal)
+        expect(rendered.error).toBeUndefined()
+        expect(rendered.backError).toBeUndefined()
+        if (template.front.includes('{{type:Meaning}}')) expect(rendered.typedAnswer).toBe('cat')
+        if (template.front.includes('{{furigana:Reading}}')) expect(rendered.front?.html).toContain('<ruby>猫<rt>ねこ</rt></ruby>')
+        if (template.name === 'Recognition') expect(rendered.css).toContain('rgb(30, 40, 50)')
+      }
+    }
+
+    const sourceCards = await collection.cards.toArray()
+    for (const note of notes) {
+      const card = sourceCards.find((candidate) => candidate.noteId === note.id)
+      if (card) await collection.answer(card.id, Rating.Good, new Date('2026-10-01T12:30:00.000Z'), 500, { allowEarly: true, reschedule: true })
+    }
+
+    const expectedDigests = (await collection.mediaBlobs.toArray()).map((entry) => entry.digest).sort()
+    const expectedReviewCount = await collection.reviewEntries.count()
+    const expectedCardCount = await collection.cards.count()
+    const exported = await exportAnkiPackage(collection, { scheduling: true, history: true, media: true, SQL })
+    const clean = createCollection(`kiroku-compatibility-reimport-${crypto.randomUUID()}`)
+    syncReplica = clean
+    const roundtrip = await prepareAnkiImport(new File([exported.bytes.slice().buffer], 'synthetic-compatibility.apkg'), clean, { SQL })
+    expect(roundtrip.issues.filter((issue) => issue.severity === 'error')).toEqual([])
+    await roundtrip.commit()
+
+    expect(await clean.notes.count()).toBe(notes.length)
+    expect(await clean.cards.count()).toBe(expectedCardCount)
+    expect(await clean.reviewEntries.count()).toBe(expectedReviewCount)
+    expect((await clean.noteTypes.toArray()).filter((type) => !type.protected).map((type) => type.templates.length).sort()).toEqual([1, 2])
+    expect((await clean.mediaBlobs.toArray()).map((entry) => entry.digest).sort()).toEqual(expectedDigests)
+    const restoredNotes = await clean.notes.toArray()
+    expect(restoredNotes.find((note) => note.id === 'anki-note:stable-occlusion-guid')?.imageOcclusion?.masks).toHaveLength(2)
+    expect((await Promise.all(restoredNotes.map((note) => clean.mediaForNote(note.id)))).flat()).toHaveLength(3)
+  })
+
   test.skipIf(!process.env.KIROKU_ANKI_COMPAT_PACKAGE)('Anki 26.09.3 official export imports, renders, studies, exports, and reimports with media semantics intact', async () => {
     const packagePath = process.env.KIROKU_ANKI_COMPAT_PACKAGE!
     const manifest = JSON.parse(await readFile(packagePath.replace(/\.colpkg$/i, '.json'), 'utf8')) as {
@@ -427,7 +481,7 @@ describe('Anki package import', () => {
       kind: 'standard',
       templates: [
         expect.objectContaining({ name: 'Recognition', front: expect.stringContaining('{{furigana:Reading}}'), css: expect.stringContaining('rgb(30, 40, 50)') }),
-        expect.objectContaining({ name: 'Production' }),
+        expect.objectContaining({ name: 'Production', front: '{{type:Meaning}}' }),
       ],
     })
     const notes = await collection.notes.toArray()
