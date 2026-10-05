@@ -48,6 +48,9 @@ printing "No drift" for a run that judged nothing.
   closed pull request cannot hide work that was reopened;
 - every worktree with uncommitted changes, separating edits to tracked files from
   files git has never seen, since a brand new file disappears with its directory;
+- untracked text whose content matches a file on `origin/main` after CRLF/LF
+  normalization. The finding prints a `git restore --source=origin/main --staged
+  --worktree -- "<path>"` command that replaces and stages the duplicate;
 - the primary working directory being on something other than `main`.
 
 Binary differences count as work: `--numstat` prints `-` for them, so a branch whose

@@ -15,6 +15,7 @@ import {
   parseStatus,
   parseWorktreePorcelain,
   revision,
+  untrackedFilesMatchingRemote,
   USAGE,
 } from './drift-check.mjs'
 
@@ -146,6 +147,34 @@ describe('worktrees with uncommitted work', () => {
     const [finding] = findingsFor(input, 'dirty-worktree')
     expect(finding.level).toBe('info')
     expect(analyseDrift(input).exitCode).toBe(0)
+  })
+
+  it('flags an untracked file whose normalized text exists on origin/main and prints its restore command', () => {
+    const input = {
+      ...inStep(),
+      cwd: 'D:/work/anki',
+      commandLines: [],
+      worktrees: [{
+        path: 'D:/work/anki-issue-94',
+        branch: 'fix/94',
+        dirtyFiles: [],
+        untrackedFiles: ['docs/guide.md'],
+        untrackedRemoteMatches: ['docs/guide.md'],
+      }],
+    }
+    const [finding] = findingsFor(input, 'untracked-remote-duplicate')
+    expect(finding.level).toBe('drift')
+    expect(finding.message).toMatch(/normalized text already on origin\/main: docs\/guide\.md/)
+    expect(finding.remedy).toBe('git restore --source=origin/main --staged --worktree -- "docs/guide.md"')
+    expect(formatReport(analyseDrift(input))).toContain(finding.remedy)
+  })
+
+  it('sets Git to check out detected text files with LF on every platform', () => {
+    const attributes = execFileSync('git', ['check-attr', 'text', 'eol', '--', 'docs/guide.md'], {
+      cwd: process.cwd(), encoding: 'utf8', stdio: 'pipe',
+    })
+    expect(attributes).toContain('docs/guide.md: text: auto')
+    expect(attributes).toContain('docs/guide.md: eol: lf')
   })
 
   it('does not treat a sibling directory with a shared name prefix as the same worktree', () => {
@@ -692,6 +721,30 @@ describe('which side of main is ahead, according to git', () => {
       commit(repo, 'straight to main')
       git(repo, ['branch', '-f', 'origin/main', 'theirs'])
       expect(counts(repo)).toEqual({ behind: 1, ahead: 1 })
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('untracked files that duplicate the remote tree', () => {
+  const git = (repo, args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', stdio: 'pipe' })
+  const commit = (repo, message) => git(repo, ['-c', 'user.name=drift', '-c', 'user.email=drift@example.com', 'commit', '--quiet', '-m', message])
+
+  it('matches CRLF worktree bytes to LF text on origin/main', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'drift-remote-duplicate-'))
+    try {
+      git(repo, ['init', '--quiet', '--initial-branch=main'])
+      git(repo, ['-c', 'user.name=drift', '-c', 'user.email=drift@example.com', 'commit', '--quiet', '--allow-empty', '-m', 'base'])
+      git(repo, ['switch', '--quiet', '-c', 'remote-update'])
+      writeFileSync(join(repo, 'guide.md'), 'first line\nsecond line\n')
+      git(repo, ['add', 'guide.md'])
+      commit(repo, 'add remote guide')
+      git(repo, ['update-ref', 'refs/remotes/origin/main', 'HEAD'])
+      git(repo, ['switch', '--quiet', 'main'])
+      writeFileSync(join(repo, 'guide.md'), 'first line\r\nsecond line\r\n')
+
+      expect(untrackedFilesMatchingRemote({ worktreePath: repo, untrackedFiles: ['guide.md'] })).toEqual(['guide.md'])
     } finally {
       rmSync(repo, { recursive: true, force: true })
     }

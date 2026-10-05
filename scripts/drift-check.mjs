@@ -2,7 +2,8 @@
 // uncommitted work nobody is using, a stale main, and a checkout sitting off main.
 // Exits non-zero so it can run unattended. See docs/agents/drift-check.md.
 import { execFileSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, lstatSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 // The one place a severity is turned into a label, an exit code and a word for the
@@ -33,6 +34,38 @@ function run(command, args, cwd) {
 // A revision used as an argument must not carry git's trailing newline, or it
 // stops being a revision: `a0667f0\n..branch` is not a range git can read.
 export const revision = (output) => (output === null ? null : output.trim() || null)
+
+const normalizedText = (bytes) => {
+  if (bytes.includes(0)) return null
+  const text = bytes.toString('utf8')
+  if (!Buffer.from(text, 'utf8').equals(bytes)) return null
+  return text.replace(/\r\n?/g, '\n')
+}
+
+export function untrackedFilesMatchingRemote({ worktreePath, untrackedFiles, remoteRef = 'origin/main' }) {
+  const matches = []
+  for (const path of untrackedFiles ?? []) {
+    let local
+    let remote
+    try {
+      const localPath = join(worktreePath, path)
+      if (!lstatSync(localPath).isFile()) continue
+      local = readFileSync(localPath)
+      remote = execFileSync('git', ['show', `${remoteRef}:${path}`], {
+        cwd: worktreePath,
+        windowsHide: true,
+        encoding: null,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+    } catch {
+      continue
+    }
+    const localText = normalizedText(local)
+    const remoteText = normalizedText(remote)
+    if (localText !== null && localText === remoteText) matches.push(path)
+  }
+  return matches
+}
 
 function tryRun(command, args, cwd) {
   try {
@@ -154,10 +187,14 @@ export function parseStatus(output) {
   return { tracked, untracked }
 }
 
-function worktreeStatus(path) {
+function worktreeStatus(path, mainBranch) {
   const output = tryRun('git', gitArgs.modifiedTracked(), path)
   const { tracked, untracked } = parseStatus(output)
-  return { dirtyFiles: tracked, untrackedFiles: untracked }
+  return {
+    dirtyFiles: tracked,
+    untrackedFiles: untracked,
+    untrackedRemoteMatches: untrackedFilesMatchingRemote({ worktreePath: path, untrackedFiles: untracked, remoteRef: `origin/${mainBranch}` }),
+  }
 }
 
 // `gh` is asked once per run. #158 needs the pull requests inside the collector,
@@ -296,7 +333,7 @@ export function collectGitFacts({ cwd = process.cwd(), mainBranch = 'main', repo
   return {
     main: counts === null ? null : { branch: mainBranch, ...counts },
     primary: present[0] ?? null,
-    worktrees: present.map((worktree) => ({ ...worktree, ...worktreeStatus(worktree.path) })),
+    worktrees: present.map((worktree) => ({ ...worktree, ...worktreeStatus(worktree.path, mainBranch) })),
     branches,
     pullRequests,
   }
@@ -575,6 +612,16 @@ function worktreeFindings({ worktrees, environment }) {
   return worktrees.flatMap((worktree) => {
     const tracked = worktree.dirtyFiles ?? []
     const untracked = worktree.untrackedFiles ?? []
+    const remoteMatches = worktree.untrackedRemoteMatches ?? []
+    const duplicateFinding = remoteMatches.length === 0 ? [] : [
+      finding(
+        samePath(environment.cwd, worktree.path) || environment.commandLines.some((line) => mentionsPath(line, worktree.path)) ? 'info' : 'drift',
+        'untracked-remote-duplicate',
+        worktree.path,
+        `${PLURAL(remoteMatches.length, 'untracked file')} match normalized text already on origin/main: ${remoteMatches.join(', ')}`,
+        remoteMatches.map((path) => `git restore --source=origin/main --staged --worktree -- "${path}"`).join(' && '),
+      ),
+    ]
     if (tracked.length === 0 && untracked.length === 0) return []
 
     const untrackedNote = untracked.length === 0 ? '' : `, ${PLURAL(untracked.length, 'untracked file')}: ${untracked.join(', ')}`
@@ -583,9 +630,9 @@ function worktreeFindings({ worktrees, environment }) {
     // Untracked files alone are ordinary: a scratch note is not lost work. Tracked
     // modifications are, because they are edits to files that already exist.
     if (tracked.length === 0) {
-      return [
+      return [...duplicateFinding,
         finding(
-          live ? 'info' : 'info',
+          'info',
           'dirty-worktree',
           worktree.path,
           `${PLURAL(untracked.length, 'untracked file')} and no tracked file changed: ${untracked.join(', ')}`,
@@ -594,7 +641,7 @@ function worktreeFindings({ worktrees, environment }) {
       ]
     }
 
-    return [
+    return [...duplicateFinding,
       finding(
         live ? 'info' : 'drift',
         'dirty-worktree',

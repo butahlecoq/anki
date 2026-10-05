@@ -108,6 +108,27 @@ One agent works in one worktree, and two agents never share a checkout. Worktree
 
 **The failure it prevents.** Uncommitted work in a shared checkout is unattributable. Nobody can tell whether a modified file is a half-finished change or debris, so the safe response is to leave the whole worktree alone and start again - which is how nine worktrees and their `node_modules` accumulated in the first place.
 
+### Every push runs the local gate
+
+The hosted workflow cannot run on this repository, so a broken change could reach
+`main` without an automated check. A flaky device-key rotation test once reached
+`main` for exactly that reason. Running `npm ci` in a fresh clone invokes the
+repository's `prepare` script, which configures `core.hooksPath=.githooks`; no
+separate hook-install command is needed. Before each push, `.githooks/pre-push`
+runs `npm run check:push` (typecheck, lint, unit tests, status tests, and server
+tests). On the reference Windows machine this took **about 29 seconds**; the
+target is under two minutes. The full `npm run check` remains the pull-request
+gate and also covers production build and browser journeys.
+
+### Text files use the same line endings on every platform
+
+`.gitattributes` checks text files out with LF on Windows and POSIX. This avoids a
+fast-forward being blocked by an untracked copy of a remote document whose only
+byte difference was CRLF versus LF. `npm run drift` compares untracked text files
+with `origin/main` after normalizing line endings. When it finds a duplicate, it
+prints the exact `git restore --source=origin/main --staged --worktree -- "<path>"`
+command to replace and stage the local copy from the remote branch.
+
 ## Pull requests
 
 - Keep one ticket per PR unless an issue explicitly says otherwise.

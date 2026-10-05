@@ -1,6 +1,10 @@
 import { expect, test, type Locator } from '@playwright/test'
 
 async function expectSameButtonSize(first: Locator, second: Locator) {
+  await expect(first).toBeVisible()
+  await expect(second).toBeVisible()
+  await first.scrollIntoViewIfNeeded()
+  await second.scrollIntoViewIfNeeded()
   const [firstBox, secondBox] = await Promise.all([first.boundingBox(), second.boundingBox()])
   expect(firstBox).not.toBeNull()
   expect(secondBox).not.toBeNull()
