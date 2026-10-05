@@ -6,7 +6,8 @@ import { handlePairedAnkiWebRelay } from './ankiweb-gateway.js'
 type Service = ReturnType<typeof createSyncService>
 
 const DEFAULT_JSON_BODY_LIMIT_BYTES = 32 * 1024 * 1024
-type HttpOptions = { allowedOrigin?: string; jsonBodyLimitBytes?: number; ankiWebUpstream?: typeof fetch }
+const MAX_TRACKED_PAIRING_PEERS = 10_000
+type HttpOptions = { allowedOrigin?: string; jsonBodyLimitBytes?: number; pairingBodyLimitBytes?: number; pairingAttemptLimit?: number; pairingWindowMs?: number; ankiWebUpstream?: typeof fetch }
 
 const corsHeaders = (origin: string | undefined, allowedOrigin: string | undefined): Record<string, string> => origin && allowedOrigin === origin ? {
   'access-control-allow-origin': allowedOrigin,
@@ -76,7 +77,8 @@ async function relayAnkiWeb(request: IncomingMessage, response: ServerResponse, 
   Readable.fromWeb(relayResponse.body as never).on('error', () => response.destroy()).pipe(response)
 }
 
-export function createSyncHttpHandler(service: Service, { allowedOrigin, jsonBodyLimitBytes = DEFAULT_JSON_BODY_LIMIT_BYTES, ankiWebUpstream = fetch }: HttpOptions = {}) {
+export function createSyncHttpHandler(service: Service, { allowedOrigin, jsonBodyLimitBytes = DEFAULT_JSON_BODY_LIMIT_BYTES, pairingBodyLimitBytes = 4096, pairingAttemptLimit = 10, pairingWindowMs = 60_000, ankiWebUpstream = fetch }: HttpOptions = {}) {
+  const pairingFailures = new Map<string, { startedAt: number; attempts: number }>()
   return async (request: IncomingMessage, response: ServerResponse) => {
     const headers = corsHeaders(request.headers.origin, allowedOrigin)
     const reply = (status: number, responseBody: unknown) => send(response, status, responseBody, headers)
@@ -89,9 +91,39 @@ export function createSyncHttpHandler(service: Service, { allowedOrigin, jsonBod
       }
       if (request.method === 'GET' && request.url === '/api/health') return reply(200, service.health())
       if (request.method === 'POST' && request.url === '/api/pair') {
-        const payload = await body(request, jsonBodyLimitBytes) as { code?: string; deviceId?: string }
-        if (!payload.code || !payload.deviceId) return reply(400, { error: 'Pairing code and device ID are required.' })
-        return reply(201, service.pair({ code: payload.code, deviceId: payload.deviceId }))
+        const payload = await body(request, Math.min(jsonBodyLimitBytes, pairingBodyLimitBytes)) as { code?: unknown; deviceId?: unknown }
+        if (typeof payload.code !== 'string' || typeof payload.deviceId !== 'string' || !payload.code || !payload.deviceId) return reply(400, { error: 'Pairing code and device ID are required.' })
+        if (payload.code.length > 128 || payload.deviceId.length > 128 || [...payload.deviceId].some((character) => character.charCodeAt(0) <= 0x1f || character.charCodeAt(0) === 0x7f)) return reply(400, { error: 'Pairing code or device ID is invalid.' })
+        const address = request.socket.remoteAddress ?? 'unknown'
+        const now = Date.now()
+        let failures = pairingFailures.get(address)
+        if (failures && now - failures.startedAt >= pairingWindowMs) {
+          pairingFailures.delete(address)
+          failures = undefined
+        }
+        if (failures && failures.attempts >= pairingAttemptLimit) {
+          const retryAfter = Math.max(1, Math.ceil((pairingWindowMs - (now - failures.startedAt)) / 1000))
+          response.setHeader('retry-after', String(retryAfter))
+          return reply(429, { error: 'Too many unsuccessful pairing attempts. Try again later.' })
+        }
+        try {
+          const paired = service.pair({ code: payload.code, deviceId: payload.deviceId })
+          pairingFailures.delete(address)
+          return reply(201, paired)
+        } catch (error) {
+          if (error instanceof Error && /pairing code is invalid or expired/i.test(error.message)) {
+            const current = pairingFailures.get(address)
+            if (current && now - current.startedAt < pairingWindowMs) current.attempts += 1
+            else {
+              if (pairingFailures.size >= MAX_TRACKED_PAIRING_PEERS) {
+                const oldest = pairingFailures.keys().next().value
+                if (oldest !== undefined) pairingFailures.delete(oldest)
+              }
+              pairingFailures.set(address, { startedAt: now, attempts: 1 })
+            }
+          }
+          throw error
+        }
       }
       if (request.method === 'POST' && request.url === '/api/credential/rotate') {
         const authorization = request.headers.authorization

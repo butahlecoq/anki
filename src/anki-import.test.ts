@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto'
 import { readFile } from 'node:fs/promises'
 import initSqlJs, { type SqlJsStatic } from 'sql.js'
 import { Collection as AnkiCollection, Deck, Note as AnkiNote, Notetype, Package } from 'ankipack'
-import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
 import { DEFAULT_DECK_OPTION_GROUP_ID, createCollection, tryRenderNoteTemplate, State, Rating, type Collection } from './collection'
 import { prepareAnkiDataImport, prepareAnkiImport, validateMediaBytes } from './anki-import'
 import { exportAnkiPackage } from './anki-export'
@@ -21,6 +21,7 @@ beforeAll(async () => {
 })
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   await collection?.delete()
   await syncReplica?.delete()
   collection = undefined
@@ -346,6 +347,7 @@ describe('Anki package import', () => {
     for (let offset = 0; offset < frames.length; offset += frame.length) frames.set(frame, offset)
     const actualBomb = zipSync({ 'collection.anki21b': frames })
     const fixtures = [hugeEntry, hugeCount, hugeWindow, actualBomb, zipSync({ '../media': new Uint8Array() }), Uint8Array.from([1, 2, 3])]
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     for (const bytes of fixtures) {
       const file = new File([bytes.slice().buffer], `hostile.${extension}`)
       await expect(prepareAnkiImport(file, collection, { SQL })).rejects.toThrow(/Unable to read/i)
@@ -357,6 +359,8 @@ describe('Anki package import', () => {
       expect(await collection.mediaBlobs.count()).toBe(0)
       expect(await collection.pendingOperations()).toHaveLength(0)
     }
+    expect(consoleError).not.toHaveBeenCalled()
+    consoleError.mockRestore()
   })
   test('previews and transactionally imports templates, scheduling, history, tags, and media from a modern package', async () => {
     collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)

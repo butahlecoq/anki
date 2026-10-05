@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
@@ -562,6 +562,21 @@ test('serves health, pairing, and authenticated sync over HTTP', async () => {
   assert.equal(pairingAfterRejection.status, 201)
 
   const code = service.createPairingCode()
+  const protectedBackupId = randomUUID()
+  const protectedMediaDigest = 'a'.repeat(64)
+  const protectedRequests: Array<Promise<Response>> = [
+    fetch(`${origin}/api/sync`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, collectionSchemaVersion: 10, cursor: 0, operations: [] }) }),
+    fetch(`${origin}/api/credential/rotate`, { method: 'POST' }),
+    fetch(`${origin}/api/backups`),
+    fetch(`${origin}/api/backups`, { method: 'POST' }),
+    fetch(`${origin}/api/backups/${protectedBackupId}/download`),
+    fetch(`${origin}/api/backups/${protectedBackupId}/restore-preview`, { method: 'POST' }),
+    fetch(`${origin}/api/backups/${protectedBackupId}/restore`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ confirmation: 'RESTORE' }) }),
+    fetch(`${origin}/api/media/${protectedMediaDigest}`),
+    fetch(`${origin}/api/media/${protectedMediaDigest}`, { method: 'PUT', headers: { 'content-type': 'image/png' }, body: new Uint8Array([1]) }),
+  ]
+  const protectedResponses = await Promise.all(protectedRequests)
+  assert.deepEqual(protectedResponses.map((response) => response.status), Array(protectedRequests.length).fill(401))
   const paired = await fetch(`${origin}/api/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code, deviceId: 'phone-1' }) })
   const credential = await paired.json() as { token: string }
   const denied = await fetch(`${origin}/api/sync`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cursor: 0, operations: [] }) })
@@ -597,6 +612,34 @@ test('serves health, pairing, and authenticated sync over HTTP', async () => {
   const unauthenticatedRotation = await fetch(`${origin}/api/credential/rotate`, { method: 'POST' })
   assert.equal(unauthenticatedRotation.status, 401)
 
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+    service.close()
+  }
+})
+
+test('rate limits unsuccessful pairing attempts by peer and then allows a valid code after the window', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-pair-rate-limit-'))
+  const service = createSyncService({ databasePath: join(runtimeDirectory, 'collection.sqlite') })
+  const server = createServer(createSyncHttpHandler(service, { pairingAttemptLimit: 2, pairingWindowMs: 1_000 }))
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  assert.ok(address && typeof address !== 'string')
+  const origin = `http://127.0.0.1:${address.port}`
+  try {
+    const oversized = await fetch(`${origin}/api/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: 'wrong-code', deviceId: 'x'.repeat(5000) }) })
+    assert.equal(oversized.status, 413)
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await fetch(`${origin}/api/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: 'wrong-code', deviceId: `phone-${attempt}` }) })
+      assert.equal(response.status, 400)
+    }
+    const limited = await fetch(`${origin}/api/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: 'wrong-code', deviceId: 'phone-limited' }) })
+    assert.equal(limited.status, 429)
+    assert.equal(limited.headers.get('retry-after'), '1')
+    const code = service.createPairingCode()
+    await new Promise((resolve) => setTimeout(resolve, 1_100))
+    const paired = await fetch(`${origin}/api/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code, deviceId: 'phone-after-window' }) })
+    assert.equal(paired.status, 201)
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
     service.close()
