@@ -6,6 +6,7 @@ This uses only a temporary collection and synthetic note; no account or network.
 
 from datetime import datetime, timedelta, timezone
 from importlib.metadata import version
+import argparse
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -23,7 +24,9 @@ MATRIX_CARD_ID = CARD_ID + 10_000
 
 def verify_persisted_state_grade_matrix(collection: Collection) -> list[dict[str, object]]:
     """Answer deterministic synthetic cards in each FSRS state and report durable rows."""
-    base_answer_at = datetime.now(timezone.utc).replace(microsecond=0)
+    # A fixed timestamp makes the native persisted-state matrix reproducible;
+    # identifiers, review counts, profile settings and the RNG are fixed too.
+    base_answer_at = datetime(2026, 10, 5, 4, 15, tzinfo=timezone.utc)
     answer_at = base_answer_at
     answer_millis = int(answer_at.timestamp() * 1000)
     today = collection.sched.today
@@ -89,6 +92,32 @@ def verify_persisted_state_grade_matrix(collection: Collection) -> list[dict[str
             })
     assert len(outcomes) == 16
     return outcomes
+
+
+def write_persisted_matrix_fixture(outcomes: list[dict[str, object]]) -> None:
+    """Write the stable subset used by app tests; absolute due dates are omitted."""
+    matrix = []
+    for outcome in outcomes:
+        card = outcome["card"]
+        data = json.loads(card["data"] or "{}")
+        matrix.append({
+            "before": outcome["before"],
+            "grade": outcome["grade"],
+            "previewLabels": outcome["previewLabels"],
+            "queue": card["queue"],
+            "card": {
+                "type": card["type"], "queue": card["queue"],
+                "intervalDays": card["intervalDays"], "reps": card["reps"],
+                "lapses": card["lapses"], "stability": data.get("s", 0),
+                "difficulty": data.get("d", 0),
+            },
+            "review": outcome["review"],
+        })
+    target = Path(__file__).parent.parent / "tests" / "fixtures" / "anki-26.9.3-scheduler-matrix.json"
+    target.write_text(json.dumps({
+        "ankiVersion": ANKI_VERSION, "scheduler": "V3", "algorithm": "FSRS-6",
+        "reviewedAt": outcomes[0]["answeredAt"], "matrix": matrix,
+    }, indent=2) + "\n", encoding="utf-8")
 
 
 def verify_selected_deck_limits(path: Path) -> dict[str, int]:
@@ -349,6 +378,9 @@ def verify_mixed_sibling_bury_precedence(path: Path) -> list[str]:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--write-matrix-fixture", action="store_true", help="refresh the checked-in normalized matrix used by client parity tests")
+    args = parser.parse_args()
     actual_version = version("anki")
     assert actual_version == ANKI_VERSION, (actual_version, ANKI_VERSION)
 
@@ -439,6 +471,8 @@ def main() -> None:
             sibling_bury_categories = verify_sibling_bury_categories(Path(directory) / "sibling-bury-oracle.anki2")
             mixed_sibling_bury_precedence = verify_mixed_sibling_bury_precedence(Path(directory) / "mixed-sibling-bury-oracle.anki2")
             persisted_state_grade_matrix = verify_persisted_state_grade_matrix(collection)
+            if args.write_matrix_fixture:
+                write_persisted_matrix_fixture(persisted_state_grade_matrix)
             print(json.dumps({
                 "ankiVersion": actual_version,
                 "scheduler": "V3",
