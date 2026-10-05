@@ -76,6 +76,8 @@ describe('application shell', () => {
     expect(within(navigation).getByRole('link', { name: 'Study' })).toBeVisible()
     expect(within(navigation).getByRole('link', { name: 'Study' })).not.toHaveAttribute('aria-disabled')
     expect(screen.getByRole('status')).toHaveTextContent('Offline cache unavailable')
+    expect(screen.getByText('Support')).toBeVisible()
+    expect(screen.getByText('Development build (not a release)')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /new deck/i })).toBeEnabled()
     expect(screen.getByRole('button', { name: 'Connect a PC' })).toBeEnabled()
   })

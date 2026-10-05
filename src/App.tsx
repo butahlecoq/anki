@@ -4,6 +4,7 @@ import { chooseAppearance, readAppearance, watchAppearance, type Appearance } fr
 import { CollectionWorkspace } from './CollectionWorkspace'
 import { supportsServiceWorkers } from './browser-capabilities'
 import { useRoute } from './route'
+import { buildIdentity } from './build-identity'
 
 function useOnlineStatus() {
   const [online, setOnline] = useState(() => navigator.onLine)
@@ -91,6 +92,7 @@ export function App() {
           <div className="eyebrow"><span>COLLECTION</span><span>/</span><span>LOCAL</span></div>
           <div className="topbar-controls">
             <div className={`connection ${online ? 'online' : 'offline'}`} role="status"><span className="pulse" />{connection}</div>
+            <details className="build-identity"><summary>Support</summary><dl><dt>Version</dt><dd>{buildIdentity.version}</dd><dt>Commit</dt><dd>{buildIdentity.commit}</dd><dt>Channel</dt><dd>{buildIdentity.release ? 'Release build' : 'Development build (not a release)'}</dd></dl></details>
             <label className="appearance-control">
               <span className="visually-hidden">Appearance</span>
               <select value={appearance.preference} onChange={(event) => appearance.select(event.target.value as Appearance)}>
@@ -108,7 +110,7 @@ export function App() {
             : 'Kiroku could not prepare its offline app shell. Check the app installation and connection before relying on a cold offline launch. Sync is paused here so you can finish your study session safely. Local review remains available while this page stays open.'}</p>
         </aside>}
         <CollectionWorkspace offlineSyncAvailable={offlineStatus === 'ready'} />
-        <footer className="footer-line"><span>KIROKU / PRIVATE WORKSPACE</span><span>BUILD 0002</span></footer>
+        <footer className="footer-line"><span>KIROKU / PRIVATE WORKSPACE</span><span>BUILD {buildIdentity.commit}</span></footer>
       </main>
       <nav className="mobile-nav" aria-label="Mobile navigation">
         <a className={onNoteTypes || onBrowse || onStatistics || onStudy ? '' : 'active'} href="#decks" aria-label="Decks"><span>Decks</span></a>

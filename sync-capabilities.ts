@@ -22,6 +22,7 @@ export interface SyncCapabilities {
 
 export interface SyncHealth extends SyncCapabilities {
   ready: true
+  build: { version: string; commit: string; release: boolean }
   maximumCollectionSchemaVersion: number
   store: 'sqlite'
   collectionGeneration?: string

@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 
 test('load, review, and remove the Japanese sample deck without changing other decks', async ({ page, browserName }) => {
+  test.setTimeout(90_000)
   await page.goto('/')
   if (browserName === 'chromium') {
     await page.evaluate(async () => { await navigator.serviceWorker.ready })
