@@ -7,7 +7,7 @@ import { digestMedia, validateMedia, type AudioPlayback, type MediaKind, type Me
 import { clozeOrdinals, tryRenderTemplate, validateTemplate } from './template-renderer'
 import { fieldsByName, isRenderedCardDisplayable, renderNoteCard } from './card-rendering'
 import { mergeRevisions, revisionHeads, type RevisionMerge } from './sync-revisions'
-import { ImportedPackageRejected, rowFingerprint, type ImportedPackageWrites } from './import-contract'
+import { ImportedPackageRejected, rowFingerprint, type ImportedPackageWrites, type ImportedPartialChoice } from './import-contract'
 import { undoBlocker, undoEpochMatches, undoOperationIds, undoOperationsPending, undoRowUnchanged, undoSubject, type CardMaintenanceUndo, type NoteDeletionUndo, type ReviewUndo, type UndoBlocker, type UndoRecord, type UndoRowBlocker } from './undo'
 
 export { Rating, State }
@@ -1143,7 +1143,7 @@ export class Collection extends Dexie {
    * Everything is checked before anything is written: a rejected import leaves
    * the collection exactly as it was.
    */
-  async applyImportedPackage(writes: ImportedPackageWrites, importedAt: string, expectUnchanged: Array<{ table: string; id: string; value: string }> = []): Promise<void> {
+  async applyImportedPackage(writes: ImportedPackageWrites, importedAt: string, expectUnchanged: Array<{ table: string; id: string; value: string }> = [], partialChoice?: ImportedPartialChoice): Promise<void> {
     const scope = [this.decks, this.noteTypes, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.mediaBlobs, this.outbox, this.syncRevisions, this.settings, this.deckOptionGroups, this.deletedEntities]
     await this.transaction('rw', scope, async () => {
       // The preview is only trustworthy if the rows it read are unchanged, so
@@ -1161,6 +1161,7 @@ export class Collection extends Dexie {
       if (writes.decks.length) await this.decks.bulkPut(writes.decks.map(({ value }) => value))
       if (writes.deletedDecks.length) await this.decks.bulkDelete(writes.deletedDecks.map(({ id }) => id))
       for (const { key, value } of writes.undoSettings) await this.settings.put({ key, value })
+      if (partialChoice) await this.settings.put({ key: partialChoice.key, value: partialChoice.value })
       if (writes.noteTypes.length) await this.noteTypes.bulkPut(writes.noteTypes.map(({ value }) => value))
       if (writes.notes.length) await this.notes.bulkPut(writes.notes.map(({ value }) => value))
       if (writes.cards.length) await this.cards.bulkPut(writes.cards.map(({ value }) => value))

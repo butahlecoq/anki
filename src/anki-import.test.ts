@@ -718,6 +718,83 @@ describe('Anki package import', () => {
     await expect(collection.notes.count()).resolves.toBe(0)
   })
 
+  test('explicit partial choice imports supported note aggregates, records omissions, and keeps them excluded on refresh', async () => {
+    collection = createCollection(`kiroku-import-partial-${crypto.randomUUID()}`)
+    const sourceIdentity = 'test-account-source-opaque-id'
+    const supported = AnkiCollection.open(await fileBytes(await japanesePackage()), SQL).data
+    const unsupported = AnkiCollection.open(await fileBytes(await unsupportedPackage()), SQL).data
+    const mixed = {
+      ...supported,
+      notetypes: [...supported.notetypes, ...unsupported.notetypes],
+      fields: [...supported.fields, ...unsupported.fields],
+      templates: [...supported.templates, ...unsupported.templates],
+      decks: [...supported.decks, ...unsupported.decks],
+      notes: [...supported.notes, ...unsupported.notes],
+      cards: [...supported.cards, ...unsupported.cards],
+      revlog: [...supported.revlog, ...unsupported.revlog],
+      media: [...supported.media, ...unsupported.media],
+    }
+
+    const prepared = await prepareAnkiDataImport(mixed, collection, { SQL, sourceIdentity, sourceFingerprint: 'revision-hash-1' })
+    expect(prepared.plan.blocksImport).toBe(true)
+    expect(prepared.plan.canImportRepresentable).toBe(true)
+    expect(prepared.plan.skipped).toEqual([expect.objectContaining({
+      guid: 'unsupported-guid',
+      noteType: 'Unsupported custom filters',
+      cardIds: [expect.any(Number)],
+      reviewIds: [],
+      reasons: expect.arrayContaining([expect.stringContaining('Unsupported template filter')]),
+    })])
+    expect(prepared.plan.decisions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ entity: 'note', id: 'anki-note:unsupported-guid', action: 'skip' }),
+      expect.objectContaining({ entity: 'card', id: expect.stringMatching(/^anki-card:/), action: 'skip' }),
+    ]))
+    await expect(prepared.commit()).rejects.toThrow(/explicitly choosing/i)
+    await expect(collection.notes.count()).resolves.toBe(0)
+    await expect(collection.pendingOperations()).resolves.toHaveLength(0)
+
+    await prepared.commit({ importRepresentableOnly: true })
+    await expect(collection.notes.count()).resolves.toBe(2)
+    await expect(collection.cards.count()).resolves.toBe(4)
+    await expect(collection.notes.get('anki-note:unsupported-guid')).resolves.toBeUndefined()
+    const receiptKey = `ankiPartialImport:${sourceIdentity}`
+    await expect(collection.settings.get(receiptKey)).resolves.toMatchObject({
+      key: receiptKey,
+      value: { version: 1, sourceIdentity, sourceFingerprint: 'revision-hash-1', excludedNoteGuids: ['unsupported-guid'] },
+    })
+
+    const newlySupported = new Notetype({
+      id: 1_700_000_000_030,
+      name: 'Unsupported custom filters',
+      fields: [{ name: 'Front' }, { name: 'Back' }],
+      templates: [{ name: 'Custom filter card', questionFormat: '{{Front}}', answerFormat: '{{Back}}' }],
+    })
+    const supportedReplacementDeck = new Deck({ id: 1_700_000_000_031, name: 'Unsupported' })
+    supportedReplacementDeck.addNote(new AnkiNote({ notetype: newlySupported, guid: 'unsupported-guid', fields: ['question', 'answer'] }))
+    const replacementPackage = new Package()
+    replacementPackage.addDeck(supportedReplacementDeck)
+    const replacement = AnkiCollection.open(await replacementPackage.toUint8Array(SQL), SQL).data
+    const refreshed = {
+      ...supported,
+      notetypes: [...supported.notetypes, ...replacement.notetypes],
+      fields: [...supported.fields, ...replacement.fields],
+      templates: [...supported.templates, ...replacement.templates],
+      decks: [...supported.decks, ...replacement.decks],
+      notes: [...supported.notes, ...replacement.notes],
+      cards: [...supported.cards, ...replacement.cards],
+      revlog: supported.revlog,
+      media: supported.media,
+    }
+    const refreshPlan = await prepareAnkiDataImport(refreshed, collection, { SQL, sourceIdentity, sourceFingerprint: 'revision-hash-2' })
+    expect(refreshPlan.plan.blocksImport).toBe(false)
+    expect(refreshPlan.plan.savedPartialChoice).toBe(true)
+    expect(refreshPlan.plan.skipped).toContainEqual(expect.objectContaining({ guid: 'unsupported-guid' }))
+    await refreshPlan.commit()
+    await expect(collection.notes.count()).resolves.toBe(2)
+    await expect(collection.notes.get('anki-note:unsupported-guid')).resolves.toBeUndefined()
+    await expect(collection.settings.get(receiptKey)).resolves.toMatchObject({ value: { sourceFingerprint: 'revision-hash-2', excludedNoteGuids: ['unsupported-guid'] } })
+  })
+
   test('ignores unsupported note types that are unused by the account snapshot', async () => {
     collection = createCollection(`kiroku-import-unused-note-type-${crypto.randomUUID()}`)
     const supportedBytes = await japanesePackage()
@@ -771,18 +848,19 @@ describe('Anki package import', () => {
     }))
   })
 
-  test('blocks executable templates but isolates malformed media to the affected attachment', async () => {
+  test('blocks executable templates and malformed media from creating partial note aggregates', async () => {
     collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
     const executable = await prepareAnkiImport(await executableTemplatePackage(), collection, { SQL })
     expect(executable.plan.blocksImport).toBe(true)
     expect(executable.issues).toEqual(expect.arrayContaining([expect.objectContaining({ severity: 'error', code: 'unsupported-note-type', subject: 'Executable template', detail: expect.stringMatching(/executable/i) })]))
     await expect(executable.commit()).rejects.toThrow(/resolve package errors/i)
     const malformed = await prepareAnkiImport(await malformedMediaPackage(), collection, { SQL })
-    expect(malformed.plan.blocksImport).toBe(false)
-    expect(malformed.issues).toEqual(expect.arrayContaining([expect.objectContaining({ severity: 'warning', code: 'media-malformed', subject: 'broken.png' })]))
-    await malformed.commit()
-    await expect(collection.notes.count()).resolves.toBe(1)
-    await expect(collection.cards.count()).resolves.toBe(1)
+    expect(malformed.plan.blocksImport).toBe(true)
+    expect(malformed.plan.canImportRepresentable).toBe(false)
+    expect(malformed.issues).toEqual(expect.arrayContaining([expect.objectContaining({ severity: 'error', code: 'media-malformed', subject: 'broken.png' })]))
+    await expect(malformed.commit({ importRepresentableOnly: true })).rejects.toThrow(/cannot be isolated safely/i)
+    await expect(collection.notes.count()).resolves.toBe(0)
+    await expect(collection.cards.count()).resolves.toBe(0)
     await expect(collection.mediaBlobs.count()).resolves.toBe(0)
   })
 

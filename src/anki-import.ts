@@ -59,9 +59,20 @@ export interface AnkiImportSummary {
   media: number
 }
 
+export interface AnkiImportSkippedNote {
+  noteId: string
+  guid: string
+  ankiNoteId: number
+  noteType: string
+  cardIds: number[]
+  reviewIds: number[]
+  mediaNames: string[]
+  reasons: string[]
+}
+
 export interface AnkiDuplicateSummary { create: number; update: number; keepLocal: number; unchanged: number }
 
-export type AnkiImportDecisionAction = 'create' | 'update' | 'keepLocal' | 'unchanged' | 'delete'
+export type AnkiImportDecisionAction = 'create' | 'update' | 'keepLocal' | 'unchanged' | 'delete' | 'skip'
 export type AnkiImportEntity = 'deck' | 'noteType' | 'note' | 'card' | 'review' | 'mediaReference'
 export interface AnkiImportDecision { entity: AnkiImportEntity; id: string; action: AnkiImportDecisionAction }
 
@@ -96,6 +107,10 @@ export interface AnkiImportPlan {
   duplicates: AnkiDuplicateSummary
   issues: AnkiImportIssue[]
   blocksImport: boolean
+  canImportRepresentable: boolean
+  requiresPartialChoice: boolean
+  skipped: AnkiImportSkippedNote[]
+  savedPartialChoice: boolean
   decisions: AnkiImportDecision[]
   writes: {
     decks: ImportWrites['decks']
@@ -113,9 +128,20 @@ export interface AnkiImportPlan {
   }
 }
 
+export interface AnkiImportCommitOptions { importRepresentableOnly?: boolean }
+
 type Snapshot = { table: 'decks' | 'noteTypes' | 'notes' | 'cards' | 'reviewEntries' | 'noteMedia' | 'mediaBlobs'; id: string; value: string }
 
-export interface PrepareAnkiImportOptions { SQL?: SqlJsStatic; now?: Date }
+export interface PrepareAnkiImportOptions { SQL?: SqlJsStatic; now?: Date; sourceIdentity?: string; sourceFingerprint?: string }
+
+interface PersistedPartialChoice {
+  version: 1
+  sourceIdentity: string
+  sourceFingerprint: string
+  selectedAt: string
+  excludedNoteGuids: string[]
+  skipped: AnkiImportSkippedNote[]
+}
 
 let sqlPromise: Promise<SqlJsStatic> | undefined
 function browserSql() {
@@ -493,11 +519,20 @@ function ownedBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.slice().buffer as ArrayBuffer
 }
 
+function partialChoiceSettingKey(sourceIdentity: string) {
+  return `ankiPartialImport:${sourceIdentity}`
+}
+
 export class PreparedAnkiImport {
   readonly summary: AnkiImportSummary
   readonly duplicates: AnkiDuplicateSummary
   readonly issues: readonly AnkiImportIssue[]
   readonly filename: string
+  readonly skipped: readonly AnkiImportSkippedNote[]
+  readonly canImportRepresentable: boolean
+  private readonly savedPartialChoice: PersistedPartialChoice | undefined
+  private readonly sourceIdentity: string | undefined
+  private readonly sourceFingerprint: string | undefined
   /** A detached description of the proposed changes. It deliberately contains
    * no collection handle and omits binary media payloads. */
   readonly plan: AnkiImportPlan
@@ -514,16 +549,32 @@ export class PreparedAnkiImport {
     private readonly importedAt: string,
     private readonly projection: AnkiImportProjection,
     decisions: AnkiImportDecision[],
+    skipped: AnkiImportSkippedNote[],
+    canImportRepresentable: boolean,
+    savedPartialChoice: PersistedPartialChoice | undefined,
+    sourceIdentity: string | undefined,
+    sourceFingerprint: string | undefined,
   ) {
     this.filename = filename
     this.summary = summary
     this.duplicates = duplicates
     this.issues = issues
+    this.skipped = skipped
+    this.canImportRepresentable = canImportRepresentable
+    this.savedPartialChoice = savedPartialChoice
+    this.sourceIdentity = sourceIdentity
+    this.sourceFingerprint = sourceFingerprint
     this.plan = structuredClone({
       summary,
       duplicates,
       issues,
-      blocksImport: issues.some((issue) => issue.severity === 'error'),
+      blocksImport: issues.some((issue) => issue.severity === 'error') && (!savedPartialChoice || !canImportRepresentable),
+      canImportRepresentable,
+      requiresPartialChoice: issues.some((issue) => issue.severity === 'error') && !savedPartialChoice,
+      skipped,
+      savedPartialChoice: Boolean(savedPartialChoice),
+      sourceIdentity,
+      sourceFingerprint,
       decisions,
       writes: {
         decks: writes.decks,
@@ -547,13 +598,28 @@ export class PreparedAnkiImport {
     return structuredClone(this.projection)
   }
 
-  async commit(): Promise<void> {
+  async commit(options: AnkiImportCommitOptions = {}): Promise<void> {
     if (this.committed) throw new Error('This package has already been imported')
-    if (this.issues.some((issue) => issue.severity === 'error')) throw new Error('Resolve package errors before importing')
+    const hasErrors = this.issues.some((issue) => issue.severity === 'error')
+    if (hasErrors && !this.savedPartialChoice && !options.importRepresentableOnly) throw new Error('Resolve package errors before importing by explicitly choosing whether to import only the representable rows')
+    if (hasErrors && !this.canImportRepresentable) throw new Error('Some unsupported rows cannot be isolated safely. Nothing was imported.')
+    if (options.importRepresentableOnly && !this.canImportRepresentable) throw new Error('The representable portion cannot be imported safely. Nothing was imported.')
+    if (this.skipped.length && !this.sourceIdentity) throw new Error('This source has no stable identity to retain its partial-import choice. Nothing was imported.')
+    const partialChoice = this.skipped.length && this.sourceIdentity ? {
+      key: partialChoiceSettingKey(this.sourceIdentity),
+      value: {
+        version: 1,
+        sourceIdentity: this.sourceIdentity,
+        sourceFingerprint: this.sourceFingerprint ?? '',
+        selectedAt: this.importedAt,
+        excludedNoteGuids: this.skipped.map(({ guid }) => guid),
+        skipped: [...this.skipped],
+      } satisfies PersistedPartialChoice,
+    } : undefined
     // The Collection owns the whole write: the stale-preview check, the
     // invariant checks and the multi-table write share one transaction, so a row
     // cannot move between the check and the write. Import names no table.
-    await this.collection.applyImportedPackage(this.writes, this.importedAt, this.snapshots)
+    await this.collection.applyImportedPackage(this.writes, this.importedAt, this.snapshots, partialChoice)
     this.committed = true
   }
 }
@@ -565,10 +631,12 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
   const now = options.now ?? new Date()
   const importedAt = now.toISOString()
   let data: CollectionData
+  let sourceFingerprint = options.sourceFingerprint
   if (sourceData) data = sourceData
   else {
     try {
       const bytes = await blobBytes(file!)
+      sourceFingerprint ??= await digestMedia(new Blob([ownedBuffer(bytes)]))
       validateAnkiArchive(bytes)
       const SQL = options.SQL ?? await browserSql()
       const { Collection: AnkiPackageCollection } = await import('ankipack')
@@ -578,6 +646,15 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
       throw new Error(`Unable to read “${file!.name}”: ${reason instanceof Error ? reason.message : 'invalid Anki package'}`)
     }
   }
+  const sourceIdentity = options.sourceIdentity ?? sourceFingerprint
+  const storedChoice = sourceIdentity ? await collection.settings.get(partialChoiceSettingKey(sourceIdentity)) : undefined
+  const candidateChoice = storedChoice?.value as Partial<PersistedPartialChoice> | undefined
+  const savedPartialChoice = candidateChoice?.version === 1
+    && candidateChoice.sourceIdentity === sourceIdentity
+    && Array.isArray(candidateChoice.excludedNoteGuids)
+    && Array.isArray(candidateChoice.skipped)
+    ? candidateChoice as PersistedPartialChoice
+    : undefined
   const issues: AnkiImportIssue[] = []
   const referencedTypeIds = new Set(data.notes.map((note) => note.mid))
   const types = decodeTypes(data, now, issues, referencedTypeIds)
@@ -639,13 +716,13 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
     deckBySource.set(sourceDeckId, parentId!)
     if (segments.length > 1) issues.push({ severity: 'info', code: 'deck-hierarchy', subject: fullName, detail: `Preserved nested deck path ${fullName}.` })
   }
-  const decks = [...deckRecords.values()]
+  let decks = [...deckRecords.values()]
   const sourceMedia = new Map(data.media.map((media) => [media.name, media]))
-  const noteTypes: NoteType[] = [...types.values()].map((type) => ({ id: type.localId, name: type.name, kind: type.kind, fields: type.fields, templates: type.templates, protected: false, createdAt: type.createdAt, updatedAt: type.updatedAt }))
-  const notes: Note[] = []
-  const cards: CardRecord[] = []
-  const reviews: ReviewEntry[] = []
-  const references: NoteMediaReference[] = []
+  let noteTypes: NoteType[] = [...types.values()].map((type) => ({ id: type.localId, name: type.name, kind: type.kind, fields: type.fields, templates: type.templates, protected: false, createdAt: type.createdAt, updatedAt: type.updatedAt }))
+  let notes: Note[] = []
+  let cards: CardRecord[] = []
+  let reviews: ReviewEntry[] = []
+  let references: NoteMediaReference[] = []
   const referencesByNoteId = new Map<string, NoteMediaReference[]>()
   const addReference = (reference: NoteMediaReference) => {
     references.push(reference)
@@ -728,16 +805,16 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
           const media = sourceMedia.get(name)
           const mime = media && mediaTypeForFilename(media.name)
           if (!media || !mime) {
-            issues.push({ severity: 'warning', code: 'media-unsupported', subject: name, detail: media ? 'Media type is not supported by the offline reviewer.' : 'Referenced media is missing from the package.' })
+            issues.push({ severity: 'error', code: 'media-unsupported', subject: name, detail: media ? 'Media type is not supported by the offline reviewer; the containing note cannot be imported whole.' : 'Referenced media is missing from the package; the containing note cannot be imported whole.' })
             continue
           }
           const mediaFile = new File([ownedBuffer(media.data)], media.name, { type: mime })
           try { validateMedia(mediaFile) } catch (reason) {
-            issues.push({ severity: 'warning', code: 'media-unsupported', subject: name, detail: reason instanceof Error ? reason.message : 'Media is unsupported' })
+            issues.push({ severity: 'error', code: 'media-unsupported', subject: name, detail: `${reason instanceof Error ? reason.message : 'Media is unsupported'} The containing note cannot be imported whole.` })
             continue
           }
           try { validateMediaBytes(media.data, mime) } catch {
-            issues.push({ severity: 'warning', code: 'media-malformed', subject: name, detail: 'Referenced media failed format validation and was excluded; the rest of its note remains available.' })
+            issues.push({ severity: 'error', code: 'media-malformed', subject: name, detail: 'Referenced media failed format validation; the containing note cannot be imported whole.' })
             continue
           }
           const digest = await digestMedia(mediaFile)
@@ -877,7 +954,7 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
     const cardId = sourceCardIds.get(row.cid)
     const card = cardId ? importedCardsById.get(cardId) : undefined
     if (!cardId || !card || row.ease < 1 || row.ease > 4) {
-      issues.push({ severity: 'warning', code: 'review-unsupported', subject: String(row.id), detail: card ? 'Manual or malformed review entry was not imported.' : 'Review belongs to a card that could not be imported.' })
+      issues.push({ severity: 'error', code: 'review-unsupported', subject: String(row.id), detail: card ? 'Manual or malformed review entry cannot be represented; the containing note cannot be imported whole.' : 'Review belongs to a card that could not be imported.' })
       continue
     }
     const reviewedAt = new Date(row.id).toISOString()
@@ -917,7 +994,106 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
     const index = noteTypes.findIndex((type) => type.id === nativeIdentity('note-type', typeId))
     if (index >= 0) noteTypes.splice(index, 1)
   }
-  const referencedNames = new Set([...references.map((reference) => reference.displayName), ...nativeReferencedNames])
+
+  const sourceNotesByGuid = new Map(data.notes.map((note) => [note.guid, note]))
+  const sourceNoteTypeNames = new Map(data.notetypes.map((type) => [type.id, type.name]))
+  const sourceCardsByNativeId = new Map(data.cards.map((card) => [String(card.id), card]))
+  const sourceCardsByNativeNoteId = new Map(data.cards.map((card) => [card.id, card.nid]))
+  const sourceNotesByNativeId = new Map(data.notes.map((note) => [note.id, note]))
+  const sourceReviewToNativeNoteId = new Map(data.revlog.flatMap((review) => {
+    const nativeNoteId = sourceCardsByNativeNoteId.get(review.cid)
+    return nativeNoteId === undefined ? [] : [[String(review.id), nativeNoteId] as const]
+  }))
+  const errorIssuesByGuid = new Map<string, AnkiImportIssue[]>()
+  const excludedNoteGuids = new Set(savedPartialChoice?.excludedNoteGuids ?? [])
+  const skippableCodes = new Set(['media-unsupported', 'media-malformed', 'review-unsupported'])
+  let hasUnmappedBlockingIssue = false
+  for (const issue of issues) {
+    if (issue.severity !== 'error' && !skippableCodes.has(issue.code)) continue
+    const guids = new Set<string>()
+    const directNote = sourceNotesByGuid.get(issue.subject)
+    if (directNote) guids.add(directNote.guid)
+    const sourceCard = sourceCardsByNativeId.get(issue.subject)
+    if (sourceCard) {
+      const note = sourceNotesByNativeId.get(sourceCard.nid)
+      if (note) guids.add(note.guid)
+    }
+    const reviewNoteId = sourceReviewToNativeNoteId.get(issue.subject)
+    if (reviewNoteId !== undefined) {
+      const note = sourceNotesByNativeId.get(reviewNoteId)
+      if (note) guids.add(note.guid)
+    }
+    const unsupportedType = data.notetypes.find((type) => type.name === issue.subject)
+    if (unsupportedType) for (const note of data.notes) if (note.mid === unsupportedType.id) guids.add(note.guid)
+    if (issue.code === 'deck-hierarchy-malformed') {
+      const badDeckIds = new Set(data.decks.filter((deck) => {
+        const path = deck.name.replaceAll(fieldSeparator, '::')
+        return path === issue.subject || path.startsWith(`${issue.subject}::`)
+      }).map((deck) => deck.id))
+      for (const card of data.cards) if (badDeckIds.has(card.odid || card.did)) {
+        const note = sourceNotesByNativeId.get(card.nid)
+        if (note) guids.add(note.guid)
+      }
+    }
+    if (skippableCodes.has(issue.code) && issue.code.startsWith('media-')) {
+      for (const note of data.notes) if (mediaNames(note.flds).includes(issue.subject)) guids.add(note.guid)
+    }
+    if (!guids.size) {
+      if (issue.severity === 'error') hasUnmappedBlockingIssue = true
+      continue
+    }
+    for (const guid of guids) {
+      excludedNoteGuids.add(guid)
+      errorIssuesByGuid.set(guid, [...(errorIssuesByGuid.get(guid) ?? []), issue])
+    }
+  }
+
+  const skipped: AnkiImportSkippedNote[] = []
+  for (const guid of excludedNoteGuids) {
+    const sourceNote = sourceNotesByGuid.get(guid)
+    if (!sourceNote) {
+      const previous = savedPartialChoice?.skipped.find((entry) => entry.guid === guid)
+      if (previous) skipped.push(previous)
+      continue
+    }
+    const nativeCardIds = (sourceCardsByNote.get(sourceNote.id) ?? []).map((card) => card.id)
+    const nativeCardIdSet = new Set(nativeCardIds)
+    const previous = savedPartialChoice?.skipped.find((entry) => entry.guid === guid)
+    const reasons = [...new Set([
+      ...(errorIssuesByGuid.get(guid) ?? []).map((issue) => `${issue.subject}: ${issue.detail}`),
+      ...(previous && !(errorIssuesByGuid.get(guid)?.length) ? ['Omitted under the previously saved representable-only import choice.'] : []),
+    ])]
+    const noteType = sourceNoteTypeNames.get(sourceNote.mid) ?? previous?.noteType ?? `Note type ${sourceNote.mid}`
+    skipped.push({
+      noteId: nativeIdentity('note', guid),
+      guid,
+      ankiNoteId: sourceNote.id,
+      noteType,
+      cardIds: nativeCardIds,
+      reviewIds: data.revlog.filter((review) => nativeCardIdSet.has(review.cid)).map((review) => review.id),
+      mediaNames: [...new Set(mediaNames(sourceNote.flds))].sort(),
+      reasons: reasons.length ? reasons : ['Omitted under the previously saved representable-only import choice.'],
+    })
+  }
+  const skippedNoteIds = new Set(skipped.map(({ noteId }) => noteId))
+  notes = notes.filter((note) => !skippedNoteIds.has(note.id))
+  const representedNoteIds = new Set(notes.map(({ id }) => id))
+  cards = cards.filter((card) => representedNoteIds.has(card.noteId))
+  const representedCardIds = new Set(cards.map(({ id }) => id))
+  reviews = reviews.filter((review) => representedCardIds.has(review.cardId))
+  references = references.filter((reference) => representedNoteIds.has(reference.noteId))
+  noteTypes = noteTypes.filter((noteType) => notes.some((note) => note.typeId === noteType.id))
+  const representedDeckIds = new Set(cards.map(({ deckId }) => deckId))
+  const deckById = new Map(decks.map((deck) => [deck.id, deck]))
+  for (const deckId of [...representedDeckIds]) {
+    let deck = deckById.get(deckId)
+    while (deck?.parentId) {
+      representedDeckIds.add(deck.parentId)
+      deck = deckById.get(deck.parentId)
+    }
+  }
+  decks = decks.filter((deck) => representedDeckIds.has(deck.id))
+  const referencedNames = new Set(references.map((reference) => reference.displayName))
   for (const media of data.media) if (!referencedNames.has(media.name)) issues.push({ severity: 'warning', code: 'media-unreferenced', subject: media.name, detail: 'Unreferenced or template-static media is reported but not attached to a note.' })
 
   const localNotes = await collection.notes.toArray()
@@ -1116,14 +1292,25 @@ const decisions: AnkiImportDecision[] = []
     if (!existing) writes.blobs.push(value)
   }
 
+  for (const item of skipped) {
+    decisions.push({ entity: 'note', id: item.noteId, action: 'skip' })
+    for (const cardId of item.cardIds) decisions.push({ entity: 'card', id: `anki-card:${cardId}`, action: 'skip' })
+    for (const reviewId of item.reviewIds) decisions.push({ entity: 'review', id: nativeIdentity('review', reviewId), action: 'skip' })
+    for (const reference of [...(referencesByNoteId.get(item.noteId) ?? [])]) decisions.push({ entity: 'mediaReference', id: reference.id, action: 'skip' })
+    const sourceNote = sourceNotesByGuid.get(item.guid)
+    const sourceType = sourceNote && data.notetypes.find((type) => type.id === sourceNote.mid)
+    if (sourceType && !types.has(sourceType.id)) decisions.push({ entity: 'noteType', id: nativeIdentity('note-type', sourceType.id), action: 'skip' })
+  }
+  const canImportRepresentable = skipped.length > 0 && Boolean(sourceIdentity) && !hasUnmappedBlockingIssue && (notes.length > 0 || Boolean(savedPartialChoice))
+
   return new PreparedAnkiImport(file?.name ?? 'AnkiWeb account', {
     decks: decks.length,
     noteTypes: noteTypes.length + imageOcclusionTypes.size,
     notes: notes.length,
     cards: cards.length,
     reviews: reviews.length,
-    media: data.media.length,
-  }, duplicates, issues, collection, writes, snapshots, importedAt, { decks, noteTypes, notes, cards, reviews, references }, decisions)
+    media: eligibleBlobs.length,
+  }, duplicates, issues, collection, writes, snapshots, importedAt, { decks, noteTypes, notes, cards, reviews, references }, decisions, skipped, canImportRepresentable, savedPartialChoice, sourceIdentity, sourceFingerprint)
 }
 
 export function prepareAnkiImport(file: File, collection: Collection, options: PrepareAnkiImportOptions = {}) {

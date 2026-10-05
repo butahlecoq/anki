@@ -3,6 +3,7 @@ import type { SyncSettings } from './collection.js'
 import { NativeSyncError } from './native-anki-sync.js'
 import { collection } from './collection.js'
 import { connectNativeAnkiAccount, prepareNativeAccountImport, type NativeAnkiAccountSession, type PreparedNativeAccountImport } from './native-anki-account-session.js'
+import { ImportSkipReport } from './ImportSkipReport.js'
 import { isSafeServiceEndpoint } from './sync-client.js'
 import { useDialogKeyboard } from './use-dialog-keyboard.js'
 
@@ -28,6 +29,8 @@ export function AnkiWebAccountDialog({ settings, onClose }: { settings: SyncSett
   const [password, setPassword] = useState('')
   const [session, setSession] = useState<NativeAnkiAccountSession>()
   const [accountPlan, setAccountPlan] = useState<PreparedNativeAccountImport>()
+  const [importRepresentableOnly, setImportRepresentableOnly] = useState(false)
+  const [importCommitted, setImportCommitted] = useState(false)
   const sessionRef = useRef<NativeAnkiAccountSession | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
@@ -69,6 +72,8 @@ export function AnkiWebAccountDialog({ settings, onClose }: { settings: SyncSett
     sessionRef.current = undefined
     setSession(undefined)
     setAccountPlan(undefined)
+    setImportRepresentableOnly(false)
+    setImportCommitted(false)
     setUsername('')
     setPassword('')
     setMessage('Disconnected. The downloaded account collection remains on this device.')
@@ -81,6 +86,8 @@ export function AnkiWebAccountDialog({ settings, onClose }: { settings: SyncSett
     try {
       const prepared = await prepareNativeAccountImport(session, collection)
       setAccountPlan(prepared)
+      setImportRepresentableOnly(false)
+      setImportCommitted(false)
       setMessage('Review the account snapshot before copying it to this device.')
     } catch (error) {
       setAccountPlan(undefined)
@@ -92,7 +99,8 @@ export function AnkiWebAccountDialog({ settings, onClose }: { settings: SyncSett
     if (!accountPlan) return
     setBusy(true)
     try {
-      await accountPlan.commit()
+      await accountPlan.commit({ importRepresentableOnly })
+      setImportCommitted(true)
       setMessage('The reviewed account snapshot is now available in this device’s offline collection. The AnkiWeb account remains authoritative; no changes were uploaded.')
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'The account collection was not copied. The local collection was left unchanged.')
@@ -138,8 +146,15 @@ export function AnkiWebAccountDialog({ settings, onClose }: { settings: SyncSett
                 <summary>Review all {accountPlan.prepared.plan.decisions.length} planned row changes</summary>
                 <ul>{accountPlan.prepared.plan.decisions.map((decision, index) => <li key={`${decision.entity}:${decision.id}:${index}`}>{decision.entity} · {decision.action} · {decision.id}</li>)}</ul>
               </details>
-              {accountPlan.prepared.plan.blocksImport && <p className="form-error" role="alert">This snapshot contains unsupported content. Nothing will be copied until the reported errors are resolved.</p>}
-              <button className="primary-action" type="button" disabled={busy || accountPlan.prepared.plan.blocksImport} onClick={() => void importAccountCollection()}>{busy ? 'Importing…' : 'Import reviewed collection to this device'}</button>
+              {accountPlan.prepared.plan.blocksImport && !accountPlan.prepared.plan.canImportRepresentable && <p className="form-error" role="alert">Some unsupported rows cannot be isolated safely. Nothing will be copied.</p>}
+              {accountPlan.prepared.plan.canImportRepresentable && accountPlan.prepared.plan.requiresPartialChoice && <label className="export-option import-partial-choice">
+                <input type="checkbox" checked={importRepresentableOnly} disabled={busy || importCommitted} onChange={(event) => setImportRepresentableOnly(event.target.checked)} />
+                Import {accountPlan.prepared.summary.notes} representable notes and skip {accountPlan.prepared.skipped.length} unsupported notes with {accountPlan.prepared.skipped.reduce((sum, note) => sum + note.cardIds.length, 0)} cards. Save this choice for later account refreshes.
+              </label>}
+              {accountPlan.prepared.plan.savedPartialChoice && <p className="import-warning" role="status">The saved representable-only choice remains active. These same notes stay omitted on later account refreshes.</p>}
+              <ImportSkipReport skipped={accountPlan.prepared.skipped} />
+              {importCommitted && <p className="import-complete" role="status">The representable portion is available in this device’s offline collection. Listed notes remain omitted; no changes were uploaded.</p>}
+              <button className="primary-action" type="button" disabled={busy || importCommitted || (accountPlan.prepared.plan.blocksImport && !importRepresentableOnly)} onClick={() => void importAccountCollection()}>{busy ? 'Importing…' : importRepresentableOnly ? 'Import representable notes to this device' : 'Import reviewed collection to this device'}</button>
             </section>}
             <p>Closing this dialog ends the in-memory session. Your downloaded collection remains available for offline study.</p>
             <div className="dialog-actions">

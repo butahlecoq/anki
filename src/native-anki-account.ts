@@ -25,5 +25,5 @@ export async function nativeAnkiAccountStorageNames(username: string): Promise<N
  * logout so study data is not silently erased. */
 export async function openNativeAnkiAccountStores(username: string) {
   const names = await nativeAnkiAccountStorageNames(username)
-  return { state: new NativeAnkiState(names.state), media: new NativeAnkiMedia(names.media) }
+  return { identity: names.state, state: new NativeAnkiState(names.state), media: new NativeAnkiMedia(names.media) }
 }

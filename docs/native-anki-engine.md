@@ -1,9 +1,10 @@
 # Native Anki synchronization engine
 
-Issue #61 implements the native boundary for #56. The engine and its verified
-account projection are not yet wired into the learner's editable collection;
-the visible account flow currently downloads a separate snapshot and lists its
-Decks.
+Issue #61 implements the native boundary for #56. The visible account flow
+downloads a separate snapshot and offers an explicit Import Plan to copy the
+supported portion into the learner's editable collection. Unsupported notes
+stay omitted by a saved local choice on later refreshes; this is not incremental
+two-way account synchronization.
 
 ## Implemented boundary
 
@@ -151,12 +152,12 @@ conflicts currently require an explicit backed-up full-direction decision.
 
 The native projection and writeback boundary in
 `src/native-anki-projection.ts` and `src/native-anki-writeback.ts` is implemented
-and verified by `src/native-anki-projection.test.ts`; it is not yet connected to
-the learner's editable collection. The visible #188 flow connects an account,
-downloads a snapshot and lists Decks, but does not upload notes, cards or study
-history. Issue #56 still needs the projection wired into the collection workflow
-and installed-iPhone/offline evidence. No real-account writes have been used as
-development evidence.
+and verified by `src/native-anki-projection.test.ts`. The visible #188 flow
+connects an account, downloads a snapshot, and copies a user-selected
+representable portion for offline study; it does not upload notes, cards or
+study history. Issue #56 still needs incremental synchronization wired into the
+collection workflow and installed-iPhone/offline evidence. No real-account
+writes have been used as development evidence.
 
 ## Primary protocol references
 
