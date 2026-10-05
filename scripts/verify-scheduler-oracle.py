@@ -377,6 +377,125 @@ def verify_mixed_sibling_bury_precedence(path: Path) -> list[str]:
         collection.close()
 
 
+def verify_alternate_review_and_gather_orders(path: Path) -> dict[str, object]:
+    """Emit native V3 queue order for the app's alternate review/gather modes."""
+    collection = Collection(str(path))
+    try:
+        update = collection.decks.get_deck_configs_for_update(1)
+        for entry in update.all_config:
+            config = entry.config.config
+            config.ClearField("fsrs_params_6")
+            config.fsrs_params_6.extend(update.defaults.config.fsrs_params_6)
+        request = UpdateDeckConfigsRequest(
+            target_deck_id=1,
+            mode=UpdateDeckConfigsMode.UPDATE_DECK_CONFIGS_MODE_NORMAL,
+            fsrs=True,
+        )
+        for entry in update.all_config:
+            request.configs.add().CopyFrom(entry.config)
+        request.limits.CopyFrom(update.current_deck.limits)
+        request.fsrs_health_check = update.fsrs_health_check
+        collection.decks.update_deck_configs(request)
+        collection.fsrs_short_term_with_steps_enabled = True
+
+        child = collection.decks.add_normal_deck_with_name("Default::Child")
+        child_config_id = collection.decks.add_config_returning_id(
+            "Child queue oracle", clone_from=collection.decks.config_dict_for_deck_id(1)
+        )
+        child_config = collection.decks.get_config(child_config_id)
+        collection.decks.update_config(child_config)
+        child_deck = collection.decks.get(child.id)
+        collection.decks.set_config_id_for_deck_dict(child_deck, child_config_id)
+        collection.decks.save(child_deck)
+
+        today = collection.sched.today
+        elapsed_at = int(time.time()) - 8 * 86_400
+        review_specs = [
+            ("parent-due-tie-short", 1, today, 4, 4.0, 8.0, 2),
+            ("parent-due-tie-long", 1, today, 30, 30.0, 4.0, 30),
+            ("parent-overdue", 1, today - 2, 10, 10.0, 6.0, 12),
+            ("child-due-tie", child.id, today, 7, 7.0, 5.0, 8),
+        ]
+        review_labels: dict[int, str] = {}
+        for index, (label, deck_id, due, interval, stability, difficulty, elapsed) in enumerate(review_specs):
+            note = collection.new_note(collection.models.by_name("Basic"))
+            note.fields = [f"queue review {label}", "synthetic"]
+            collection.add_note(note, deck_id)
+            generated_id = int(collection.db.scalar("select id from cards where nid = ?", note.id))
+            card_id = CARD_ID + 20_000 + index
+            collection.db.execute(
+                "update cards set id=?, type=2, queue=2, due=?, ivl=?, reps=5, lapses=0, data=? where id=?",
+                card_id, due, interval, json.dumps({"s": stability, "d": difficulty}), generated_id,
+            )
+            card = collection.get_card(card_id)
+            card.last_review_time = elapsed_at - (elapsed - 8) * 86_400
+            collection.update_card(card, skip_undo_entry=True)
+            review_labels[card_id] = label
+
+        config = collection.decks.config_dict_for_deck_id(1)
+        review_modes = {
+            "dueThenDeck": 1,
+            "deckThenDue": 2,
+            "intervalAscending": 3,
+            "intervalDescending": 4,
+            "retrievabilityAscending": 7,
+            "retrievabilityDescending": 11,
+        }
+        review_orders = {}
+        for name, mode in review_modes.items():
+            config["reviewOrder"] = mode
+            collection.decks.update_config(config)
+            collection.decks.select(1)
+            queued = collection.sched.get_queued_cards(fetch_limit=100)
+            review_orders[name] = [review_labels[int(item.card.id)] for item in queued.cards]
+
+        # Fresh new cards with fixed positions in parent and child decks make
+        # gather priority observable independently of the final sort order.
+        new_labels: dict[int, str] = {}
+        for index, (label, deck_id) in enumerate([
+            ("parent-position-3", 1), ("child-position-1", child.id),
+            ("parent-position-2", 1), ("child-position-4", child.id),
+        ]):
+            note = collection.new_note(collection.models.by_name("Basic"))
+            note.fields = [f"queue new {label}", "synthetic"]
+            collection.add_note(note, deck_id)
+            generated_id = int(collection.db.scalar("select id from cards where nid = ?", note.id))
+            card_id = CARD_ID + 30_000 + index
+            position = int(label.rsplit("-", 1)[1])
+            collection.db.execute(
+                "update cards set id=?, type=0, queue=0, due=?, data='{}' where id=?",
+                card_id, position, generated_id,
+            )
+            new_labels[card_id] = label
+        config = collection.decks.config_dict_for_deck_id(1)
+        config["newSortOrder"] = 1  # NO_SORT: expose gathering order.
+        gather_modes = {
+            "deck": 0,
+            "ascendingPosition": 1,
+            "descendingPosition": 2,
+            "randomNotes": 3,
+            "randomCards": 4,
+            "deckThenRandomNotes": 5,
+        }
+        gather_orders = {}
+        for name, mode in gather_modes.items():
+            config["newGatherPriority"] = mode
+            collection.decks.update_config(config)
+            collection.decks.select(1)
+            queued = collection.sched.get_queued_cards(fetch_limit=100)
+            gather_orders[name] = [new_labels[int(item.card.id)] for item in queued.cards if int(item.card.id) in new_labels]
+
+        return {
+            "today": today,
+            "reviewModes": review_modes,
+            "reviewOrders": review_orders,
+            "gatherModes": gather_modes,
+            "gatherOrders": gather_orders,
+        }
+    finally:
+        collection.close()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--write-matrix-fixture", action="store_true", help="refresh the checked-in normalized matrix used by client parity tests")
@@ -470,6 +589,7 @@ def main() -> None:
             selected_parent_review_limit = verify_selected_parent_review_limit(Path(directory) / "parent-review-limit-oracle.anki2")
             sibling_bury_categories = verify_sibling_bury_categories(Path(directory) / "sibling-bury-oracle.anki2")
             mixed_sibling_bury_precedence = verify_mixed_sibling_bury_precedence(Path(directory) / "mixed-sibling-bury-oracle.anki2")
+            alternate_queue_orders = verify_alternate_review_and_gather_orders(Path(directory) / "alternate-queue-oracle.anki2")
             persisted_state_grade_matrix = verify_persisted_state_grade_matrix(collection)
             if args.write_matrix_fixture:
                 write_persisted_matrix_fixture(persisted_state_grade_matrix)
@@ -498,6 +618,7 @@ def main() -> None:
                 "nativeSelectedParentReviewLimit": selected_parent_review_limit,
                 "nativeSiblingBuryCategories": sibling_bury_categories,
                 "nativeMixedSiblingBuryPrecedence": mixed_sibling_bury_precedence,
+                "nativeAlternateQueueOrders": alternate_queue_orders,
                 "nativePersistedStateGradeMatrix": persisted_state_grade_matrix,
             }, indent=2))
         finally:
