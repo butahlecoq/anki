@@ -650,6 +650,8 @@ test('reviewer flag control and keyboard shortcut update the current card', asyn
     const flagControl = await screen.findByRole('combobox', { name: 'Card flag' })
     fireEvent.change(flagControl, { target: { value: '1' } })
     await waitFor(async () => expect(await collection.cards.get(card.id)).toMatchObject({ flag: 1 }))
+    await waitFor(() => expect(flagControl).toBeEnabled())
+    flagControl.blur()
     expect(screen.getByRole('button', { name: 'Show answer' })).toBeVisible()
     fireEvent.keyDown(window, { key: 'f' })
     await waitFor(async () => expect(await collection.cards.get(card.id)).toMatchObject({ flag: 2 }))

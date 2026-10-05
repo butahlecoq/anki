@@ -18,6 +18,7 @@ import { isShortcutBlocked } from './keyboard-shortcuts'
 import { TemplatePreview } from './TemplatePreview'
 import { useDialogKeyboard } from './use-dialog-keyboard'
 import { useDialogSubmit } from './use-dialog-submit'
+import { userFacingStorageError } from './offline-storage'
 type PendingAttachment = { file: File; side: 'front' | 'back'; playback: 'automatic' | 'manual' }
 
 export function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: Note; onClose: () => void }) {
@@ -52,7 +53,7 @@ export function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: N
       setError('')
       requestAnimationFrame(() => { textarea.focus(); textarea.setSelectionRange(start, start + replacement.length) })
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to make cloze deletion')
+      setError(userFacingStorageError(reason, 'Unable to make cloze deletion'))
     }
   }
 
@@ -66,7 +67,7 @@ export function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: N
       setAttachments((current) => [...current, ...next])
       setError('')
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to attach media')
+      setError(userFacingStorageError(reason, 'Unable to attach media'))
     }
   }
 
@@ -135,7 +136,7 @@ export function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: N
 
 function ExistingMedia({ media }: { media: NoteMediaReference }) {
   const [error, setError] = useState('')
-  return <div className="media-attachment"><strong>{media.displayName}</strong><span>{media.side} · {media.kind}</span><button className="text-button" type="button" onClick={() => void collection.removeMedia(media.id).catch((reason) => setError(reason instanceof Error ? reason.message : 'Unable to remove media'))}>Remove</button>{error && <p className="form-error" role="alert">{error}</p>}</div>
+  return <div className="media-attachment"><strong>{media.displayName}</strong><span>{media.side} · {media.kind}</span><button className="text-button" type="button" onClick={() => void collection.removeMedia(media.id).catch((reason) => setError(userFacingStorageError(reason, 'Unable to remove media')))}>Remove</button>{error && <p className="form-error" role="alert">{error}</p>}</div>
 }
 
 export function MoveNoteDialog({ note, onClose }: { note: Note; onClose: () => void }) {
@@ -285,7 +286,7 @@ export function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: str
       setReviewAnnouncement(`Recorded ${Rating[rating]}. ${reviewsRecorded + 1} rated this session.`)
       setShownAnswerCardId(null)
     } catch (reason) {
-      setActionError(reason instanceof Error && reason.message ? reason.message : 'Unable to update card')
+      setActionError(userFacingStorageError(reason, 'Unable to update card'))
     } finally {
       setIsAnswering(false)
     }
@@ -300,7 +301,7 @@ export function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: str
       setReviewAnnouncement(message)
       setShownAnswerCardId(null)
     } catch (reason) {
-      setActionError(reason instanceof Error && reason.message ? reason.message : 'Unable to update card')
+      setActionError(userFacingStorageError(reason, 'Unable to update card'))
     } finally {
       setIsAnswering(false)
     }
@@ -327,7 +328,7 @@ export function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: str
       setDeletingNote(false)
       setShownAnswerCardId(null)
     } catch (reason) {
-      setActionError(reason instanceof Error && reason.message ? reason.message : 'Unable to delete note')
+      setActionError(userFacingStorageError(reason, 'Unable to delete note'))
     } finally {
       setIsAnswering(false)
     }
@@ -345,7 +346,7 @@ export function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: str
       setShownAnswerCardId(null)
       setReviewsRecorded((count) => (pendingUndo?.kind === 'review' ? Math.max(0, count - 1) : count))
     } catch (reason) {
-      setActionError(reason instanceof Error && reason.message ? reason.message : 'Unable to undo')
+      setActionError(userFacingStorageError(reason, 'Unable to undo'))
     } finally {
       setIsAnswering(false)
     }

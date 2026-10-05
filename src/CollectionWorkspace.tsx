@@ -26,6 +26,9 @@ import { useDialogSubmit } from './use-dialog-submit'
 import { SyncControls } from './SyncControls'
 import { ImportDialog } from './ImportDialog'
 import { MoveNoteDialog, NoteDialog, ReviewSession } from './ReviewSession'
+import { syncCollection } from './sync-client'
+import { digestMedia } from './media'
+import { userFacingStorageError } from './offline-storage'
 
 function CountStrip({ counts, reviews }: { counts: DeckCounts; reviews: number }) {
   return (
@@ -326,7 +329,7 @@ function CardManagementDialog({ note, onClose }: { note: Note; onClose: () => vo
     try {
       await action()
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Unable to update card')
+      setError(userFacingStorageError(reason, 'Unable to update card'))
     } finally {
       setBusyCardId(null)
     }
@@ -371,8 +374,10 @@ function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () =>
     const references = noteIds.length ? await collection.noteMedia.where('noteId').anyOf(noteIds).toArray() : []
     const digests = [...new Set(references.map((reference) => reference.digest))]
     const blobs = digests.length ? await collection.mediaBlobs.bulkGet(digests) : []
-    const available = new Set(blobs.filter((blob): blob is NonNullable<typeof blob> => Boolean(blob)).map((blob) => blob.digest))
-    return { required: digests.length, missing: digests.filter((digest) => !available.has(digest)).length }
+    const available = await Promise.all(blobs.map(async (blob, index) => {
+      return Boolean(blob && await digestMedia(blob.blob) === digests[index])
+    }))
+    return { required: digests.length, missing: available.filter((isAvailable) => !isAvailable).length }
   }, [deckId])
   const [deckDialog, setDeckDialog] = useState(false)
   const [childDialog, setChildDialog] = useState(false)
@@ -399,11 +404,17 @@ function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () =>
     setPreparingOffline(true)
     setOfflineMessage('Syncing the collection to download this deck’s missing media…')
     try {
+      const noteIds = await collection.notes.where('deckId').equals(deckId).primaryKeys()
+      const references = noteIds.length ? await collection.noteMedia.where('noteId').anyOf(noteIds.map(String)).toArray() : []
+      for (const digest of new Set(references.map((reference) => reference.digest))) {
+        const blob = await collection.verifiedMediaBlob(digest)
+        if (blob && await digestMedia(blob.blob) !== digest) await collection.mediaBlobs.delete(digest)
+      }
       const result = await syncCollection(collection)
       const current = await collection.notes.where('deckId').equals(deckId).primaryKeys()
-      const references = current.length ? await collection.noteMedia.where('noteId').anyOf(current.map(String)).toArray() : []
+      const latestReferences = current.length ? await collection.noteMedia.where('noteId').anyOf(current.map(String)).toArray() : []
       const missing = new Set((await collection.missingReferencedMedia()).map((reference) => reference.digest))
-      const deckMissing = new Set(references.map((reference) => reference.digest).filter((digest) => missing.has(digest))).size
+      const deckMissing = new Set(latestReferences.map((reference) => reference.digest).filter((digest) => missing.has(digest))).size
       if (deckMissing === 0) setOfflineMessage('This deck is ready for offline review. All referenced media is stored on this device.')
       else if (result.state === 'authentication-required') setOfflineMessage(`This deck needs ${deckMissing} media file${deckMissing === 1 ? '' : 's'} from the paired PC. Connect to the PC, sync, and prepare the deck again.`)
       else if (result.state === 'complete') setOfflineMessage(`${deckMissing} media file${deckMissing === 1 ? '' : 's'} could not be downloaded. Keep the PC reachable and try again before going offline.`)

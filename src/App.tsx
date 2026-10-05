@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
-import { OFFLINE_READY_EVENT, OFFLINE_UNAVAILABLE_EVENT, UPDATE_READY_EVENT } from './appEvents'
+import { clearUpdateWaiting, isUpdateWaiting, OFFLINE_READY_EVENT, OFFLINE_UNAVAILABLE_EVENT, UPDATE_READY_EVENT } from './appEvents'
 import { chooseAppearance, readAppearance, watchAppearance, type Appearance } from './appearance'
 import { CollectionWorkspace } from './CollectionWorkspace'
 import { supportsServiceWorkers } from './browser-capabilities'
 import { useRoute } from './route'
 import { buildIdentity } from './build-identity'
+import { activateAvailableUpdate } from './service-worker-update'
 
 function useOnlineStatus() {
   const [online, setOnline] = useState(() => navigator.onLine)
@@ -51,12 +52,30 @@ export function App() {
   const online = useOnlineStatus()
   const appearance = useAppearance()
   const offlineStatus = useOfflineShellStatus()
-  const [updateReady, setUpdateReady] = useState(false)
+  const [updateReady, setUpdateReady] = useState(isUpdateWaiting)
+  const [updateError, setUpdateError] = useState('')
+  const [activatingUpdate, setActivatingUpdate] = useState(false)
   const [route] = useRoute()
   const onStatistics = route.view === 'statistics'
   const onNoteTypes = route.view === 'note-types'
   const onBrowse = route.view === 'browse'
   const onStudy = route.view === 'study' || route.view === 'custom-review'
+
+  async function activateUpdate() {
+    setActivatingUpdate(true)
+    setUpdateError('')
+    try {
+      const activated = await activateAvailableUpdate()
+      if (!activated) {
+        setUpdateError('This update is no longer waiting. Reload to check for the current version.')
+        setActivatingUpdate(false)
+      }
+      clearUpdateWaiting()
+    } catch {
+      setUpdateError('The update could not be activated. Your saved collection remains on this device; try reloading when you are online.')
+      setActivatingUpdate(false)
+    }
+  }
   const connection = online
     ? offlineStatus === 'ready' ? 'Offline shell ready' : offlineStatus === 'checking' ? 'Preparing offline shell' : 'Offline cache unavailable'
     : offlineStatus === 'ready' ? 'Offline shell active' : 'Offline shell unavailable'
@@ -119,7 +138,7 @@ export function App() {
         <a className={onBrowse ? 'active' : ''} href="#browse" aria-label="Browse"><span>Browse</span></a>
         <a className={onStatistics ? 'active' : ''} href="#statistics" aria-label="Statistics"><span>Stats</span></a>
       </nav>
-      {updateReady && <div className="update-toast" role="status"><span>A new version is ready.</span><button type="button" onClick={() => window.location.reload()}>Reload</button></div>}
+      {updateReady && <div className="update-toast" role="status"><span>{updateError || (activatingUpdate ? 'Updating the app…' : 'A new version is ready.')}</span>{!activatingUpdate && <button type="button" onClick={() => updateError ? window.location.reload() : void activateUpdate()}>{updateError ? 'Reload to check' : 'Update app'}</button>}</div>}
     </div>
   )
 }
