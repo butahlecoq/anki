@@ -71,8 +71,8 @@ function resolveTemplateMedia(template: string, media: RenderOptions['media']) {
 
 function removeTemplateResourceElements(template: string): string {
   return template
-    .replace(/<(script|object|iframe|audio|video)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '')
-    .replace(/<(?:script|object|iframe|audio|video|img|source|track|embed|link|base|meta)\b[^>]*\/?>/gi, '')
+    .replace(/<(script|style|object|iframe|audio|video|svg|math)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '')
+    .replace(/<(?:script|style|object|iframe|audio|video|svg|math|img|source|track|embed|link|base|meta)\b[^>]*\/?>/gi, '')
 }
 
 function renderField(value: string, media: RenderOptions['media'], preserveHtml = false): string {
@@ -180,13 +180,12 @@ export function validateTemplate(template: string, fieldNames: readonly string[]
 
 /** Replace fields without evaluating template text or field contents as code. */
 export function renderTemplate(template: string, fields: Record<string, string>, front?: string, options: RenderOptions = {}): RenderedTemplate {
-  // Strip untrusted template resource loaders before resolving trusted local
-  // media placeholders; CSP remains a second boundary at the preview frame.
-  template = removeTemplateResourceElements(template)
+  // Remove raw resource loaders before trusted local media placeholders are
+  // expanded; CSP and a script-free sandbox remain second boundaries.
+  const navigation = resolveTemplateNavigation(removeTemplateResourceElements(template), fields)
+  template = navigation.markup
   const templateMedia = resolveTemplateMedia(template, options.media)
   template = templateMedia.html
-  const navigation = resolveTemplateNavigation(template, fields)
-  template = navigation.markup
   const side = options.side ?? (front === undefined ? 'front' : 'back')
   const known = new Set(Object.keys(fields))
   let html = ''

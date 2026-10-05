@@ -618,6 +618,34 @@ test('serves health, pairing, and authenticated sync over HTTP', async () => {
   }
 })
 
+test('rate limits unsuccessful pairing attempts by peer and then allows a valid code after the window', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-pair-rate-limit-'))
+  const service = createSyncService({ databasePath: join(runtimeDirectory, 'collection.sqlite') })
+  const server = createServer(createSyncHttpHandler(service, { pairingAttemptLimit: 2, pairingWindowMs: 1_000 }))
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  assert.ok(address && typeof address !== 'string')
+  const origin = `http://127.0.0.1:${address.port}`
+  try {
+    const oversized = await fetch(`${origin}/api/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: 'wrong-code', deviceId: 'x'.repeat(5000) }) })
+    assert.equal(oversized.status, 413)
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await fetch(`${origin}/api/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: 'wrong-code', deviceId: `phone-${attempt}` }) })
+      assert.equal(response.status, 400)
+    }
+    const limited = await fetch(`${origin}/api/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: 'wrong-code', deviceId: 'phone-limited' }) })
+    assert.equal(limited.status, 429)
+    assert.equal(limited.headers.get('retry-after'), '1')
+    const code = service.createPairingCode()
+    await new Promise((resolve) => setTimeout(resolve, 1_100))
+    const paired = await fetch(`${origin}/api/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code, deviceId: 'phone-after-window' }) })
+    assert.equal(paired.status, 201)
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
+    service.close()
+  }
+})
+
 test('exposes manual backup download and verified preview and snapshots before an HTTP sync mutation', async () => {
   runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-backup-http-'))
   const service = createSyncService({ databasePath: join(runtimeDirectory, 'collection.sqlite') })

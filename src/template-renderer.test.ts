@@ -35,6 +35,12 @@ describe('renderTemplate', () => {
       isEmpty: false,
     })
   })
+  test('removes untrusted template resource elements while preserving local media placeholders', () => {
+    const media = { '猫.png': { kind: 'image' as const, url: 'blob:verified-media' } }
+    const rendered = renderTemplate('<script>parent.fetch("/api/backups")</script><img src="https://attacker.invalid/x"><iframe src="file:///private/anki.anki2"></iframe><svg><image href="file:///private/anki.anki2"></image></svg><b>[[kiroku-media:%E7%8C%AB.png]]</b>', {}, undefined, { media })
+    expect(rendered.html).toBe('<b><img class="card-image" src="blob:verified-media" alt="猫.png"></b>')
+    expect(rendered.html).not.toMatch(/attacker|file:|<script|<iframe/i)
+  })
 
   test('masks only the active cloze ordinal, using hints and one card for repeated ordinals', () => {
     const fields = { Text: '{{c1::東京::city}}と{{c2::大阪}}へ{{c1::行く}}' }
