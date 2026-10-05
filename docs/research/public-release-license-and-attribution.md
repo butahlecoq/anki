@@ -76,7 +76,9 @@ The relevant primary sources disagree:
 * [Ankipack v0.3.1 proto/LICENSE](https://github.com/ImGajeed76/ankipack/blob/v0.3.1/proto/LICENSE)
   says the `.proto` files came from Anki and are AGPL-3.0-or-later, but says
   the generated code and package are distributed under MIT.
-* Generated files in that same [Ankipack source tree](https://github.com/ImGajeed76/ankipack/tree/v0.3.1/src/generated/anki)
+* Exact generated source files, including
+  [`collection_pb.ts`](https://github.com/ImGajeed76/ankipack/blob/v0.3.1/src/generated/anki/collection_pb.ts)
+  and [`sync_pb.ts`](https://github.com/ImGajeed76/ankipack/blob/v0.3.1/src/generated/anki/sync_pb.ts),
   instead include headers identifying Ankitects Pty Ltd and contributors and
   GNU AGPL v3 or later. The exact installed files under `node_modules/ankipack/dist/generated/anki/`
   carry these headers as well.
