@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto'
-import { expect, test } from 'vitest'
+import { expect, test, vi } from 'vitest'
 import { createCollection, Rating } from './collection'
 import { applyBulkAction, applyFieldChanges, fieldChangePreview, selectionSummary, type FieldOperation } from './browser-maintenance'
 
@@ -25,6 +25,25 @@ test('card-level flags and suspension retain sibling identity; note view affects
     await applyBulkAction(db, { view: 'notes', ids: [note.id] }, { kind: 'suspend', suspended: false })
     expect((await db.cards.toArray()).every((card) => !card.manualSuspended)).toBe(true)
     expect((await db.cards.toArray()).map((card) => card.id).sort()).toEqual(cards.map((card) => card.id).sort())
+  } finally { db.close(); await db.delete() }
+})
+
+test('bulk mutations own one explicit transaction scope instead of all Collection tables', async () => {
+  const { db, note } = await fixture()
+  try {
+    const transaction = vi.spyOn(db, 'transaction')
+    await applyBulkAction(db, { view: 'notes', ids: [note.id] }, { kind: 'tags', mode: 'add', tags: ['reviewed'] })
+    expect(transaction.mock.calls[0]?.slice(0, 2)).toEqual([
+      'rw',
+      [db.noteTypes, db.decks, db.notes, db.cards, db.reviewEntries, db.noteMedia, db.outbox, db.syncRevisions, db.deletedEntities, db.settings],
+    ])
+
+    transaction.mockClear()
+    const updated = await db.notes.get(note.id)
+    const type = await db.noteTypes.get(note.typeId)
+    const field = type!.fields[0]!
+    await applyFieldChanges(db, [{ noteId: note.id, typeId: type!.id, fieldId: field.id, before: updated!.fields[field.id]!, after: '犬', expectedNote: updated!, expectedType: type! }])
+    expect(transaction.mock.calls[0]?.slice(0, 2)).toEqual(['rw', [db.noteTypes, db.notes, db.cards, db.outbox, db.syncRevisions]])
   } finally { db.close(); await db.delete() }
 })
 

@@ -12,6 +12,7 @@ import { decodeFieldText, sanitizeFieldHtml } from './field-html'
 import { ANKI_ARCHIVE_LIMITS, validateAnkiArchive } from './anki-archive'
 import { readKirokuSchedule, readKirokuReview } from './anki-scheduling-metadata'
 import { derivedNativeId, hasLegacyDeckIdentity, nativeIdentity } from './anki-identity'
+import { readAnkiImportMediaBlobs, readAnkiImportSnapshot } from './collection-queries'
 
 /** The Deck Path a deck occupies in the app's own hierarchy. */
 function deckPath(deck: Deck, byId: ReadonlyMap<string, Deck>, seen = new Set<string>()): string {
@@ -696,7 +697,8 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
     }
   }
   const sourceIdentity = options.sourceIdentity ?? sourceFingerprint
-  const storedChoice = sourceIdentity ? await collection.settings.get(partialChoiceSettingKey(sourceIdentity)) : undefined
+  const local = await readAnkiImportSnapshot(collection, sourceIdentity ? partialChoiceSettingKey(sourceIdentity) : undefined)
+  const storedChoice = local.partialChoice
   const candidateChoice = storedChoice?.value as Partial<PersistedPartialChoice> | undefined
   const savedPartialChoice = candidateChoice?.version === 1
     && candidateChoice.sourceIdentity === sourceIdentity
@@ -721,7 +723,7 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
   // Local decks already occupy Deck Paths. Matching them here keeps a repeat
   // import from writing a second deck of the same path, and is where a deck
   // still carrying the legacy identity form is adopted and rekeyed.
-  const localDecks = await collection.decks.toArray()
+  const localDecks = local.decks
   const localDecksById = new Map(localDecks.map((deck) => [deck.id, deck]))
   const localDecksByPath = new Map<string, Deck[]>()
   for (const deck of localDecks) {
@@ -1178,11 +1180,11 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
   const referencedNames = new Set(references.map((reference) => reference.displayName))
   for (const media of data.media) if (!referencedNames.has(media.name)) issues.push({ severity: 'warning', code: 'media-unreferenced', subject: media.name, detail: 'Unreferenced or template-static media is reported but not attached to a note.' })
 
-  const localNotes = await collection.notes.toArray()
-  const localCards = await collection.cards.toArray()
-  const localReviews = await collection.reviewEntries.toArray()
-  const localNoteTypes = await collection.noteTypes.toArray()
-  const localReferences = await collection.noteMedia.toArray()
+  const localNotes = local.notes
+  const localCards = local.cards
+  const localReviews = local.reviews
+  const localNoteTypes = local.noteTypes
+  const localReferences = local.references
   const localRowsByTable = {
     decks: new Map(localDecks.map((value) => [value.id, value])),
     noteTypes: new Map(localNoteTypes.map((value) => [value.id, value])),
@@ -1249,7 +1251,7 @@ const decisions: AnkiImportDecision[] = []
     // all, and restoring it insists that deck still exists. Left pointing at a
     // superseded identity it would fail permanently, so the copy follows too.
     for (const key of ['noteDeletionUndo'] as const) {
-      const stored = await collection.settings.get(key)
+      const stored = key === 'noteDeletionUndo' ? local.noteDeletionUndo : undefined
       const undo = stored?.value as { note?: { deckId?: string }; cards?: Array<{ deckId?: string }>; reviews?: Array<{ deckId?: string }> } | undefined
       if (!undo) continue
       const notes = undo.note?.deckId === from ? [undo.note] : []
@@ -1367,7 +1369,7 @@ const decisions: AnkiImportDecision[] = []
   }
   const eligibleMediaDigests = new Set(references.filter((reference) => !keptAggregateNoteIds.has(reference.noteId)).map((reference) => reference.digest))
   const eligibleBlobs = [...blobs.values()].filter((value) => eligibleMediaDigests.has(value.digest))
-  const existingBlobs = await collection.mediaBlobs.bulkGet(eligibleBlobs.map((value) => value.digest))
+  const existingBlobs = await readAnkiImportMediaBlobs(collection, eligibleBlobs.map((value) => value.digest))
   for (const [index, value] of eligibleBlobs.entries()) {
     const existing = existingBlobs[index]
     snapshots.push({ table: 'mediaBlobs', id: value.digest, value: fingerprint(existing) })
