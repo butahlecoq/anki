@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { hashForRoute, routeFromHash, type Route } from './route'
 
 /**
@@ -20,6 +22,11 @@ const cases: Array<[string, Route]> = [
 ]
 
 describe('the hash parser', () => {
+  test('App delegates hash changes to the route module', () => {
+    const app = readFileSync(resolve(process.cwd(), 'src/App.tsx'), 'utf8')
+    expect(app).toContain('useRoute')
+    expect(app).not.toMatch(/location\.hash|hashchange/)
+  })
   test('each route the app can show is reachable from its hash', () => {
     for (const [hash, route] of cases) expect(`${hash} -> ${JSON.stringify(routeFromHash(hash))}`).toBe(`${hash} -> ${JSON.stringify(route)}`)
   })
