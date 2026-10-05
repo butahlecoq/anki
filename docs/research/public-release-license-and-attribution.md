@@ -32,17 +32,18 @@ license files; they are not a conclusion about the combined app.
 
 | Component | Resolved version | Published licence / attribution |
 | --- | ---: | --- |
-| Ankipack | 0.3.1 | MIT in package metadata and root `LICENSE`; see unresolved generated-code conflict above |
-| `@bufbuild/protobuf` | 2.16.0 | `(Apache-2.0 AND BSD-3-Clause)` in package metadata |
-| `fflate` | 0.8.3 | MIT |
-| `fzstd` | 0.1.1 | MIT |
-| Dexie | 4.4.6 | Apache-2.0 |
-| `dexie-react-hooks` | 4.4.0 | Apache-2.0 |
-| React / React DOM | 19.3.0 | MIT; React DOM also depends on `scheduler` 0.28.0 (MIT) |
-| `ts-fsrs` | 5.4.2 | MIT |
-| `sql.js` | 1.12.0 | MIT; its project README identifies SQLite as public domain and sql.js as MIT |
-| JetBrains Mono variable font | 5.3.0 | SIL Open Font License 1.1; JetBrains Mono Project Authors |
-| Workbox generated service worker | 7.4.0 | MIT; Google LLC copyright notice appears in the distributed Workbox bundle |
+| Ankipack | 0.3.1 | [npm version metadata](https://www.npmjs.com/package/ankipack/v/0.3.1) says MIT; its [root LICENSE](https://github.com/ImGajeed76/ankipack/blob/v0.3.1/LICENSE) is MIT; see unresolved generated-code conflict above |
+| `@bufbuild/protobuf` | 2.16.0 | [npm version metadata](https://www.npmjs.com/package/@bufbuild/protobuf/v/2.16.0) says `(Apache-2.0 AND BSD-3-Clause)` |
+| `fflate` | 0.8.3 | [npm version metadata](https://www.npmjs.com/package/fflate/v/0.8.3) says MIT |
+| `fzstd` | 0.1.1 | [npm version metadata](https://www.npmjs.com/package/fzstd/v/0.1.1) says MIT |
+| Dexie | 4.4.6 | [npm version metadata](https://www.npmjs.com/package/dexie/v/4.4.6) says Apache-2.0 |
+| `dexie-react-hooks` | 4.4.0 | [npm version metadata](https://www.npmjs.com/package/dexie-react-hooks/v/4.4.0) says Apache-2.0 |
+| React | 19.3.0 | [npm version metadata](https://www.npmjs.com/package/react/v/19.3.0) says MIT |
+| React DOM | 19.3.0 | [npm version metadata](https://www.npmjs.com/package/react-dom/v/19.3.0) says MIT; depends on [`scheduler` 0.28.0](https://www.npmjs.com/package/scheduler/v/0.28.0), also MIT |
+| `ts-fsrs` | 5.4.2 | [npm version metadata](https://www.npmjs.com/package/ts-fsrs/v/5.4.2) says MIT; [LICENSE](https://github.com/open-spaced-repetition/ts-fsrs/blob/v5.4.2/LICENSE) |
+| `sql.js` | 1.12.0 | [npm version metadata](https://www.npmjs.com/package/sql.js/v/1.12.0) says MIT; its [v1.12.0 README](https://github.com/sql-js/sql.js/blob/v1.12.0/README.md) identifies SQLite as public domain and sql.js as MIT |
+| JetBrains Mono variable font | 5.3.0 | [npm version metadata](https://www.npmjs.com/package/@fontsource-variable/jetbrains-mono/v/5.3.0) says OFL-1.1; the exact package's `LICENSE` identifies JetBrains Mono Project Authors |
+| Workbox generated service worker/runtime | 7.4.1 | [workbox-build](https://www.npmjs.com/package/workbox-build/v/7.4.1), [workbox-core](https://www.npmjs.com/package/workbox-core/v/7.4.1), [workbox-precaching](https://www.npmjs.com/package/workbox-precaching/v/7.4.1), and [workbox-window](https://www.npmjs.com/package/workbox-window/v/7.4.1) package metadata say MIT; Google LLC copyright notice appears in the distributed Workbox bundle |
 
 Build inspection found SQL.js WASM, JetBrains Mono WOFF2 files, a Workbox
 runtime chunk and service-worker script, plus Ankipack-derived protocol
@@ -59,7 +60,8 @@ specifies its notice and font-redistribution terms. SQLite describes its code
 as public domain in its [official licensing page](https://www.sqlite.org/copyright.html).
 
 The application repository has no root `LICENSE` and no third-party notices
-file at the checked head. `package.json` marks the package `private`, which is
+file at the checked head. The [project package metadata](https://github.com/butahlecoq/anki/blob/f3b425a5b2cdf6ae5bcfd599dbae827cc993d9be/package.json)
+marks the package `private`, which is
 an npm publication setting and does not itself state a project-wide licence.
 The available source does not establish an app-wide licence or a project-wide
 copyright grant. Do not infer either from the package setting or README.
@@ -83,7 +85,7 @@ The relevant primary sources disagree:
   `notes`, `notetypes`, and `sync` protobuf files. The generated source headers
   are not present in the minified bundle.
 
-The app's own [Ankipack import](https://github.com/butahlecoq/anki/blob/main/src/)
+The app's own [Ankipack import](https://github.com/butahlecoq/anki/blob/f3b425a5b2cdf6ae5bcfd599dbae827cc993d9be/src/anki-import.ts)
 and build output establish that this code is bundled. The official Anki
 protocol source at [tag 26.09.3](https://github.com/ankitects/anki/tree/26.09.3/proto)
 is useful provenance, but does not settle the conflicting Ankipack statements.
