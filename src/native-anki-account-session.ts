@@ -26,6 +26,22 @@ export interface PreparedNativeAccountImport {
   commit(options?: AnkiImportCommitOptions): Promise<void>
 }
 
+/** Seed a first account checkpoint without replacing durable local state on
+ * later logins. The native snapshot remains the sync engine's local side;
+ * callers must use the explicit sync/full-sync workflow to reconcile it. */
+export async function ensureNativeAccountCheckpoint(
+  state: Pick<NativeAnkiAccountSession['state'], 'checkpoint' | 'replace'>,
+  download: () => Promise<Uint8Array>,
+) {
+  const existing = await state.checkpoint()
+  if (existing) return { checkpoint: existing, downloaded: false }
+  const snapshot = await download()
+  await state.replace(snapshot, null)
+  const checkpoint = await state.checkpoint()
+  if (!checkpoint) throw new Error('The downloaded AnkiWeb collection could not be retained locally.')
+  return { checkpoint, downloaded: true }
+}
+
 let sqlPromise: Promise<SqlJsStatic> | undefined
 function nativeSql() {
   return sqlPromise ??= initSqlJs({ locateFile: () => sqlWasmUrl })
@@ -47,11 +63,10 @@ export async function connectNativeAnkiAccount(
   try {
     const SQL = await nativeSql()
     const client = await NativeAnkiClient.login(createPairedAnkiWebTransport(settings, fetcher), identity, password, options)
-    const snapshot = await client.downloadCollection(SQL, options)
-    const existing = await stores.state.checkpoint()
-    await stores.state.replace(snapshot, existing?.revision ?? null)
-    const current = await stores.state.checkpoint()
-    if (!current) throw new Error('The downloaded AnkiWeb collection could not be retained locally.')
+    const { checkpoint: current } = await ensureNativeAccountCheckpoint(
+      stores.state,
+      () => client.downloadCollection(SQL, options),
+    )
     const decks = nativeAnkiProjectionData(SQL, current.collection).decks
       .map((deck) => {
         const path = deck.name.replaceAll('\u001f', '::')
