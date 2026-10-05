@@ -718,6 +718,25 @@ describe('Anki package import', () => {
     await expect(collection.notes.count()).resolves.toBe(0)
   })
 
+  test('ignores unsupported note types that are unused by the account snapshot', async () => {
+    collection = createCollection(`kiroku-import-unused-note-type-${crypto.randomUUID()}`)
+    const supportedBytes = await japanesePackage()
+    const unusedBytes = await unsupportedPackage()
+    const supported = AnkiCollection.open(await fileBytes(supportedBytes), SQL).data
+    const unused = AnkiCollection.open(await fileBytes(unusedBytes), SQL).data
+    supported.notetypes.push(...unused.notetypes)
+    supported.fields.push(...unused.fields)
+    supported.templates.push(...unused.templates)
+
+    const prepared = await prepareAnkiDataImport(supported, collection, { SQL })
+
+    expect(prepared.plan.blocksImport).toBe(false)
+    expect(prepared.issues).not.toContainEqual(expect.objectContaining({ code: 'unsupported-note-type', subject: 'Unsupported custom filters' }))
+    expect(prepared.summary.notes).toBe(2)
+    await prepared.commit()
+    await expect(collection.notes.count()).resolves.toBe(2)
+  })
+
   test('preserves safe field layout HTML and reports preserved markup in import findings', async () => {
     collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
     const prepared = await prepareAnkiImport(await fieldHtmlPackage(), collection, { SQL, now: new Date('2026-10-01T12:00:00.000Z') })

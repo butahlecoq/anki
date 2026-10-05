@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import type { SyncSettings } from './collection.js'
 import { NativeSyncError } from './native-anki-sync.js'
-import { connectNativeAnkiAccount, type NativeAnkiAccountSession } from './native-anki-account-session.js'
+import { collection } from './collection.js'
+import { connectNativeAnkiAccount, prepareNativeAccountImport, type NativeAnkiAccountSession, type PreparedNativeAccountImport } from './native-anki-account-session.js'
 import { isSafeServiceEndpoint } from './sync-client.js'
 import { useDialogKeyboard } from './use-dialog-keyboard.js'
 
@@ -26,6 +27,7 @@ export function AnkiWebAccountDialog({ settings, onClose }: { settings: SyncSett
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [session, setSession] = useState<NativeAnkiAccountSession>()
+  const [accountPlan, setAccountPlan] = useState<PreparedNativeAccountImport>()
   const sessionRef = useRef<NativeAnkiAccountSession | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
@@ -66,9 +68,35 @@ export function AnkiWebAccountDialog({ settings, onClose }: { settings: SyncSett
     sessionRef.current?.disconnect()
     sessionRef.current = undefined
     setSession(undefined)
+    setAccountPlan(undefined)
     setUsername('')
     setPassword('')
     setMessage('Disconnected. The downloaded account collection remains on this device.')
+  }
+
+  async function previewAccountCollection() {
+    if (!session) return
+    setBusy(true)
+    setMessage('Preparing an Import Plan from the downloaded account snapshot…')
+    try {
+      const prepared = await prepareNativeAccountImport(session, collection)
+      setAccountPlan(prepared)
+      setMessage('Review the account snapshot before copying it to this device.')
+    } catch (error) {
+      setAccountPlan(undefined)
+      setMessage(error instanceof Error ? error.message : 'The account collection could not be prepared. No local collection rows were changed.')
+    } finally { setBusy(false) }
+  }
+
+  async function importAccountCollection() {
+    if (!accountPlan) return
+    setBusy(true)
+    try {
+      await accountPlan.commit()
+      setMessage('The reviewed account snapshot is now available in this device’s offline collection. The AnkiWeb account remains authoritative; no changes were uploaded.')
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'The account collection was not copied. The local collection was left unchanged.')
+    } finally { setBusy(false) }
   }
 
   return (
@@ -92,9 +120,30 @@ export function AnkiWebAccountDialog({ settings, onClose }: { settings: SyncSett
             <p role="status" aria-live="polite">Connected as {session.username}. {message}</p>
             <h3>Decks</h3>
             {session.decks.length ? <ul className="ankiweb-deck-list">{session.decks.map((deck) => <li key={deck.id}><strong>{deck.name}</strong><span>{deck.path}</span></li>)}</ul> : <p>This account has no decks.</p>}
+            <button className="text-button" type="button" disabled={busy} onClick={() => void previewAccountCollection()}>{busy && !accountPlan ? 'Preparing…' : 'Preview account collection'}</button>
+            {accountPlan && <section className="import-summary" aria-label="Account Import Plan">
+              <h3>Account Import Plan · revision {accountPlan.revision}</h3>
+              <p>The downloaded snapshot remains the authoritative account copy. This plan copies its representable rows into this device’s separate offline collection; it does not write to AnkiWeb.</p>
+              <ul>
+                <li>{accountPlan.prepared.summary.decks} Decks</li>
+                <li>{accountPlan.prepared.summary.noteTypes} note types</li>
+                <li>{accountPlan.prepared.summary.notes} notes</li>
+                <li>{accountPlan.prepared.summary.cards} cards</li>
+                <li>{accountPlan.prepared.summary.reviews} review entries</li>
+                <li>{accountPlan.prepared.summary.media} media files</li>
+              </ul>
+              <p>Snapshot hash: <code>{accountPlan.snapshotHash}</code></p>
+              {accountPlan.prepared.issues.length > 0 && <section className="import-report" aria-label="Account import findings"><h4>Import findings</h4><ul>{accountPlan.prepared.issues.map((issue, index) => <li key={`${issue.code}-${issue.subject}-${index}`} className={`import-${issue.severity}`}><strong>{issue.subject}</strong><span>{issue.detail}</span></li>)}</ul></section>}
+              <details>
+                <summary>Review all {accountPlan.prepared.plan.decisions.length} planned row changes</summary>
+                <ul>{accountPlan.prepared.plan.decisions.map((decision, index) => <li key={`${decision.entity}:${decision.id}:${index}`}>{decision.entity} · {decision.action} · {decision.id}</li>)}</ul>
+              </details>
+              {accountPlan.prepared.plan.blocksImport && <p className="form-error" role="alert">This snapshot contains unsupported content. Nothing will be copied until the reported errors are resolved.</p>}
+              <button className="primary-action" type="button" disabled={busy || accountPlan.prepared.plan.blocksImport} onClick={() => void importAccountCollection()}>{busy ? 'Importing…' : 'Import reviewed collection to this device'}</button>
+            </section>}
             <p>Closing this dialog ends the in-memory session. Your downloaded collection remains available for offline study.</p>
             <div className="dialog-actions">
-              <button className="text-button" type="button" onClick={disconnect}>Disconnect</button>
+              <button className="text-button" type="button" disabled={busy} onClick={disconnect}>Disconnect</button>
               <button className="primary-action" type="button" onClick={onClose}>Done</button>
             </div>
           </section>

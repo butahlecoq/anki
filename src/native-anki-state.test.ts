@@ -5,6 +5,8 @@ import type { SqlJsStatic } from 'sql.js'
 import { NativeAnkiState } from './native-anki-state'
 import { NativeAnkiClient, NativeSyncConflict } from './native-anki-sync'
 import { NativeAnkiMedia } from './native-anki-media'
+import { createCollection } from './collection'
+import { prepareNativeAccountImport, type NativeAnkiAccountSession } from './native-anki-account-session'
 
 let state: NativeAnkiState
 let SQL: SqlJsStatic
@@ -50,6 +52,20 @@ it('persists a projection map only while its exact native checkpoint remains cur
   state.close()
   await state.open()
   expect(await state.projectionManifest()).toBeUndefined()
+})
+
+it('refuses an empty native account snapshot without changing the editable collection', async () => {
+  const target = createCollection(`native-account-empty-target-${crypto.randomUUID()}`)
+  try {
+    await expect(prepareNativeAccountImport({ state } as unknown as NativeAnkiAccountSession, target))
+      .rejects.toThrow(/account collection is empty/i)
+    expect(await state.projectionManifest()).toMatchObject({ version: 1, notes: [], cards: [], reviews: [] })
+    await expect(target.decks.count()).resolves.toBe(0)
+    await expect(target.notes.count()).resolves.toBe(0)
+    await expect(target.cards.count()).resolves.toBe(0)
+  } finally {
+    await target.delete()
+  }
 })
 
 it('keeps the durable checkpoint after a lost finish response and commits only the recovered result', async () => {

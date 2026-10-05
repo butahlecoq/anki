@@ -55,7 +55,7 @@ async function pair(page: Page, url: string, runtime: string) {
   await expect(page.getByText('PC connected. Your collections are ready to sync.', { exact: true })).toBeVisible()
 }
 
-test('connects to a temporary official Anki account and lists its nested deck', async ({ page }) => {
+test('downloads an official account snapshot, reviews its Import Plan, and studies the copied collection offline', async ({ page, context }) => {
   test.skip(!python, 'Set ANKI_TEST_PYTHON to an isolated Python environment with pinned anki==26.9.3')
   test.setTimeout(120_000)
   const fixture = mkdtempSync(join(tmpdir(), 'ankiweb-official-fixture-'))
@@ -65,6 +65,8 @@ test('connects to a temporary official Anki account and lists its nested deck', 
   const password = 'generated-local-only'
   const seed = join(fixture, 'seed.py')
   writeFileSync(seed, `from anki.collection import Collection
+from anki.scheduler_pb2 import CardAnswer
+from datetime import datetime, timezone, timedelta
 import sys
 collection = Collection(sys.argv[1])
 auth = collection.sync_login(sys.argv[3], sys.argv[4], sys.argv[2])
@@ -73,6 +75,15 @@ deck = collection.decks.id('語彙::JLPT N5')
 note = collection.new_note(collection.models.by_name('Basic'))
 note.fields = ['猫', 'cat']
 collection.add_note(note, deck)
+card = collection.get_card(collection.db.scalar('select id from cards where nid = ?', note.id))
+card.start_timer()
+states = collection._backend.get_scheduling_states(card.id)
+answer = collection.sched.build_answer(card=card, states=states, rating=CardAnswer.EASY)
+answer.answered_at_millis = int((datetime.now(timezone.utc) - timedelta(days=8)).timestamp() * 1000)
+collection.sched.answer_card(answer)
+card = collection.get_card(card.id)
+card.due = collection.sched.today
+collection.update_card(card, skip_undo_entry=True)
 collection.sync_collection(auth, False)
 collection.full_upload_or_download(auth=auth, server_usn=None, upload=True)
 collection.close()
@@ -95,6 +106,21 @@ collection.close()
     await dialog.getByRole('button', { name: 'Connect account' }).click()
     await expect(dialog.getByRole('region', { name: 'AnkiWeb account decks' })).toContainText('語彙::JLPT N5', { timeout: 30_000 })
     await expect(dialog.getByText('No notes, cards, or study history were uploaded.')).toBeVisible()
+    await dialog.getByRole('button', { name: 'Preview account collection' }).click()
+    const plan = dialog.getByRole('region', { name: 'Account Import Plan' })
+    await expect(plan).toContainText('Account Import Plan · revision 1')
+    await expect(plan).toContainText('2 Decks')
+    await expect(plan).toContainText('1 note types')
+    await expect(plan).toContainText('1 notes')
+    await expect(plan).toContainText('1 cards')
+    await expect(plan).toContainText('1 review entries')
+    await plan.getByText(/Review all \d+ planned row changes/).click()
+    await expect(plan).toContainText('note · create · anki-note:')
+    await expect(plan).toContainText('card · create · anki-note:')
+    await expect(plan).toContainText('review · create · anki-review:')
+    await plan.getByRole('button', { name: 'Import reviewed collection to this device' }).click()
+    await expect(dialog.getByRole('status')).toContainText('offline collection')
+    await expect(dialog.getByRole('status')).toContainText(/no changes were uploaded/i)
     const persisted = await page.evaluate(async () => {
       const databases = await indexedDB.databases?.() ?? []
       const local = `${JSON.stringify(localStorage)}${JSON.stringify(sessionStorage)}`
@@ -139,6 +165,23 @@ collection.close()
     await expect(dialog.getByRole('status')).toContainText('downloaded account collection remains')
     const retainedStores = await page.evaluate(async () => (await indexedDB.databases?.() ?? []).map((database) => database.name ?? ''))
     expect(retainedStores).toEqual(persisted.names)
+    await dialog.getByRole('button', { name: 'Cancel' }).click()
+    await page.getByRole('button', { name: /Open .*JLPT N5/ }).click()
+    await expect(page.getByRole('button', { name: 'Study now' })).toBeEnabled()
+    await expect(page.getByRole('group', { name: 'Deck counts' })).toContainText('REVIEW 1')
+    await expect(page.getByRole('group', { name: 'Deck counts' })).toContainText('REVIEWS 1')
+    await context.setOffline(true)
+    await page.getByRole('button', { name: 'Study now' }).click()
+    await expect(page.getByRole('button', { name: 'Show answer' })).toBeVisible()
+    await expect(page.frameLocator('iframe[title="Review card"]').locator('body')).toContainText('猫')
+    await page.getByRole('link', { name: 'Statistics', exact: true }).click()
+    await expect(page.getByRole('heading', { name: 'Every answer adds up' })).toBeVisible()
+    await page.getByLabel('Period', { exact: true }).selectOption('all')
+    await expect(page.getByText('ANSWERS', { exact: true }).locator('..').locator('strong')).toHaveText('1')
+    await page.getByRole('link', { name: 'Browse', exact: true }).click()
+    await page.getByLabel('Collection search', { exact: true }).fill('猫')
+    await page.getByRole('button', { name: 'Search', exact: true }).click()
+    await expect(page.getByRole('button', { name: '猫', exact: true })).toBeVisible()
   } finally {
     await pc?.close()
     if (anki.exitCode === null) {
