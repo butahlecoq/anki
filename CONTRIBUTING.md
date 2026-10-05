@@ -25,7 +25,9 @@ A finding is evidence, not a verdict. "Nothing is in it" means no running proces
 4. Implement only that ticket's acceptance criteria using the highest user-visible test seam available.
 5. Run focused tests throughout and `npm run check` before requesting review.
 6. Push the branch and open a PR that includes `Closes #<issue>`.
-7. Do not close a ticket until its PR is merged and its acceptance evidence is recorded.
+7. Record a named test, command, or human observation on each completed issue criterion before ticking it. Leave unfinished criteria unchecked and record explicit deferrals in an issue comment.
+8. Run `npm run premerge -- <PR-number>` immediately before merging. It refuses an unlinked issue, a missing checklist, or any unchecked/unproven criterion without a matching issue-comment deferral.
+9. Do not close a ticket until its PR is merged and its acceptance evidence is recorded.
 
 Example claim:
 
@@ -37,7 +39,11 @@ git worktree add ..\anki-3 -b feat/3-first-offline-review origin/main
 
 Never run two implementation agents in the same worktree; see [one agent, one worktree](#one-agent-one-worktree) below for why that is not negotiable.
 
-There is no blocking GitHub Actions gate, so `npm run check` — typecheck, lint, unit, server, build, and browser — remains the only merge gate, and its result must be recorded on the pull request. A separate non-blocking scheduled workflow monitors the latest Anki sync wheel for #150. See [the CI guide](docs/agents/ci.md) for the billing limitation and workflow scope.
+There is no blocking GitHub Actions gate, so `npm run check` — typecheck, lint, unit, server, build, and browser — remains the full software gate, and its result must be recorded on the pull request. `npm run premerge` is the separate acceptance-evidence gate. A non-blocking scheduled workflow monitors the latest Anki sync wheel for #150. See [the CI guide](docs/agents/ci.md) for the billing limitation and workflow scope.
+
+GitHub does not enforce `premerge` because this repository has no required hosted
+checks or branch protection. The repository merge procedure must run the local
+pre-merge check; GitHub's merge button and a direct `gh pr merge` can bypass it.
 
 ### Local browser verification
 

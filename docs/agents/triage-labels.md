@@ -91,3 +91,19 @@ When an issue's real requirement turns out to be human-only, relabel it rather
 than leaving it claimable, and say in a comment which requirement did it. The
 comment is what stops the next agent from re-deriving the same conclusion from
 the body and second-guessing the label.
+
+## Acceptance evidence
+
+Issues use an `## Acceptance criteria` checklist with stable `AC-01`-style IDs.
+A completed item is ticked only when the same line records a named test,
+command, or human observation using `Evidence: test: ...`, `Evidence: command:
+...`, or `Evidence: human observation: ...`. A tick without named evidence does
+not count as complete. Leave incomplete items unchecked. To defer one, add an
+issue comment under `## Deferred acceptance`, naming its AC ID and a reason.
+
+The generated status report counts only checked criteria with named evidence,
+prints remaining items, and reports parent-story coverage from explicit story
+references in issue bodies. Run `npm run premerge -- <PR-number>` before merging;
+it blocks unchecked/unproven criteria unless each is deferred in an issue
+comment. This is a local guard: the repository has no hosted required check, so
+the GitHub merge UI can bypass it.

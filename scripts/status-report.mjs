@@ -5,6 +5,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { analyseDrift, branchDispositionEvidence, branchProvenOnMain, collectGitFacts, repoFromRemote, runningCommandLines } from './drift-check.mjs'
+import { acceptanceReport, numberedUserStories } from './acceptance-evidence.mjs'
 
 export function branchDisposition(branch, finding, tree, pullRequests) {
   const evidence = branchDispositionEvidence(branch, finding, tree, pullRequests)
@@ -117,11 +118,22 @@ function statusForIssue(issue, prs, worktrees, commentsByIssue, checksByPr, owne
 }
 
 export function renderStatus({ issues, prs, worktrees, branches, commentsByIssue = new Map(), checksByPr = new Map(), generatedFrom, repoOwner = '' }) {
-  const inFlight = issues.map((issue) => statusForIssue(issue, prs, worktrees, commentsByIssue, checksByPr, repoOwner)).filter(Boolean)
+  const openIssues = issues.filter((issue) => issue.state !== 'CLOSED')
+  const inFlight = openIssues.map((issue) => statusForIssue(issue, prs, worktrees, commentsByIssue, checksByPr, repoOwner)).filter(Boolean)
   const represented = new Set(inFlight.flatMap(({ issue }) => prs.filter((pr) => linkedIssue(pr) === issue.number).map((pr) => pr.number)))
   const unlinked = prs.filter((pr) => !represented.has(pr.number))
   const dirty = worktrees.filter((tree) => tree.dirtyFiles?.length || tree.untrackedFiles?.length)
   const superseded = branches.filter((branch) => branch.disposition === 'provably disposable')
+  const progressRows = acceptanceReport(openIssues, commentsByIssue)
+  const totalCriteria = progressRows.reduce((sum, row) => sum + row.total, 0)
+  const evidencedCriteria = progressRows.reduce((sum, row) => sum + row.evidenced, 0)
+  const deferredCriteria = progressRows.reduce((sum, row) => sum + row.deferred, 0)
+  const parent = issues.find((issue) => issue.number === 1)
+  const stories = numberedUserStories(parent?.body ?? '')
+  const acceptedStoryIds = new Set(acceptanceReport(issues, commentsByIssue)
+    .filter((row) => row.remaining === 0)
+    .flatMap((row) => row.stories))
+  const coveredStories = stories.filter((story) => acceptedStoryIds.has(story)).length
   const lines = [
     '# Live repository status',
     '',
@@ -136,6 +148,18 @@ export function renderStatus({ issues, prs, worktrees, branches, commentsByIssue
   for (const { issue, rows } of inFlight) {
     lines.push(`### [#${issue.number} ${issue.title}](${issue.url})`, '', ...rows.map((row) => `- ${row}`), '')
   }
+  lines.push('## Acceptance progress', '')
+  lines.push(`Open issues: ${evidencedCriteria}/${totalCriteria} criteria evidenced; ${totalCriteria - evidencedCriteria} remain (${deferredCriteria} deferred with a reason).`)
+  lines.push(`Parent specification story coverage: ${coveredStories}/${stories.length} numbered stories have linked issues with all criteria evidenced.`)
+  if (!progressRows.length) lines.push('No open issues have an acceptance checklist.')
+  for (const row of progressRows) {
+    lines.push('', `### [#${row.issue.number} ${row.issue.title}](${row.issue.url})`, '', `- Evidenced: ${row.evidenced}/${row.total}; remaining: ${row.remaining}; deferred: ${row.deferred}.`)
+    for (const criterion of row.criteria.filter((item) => !item.evidenced)) {
+      const label = criterion.id ? `${criterion.id}: ` : ''
+      lines.push(`- Remaining: ${label}${criterion.text}${criterion.deferred ? ` (deferred: ${criterion.deferred.reason})` : criterion.checked ? ' (checked without named evidence)' : ''}`)
+    }
+  }
+  lines.push('')
   lines.push('## Open PRs without an open issue', '')
   if (!unlinked.length) lines.push('None.')
   else for (const pr of unlinked) lines.push(`- ${prRow(pr, worktrees.find((tree) => tree.branch === pr.headRefName && isLocalHead(pr, repoOwner)), commentsByIssue.get(linkedIssue(pr)) ?? [], checksByPr.get(pr.number))}`)
@@ -156,7 +180,7 @@ export function renderStatus({ issues, prs, worktrees, branches, commentsByIssue
 function collect({ repoOverride } = {}) {
   run('git', ['fetch', 'origin'])
   const repo = repoOverride ?? repoFromRemote(root, 'butahlecoq/anki')
-  const issues = ghJson(['issue', 'list', '--repo', repo, '--state', 'open', '--limit', '500', '--json', 'number,title,body,url,labels']).sort((a, b) => a.number - b.number)
+  const issues = ghJson(['issue', 'list', '--repo', repo, '--state', 'all', '--limit', '500', '--json', 'number,title,body,url,labels,state']).sort((a, b) => a.number - b.number)
   const prs = ghJson(['pr', 'list', '--repo', repo, '--state', 'open', '--limit', '500', '--json', 'number,title,body,isDraft,headRefName,headRefOid,headRepositoryOwner,baseRefName,url']).sort((a, b) => a.number - b.number)
   if (issues.length >= 500 || prs.length >= 500) throw new Error('Tracker result reached the 500 item limit; paginate before generating status.')
   const facts = collectGitFacts({ repo })
@@ -182,6 +206,7 @@ function collect({ repoOverride } = {}) {
     }
   })
   const issueNumbers = [...new Set([
+    ...issues.filter((issue) => issue.state !== 'CLOSED').map((issue) => issue.number),
     ...prs.map(linkedIssue).filter(Number.isFinite),
     ...worktrees.map((tree) => Number(/(?:^|[/-])(\d+)(?:-|$)/.exec(tree.branch ?? '')?.[1])).filter(Number.isFinite),
   ])]
