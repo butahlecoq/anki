@@ -1,7 +1,9 @@
 # Native Anki synchronization engine
 
-Issue #61 implements the native boundary for #56. This engine is not yet wired
-to the app and does not establish finished AnkiWeb synchronization.
+Issue #61 implements the native boundary for #56. The engine and its verified
+account projection are not yet wired into the learner's editable collection;
+the visible account flow currently downloads a separate snapshot and lists its
+Decks.
 
 ## Implemented boundary
 
@@ -89,8 +91,10 @@ normalized AnkiWeb username using a domain-separated SHA-256 digest. The raw
 username, password, and session key are not persisted. Closing the stores on
 logout retains account data; deleting it must be a separate explicit action.
 This namespace is a separation mechanism, not encryption or an authentication
-boundary. The visible login/logout workflow and native-to-app projection remain
-unimplemented.
+boundary. The visible login/download/Deck-list workflow is implemented in
+`src/AnkiWebAccountDialog.tsx`. Native-to-app projection and writeback are also
+implemented and verified, but remain unwired to the learner's editable
+collection.
 
 ## Reproducible evidence
 
@@ -129,10 +133,11 @@ port, creates temporary Japanese collections and fake accounts, and checks:
   concrete native versions instead of silently overwriting or resurrecting.
 
 Temporary oracle collections are removed when its server exits. It does not read
-`.env`, connect to the real account or deploy a gateway. The three storage tests
-cover checkpoint preservation/recovery across reopen, durable conflict versions
-and concurrent session/replacement rejection. These storage tests do not prove
-protocol interoperability; the separate official oracle supplies that evidence.
+`.env`, connect to the real account or deploy a gateway. The five tests in
+`src/native-anki-state.test.ts` cover projection-map durability, checkpoint
+recovery after a lost finish response, conflict versions across reopen,
+concurrent session/replacement rejection, and safe refusal without Web Locks.
+The separate official oracle supplies protocol interoperability evidence.
 
 ## Boundaries and remaining account workflow
 
@@ -144,9 +149,14 @@ is silently omitted to fit these limits. Future protocol/format expansion and
 granular field-level native conflict editing are separate enhancements; native
 conflicts currently require an explicit backed-up full-direction decision.
 
-#56 additionally needs native projection into editable app entities, visible
-account controls, deployed independent gateway and installed-iPhone evidence
-with the PC off. No real-account writes have been used as development evidence.
+The native projection and writeback boundary in
+`src/native-anki-projection.ts` and `src/native-anki-writeback.ts` is implemented
+and verified by `src/native-anki-projection.test.ts`; it is not yet connected to
+the learner's editable collection. The visible #188 flow connects an account,
+downloads a snapshot and lists Decks, but does not upload notes, cards or study
+history. Issue #56 still needs the projection wired into the collection workflow
+and installed-iPhone/offline evidence. No real-account writes have been used as
+development evidence.
 
 ## Primary protocol references
 

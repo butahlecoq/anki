@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { branchDisposition, checkState, deferredLines, omitGeneratedStatusFile, renderStatus } from './status-report.mjs'
+import { branchDisposition, checkState, deferredLines, omitGeneratedStatusFile, renderStatus, statusReportBaseCommit, statusReportMatchesRemote } from './status-report.mjs'
 
 const issue = { number: 42, title: 'Keep deferred acceptance visible', url: 'https://github.com/butahlecoq/anki/issues/42' }
 const pr = {
@@ -30,6 +30,14 @@ test('status names the matching issue PR, current-head checks, deferral, and wor
   assert.match(output, /remains deferred/)
   assert.match(output, /D:\/work\/anki-42/)
   assert.equal(renderStatus(input), output)
+})
+
+test('status check detects when the report base no longer matches origin/main', () => {
+  const current = renderStatus({ issues: [], prs: [], worktrees: [], branches: [], generatedFrom: 'remote-main-new' })
+  const stale = renderStatus({ issues: [], prs: [], worktrees: [], branches: [], generatedFrom: 'remote-main-old' })
+  assert.equal(statusReportBaseCommit(current), 'remote-main-new')
+  assert.equal(statusReportMatchesRemote(current, 'remote-main-new'), true)
+  assert.equal(statusReportMatchesRemote(stale, 'remote-main-new'), false)
 })
 
 test('status exposes dirty worktrees and distinguishes retained branches from proven superseded branches', () => {

@@ -17,6 +17,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:status": "node --test scripts/status-report.test.mjs",
+    "status:check": "node scripts/status-report.mjs --check",
     "drift": "node scripts/drift-check.mjs",
     "status": "node scripts/status-report.mjs",
     "server:build": "tsc -p tsconfig.server.json",
