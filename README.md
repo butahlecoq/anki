@@ -15,7 +15,7 @@ Nothing, and it stays nothing. See [ADR 0003](docs/adr/0003-a-free-web-app-for-e
 - **No third-party sync service.** The AnkiWeb relay runs on the learner's own PC, is reached over the private network, and requires that PC to be running for account synchronization. Offline study from the phone's downloaded collection does not require the PC. Syncing AnkiWeb while the PC is off would require each learner to operate and fund an always-internet-facing relay; that topology is not currently supported.
 - **No store account and no store listing.** Distribution is a URL.
 
-Anyone can run Kiroku, and anyone can share it. AnkiWeb account synchronization is being implemented through a relay on the learner's own PC, reached over the private network; the PC must be running and reachable to synchronize. Offline study from the phone's downloaded collection does not require the PC. Syncing AnkiWeb while the PC is off would require each learner to operate and fund an always-internet-facing relay, so that topology is not currently supported. Account synchronization is not yet available in the application. See [the AnkiWeb account notes](docs/ankiweb-account-sync.md) and [ADR 0004](docs/adr/0004-ankiweb-relay-runs-on-the-pc.md).
+Anyone can run Kiroku, and anyone can share it. The **Connect AnkiWeb account** flow uses a relay on the learner's own PC, reached over the private network; the PC must be running and reachable to download the account collection and list its Decks. Two-way account synchronization is still being implemented. Offline study from the phone's downloaded collection does not require the PC. Syncing AnkiWeb while the PC is off would require each learner to operate and fund an always-internet-facing relay, so that topology is not currently supported. See [the AnkiWeb account notes](docs/ankiweb-account-sync.md) and [ADR 0004](docs/adr/0004-ankiweb-relay-runs-on-the-pc.md).
 
 ## Run locally
 
@@ -58,7 +58,7 @@ $env:KIROKU_ALLOWED_ORIGIN = 'https://study.example.net'
 npm run server:start
 ```
 
-Enter the service’s `https://` address and the one-time code in **Connect a PC**. Credentials remain in that browser’s local collection settings and are never included in the web build.
+Enter the service’s `https://` address and the one-time code in **Connect a PC**. The paired-device credential is retained in that browser’s local collection settings and is never included in the web build. AnkiWeb username and password are used only by **Connect AnkiWeb account** and remain in memory while connected; see [the account-sync notes](docs/ankiweb-account-sync.md).
 
 After pairing, use **Download PC backup** to create and download a verified snapshot of the PC sync history and media. The service retains up to 14 automatic and manual backups for 30 days. See [PC service backups and recovery](docs/server-backups.md) for contents, verification, and restore limits.
 

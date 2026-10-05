@@ -11,6 +11,14 @@ export function branchDisposition(branch, finding, tree, pullRequests) {
   return { disposition: evidence.disposable ? 'provably disposable' : 'retain', relatedPrNumber: evidence.relatedPrNumber }
 }
 
+export function statusReportBaseCommit(report) {
+  return /^Base commit: `([^`]+)` \(current `origin\/main`\)\.$/m.exec(report)?.[1] ?? null
+}
+
+export function statusReportMatchesRemote(existing, remoteMain) {
+  return statusReportBaseCommit(existing) === remoteMain
+}
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 function run(command, args, cwd = root) {
   return execFileSync(command, args, { cwd, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim()
@@ -198,8 +206,18 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const output = path.join(root, 'docs', 'agents', 'status.md')
   const repoAt = process.argv.indexOf('--repo')
   const status = renderStatus(collect({ repoOverride: repoAt === -1 ? undefined : process.argv[repoAt + 1] }))
+  const checkOnly = process.argv.includes('--check')
   let existing = ''
   try { existing = readFileSync(output, 'utf8') } catch {}
-  if (existing !== status) writeFileSync(output, status, 'utf8')
-  console.log(`${existing === status ? 'Unchanged' : 'Updated'} ${path.relative(root, output)}`)
+  if (checkOnly) {
+    const currentMain = statusReportBaseCommit(status)
+    const reportedMain = statusReportBaseCommit(existing)
+    if (!statusReportMatchesRemote(existing, currentMain)) {
+      console.error(`Stale ${path.relative(root, output)}: it reports origin/main at ${reportedMain ?? 'no recorded commit'}, but origin/main is now ${currentMain}. Run npm run status to regenerate it.`)
+      process.exitCode = 1
+    } else console.log(`Current ${path.relative(root, output)} records the current origin/main commit ${currentMain}.`)
+  } else {
+    if (existing !== status) writeFileSync(output, status, 'utf8')
+    console.log(`${existing === status ? 'Unchanged' : 'Updated'} ${path.relative(root, output)}`)
+  }
 }
