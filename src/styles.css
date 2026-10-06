@@ -404,7 +404,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .occlusion-back-extra { padding-top: 16px; border-top: 1px solid var(--border-subtle); color: var(--text-muted); }
 .type-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .compact-hero .type-actions { flex: none; }
-.compact-hero .type-actions > button, .dialog-actions > button { box-sizing: border-box; flex: 0 0 150px; width: 150px; height: 42px; min-height: 42px; justify-content: center; }
+.compact-hero .type-actions > button, .compact-hero .collection-actions > button, .dialog-actions > button { box-sizing: border-box; flex: 0 0 150px; width: 150px; height: 42px; min-height: 42px; justify-content: center; }
 .dialog-actions > button:only-child { flex-basis: 150px; width: 150px; }
 .type-list { padding: 28px 0 40px; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
 .type-tile { padding: 24px; border: 1px solid var(--border-subtle); background: var(--surface-panel); }
@@ -533,7 +533,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   .update-toast { left: 12px; right: 12px; bottom: 80px; justify-content: space-between; }
   .compact-hero { min-height: 250px; padding: 38px 0 28px; align-items: flex-start; flex-direction: column; }
   .collection-actions { width: 100%; }
-  .collection-actions button { flex: 1; }
+  .collection-actions > button { flex: 0 0 calc(50% - 4px); width: calc(50% - 4px); min-width: 0; height: 54px; min-height: 54px; }
   .compact-hero .type-actions { width: 100%; }
   .compact-hero .type-actions > button { flex: 0 0 calc(50% - 4px); width: calc(50% - 4px); min-width: 0; height: 54px; min-height: 54px; }
   .dialog-actions > button { flex: 0 0 calc(50% - 4.5px); width: calc(50% - 4.5px); min-width: 0; height: 54px; min-height: 54px; }
@@ -667,7 +667,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
  * area regardless of which screen renders it.
  */
 @media (pointer: coarse) {
-  .compact-hero .type-actions > button, .dialog-actions > button { min-height: 54px; }
+  .compact-hero .type-actions > button, .compact-hero .collection-actions > button, .dialog-actions > button { min-height: 54px; }
   .text-button, .appearance-control select, .review-flag-control select, .occlusion-mask-controls input { min-height: 44px; }
   .nav-item, .mobile-nav a { min-height: 44px; }
   .primary-action, .rating { min-height: 54px; }
