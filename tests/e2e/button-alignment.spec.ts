@@ -60,6 +60,8 @@ test('Collection landing actions have matching desktop and phone dimensions', as
   } else {
     expect(importBox!.width).toBe(150)
     expect(importBox!.height).toBe(42)
+    expect(newDeckBox!.width).toBe(150)
+    expect(newDeckBox!.height).toBe(42)
   }
 
   await importPackage.focus()
