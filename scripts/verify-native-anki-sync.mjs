@@ -125,7 +125,7 @@ try {
   // The application build uses bundler resolution and extensionless TS imports.
   // Emit this isolated verifier build as CommonJS so TypeScript's NodeNext
   // extension checks do not reject valid Vite imports.
-  execFileSync(process.execPath, ['node_modules/typescript/bin/tsc', 'src/native-anki-sync.ts', 'src/native-anki-media.ts', 'src/native-anki-state.ts', '--outDir', 'runtime/native-build', '--module', 'CommonJS', '--moduleResolution', 'Node', '--target', 'ES2022', '--strict', '--skipLibCheck'], { stdio: 'pipe', windowsHide: true })
+  execFileSync(process.execPath, ['node_modules/typescript/bin/tsc', 'src/native-anki-sync.ts', 'src/native-anki-media.ts', 'src/native-anki-state.ts', '--outDir', 'runtime/native-build', '--module', 'CommonJS', '--moduleResolution', 'Node', '--target', 'ES2022', '--strict', '--skipLibCheck', '--types', 'vite/client'], { stdio: 'pipe', windowsHide: true })
   writeFileSync(join(process.cwd(), 'runtime', 'native-build', 'package.json'), '{"type":"commonjs"}')
   const { NativeAnkiClient } = await import('../runtime/native-build/src/native-anki-sync.js')
   const { nativeFieldText } = await import('../runtime/native-build/src/native-anki-cache.js')
