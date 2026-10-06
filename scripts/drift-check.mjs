@@ -247,6 +247,58 @@ export function branchDispositionEvidence(branch, finding, tree, pullRequests) {
 // The state that decides a branch's fate, so `gh`'s listing order cannot.
 const STATE_RANK = { OPEN: 0, MERGED: 1, CLOSED: 2 }
 
+/**
+ * The numbers a branch name carries: the issue it works, or the pull request it
+ * reviews. `feat/21-offline-storage-protection` is issue 21;
+ * `review-pr174` and `pr/113` name a pull request.
+ */
+export function referencedNumbers(name) {
+  const pullReference = /(?:^|[/-])(?:pr|pull)[/-]?(\d+)\b/gi
+  const pulls = [...name.matchAll(pullReference)].map((match) => Number(match[1]))
+  // A branch named `pr/113` points at pull request 113, not at issue 113. Mask
+  // the reference before scanning for issues so it cannot also answer as one:
+  // reading it both ways would let a merged pull request for an unrelated issue
+  // 113 suppress a genuine loss.
+  const withoutPulls = pulls.length
+    ? name.replace(new RegExp(pullReference.source, 'gi'), (match) => match.replace(/\d+/, ''))
+    : name
+  const issues = [...withoutPulls.matchAll(/(?:^|[/-])(\d+)(?:-|$)/g)].map((match) => Number(match[1]))
+  return { issues, pulls }
+}
+
+/**
+ * The merged pull request that carried this branch's work on a differently
+ * named branch, when there is one.
+ *
+ * This repository re-lands issue work on a fresh branch named after the issue -
+ * `feat/19-interruption-safe-sync` became `feat/19-interruption-safe-sync-current`
+ * and then `feat/19-resumable-fault-recovery` - and abandons the original. The
+ * abandoned branch then reads as a loss, because byte-identity and ancestry both
+ * fail: `main` holds its work *plus* later improvements, so the diff has
+ * additions as well as deletions and the squash-merge rule cannot fire either.
+ *
+ * Matching on the number a branch name carries is the convention's fingerprint.
+ * It is deliberately not treated as proof that the content is identical - the
+ * caller reports a question, never a deletion - because two pull requests can
+ * work one issue and the second need not contain all of the first.
+ */
+export function relandingPullRequest(branch, pullRequests) {
+  if (!pullRequests) return undefined
+  const { issues, pulls } = referencedNumbers(branch.name)
+  const wanted = new Set([...issues, ...pulls])
+  if (wanted.size === 0) return undefined
+  return pullRequests
+    .filter((pr) => {
+      if (pr.state !== 'MERGED' || pr.headRefName === branch.name) return false
+      // A branch named after the pull request it reviews points at that pull
+      // request directly; a branch named after an issue points at whichever pull
+      // request re-landed that issue.
+      if (pulls.includes(pr.number)) return true
+      return [...pr.headRefName.matchAll(/(?:^|[/-])(\d+)(?:-|$)/g)].some((match) => issues.includes(Number(match[1])))
+    })
+    .sort((left, right) => (right.mergedAt ?? '').localeCompare(left.mergedAt ?? ''))[0]
+}
+
 export function livePullRequestPerBranch(pullRequests) {
   const chosen = new Map()
   for (const pr of pullRequests) {
@@ -537,6 +589,29 @@ function branchFindings({ branches, pullRequests, mainBranch, inProgress }) {
           subject,
           `pull request #${pr.number} merged on ${pr.mergedAt?.slice(0, 10)}, but the branch still carries ${ownSizeOf(branch, mainBranch)}${binaryNote} (${where}).${handOn}`,
           busy ? remedy : 'rebase the branch onto origin/main and open a pull request, or confirm the work already reached main',
+        ),
+      )
+      continue
+    }
+
+    // The issue this branch works may have been re-landed on another branch that
+    // merged. Reported as a question rather than a loss: the remedy for a loss
+    // says "open a pull request from the branch", and following that against
+    // already-merged work duplicates it. Nothing here becomes disposable, so the
+    // branch is still retained until a person compares the two.
+    const relanded = relandingPullRequest(branch, pullRequests)
+    if (relanded !== undefined) {
+      const relandedHead = relanded.headRefName
+      const relandedAt = relanded.mergedAt?.slice(0, 10)
+      findings.push(
+        finding(
+          busy ? 'info' : 'drift',
+          'branch-relanded',
+          subject,
+          `pull request #${relanded.number} merged on ${relandedAt} from \`${relandedHead}\`, a differently named branch for the same issue. That is where this issue's work is believed to have been re-landed - main holds it plus later work, so it cannot be shown byte-identical either. Same issue is not the same content, so confirm what this branch still holds that pull request #${relanded.number} does not, then remove it (${where}).${handOn}`,
+          busy
+            ? remedy
+            : `git diff --stat origin/${mainBranch} ${subject} - if the branch adds nothing pull request #${relanded.number} does not, remove it with the worktree first; otherwise reopen the work`,
         ),
       )
       continue

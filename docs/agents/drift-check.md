@@ -46,6 +46,8 @@ printing "No drift" for a run that judged nothing.
   pull request already carries. When a branch has had more than one pull request,
   the open one wins, then the merged one, then the most recently updated - a
   closed pull request cannot hide work that was reopened;
+- a branch whose issue was **re-landed on another branch** that merged, reported
+  as `branch-relanded` rather than a loss;
 - every worktree with uncommitted changes, separating edits to tracked files from
   files git has never seen, since a brand new file disappears with its directory;
 - untracked text whose content matches a file on `origin/main` after CRLF/LF
@@ -61,6 +63,34 @@ the branch is byte-identical to it. A branch that differs from `main` only by
 *deletions*, with no pull request to explain it, gets a `branch-unverified`
 verdict and asks you to look, because that is either a snapshot taken before `main`
 advanced or unmerged deletion work.
+
+## Re-landed work
+
+Issue work in this repository is re-landed on a fresh branch named after the
+issue - `feat/19-interruption-safe-sync` became
+`feat/19-interruption-safe-sync-current` and then `feat/19-resumable-fault-recovery`,
+`feat/21-offline-storage-protection` became `feat/21-offline-storage-rebased` -
+and the original branch is abandoned. A review branch names the pull request it
+reviews instead: `review-pr174`.
+
+Neither byte-identity nor ancestry can see this, because `main` holds the
+abandoned branch's work **plus** whatever landed afterwards, so the diff has
+additions as well as deletions and the squash-merge rule never fires. On
+2026-10-06 that made six branches read as `LOSS` at exit code 2 when nothing was
+lost, and the printed remedy - *open a pull request from the branch* - would have
+re-landed about 2,400 lines of already-merged code.
+
+`branch-relanded` therefore recognises the convention by the number a branch name
+carries: an issue number, or a pull request number for a review branch. It exits
+1 and names the merged pull request to compare against.
+
+**It is never a deletion instruction and never marks a branch disposable.** Same
+issue is not the same content - two pull requests can work one issue and the
+second need not contain all of the first - so the finding asks a question and
+prints a `git diff --stat` to answer it. `branchDispositionEvidence` is
+deliberately untouched by this verdict. A branch naming a pull request is read as
+that pull request and not also as an issue of the same number, so an unrelated
+merged pull request cannot suppress a real loss.
 
 ## Two diffs, because two questions
 
