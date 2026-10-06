@@ -533,7 +533,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   .update-toast { left: 12px; right: 12px; bottom: 80px; justify-content: space-between; }
   .compact-hero { min-height: 250px; padding: 38px 0 28px; align-items: flex-start; flex-direction: column; }
   .collection-actions { width: 100%; }
-  .collection-actions > button { flex: 0 0 calc(50% - 4px); width: calc(50% - 4px); min-width: 0; height: 54px; min-height: 54px; }
+  .collection-actions > button { flex: 0 0 calc(50% - 4.5px); width: calc(50% - 4.5px); min-width: 0; height: 54px; min-height: 54px; }
   .compact-hero .type-actions { width: 100%; }
   .compact-hero .type-actions > button { flex: 0 0 calc(50% - 4px); width: calc(50% - 4px); min-width: 0; height: 54px; min-height: 54px; }
   .dialog-actions > button { flex: 0 0 calc(50% - 4.5px); width: calc(50% - 4.5px); min-width: 0; height: 54px; min-height: 54px; }
