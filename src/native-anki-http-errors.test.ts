@@ -31,3 +31,9 @@ it('does not describe a relay origin rejection as incorrect AnkiWeb credentials'
     message: expect.stringContaining('PC relay'),
   })
 })
+
+it('keeps an unclassified HTTP 403 distinct from confirmed AnkiWeb credential rejection', async () => {
+  await expect(NativeAnkiClient.login(async () => new Response(null, { status: 403 }), 'user', 'password')).rejects.toMatchObject({
+    code: 'transfer', requestFailure: { route: 'sync/hostKey', status: 403, source: 'unknown' },
+  })
+})

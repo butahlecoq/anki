@@ -23,3 +23,14 @@ test('keeps actionable account authentication guidance', () => {
   expect(nativeAnkiAccountErrorMessage(new NativeSyncError('authentication', 'private auth response')))
     .toBe('AnkiWeb rejected the username or password. Check them and try again.')
 })
+
+test('retains safe request details and build for a confirmed upstream authentication rejection', () => {
+  const message = nativeAnkiAccountErrorMessage(new NativeSyncError('authentication', 'private auth response',
+    { route: 'sync/hostKey', status: 403, source: 'upstream' },
+  ))
+  expect(message).toContain('AnkiWeb rejected the username or password')
+  expect(message).toContain('sync/hostKey')
+  expect(message).toContain('HTTP 403; upstream')
+  expect(message).toContain(`App build: ${buildIdentity.commit}`)
+  expect(message).not.toContain('private auth response')
+})

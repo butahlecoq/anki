@@ -223,10 +223,10 @@ export class NativeAnkiClient {
         const origin = response.headers.get('x-kiroku-response-source')
         const source = origin === 'relay' || origin === 'upstream' ? origin : 'unknown'
         const failure = { route, status: response.status, source } as const
-        if (source !== 'relay' && (response.status === 401 || response.status === 403)) throw new NativeSyncError('authentication', 'AnkiWeb rejected the account credentials. Check them and try again.', failure)
+        if (source === 'upstream' && (response.status === 401 || response.status === 403)) throw new NativeSyncError('authentication', 'AnkiWeb rejected the account credentials. Check them and try again.', failure)
         const phase = route === 'sync/hostKey' ? 'sign-in' : route === 'sync/meta' ? 'collection check' : route === 'sync/download' ? 'collection download' : route.startsWith('msync/') ? 'media transfer' : 'collection synchronization'
         const service = source === 'relay' ? 'The PC relay' : source === 'upstream' ? 'AnkiWeb' : 'The account service'
-        const action = source === 'relay' ? 'Check the PC service configuration and update the app and service together.' : response.status === 400 ? 'Update the app and PC service together. If this continues, report these request details.' : 'Check connectivity and try again.'
+        const action = source === 'relay' ? 'Check the PC service configuration and update the app and service together.' : source === 'unknown' && (response.status === 401 || response.status === 403) ? 'Check PC pairing and service configuration. The response source is unknown; update the app and PC service together.' : response.status === 400 ? 'Update the app and PC service together. If this continues, report these request details.' : 'Check connectivity and try again.'
         throw new NativeSyncError('transfer', `${service} rejected ${phase} (HTTP ${response.status}; ${route}). ${action} Your local work is preserved.`, failure)
       }
       if (Number(response.headers.get('content-length')) > cap) throw new NativeSyncError('transfer', 'The Anki account response exceeds the 64 MiB transfer limit.')
@@ -368,5 +368,4 @@ export class NativeAnkiClient {
     }
   }
 }
-
 
