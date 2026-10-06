@@ -12,6 +12,19 @@ export const stylesheet = readFileSync(resolve(process.cwd(), 'src/styles.css'),
 /** The document shell, whose meta tags the installed PWA is described by. */
 export const indexHtml = readFileSync(resolve(process.cwd(), 'index.html'), 'utf8').replace(/\r\n/g, '\n')
 
+/**
+ * Reads a front-end source file, so a suite can assert on a rule that lives in
+ * a component rather than in the stylesheet.
+ *
+ * The card document is built as a string inside src/TemplatePreview.tsx, which
+ * the stylesheet-only readers above cannot see. Reading the source is what lets
+ * src/design-tokens.test.ts hold those colours to the same contrast contract as
+ * the tokens it already checks.
+ */
+export function source(path: string): string {
+  return readFileSync(resolve(process.cwd(), path), 'utf8').replace(/\r\n/g, '\n')
+}
+
 /** Returns the declaration body of the rule for an exact selector. */
 export function rule(selector: string): string {
   const start = stylesheet.indexOf(`\n${selector} {`)

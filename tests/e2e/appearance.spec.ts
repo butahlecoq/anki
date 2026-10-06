@@ -284,7 +284,7 @@ test('auto follows the operating system setting while the app is open', async ({
   await expect.poll(() => appliedTheme(page)).toEqual(LIGHT)
 })
 
-test('card styling stays inside the card sandbox in every app theme', async ({ page }, testInfo) => {
+test('an imported note type owns its card colours in every app theme', async ({ page }, testInfo) => {
   const SQL = await initSqlJs({ locateFile: () => './node_modules/sql.js/dist/sql-wasm.wasm' })
   const cardCSS = '.card{background:#123456;color:#fedcba;font-size:29px}'
   const type = new Notetype({
@@ -324,8 +324,9 @@ test('card styling stays inside the card sandbox in every app theme', async ({ p
       const style = getComputedStyle(body)
       return { background: style.backgroundColor, color: style.color, fontSize: style.fontSize }
     })
-    // The imported note type owns the card. Only application chrome may respond
-    // to the appearance preference, so these values must not move.
+    // The imported note type owns the card. The theme supplies only a default
+    // for a card that names no background of its own, so a deck that does name
+    // one keeps it and these values must not move.
     expect(card).toEqual({ background: 'rgb(18, 52, 86)', color: 'rgb(254, 220, 186)', fontSize: '29px' })
     rendered.set(theme, card)
 
@@ -349,4 +350,57 @@ test('card styling stays inside the card sandbox in every app theme', async ({ p
     await testInfo.attach(`review-card-${theme}`, { body: await page.screenshot({ fullPage: true }), contentType: 'image/png' })
   }
   expect(rendered.get('dark')).toEqual(rendered.get('light'))
+})
+
+test('a card that names no background follows the app theme', async ({ page }, testInfo) => {
+  const SQL = await initSqlJs({ locateFile: () => './node_modules/sql.js/dist/sql-wasm.wasm' })
+  // No background and no colour anywhere in the deck's CSS, so the only thing
+  // that can paint this card is the frame's own themed default.
+  const type = new Notetype({
+    id: 1700000240001,
+    name: 'Themed default',
+    css: '.card { text-align: center }',
+    fields: [{ name: 'Word' }, { name: 'Meaning' }],
+    templates: [{ name: 'Recognition', questionFormat: '{{Word}}', answerFormat: '{{FrontSide}}<hr>{{Meaning}}' }],
+  })
+  const deck = new Deck({ id: 1700000240002, name: '日本語 themed' })
+  deck.addNote(new Note({ notetype: type, guid: 'synthetic-themed-note', fields: ['猫', 'cat · ねこ'] }))
+  const pkg = new Package()
+  pkg.addDeck(deck)
+
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Import Anki package', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: 'Import Anki package' })
+  await dialog.getByLabel('Anki package', { exact: true }).setInputFiles({ name: 'themed.apkg', mimeType: 'application/octet-stream', buffer: Buffer.from(await pkg.toUint8Array(SQL)) })
+  await dialog.getByRole('button', { name: 'Import package', exact: true }).click()
+  await page.getByRole('button', { name: 'Open 日本語 themed', exact: true }).click()
+  await expect(page.getByText('Offline shell ready', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Study now', exact: true }).click()
+
+  const expected = {
+    dark: { background: 'rgb(16, 19, 23)', color: 'rgb(233, 237, 227)' },
+    light: { background: 'rgb(255, 255, 255)', color: 'rgb(28, 33, 24)' },
+  } as const
+
+  for (const theme of ['dark', 'light'] as const) {
+    await control(page).selectOption(theme)
+    await expect
+      .poll(() => appliedTheme(page))
+      .toEqual(theme === 'dark'
+        ? { theme: null, colorScheme: 'dark', page: 'rgb(11, 13, 16)', ink: 'rgb(233, 237, 227)' }
+        : { theme: 'light', colorScheme: 'light', page: 'rgb(247, 248, 246)', ink: 'rgb(28, 33, 24)' })
+
+    const review = page.frameLocator('iframe[title="Review card"]')
+    await expect(review.locator('body')).toContainText('猫')
+    // The frame is a separate document, so it is told the theme rather than
+    // reading it; polling covers the paint arriving after the attribute is set.
+    await expect
+      .poll(async () => review.locator('body.card').evaluate((body) => {
+        const style = getComputedStyle(body)
+        return { background: style.backgroundColor, color: style.color }
+      }), { message: `the card did not repaint for the ${theme} theme` })
+      .toEqual(expected[theme])
+
+    await testInfo.attach(`themed-card-${theme}`, { body: await page.screenshot({ fullPage: true }), contentType: 'image/png' })
+  }
 })

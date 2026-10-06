@@ -1,9 +1,10 @@
 /*
  * Design tokens.
  *
- * Application chrome is themed only. Card content renders inside a sandboxed
- * iframe that carries its own stylesheet, so switching these tokens never
- * rewrites imported card styling. See src/TemplatePreview.tsx.
+ * Application chrome is themed. Card content renders inside a sandboxed iframe
+ * that carries its own stylesheet, so these tokens cannot reach it; the frame
+ * supplies the card's default surface and ink from the resolved theme instead,
+ * which an imported deck's CSS still overrides. See src/TemplatePreview.tsx.
  *
  * Every text token is verified against every surface token it can land on by
  * src/design-tokens.test.ts, which fails if a pairing drops below WCAG AA.
@@ -420,7 +421,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .editor-row-actions .text-button { min-width: 38px; }
 .template-fields { padding: 14px; display: grid; gap: 12px; border: 1px solid var(--border-default); }
 .preview-controls, .preview-samples { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
-.template-preview iframe { width: 100%; min-height: 190px; border: 1px solid var(--border-default); background: white; }
+.template-preview iframe { width: 100%; min-height: 190px; border: 1px solid var(--border-default); background: var(--surface-panel); }
 .form-warning { margin: 0; color: var(--status-warn); font-size: 10px; line-height: 1.5; }
 .dialog.import-dialog { width: min(760px, 100%); }
 .dialog.export-dialog { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; min-width: 0; }
