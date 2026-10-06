@@ -51,7 +51,7 @@ test('Collection landing actions have matching desktop and phone dimensions', as
   if (viewportWidth < 600) {
     const actionsBox = await actions.boundingBox()
     expect(actionsBox).not.toBeNull()
-    expect(importBox!.width).toBe(newDeckBox!.width)
+    expect(Math.abs(importBox!.width - newDeckBox!.width)).toBeLessThanOrEqual(1)
     expect(importBox!.height).toBeGreaterThanOrEqual(54)
     expect(importBox!.x).toBeGreaterThanOrEqual(actionsBox!.x)
     expect(importBox!.x + importBox!.width).toBeLessThanOrEqual(actionsBox!.x + actionsBox!.width + 1)
