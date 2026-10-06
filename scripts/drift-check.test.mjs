@@ -1,8 +1,8 @@
 // @vitest-environment node
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   analyseDrift,
@@ -289,7 +289,7 @@ describe('branches', () => {
       expect(referencedNumbers('main-ish')).toEqual({ issues: [], pulls: [] })
     })
 
-    it('reports an abandoned branch as superseded when the same issue was re-landed and merged', () => {
+    it('reports an abandoned branch as re-landed when the same issue was re-landed and merged', () => {
       const input = withBranch({ name: 'feat/21-offline-storage-protection', additions: 2003, deletions: 117 }, [
         { number: 135, state: 'CLOSED', mergedAt: null, headRefName: 'feat/21-offline-storage-protection' },
         { number: 198, state: 'MERGED', mergedAt: '2026-10-05T21:39:18Z', headRefName: 'feat/21-offline-storage-rebased' },
@@ -307,8 +307,12 @@ describe('branches', () => {
         { number: 174, state: 'MERGED', mergedAt: '2026-10-04T09:46:06Z', headRefName: 'feat/172-export-indexes' },
       ])
       const [finding] = findingsFor(input, 'branch-relanded')
+      expect(finding.level).toBe('drift')
       expect(finding.message).toMatch(/#174 merged/)
       expect(findingsFor(input, 'branch-no-pr')).toEqual([])
+      // The level and the exit code are the point of the verdict: a loss sends an
+      // agent to open a duplicate pull request, so both are pinned here too.
+      expect(analyseDrift(input).exitCode).toBe(1)
     })
 
     it('never reports a re-landed branch as disposable', () => {
@@ -355,6 +359,35 @@ describe('branches', () => {
         { number: 27, state: 'OPEN', mergedAt: null, headRefName: 'feat/2-pwa-shell' },
       ])
       expect(analyseDrift(input).findings).toEqual([])
+    })
+
+    it('softens to a note while an agent is in the worktree, as the guide states', () => {
+      const branch = { name: 'feat/21-offline-storage-protection', additions: 2003, deletions: 117, worktree: 'D:/work/anki-21' }
+      const input = {
+        ...withBranch(branch, [
+          { number: 198, state: 'MERGED', mergedAt: '2026-10-05T21:39:18Z', headRefName: 'feat/21-offline-storage-rebased' },
+        ]),
+        // In progress means a worktree whose path a running process names.
+        worktrees: [
+          { path: 'D:/work/anki', branch: 'main', dirtyFiles: [], untrackedFiles: [] },
+          { path: 'D:/work/anki-21', branch: 'feat/21-offline-storage-protection', dirtyFiles: [], untrackedFiles: [] },
+        ],
+        commandLines: ['node D:/work/anki-21/node_modules/vite/bin/vite.js'],
+      }
+      const [finding] = findingsFor(input, 'branch-relanded')
+      expect(finding.level).toBe('info')
+      expect(finding.message).toMatch(/An agent is in it/)
+      expect(analyseDrift(input).exitCode).toBe(0)
+    })
+
+    it('is documented at the level the check reports it', () => {
+      // The guide is what an agent reads to decide what an exit code means, so a
+      // renamed verdict or a dropped table row has to fail here rather than be
+      // discovered by someone trusting the document.
+      const guide = readFileSync(resolve(process.cwd(), 'docs/agents/drift-check.md'), 'utf8')
+      expect(guide).toContain('branch-relanded')
+      expect(guide).toMatch(/\| 1 \| recoverable drift \|[^\n]*re-landed/)
+      expect(guide).toMatch(/reported at level \*\*`drift`\*\*/)
     })
   })
 

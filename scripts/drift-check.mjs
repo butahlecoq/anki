@@ -270,17 +270,17 @@ export function referencedNumbers(name) {
  * The merged pull request that carried this branch's work on a differently
  * named branch, when there is one.
  *
- * This repository re-lands issue work on a fresh branch named after the issue -
- * `feat/19-interruption-safe-sync` became `feat/19-interruption-safe-sync-current`
- * and then `feat/19-resumable-fault-recovery` - and abandons the original. The
- * abandoned branch then reads as a loss, because byte-identity and ancestry both
- * fail: `main` holds its work *plus* later improvements, so the diff has
- * additions as well as deletions and the squash-merge rule cannot fire either.
+ * Why this exists, why byte-identity cannot cover it, and why the answer is a
+ * question rather than a deletion, are written out in
+ * `docs/agents/drift-check.md` under "Re-landed work". In short: this repository
+ * re-lands issue work on a fresh branch named after the issue and abandons the
+ * original, and the abandoned branch reads as a loss because `main` holds its
+ * work *plus* later improvements.
  *
- * Matching on the number a branch name carries is the convention's fingerprint.
- * It is deliberately not treated as proof that the content is identical - the
- * caller reports a question, never a deletion - because two pull requests can
- * work one issue and the second need not contain all of the first.
+ * Matching on the number a branch name carries is the convention's fingerprint,
+ * not proof the content is identical - two pull requests can work one issue and
+ * the second need not contain all of the first - so the caller reports a
+ * question and never authorises a deletion.
  */
 export function relandingPullRequest(branch, pullRequests) {
   if (!pullRequests) return undefined
@@ -294,7 +294,7 @@ export function relandingPullRequest(branch, pullRequests) {
       // request directly; a branch named after an issue points at whichever pull
       // request re-landed that issue.
       if (pulls.includes(pr.number)) return true
-      return [...pr.headRefName.matchAll(/(?:^|[/-])(\d+)(?:-|$)/g)].some((match) => issues.includes(Number(match[1])))
+      return referencedNumbers(pr.headRefName).issues.some((issue) => issues.includes(issue))
     })
     .sort((left, right) => (right.mergedAt ?? '').localeCompare(left.mergedAt ?? ''))[0]
 }

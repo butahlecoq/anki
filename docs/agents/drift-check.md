@@ -28,7 +28,7 @@ belong to other agents and which are yours to touch.
 | Code | Meaning | Examples |
 | --- | --- | --- |
 | 0 | no drift | every branch has a live pull request, every worktree is clean |
-| 1 | recoverable drift | `main` behind `origin/main`, a dirty worktree nothing is in, a branch whose content is already on `main`, a branch that is an ancestor of `main`, a merge workspace for an open pull request, or something this check could not read |
+| 1 | recoverable drift | `main` behind `origin/main`, a dirty worktree nothing is in, a branch whose content is already on `main`, a branch that is an ancestor of `main`, a merge workspace for an open pull request, a branch whose issue was re-landed and merged, or something this check could not read |
 | 2 | possible loss | a branch with work that is on no pull request, or commits past the merge point of a merged one |
 
 Every finding names the worktree or branch it found, and prints the command that
@@ -81,8 +81,9 @@ lost, and the printed remedy - *open a pull request from the branch* - would hav
 re-landed about 2,400 lines of already-merged code.
 
 `branch-relanded` therefore recognises the convention by the number a branch name
-carries: an issue number, or a pull request number for a review branch. It exits
-1 and names the merged pull request to compare against.
+carries: an issue number, or a pull request number for a review branch. It is
+reported at level **`drift`** (exit 1), softened to `info` (exit 0) while an
+agent is in the worktree, exactly as the other verdicts here are.
 
 **It is never a deletion instruction and never marks a branch disposable.** Same
 issue is not the same content - two pull requests can work one issue and the
