@@ -27,6 +27,8 @@ import { readCardsForNote, readDeckList, readDeckMediaReferences, readDeckMediaS
 import { SyncControls } from './SyncControls'
 import { ImportDialog } from './ImportDialog'
 import { MoveNoteDialog, NoteDialog, ReviewSession } from './ReviewSession'
+import { ActivitySelection } from './ActivitySelection'
+import { DEFAULT_LEARNING_ACTIVITY_ID } from './learning-activities'
 import { syncCollection } from './sync-client'
 import { digestMedia } from './media'
 import { userFacingStorageError } from './offline-storage'
@@ -364,7 +366,7 @@ function CardManagementDialog({ note, onClose }: { note: Note; onClose: () => vo
   </section></div>
 }
 
-function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () => void; onStudy: () => void }) {
+function DeckDetail({ deckId, onBack, onStudy, onChooseActivity }: { deckId: string; onBack: () => void; onStudy: () => void; onChooseActivity: () => void }) {
   const workspace = useLiveQuery(() => readDeckWorkspaceSnapshot(collection, deckId), [deckId])
   const deck = workspace?.deck
   const notes = workspace?.notes ?? []
@@ -437,6 +439,7 @@ function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () =>
           <button className="text-button" type="button" disabled={preparingOffline || !offlineReadiness} onClick={() => void prepareDeckOffline()}>{preparingOffline ? 'Preparing offline…' : 'Prepare this deck for offline use'}</button>
           <button className="primary-action" type="button" onClick={() => setNoteDialog({})}>Add note</button>
           <button className="primary-action study-action" type="button" disabled={!hasDueCards} onClick={onStudy}>Study now</button>
+          <button className="text-button" type="button" disabled={!hasDueCards} onClick={onChooseActivity}>Choose activity</button>
           <button className="text-button" type="button" onClick={() => setChildDialog(true)}>Create child deck</button>
           <button className="text-button" type="button" onClick={() => setMoveDialog(true)}>Move deck</button>
           <button className="text-button" type="button" onClick={() => setOptionsDialog(true)}>Scheduling options</button>
@@ -491,10 +494,24 @@ export function CollectionWorkspace({ offlineSyncAvailable = true }: { offlineSy
   }, [newDeck, importing, exporting])
 
   const content = useMemo(() => {
-    if (route.view === 'review') return <ReviewSession deckId={route.deckId} onBack={() => navigate({ view: 'deck', deckId: route.deckId })} />
-    if (route.view === 'deck') return <DeckDetail deckId={route.deckId} onBack={() => navigate({ view: 'decks' })} onStudy={() => navigate({ view: 'review', deckId: route.deckId })} />
-    if (route.view === 'custom-review') return <ReviewSession sessionId={route.sessionId} onBack={() => navigate({ view: 'study' })} />
-    if (route.view === 'study') return <CustomStudy onStudy={(sessionId) => navigate({ view: 'custom-review', sessionId })} />
+    if (route.view === 'activity-selection') return <ActivitySelection
+      onBack={() => navigate(route.target.kind === 'deck' ? { view: 'deck', deckId: route.target.deckId } : { view: 'study' })}
+      onSelect={(activityId) => navigate(route.target.kind === 'deck'
+        ? { view: 'review', deckId: route.target.deckId, activityId }
+        : { view: 'custom-review', sessionId: route.target.sessionId, activityId })}
+    />
+    if (route.view === 'review') return <ReviewSession activityId={route.activityId} deckId={route.deckId} onBack={() => navigate({ view: 'deck', deckId: route.deckId })} />
+    if (route.view === 'deck') return <DeckDetail
+      deckId={route.deckId}
+      onBack={() => navigate({ view: 'decks' })}
+      onStudy={() => navigate({ view: 'review', deckId: route.deckId, activityId: DEFAULT_LEARNING_ACTIVITY_ID })}
+      onChooseActivity={() => navigate({ view: 'activity-selection', target: { kind: 'deck', deckId: route.deckId } })}
+    />
+    if (route.view === 'custom-review') return <ReviewSession activityId={route.activityId} sessionId={route.sessionId} onBack={() => navigate({ view: 'study' })} />
+    if (route.view === 'study') return <CustomStudy
+      onStudy={(sessionId) => navigate({ view: 'custom-review', sessionId, activityId: DEFAULT_LEARNING_ACTIVITY_ID })}
+      onChooseActivity={(sessionId) => navigate({ view: 'activity-selection', target: { kind: 'session', sessionId } })}
+    />
     if (route.view === 'statistics') return <Statistics />
     if (route.view === 'note-types') return <NoteTypeManager onNewDeck={() => { navigate({ view: 'decks' }); setNewDeck(true) }} />
     if (route.view === 'browse') return <CollectionBrowser />

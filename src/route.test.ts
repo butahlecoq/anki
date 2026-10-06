@@ -15,10 +15,14 @@ const cases: Array<[string, Route]> = [
   ['#note-types', { view: 'note-types' }],
   ['#statistics', { view: 'statistics' }],
   ['#study', { view: 'study' }],
+  ['#activity/deck/abc', { view: 'activity-selection', target: { kind: 'deck', deckId: 'abc' } }],
+  ['#activity/session/session-1', { view: 'activity-selection', target: { kind: 'session', sessionId: 'session-1' } }],
   ['#browse', { view: 'browse' }],
   ['#deck/abc', { view: 'deck', deckId: 'abc' }],
   ['#review/abc', { view: 'review', deckId: 'abc' }],
+  ['#review/abc/review', { view: 'review', deckId: 'abc', activityId: 'review' }],
   ['#custom-review/session-1', { view: 'custom-review', sessionId: 'session-1' }],
+  ['#custom-review/session-1/review', { view: 'custom-review', sessionId: 'session-1', activityId: 'review' }],
 ]
 
 describe('the hash parser', () => {
@@ -32,7 +36,7 @@ describe('the hash parser', () => {
   })
 
   test('an unrecognised hash lands somewhere usable rather than nowhere', () => {
-    for (const hash of ['#nonsense', '#deck', '#deck/', '#review/a/b', '#custom-review/', '#DECK/abc', 'deck/abc']) {
+    for (const hash of ['#nonsense', '#deck', '#deck/', '#review/a/b/c', '#custom-review/', '#activity/unknown/a', '#DECK/abc', 'deck/abc']) {
       expect(`${hash} -> ${JSON.stringify(routeFromHash(hash))}`).toBe(`${hash} -> ${JSON.stringify({ view: 'decks' })}`)
     }
   })
@@ -44,14 +48,21 @@ describe('the hash parser', () => {
     expect(routeFromHash(hash)).toEqual({ view: 'deck', deckId: awkward })
     const session = hashForRoute({ view: 'custom-review', sessionId: 'a b&c' })
     expect(routeFromHash(session)).toEqual({ view: 'custom-review', sessionId: 'a b&c' })
+    const selectedActivity = hashForRoute({ view: 'review', deckId: awkward, activityId: 'review/activity' })
+    expect(routeFromHash(selectedActivity)).toEqual({ view: 'review', deckId: awkward, activityId: 'review/activity' })
+    const customSelection = hashForRoute({ view: 'activity-selection', target: { kind: 'session', sessionId: 'a b&c' } })
+    expect(routeFromHash(customSelection)).toEqual({ view: 'activity-selection', target: { kind: 'session', sessionId: 'a b&c' } })
   })
 
   test('every route has a hash that parses back to it', () => {
     const routes: Route[] = [
       { view: 'decks' }, { view: 'note-types' }, { view: 'statistics' },
       { view: 'browse' }, { view: 'study' },
+      { view: 'activity-selection', target: { kind: 'deck', deckId: 'd' } },
+      { view: 'activity-selection', target: { kind: 'session', sessionId: 's' } },
       { view: 'deck', deckId: 'd' }, { view: 'review', deckId: 'd' },
       { view: 'custom-review', sessionId: 's' },
+      { view: 'custom-review', sessionId: 's', activityId: 'review' },
     ]
     for (const route of routes) {
       const hash = hashForRoute(route)

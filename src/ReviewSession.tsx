@@ -1,25 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { Rating, BASIC_NOTE_TYPE_ID, IMAGE_OCCLUSION_NOTE_TYPE_ID, collection, type Grade, type Note, type NoteMediaReference } from './collection'
-import { MediaRenderer } from './MediaRenderer'
+import { BASIC_NOTE_TYPE_ID, IMAGE_OCCLUSION_NOTE_TYPE_ID, collection, type Grade, type Note, type NoteMediaReference } from './collection'
 import { replayAudioElements } from './audio-playback'
-import { ImageOcclusionEditor, ImageOcclusionReview } from './ImageOcclusion'
+import { ImageOcclusionEditor } from './ImageOcclusion'
 import { useReviewMedia } from './use-review-media'
 import { validateMedia } from './media'
 import { clozeOrdinals } from './template-renderer'
-import { compareTypedAnswer } from './typed-answer'
 import { CardHistory } from './Statistics'
 import { unavailableReason } from './scheduler'
 import { describeCardMedia, isRenderedCardDisplayable, renderNoteCard } from './card-rendering'
 import { undoAnnouncement, undoLabel } from './undo'
-import { answerCustomStudy, customStudyQueue, practiceChoices, undoCustomStudy } from './custom-study'
-import { customStudySessions } from './custom-study-state'
+import { undoCustomStudy } from './custom-study'
 import { isShortcutBlocked } from './keyboard-shortcuts'
-import { TemplatePreview } from './TemplatePreview'
 import { useDialogKeyboard } from './use-dialog-keyboard'
 import { useDialogSubmit } from './use-dialog-submit'
 import { userFacingStorageError } from './offline-storage'
 import { readCard, readCardReviewHistory, readDeckList, readNote, readNoteType, readNoteTypeList } from './collection-queries'
+import { DEFAULT_LEARNING_ACTIVITY_ID, learningActivity } from './learning-activities'
+import { useStudyLifecycle } from './study-lifecycle'
 type PendingAttachment = { file: File; side: 'front' | 'back'; playback: 'automatic' | 'manual' }
 
 export function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: Note; onClose: () => void }) {
@@ -180,19 +178,14 @@ export function NoteTagsDialog({ note, onClose }: { note: Note; onClose: () => v
   </section></div>
 }
 
-export function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: string; sessionId?: string; onBack: () => void }) {
-  const [skippedCardIds, setSkippedCardIds] = useState<ReadonlySet<string>>(() => new Set())
-  const [shownAnswerCardId, setShownAnswerCardId] = useState<string | null>(null)
-  const [reviewsRecorded, setReviewsRecorded] = useState(0)
-  const [isAnswering, setIsAnswering] = useState(false)
-  const [actionError, setActionError] = useState('')
+export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEARNING_ACTIVITY_ID, onBack }: { deckId?: string; sessionId?: string; activityId?: string; onBack: () => void }) {
+  const activity = learningActivity(activityId)
+  const [activityInteractionRevision, setActivityInteractionRevision] = useState(0)
   /*
    * Rating a card moves it out of view without moving focus, so a learner
    * driving the reviewer from the keyboard or a screen reader gets no sign
    * that anything happened. Every outcome of a card action is announced here.
    */
-  const [reviewAnnouncement, setReviewAnnouncement] = useState('')
-  const [typedDraft, setTypedDraft] = useState<{ cardId?: string; value: string }>({ value: '' })
   const [editingNote, setEditingNote] = useState(false)
   const [movingNote, setMovingNote] = useState(false)
   const [editingTags, setEditingTags] = useState(false)
@@ -201,14 +194,12 @@ export function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: str
   const deleteDialogKeyboard = useDialogKeyboard(() => setDeletingNote(false), deletingNote)
   const cardInfoDialogKeyboard = useDialogKeyboard(() => setShowCardInfo(false), showCardInfo)
   const [audioMessage, setAudioMessage] = useState('')
-  const typedResultRef = useRef<HTMLDivElement>(null)
   const reviewCardRef = useRef<HTMLElement>(null)
-  const customSession = useLiveQuery(async () => sessionId ? (await customStudySessions(collection)).find((session) => session.id === sessionId) : undefined, [sessionId])
-  const dueQueue = useLiveQuery(() => sessionId ? customStudyQueue(collection, sessionId, new Date()) : collection.reviewQueue(deckId, new Date()), [deckId, sessionId])
-  const queue = dueQueue?.filter((candidate) => !skippedCardIds.has(candidate.id))
-  const cardId = queue?.[0]?.id
-  const showAnswer = shownAnswerCardId === cardId
-  const typedInput = typedDraft.cardId === cardId ? typedDraft.value : ''
+  const {
+    customSession, queue, cardId, choices, reviewsRecorded, setReviewsRecorded,
+    isAnswering, setIsAnswering, actionError, setActionError, reviewAnnouncement,
+    setReviewAnnouncement, answer, skipCard,
+  } = useStudyLifecycle(collection, { deckId, sessionId })
   const card = useLiveQuery(async () => cardId ? await readCard(collection, cardId) ?? null : undefined, [cardId])
   const note = useLiveQuery(async () => card ? await readNote(collection, card.noteId) ?? null : undefined, [card?.noteId])
   const noteType = useLiveQuery(async () => note ? await readNoteType(collection, note.typeId) ?? null : undefined, [note?.typeId])
@@ -223,9 +214,7 @@ export function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: str
     const record = await collection.pendingUndo()
     return sessionId && record?.kind === 'review' && record.customSession?.after.id !== sessionId ? null : record
   }, [sessionId])
-  const choices = useLiveQuery(() => card ? sessionId && customSession?.reschedule === false ? practiceChoices : collection.reviewChoices(card.id, new Date(), Boolean(sessionId)) : [], [card?.id, sessionId, customSession?.reschedule], [])
   const template = noteType?.templates.find((candidate) => candidate.id === card?.templateId)
-  const imageOcclusion = noteType?.kind === 'image-occlusion'
   // Only prepare media once the live query has actually resolved for the active card,
   // so a pending read cannot be mistaken for a card that has no attachments. Prepared
   // sources are keyed by this list inside the hook, so no extra memoization is needed.
@@ -241,7 +230,6 @@ export function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: str
   const renderedCard = template && noteType && note && card
     ? renderNoteCard(noteType, template, note.fields, card.clozeOrdinal, preparedMedia.sources.byName, attachments, note.renderedHtmlFields)
     : undefined
-  const typedAnswer = renderedCard?.typedAnswer
   const renderError = renderedCard?.error
   // A media failure is reported but never blocks the card: a single corrupt or
   // unsupported attachment must not make the card permanently unanswerable.
@@ -252,10 +240,6 @@ export function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: str
     Boolean(card && unavailableReason(card, new Date()) !== null) ||
     (Boolean(noteType && card) && !template) ||
     Boolean(renderedCard && !isRenderedCardDisplayable(renderedCard, noteType?.kind))
-
-  useEffect(() => {
-    if (showAnswer && typedAnswer !== undefined) typedResultRef.current?.focus()
-  }, [cardId, showAnswer, typedAnswer])
 
   const activeTime = useRef<{ cardId?: string; elapsed: number; started: number | null }>({ elapsed: 0, started: null })
   useEffect(() => {
@@ -275,23 +259,16 @@ export function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: str
     }
   }, [cardId, editingNote, movingNote, editingTags, deletingNote, showCardInfo, unavailable, note, mediaBlocked])
 
-  const answer = useCallback(async (rating: Grade) => {
+  const answerCurrent = useCallback(async (rating: Grade) => {
     if (!cardId || isAnswering || mediaBlocked) return
-    setIsAnswering(true)
-    setActionError('')
-    try {
-      const duration = activeTime.current.elapsed + (activeTime.current.started === null ? 0 : performance.now() - activeTime.current.started)
-      if (sessionId) await answerCustomStudy(collection, sessionId, cardId, rating, new Date(), duration)
-      else await collection.answer(cardId, rating, new Date(), duration)
-      setReviewsRecorded((count) => count + 1)
-      setReviewAnnouncement(`Recorded ${Rating[rating]}. ${reviewsRecorded + 1} rated this session.`)
-      setShownAnswerCardId(null)
-    } catch (reason) {
-      setActionError(userFacingStorageError(reason, 'Unable to update card'))
-    } finally {
-      setIsAnswering(false)
-    }
-  }, [cardId, isAnswering, mediaBlocked, sessionId, reviewsRecorded])
+    const duration = activeTime.current.elapsed + (activeTime.current.started === null ? 0 : performance.now() - activeTime.current.started)
+    if (await answer(rating, duration)) setActivityInteractionRevision((revision) => revision + 1)
+  }, [cardId, isAnswering, mediaBlocked, answer])
+
+  const skipCurrentCard = useCallback(() => {
+    setActivityInteractionRevision((revision) => revision + 1)
+    skipCard()
+  }, [skipCard])
 
   const updateCurrentCard = useCallback(async (action: (id: string) => Promise<void>, message: string) => {
     if (!cardId || isAnswering) return
@@ -300,13 +277,13 @@ export function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: str
     try {
       await action(cardId)
       setReviewAnnouncement(message)
-      setShownAnswerCardId(null)
+      setActivityInteractionRevision((revision) => revision + 1)
     } catch (reason) {
       setActionError(userFacingStorageError(reason, 'Unable to update card'))
     } finally {
       setIsAnswering(false)
     }
-  }, [cardId, isAnswering])
+  }, [cardId, isAnswering, setIsAnswering, setActionError, setReviewAnnouncement])
 
   const replayAudio = useCallback(async () => {
     const surface = reviewCardRef.current
@@ -327,13 +304,13 @@ export function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: str
       await collection.deleteNote(note.id)
       setReviewAnnouncement('Note and its cards deleted.')
       setDeletingNote(false)
-      setShownAnswerCardId(null)
+      setActivityInteractionRevision((revision) => revision + 1)
     } catch (reason) {
       setActionError(userFacingStorageError(reason, 'Unable to delete note'))
     } finally {
       setIsAnswering(false)
     }
-  }, [note, isAnswering])
+  }, [note, isAnswering, setIsAnswering, setActionError, setReviewAnnouncement])
 
   /** One affordance for the one undo record, whatever produced it. */
   const undoLastAction = useCallback(async () => {
@@ -344,34 +321,23 @@ export function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: str
       if (pendingUndo?.kind === 'review' && sessionId) await undoCustomStudy(collection, sessionId)
       else await collection.undo()
       setReviewAnnouncement(undoAnnouncement(pendingUndo ?? null))
-      setShownAnswerCardId(null)
       setReviewsRecorded((count) => (pendingUndo?.kind === 'review' ? Math.max(0, count - 1) : count))
+      setActivityInteractionRevision((revision) => revision + 1)
     } catch (reason) {
       setActionError(userFacingStorageError(reason, 'Unable to undo'))
     } finally {
       setIsAnswering(false)
     }
-  }, [isAnswering, pendingUndo, sessionId])
+  }, [isAnswering, pendingUndo, sessionId, setIsAnswering, setActionError, setReviewAnnouncement, setReviewsRecorded])
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (isAnswering || editingNote || movingNote || editingTags || deletingNote || showCardInfo) return
       if (isShortcutBlocked(event)) return
       const key = event.key.toLowerCase()
-      const buttonFocused = event.target instanceof Element && Boolean(event.target.closest('button'))
       if ((key === 'u' || key === 'v' || key === 'x') && pendingUndo) { event.preventDefault(); void undoLastAction(); return }
       if (!cardId) return
-      if ((key === ' ' || key === 'spacebar') && !showAnswer && !buttonFocused) {
-        // Media that is still loading, or that failed to prepare, must not be
-        // revealed early: the question would render without its own content.
-        if (mediaBlocked) return
-        event.preventDefault()
-        setReviewAnnouncement('Answer shown. Rate the card with 1 to 4.')
-        setShownAnswerCardId(cardId)
-      } else if (showAnswer && /^[1-4]$/.test(key)) {
-        const choice = choices[Number(key) - 1]
-        if (choice) { event.preventDefault(); void answer(choice.rating) }
-      } else if (key === 'e') { event.preventDefault(); setEditingNote(true) }
+      if (key === 'e') { event.preventDefault(); setEditingNote(true) }
       else if (key === 'm') { event.preventDefault(); setMovingNote(true) }
       else if (key === 't') { event.preventDefault(); setEditingTags(true) }
       else if (key === 'k' && note) { event.preventDefault(); void updateCurrentCard(async () => collection.updateNoteTags(note.id, note.tags?.includes('marked') ? (note.tags ?? []).filter((tag) => tag !== 'marked') : [...(note.tags ?? []), 'marked']), note.tags?.includes('marked') ? 'Mark removed.' : 'Marked.') }
@@ -384,7 +350,7 @@ export function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: str
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [cardId, card?.flag, note, isAnswering, editingNote, movingNote, editingTags, deletingNote, showCardInfo, showAnswer, choices, media, answer, replayAudio, updateCurrentCard, pendingUndo, undoLastAction, mediaBlocked])
+  }, [cardId, card?.flag, note, isAnswering, editingNote, movingNote, editingTags, deletingNote, showCardInfo, media, replayAudio, updateCurrentCard, pendingUndo, undoLastAction])
 
   /*
    * Card actions move the card out of view without moving focus, so a learner
@@ -394,6 +360,11 @@ export function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: str
    * action is usually the one that emptied the queue.
    */
   const announcementRegion = <p className="visually-hidden" role="status">{reviewAnnouncement}</p>
+
+  if (!activity) return <section className="review-session">
+    <p className="form-error" role="alert">This study activity is no longer available.</p>
+    <button className="text-button" type="button" onClick={onBack}>Back to study</button>
+  </section>
 
   if (queue === undefined || (cardId && (card === undefined || note === undefined || noteType === undefined || unavailable))) return <div className="loading-state" role="status">Preparing review…</div>
   if (!cardId || !card || !note || !noteType || !template) {
@@ -411,13 +382,6 @@ export function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: str
         <button className="primary-action" type="button" onClick={onBack}>{sessionId ? 'Back to custom study' : 'Back to deck'}</button>
       </section>
     )
-  }
-
-  function skipCard() {
-    if (!cardId) return
-    setShownAnswerCardId(null)
-    setSkippedCardIds((current) => new Set(current).add(cardId))
-    setReviewAnnouncement('Card skipped. It stays scheduled and comes back later.')
   }
 
   const reviewActions = <div className="review-session-actions">
@@ -460,10 +424,10 @@ export function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: str
     {actionError && <p className="form-error" role="alert">{actionError}</p>}
     {announcementRegion}
     <article className="review-card"><p className="form-error" role="alert">Unable to render card: {renderError}</p></article>
-    <button className="primary-action" type="button" onClick={skipCard}>Skip card</button>
+    <button className="primary-action" type="button" onClick={skipCurrentCard}>Skip card</button>
   </section>{reviewerDialogs}</>
 
-  const answerDiff = showAnswer && typedAnswer !== undefined ? compareTypedAnswer(typedAnswer, typedInput) : []
+  const ActivityView = activity.View
 
   return (
     <>
@@ -474,34 +438,24 @@ export function ReviewSession({ deckId = '', sessionId, onBack }: { deckId?: str
       {actionError && <p className="form-error" role="alert">{actionError}</p>}
       {announcementRegion}
       {audioMessage && <p className="review-feedback" role="status">{audioMessage}</p>}
-      <article className="review-card" ref={reviewCardRef}>
-        <span className="card-side">{showAnswer ? 'ANSWER' : 'QUESTION'}</span>
-        {mediaBlocked ? <p role="status">Preparing card media…</p> : imageOcclusion
-          ? <ImageOcclusionReview note={note} card={card} showAnswer={showAnswer} imageUrl={preparedMedia.sources.byReference[note.imageOcclusion?.sourceMediaId ?? '']?.url} />
-          : <TemplatePreview title="Review card" key={card.id} rendering={renderedCard!} templateOrdinal={Math.max(1, noteType.templates.findIndex((candidate) => candidate.id === template.id) + 1)} side={showAnswer ? 'back' : 'front'} />}
-        {preparedMedia.error && <p className="form-error" role="alert">Some attachments could not be shown: {preparedMedia.error}</p>}
-        {!mediaBlocked && noteType.kind !== 'image-occlusion' && renderedCard?.media.filter((description) => description.side === 'front').map((description) => <MediaRenderer key={description.id} description={description} />)}
-        {!mediaBlocked && noteType.kind !== 'image-occlusion' && showAnswer && renderedCard?.media.filter((description) => description.side === 'back').map((description) => <MediaRenderer key={description.id} description={description} />)}
-        {typedAnswer !== undefined && !showAnswer && <label className="typed-answer">Type your answer
-          <input autoComplete="off" value={typedInput} onChange={(event) => setTypedDraft({ cardId, value: event.target.value })} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); if (!mediaBlocked) setShownAnswerCardId(cardId) } }} />
-        </label>}
-        {typedAnswer !== undefined && showAnswer && <div ref={typedResultRef} className="typed-answer-result" role="status" aria-live="polite" aria-label="Typed answer comparison" tabIndex={-1}>
-          <span className="section-code">YOUR ANSWER</span>
-          <div className="answer-diff">{answerDiff.map((part, index) => <span key={index} className={`answer-${part.kind}`} aria-label={`${part.kind === 'good' ? 'Correct' : part.kind === 'bad' ? 'Incorrect' : 'Missing'}: ${part.text}`}>{part.text}</span>)}</div>
-          <p>Expected: <strong>{typedAnswer}</strong></p>
-        </div>}
-      </article>
-      {!showAnswer ? (
-        <button className="primary-action reveal-action" type="button" disabled={isAnswering || mediaBlocked} onClick={() => { setReviewAnnouncement('Answer shown. Rate the card with 1 to 4.'); setShownAnswerCardId(cardId) }}>Show answer</button>
-      ) : (
-        <div className="rating-grid" role="group" aria-label="Rate answer">
-          {choices.map((choice) => (
-            <button aria-label={`${choice.label} · ${choice.interval}`} className={`rating rating-${Rating[choice.rating].toLowerCase()}`} type="button" disabled={isAnswering || mediaBlocked} key={choice.rating} onClick={() => void answer(choice.rating)}>
-              <strong>{choice.label}</strong><span aria-hidden="true">·</span><small>{choice.interval}</small>
-            </button>
-          ))}
-        </div>
-      )}
+      <ActivityView key={`${cardId}:${reviewsRecorded}:${activityInteractionRevision}`} session={{
+        prompt: {
+          card,
+          note,
+          noteType,
+          template,
+          rendering: renderedCard!,
+          imageOcclusionImage: preparedMedia.sources.byReference[note.imageOcclusion?.sourceMediaId ?? '']?.url,
+          attachments,
+          mediaBlocked,
+          mediaError: preparedMedia.error,
+        },
+        busy: isAnswering,
+        choices,
+        grade: (rating) => { void answerCurrent(rating) },
+        announceAnswer: () => setReviewAnnouncement('Answer shown. Rate the card with 1 to 4.'),
+        cardSurface: reviewCardRef,
+      }} />
     </section>
     {reviewerDialogs}
     </>

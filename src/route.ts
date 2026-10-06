@@ -14,15 +14,19 @@ export type Route =
   | { view: 'statistics' }
   | { view: 'browse' }
   | { view: 'study' }
-  | { view: 'custom-review'; sessionId: string }
+  | { view: 'activity-selection'; target: { kind: 'deck'; deckId: string } | { kind: 'session'; sessionId: string } }
+  | { view: 'custom-review'; sessionId: string; activityId?: string }
   | { view: 'deck'; deckId: string }
-  | { view: 'review'; deckId: string }
+  | { view: 'review'; deckId: string; activityId?: string }
 
 /** The hash that reaches a route. Every route has one. */
 export function hashForRoute(route: Route): string {
   if (route.view === 'deck') return `#deck/${encodeURIComponent(route.deckId)}`
-  if (route.view === 'review') return `#review/${encodeURIComponent(route.deckId)}`
-  if (route.view === 'custom-review') return `#custom-review/${encodeURIComponent(route.sessionId)}`
+  if (route.view === 'activity-selection') return route.target.kind === 'deck'
+    ? `#activity/deck/${encodeURIComponent(route.target.deckId)}`
+    : `#activity/session/${encodeURIComponent(route.target.sessionId)}`
+  if (route.view === 'review') return `#review/${encodeURIComponent(route.deckId)}${route.activityId ? `/${encodeURIComponent(route.activityId)}` : ''}`
+  if (route.view === 'custom-review') return `#custom-review/${encodeURIComponent(route.sessionId)}${route.activityId ? `/${encodeURIComponent(route.activityId)}` : ''}`
   return `#${route.view}`
 }
 
@@ -35,11 +39,16 @@ export function routeFromHash(hash: string): Route {
   if (hash === '#statistics') return { view: 'statistics' }
   if (hash === '#study') return { view: 'study' }
   if (hash === '#browse') return { view: 'browse' }
-  const custom = hash.match(/^#custom-review\/([^/]+)$/)
-  if (custom) return { view: 'custom-review', sessionId: decodeURIComponent(custom[1]) }
-  const match = hash.match(/^#(deck|review)\/([^/]+)$/)
+  const activitySelection = hash.match(/^#activity\/(deck|session)\/([^/]+)$/)
+  if (activitySelection) return activitySelection[1] === 'deck'
+    ? { view: 'activity-selection', target: { kind: 'deck', deckId: decodeURIComponent(activitySelection[2]) } }
+    : { view: 'activity-selection', target: { kind: 'session', sessionId: decodeURIComponent(activitySelection[2]) } }
+  const custom = hash.match(/^#custom-review\/([^/]+)(?:\/([^/]+))?$/)
+  if (custom) return { view: 'custom-review', sessionId: decodeURIComponent(custom[1]), ...(custom[2] ? { activityId: decodeURIComponent(custom[2]) } : {}) }
+  const match = hash.match(/^#(deck|review)\/([^/]+)(?:\/([^/]+))?$/)
   if (!match) return { view: 'decks' }
-  return { view: match[1] as 'deck' | 'review', deckId: decodeURIComponent(match[2]) }
+  if (match[1] === 'deck') return { view: 'deck', deckId: decodeURIComponent(match[2]) }
+  return { view: 'review', deckId: decodeURIComponent(match[2]), ...(match[3] ? { activityId: decodeURIComponent(match[3]) } : {}) }
 }
 
 /**

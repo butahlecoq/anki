@@ -685,6 +685,14 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+.activity-selection { width: min(100%, 48rem); margin-inline: auto; padding-block: 1rem 3rem; }
+.activity-selection > p { max-width: 42rem; color: var(--text-muted); line-height: 1.7; }
+.activity-list { display: grid; gap: 1rem; margin-top: 2rem; }
+.activity-option { display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; min-width: 0; padding: 1.25rem; border: 1px solid var(--border-subtle); background: var(--surface-panel); }
+.activity-option h2 { margin: 0; }
+.activity-option p { margin: .5rem 0 0; color: var(--text-muted); line-height: 1.6; }
+.activity-option .primary-action { flex: 0 0 auto; }
+.activity-selection + .custom-study-create, .activity-selection + .custom-session-list { margin-top: 2rem; }
 .custom-study-create, .custom-session-list { margin-top: 2rem; }
 .custom-study-create form { display: grid; gap: 1rem; max-width: 48rem; }
 .custom-study-create label { display: grid; gap: .4rem; }
@@ -700,6 +708,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .custom-study-help, .temporary-membership { color: var(--text-muted); line-height: 1.8; }
 .custom-review-mode { background: var(--surface-panel); }
 @media (max-width: 680px) { .custom-study-create input, .custom-study-create select { font-size: 16px; } }
+@media (max-width: 520px) { .activity-option { align-items: stretch; flex-direction: column; gap: 1rem; } .activity-option .primary-action { width: 100%; } }
 .external-destination { overflow-wrap: anywhere; }
 .external-card-links { padding-top: 12px; }
 .external-card-links p { color: var(--text-muted); font-size: 11px; line-height: 1.8; }
