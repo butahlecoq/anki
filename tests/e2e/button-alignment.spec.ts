@@ -31,3 +31,45 @@ test('paired note-type and dialog actions use matching button dimensions', async
   const editDialog = page.getByRole('dialog', { name: 'Edit Japanese nouns' })
   await expectSameButtonSize(editDialog.getByRole('button', { name: 'Cancel' }), editDialog.getByRole('button', { name: 'Save changes' }))
 })
+
+test('Collection landing actions have matching desktop and phone dimensions', async ({ page }) => {
+  await page.goto('/')
+
+  await page.getByRole('button', { name: 'Load sample deck' }).click()
+  await expect(page.getByRole('heading', { name: 'Choose what to remember' })).toBeVisible()
+
+  const actions = page.locator('.compact-hero .collection-actions')
+  const importPackage = actions.getByRole('button', { name: 'Import Anki package', exact: true })
+  const newDeck = actions.getByRole('button', { name: 'New deck', exact: true })
+  await expect(importPackage).toBeVisible()
+  await expect(newDeck).toBeVisible()
+
+  const [importBox, newDeckBox] = await Promise.all([importPackage.boundingBox(), newDeck.boundingBox()])
+  expect(importBox).not.toBeNull()
+  expect(newDeckBox).not.toBeNull()
+  expect(Math.abs(importBox!.width - newDeckBox!.width)).toBeLessThanOrEqual(1)
+  expect(Math.abs(importBox!.height - newDeckBox!.height)).toBeLessThanOrEqual(1)
+
+  const viewportWidth = page.viewportSize()!.width
+  if (viewportWidth < 600) {
+    const actionsBox = await actions.boundingBox()
+    expect(actionsBox).not.toBeNull()
+    expect(importBox!.height).toBeGreaterThanOrEqual(54)
+    expect(importBox!.x).toBeGreaterThanOrEqual(actionsBox!.x)
+    expect(importBox!.x + importBox!.width).toBeLessThanOrEqual(actionsBox!.x + actionsBox!.width + 1)
+    expect(newDeckBox!.x + newDeckBox!.width).toBeLessThanOrEqual(actionsBox!.x + actionsBox!.width + 1)
+    expect(await page.evaluate(width => document.documentElement.scrollWidth <= width, viewportWidth)).toBe(true)
+  } else {
+    expect(Math.abs(importBox!.width - 150)).toBeLessThanOrEqual(1)
+    expect(Math.abs(importBox!.height - 42)).toBeLessThanOrEqual(1)
+  }
+
+  await importPackage.focus()
+  await expect(importPackage).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(page.getByRole('dialog', { name: 'Import Anki package' })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await newDeck.click()
+  await expect(page.getByRole('dialog', { name: 'Create a deck' })).toBeVisible()
+  await page.keyboard.press('Escape')
+})
