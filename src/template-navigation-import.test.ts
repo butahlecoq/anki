@@ -4,6 +4,7 @@ import { expect, test } from 'vitest'
 import { createCollection } from './collection'
 import { prepareAnkiImport } from './anki-import'
 import { exportAnkiPackage } from './anki-export'
+import { readAnkiExportSnapshot } from './collection-queries'
 import { navigationFront, navigationPackage } from '../tests/fixtures/secure-navigation'
 
 test('Japanese HTTPS templates, fields and media survive package import/export/clean reimport', async () => {
@@ -14,16 +15,17 @@ test('Japanese HTTPS templates, fields and media survive package import/export/c
     const prepared = await prepareAnkiImport(new File([bytes.slice().buffer], 'synthetic.apkg'), source, { SQL })
     expect(prepared.issues.filter(issue => issue.severity === 'error')).toEqual([])
     await prepared.commit()
-    const template = (await source.noteTypes.toArray()).find(type => type.name === 'Japanese navigation')!
+    const template = (await readAnkiExportSnapshot(source)).types.find(type => type.name === 'Japanese navigation')!
     expect(template.templates[0].front).toBe(navigationFront)
     const output = await exportAnkiPackage(source, { SQL, media: true, history: true, scheduling: true })
     const reimport = await prepareAnkiImport(new File([output.bytes.slice().buffer], 'roundtrip.apkg'), clean, { SQL })
     expect(reimport.issues.filter(issue => issue.severity === 'error')).toEqual([])
     await reimport.commit()
-    expect((await clean.notes.toArray()).map(note => [note.id, note.fields, note.tags])).toEqual((await source.notes.toArray()).map(note => [note.id, note.fields, note.tags]))
-    expect((await clean.noteTypes.toArray()).find(type => type.name === 'Japanese navigation')!.templates[0].front).toBe(navigationFront)
-    expect((await clean.noteMedia.toArray()).map(media => media.digest)).toEqual((await source.noteMedia.toArray()).map(media => media.digest))
-  } finally { await source.delete(); await clean.delete() }
+    const [cleanState, sourceState] = await Promise.all([readAnkiExportSnapshot(clean), readAnkiExportSnapshot(source)])
+    expect(cleanState.notes.map(note => [note.id, note.fields, note.tags])).toEqual(sourceState.notes.map(note => [note.id, note.fields, note.tags]))
+    expect(cleanState.types.find(type => type.name === 'Japanese navigation')!.templates[0].front).toBe(navigationFront)
+    expect(cleanState.references.map(media => media.digest)).toEqual(sourceState.references.map(media => media.digest))
+  } finally { await source.removeLocalCollection(); await clean.removeLocalCollection() }
 })
 
 test('navigation exception does not allow remote resources, executable markup or unsafe schemes', async () => {
@@ -43,7 +45,7 @@ test('navigation exception does not allow remote resources, executable markup or
       const prepared = await prepareAnkiImport(new File([bytes.slice().buffer], 'unsafe.apkg'), db, { SQL })
       expect(prepared.issues.some(issue => issue.severity === 'error')).toBe(true)
       await expect(prepared.commit()).rejects.toThrow()
-      expect(await db.notes.count()).toBe(0)
+      expect((await readAnkiExportSnapshot(db)).notes).toHaveLength(0)
     }
-  } finally { await db.delete() }
+  } finally { await db.removeLocalCollection() }
 })

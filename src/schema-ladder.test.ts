@@ -1,20 +1,20 @@
 import 'fake-indexeddb/auto'
 import { expect, test } from 'vitest'
-import { Collection, createCollection } from './collection'
+import { createCollection } from './collection'
 import { CLIENT_COLLECTION_SCHEMA_VERSION, SERVER_MAX_COLLECTION_SCHEMA_VERSION } from '../sync-capabilities'
 import { SCHEMA_LADDER, schemaIntroducedFields, schemaRequiredByPayload } from '../schema-ladder'
 
 test('the collection store version is the advertised schema version', async () => {
   // The ladder is the single definition; a client must never advertise a store
   // version its own migrations do not reach.
-  const collection = new Collection(`kiroku-schema-${crypto.randomUUID()}`)
-  expect(collection.verno).toBe(CLIENT_COLLECTION_SCHEMA_VERSION)
+  const collection = createCollection(`kiroku-schema-${crypto.randomUUID()}`)
+  expect(collection.schemaVersion).toBe(CLIENT_COLLECTION_SCHEMA_VERSION)
   expect(CLIENT_COLLECTION_SCHEMA_VERSION).toBe(SCHEMA_LADDER[SCHEMA_LADDER.length - 1].schema)
   expect(SERVER_MAX_COLLECTION_SCHEMA_VERSION).toBe(CLIENT_COLLECTION_SCHEMA_VERSION)
   const db = createCollection(`kiroku-schema-open-${crypto.randomUUID()}`)
   await db.createDeck('Schema')
-  expect(db.verno).toBe(CLIENT_COLLECTION_SCHEMA_VERSION)
-  await db.delete()
+  expect(db.schemaVersion).toBe(CLIENT_COLLECTION_SCHEMA_VERSION)
+  await db.removeLocalCollection()
 })
 
 test('the ladder is ordered, contiguous, and starts at 1', () => {

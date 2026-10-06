@@ -1,11 +1,12 @@
 import 'fake-indexeddb/auto'
 import { afterEach, expect, it } from 'vitest'
 import initSqlJs from 'sql.js'
-import { Collection } from './collection'
+import { createCollection, Rating } from './collection'
 import { prepareAnkiDataImport, prepareAnkiImport } from './anki-import'
 import { exportAnkiPackage } from './anki-export'
 import { nativeAnkiProjectionData, nativeAnkiProjectionEntityMap, nativeAnkiProjectionManifest } from './native-anki-projection'
 import { prepareNativeAnkiWriteback } from './native-anki-writeback'
+import { readAnkiExportSnapshot, readNativeWritebackSnapshot } from './collection-queries'
 
 const noteId = 1_700_000_000_100
 const firstCardId = 1_700_000_000_101
@@ -45,9 +46,9 @@ async function nativeFixture(schema = 11) {
   return { SQL, snapshot }
 }
 
-let collection: Collection | undefined
+let collection: ReturnType<typeof createCollection> | undefined
 afterEach(async () => {
-  if (collection) await collection.delete()
+  if (collection) await collection.removeLocalCollection()
   collection = undefined
 })
 
@@ -63,7 +64,7 @@ it('projects schema-11 note, card, deck, and review identities without rewriting
   expect(Array.from(mediaBytes)).toEqual([0, 1, 2, 255])
   expect(Array.from(snapshot)).toEqual(before)
 
-  collection = new Collection(`native-projection-${crypto.randomUUID()}`)
+  collection = createCollection(`native-projection-${crypto.randomUUID()}`)
   const prepared = await prepareAnkiDataImport(data, collection, { SQL, now: new Date('2026-10-02T12:00:00Z') })
   expect(prepared.issues.filter((issue) => issue.severity === 'error')).toEqual([])
   expect(prepared.summary).toMatchObject({ decks: 4, noteTypes: 1, notes: 1, cards: 2, reviews: 1 })
@@ -73,9 +74,10 @@ it('projects schema-11 note, card, deck, and review identities without rewriting
   expect(prepared.projectedEntities().notes[0].fields['anki-field:100:0']).toBe('猫')
   await prepared.commit()
 
-  const note = await collection.notes.get(`anki-note:${originalNote.guid}`)
-  const cards = await collection.cards.where('noteId').equals(`anki-note:${originalNote.guid}`).sortBy('ankiId')
-  const review = await collection.reviewEntries.get(`anki-review:${reviewId}`)
+  const initialProjection = await readNativeWritebackSnapshot(collection)
+  const note = initialProjection.notes.find(({ id }) => id === `anki-note:${originalNote.guid}`)
+  const cards = initialProjection.cards.filter(({ noteId }) => noteId === `anki-note:${originalNote.guid}`).sort((left, right) => (left.ankiId ?? 0) - (right.ankiId ?? 0))
+  const review = initialProjection.reviews.find(({ id }) => id === `anki-review:${reviewId}`)
   expect(note).toMatchObject({ ankiId: noteId, tags: ['jlpt::n5'], fields: { 'anki-field:100:0': '猫', 'anki-field:100:1': 'cat' } })
   expect(cards).toHaveLength(2)
   expect(cards.map((card) => card.ankiId)).toEqual([firstCardId, secondCardId])
@@ -83,13 +85,7 @@ it('projects schema-11 note, card, deck, and review identities without rewriting
   expect(review).toMatchObject({ id: `anki-review:${reviewId}`, cardId: cards[0].id, rating: 4 })
 
   const manifest = await nativeAnkiProjectionManifest(SQL, snapshot)
-  const entities = {
-    notes: await collection.notes.toArray(),
-    cards: await collection.cards.toArray(),
-    reviews: await collection.reviewEntries.toArray(),
-    decks: await collection.decks.toArray(),
-    notetypes: await collection.noteTypes.toArray(),
-  }
+  const entities = initialProjection
   const entityMap = nativeAnkiProjectionEntityMap(manifest, entities)
   expect(entityMap.notes.get(noteId)).toBe(`anki-note:${originalNote.guid}`)
   expect(entityMap.cards.get(firstCardId)).toBe(cards[0].id)
@@ -104,9 +100,10 @@ it('projects schema-11 note, card, deck, and review identities without rewriting
   const reimported = await prepareAnkiImport(new File([packageFile.bytes.slice().buffer], 'account-copy.apkg'), collection, { SQL })
   expect(reimported.issues.filter((issue) => issue.severity === 'error')).toEqual([])
   await reimported.commit()
-  expect(await collection.notes.get(`anki-note:${originalNote.guid}`)).toMatchObject({ ankiId: noteId })
-  expect((await collection.cards.toArray()).map(({ ankiId }) => ankiId).sort()).toEqual([firstCardId, secondCardId])
-  expect(await collection.reviewEntries.get(`anki-review:${reviewId}`)).toMatchObject({ cardId: cards[0].id, rating: 4 })
+  const restoredProjection = await readNativeWritebackSnapshot(collection)
+  expect(restoredProjection.notes.find(({ id }) => id === `anki-note:${originalNote.guid}`)).toMatchObject({ ankiId: noteId })
+  expect(restoredProjection.cards.map(({ ankiId }) => ankiId).sort()).toEqual([firstCardId, secondCardId])
+  expect(restoredProjection.reviews.find(({ id }) => id === `anki-review:${reviewId}`)).toMatchObject({ cardId: cards[0].id, rating: 4 })
   expect(() => nativeAnkiProjectionEntityMap(manifest, {
     ...entities,
     cards: [...entities.cards, { ...cards[0], id: 'duplicate-native-card' }],
@@ -157,7 +154,7 @@ it('writes only plain native note fields and tags while preserving native identi
   const { SQL, snapshot } = await nativeFixture()
   const original = Array.from(snapshot)
   const manifest = await nativeAnkiProjectionManifest(SQL, snapshot)
-  collection = new Collection(`native-writeback-${crypto.randomUUID()}`)
+  collection = createCollection(`native-writeback-${crypto.randomUUID()}`)
   const prepared = await prepareAnkiDataImport(nativeAnkiProjectionData(SQL, snapshot), collection, { SQL, now: new Date('2026-10-02T12:00:00Z') })
   await prepared.commit()
 
@@ -165,15 +162,15 @@ it('writes only plain native note fields and tags while preserving native identi
   expect(unchanged).toMatchObject({ status: 'unchanged', changes: [], blocked: [] })
 
   const noteIdLocal = `anki-note:${originalNote.guid}`
-  const note = await collection.notes.get(noteIdLocal)
-  await collection.notes.put({ ...note!, fields: { ...note!.fields, 'anki-field:100:0': '猫 & <ねこ>\nNeko' }, tags: ['jlpt::n4', 'reviewed'], updatedAt: '2026-10-02T13:00:00.000Z' })
-  const beforeApp = await collection.notes.toArray()
+  const note = (await readAnkiExportSnapshot(collection)).notes.find(({ id }) => id === noteIdLocal)
+  await collection.updateNativeNoteContent(noteIdLocal, { ...note!.fields, 'anki-field:100:0': '猫 & <ねこ>\nNeko' }, ['jlpt::n4', 'reviewed'], new Date('2026-10-02T13:00:00.000Z'))
+  const beforeApp = (await readAnkiExportSnapshot(collection)).notes
   const plan = await prepareNativeAnkiWriteback(SQL, snapshot, manifest, collection, { now: new Date('2026-10-02T13:00:00Z') })
   expect(plan.status).toBe('ready')
   if (plan.status !== 'ready') throw new Error('Expected supported field and tag changes to prepare')
   expect(plan.changes).toEqual([{ noteId, fields: [0], tags: true }])
   expect(Array.from(snapshot)).toEqual(original)
-  expect(await collection.notes.toArray()).toEqual(beforeApp)
+  expect((await readAnkiExportSnapshot(collection)).notes).toEqual(beforeApp)
 
   const db = new SQL.Database(plan.snapshot)
   const nativeNote = db.exec('SELECT id,guid,mid,usn,tags,flds,sfld,data FROM notes WHERE id = ?', [noteId])[0].values
@@ -190,11 +187,11 @@ it('writes only plain native note fields and tags while preserving native identi
 it('blocks native writeback when scheduling or review history changes', async () => {
   const { SQL, snapshot } = await nativeFixture()
   const manifest = await nativeAnkiProjectionManifest(SQL, snapshot)
-  collection = new Collection(`native-writeback-block-${crypto.randomUUID()}`)
+  collection = createCollection(`native-writeback-block-${crypto.randomUUID()}`)
   const prepared = await prepareAnkiDataImport(nativeAnkiProjectionData(SQL, snapshot), collection, { SQL, now: new Date('2026-10-02T12:00:00Z') })
   await prepared.commit()
-  const card = (await collection.cards.toArray()).find(({ ankiId }) => ankiId === firstCardId)!
-  await collection.cards.put({ ...card, reps: card.reps + 1 })
+  const card = (await readAnkiExportSnapshot(collection)).cards.find(({ ankiId }) => ankiId === firstCardId)!
+  await collection.answer(card.id, Rating.Good, new Date('2026-10-03T12:00:00Z'), undefined, { allowEarly: true, reschedule: true })
   const result = await prepareNativeAnkiWriteback(SQL, snapshot, manifest, collection, { now: new Date('2026-10-02T12:00:00Z') })
   expect(result.status).toBe('blocked')
   if (result.status !== 'blocked') throw new Error('Expected schedule changes to block writeback')

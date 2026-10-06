@@ -2,7 +2,7 @@ import type { CardRecord, Collection, Grade } from './collection'
 import { isRenderedCardDisplayable, renderNoteCard } from './card-rendering'
 import { collectionSearchRows, compileCollectionSearch, type SearchRow } from './collection-search'
 import { customStudyKey, customStudySessions, type CustomStudySession } from './custom-study-state'
-import { persistCustomStudySessions, runCustomStudyAnswer, runCustomStudyUndo, runCustomStudyWrite } from './collection-mutations'
+import { runCustomStudyAnswer, runCustomStudyUndo, runCustomStudyWrite } from './collection-mutations'
 import { readCustomStudyQueueSnapshot, readCustomStudySnapshot } from './collection-queries'
 import { eligibleForQueue } from './scheduler'
 
@@ -46,7 +46,7 @@ export async function createCustomStudy(db: Collection, definition: CustomStudyD
     if ((await customStudySessions(db)).some((session) => session.name.toLocaleLowerCase() === definition.name.trim().toLocaleLowerCase())) throw new Error('A custom session already uses that name. Choose another name.')
     const preview = await previewCustomStudy(db, definition, now, id)
     const session: CustomStudySession = { ...definition, name: definition.name.trim(), id, cardIds: preview.cards.map((card) => card.id), completed: [], createdAt: now.toISOString() }
-    await persistCustomStudySessions(db, customStudyKey, [...await customStudySessions(db), session])
+    await db.replaceCustomStudySessions([...await customStudySessions(db), session])
     return session
   })
 }
@@ -57,7 +57,7 @@ export async function changeCustomStudy(db: Collection, id: string, action: 'reb
     if (!session) throw new Error('Custom session no longer exists.')
     const cards = action === 'rebuild' ? (await previewCustomStudy(db, session, now, id)).cards : []
     const replacement = { ...session, cardIds: cards.map((card) => card.id), completed: [] }
-    await persistCustomStudySessions(db, customStudyKey, action === 'delete' ? sessions.filter((item) => item.id !== id) : sessions.map((item) => item.id === id ? replacement : item))
+    await db.replaceCustomStudySessions(action === 'delete' ? sessions.filter((item) => item.id !== id) : sessions.map((item) => item.id === id ? replacement : item))
   })
 }
 export async function customStudyQueue(db: Collection, id: string, now = new Date()) {
@@ -80,7 +80,7 @@ export async function answerCustomStudy(db: Collection, sessionId: string, cardI
     if (!card) throw new Error('This custom-study card is no longer available.')
     const review = await db.answer(cardId, rating, now, durationMs, { allowEarly: true, reschedule: session.reschedule })
     const updated = { ...session, cardIds: session.cardIds.filter((id) => id !== cardId), completed: [...session.completed, { cardId, reviewId: review.id }] }
-    await persistCustomStudySessions(db, customStudyKey, sessions.map((item) => item.id === sessionId ? updated : item))
+    await db.replaceCustomStudySessions(sessions.map((item) => item.id === sessionId ? updated : item))
     await db.attachUndoContext({ before: session, after: updated })
     return review
   })

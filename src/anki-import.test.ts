@@ -11,6 +11,7 @@ import { prepareReviewMedia } from './review-media'
 import { digestMedia } from './media'
 import { zipSync } from 'fflate'
 import { ANKI_ARCHIVE_LIMITS } from './anki-archive'
+import { readAnkiExportSnapshot, readCard, readCardsForNote, readCardReviewHistory, readCollectionSetting, readNote, readNoteType, readReceivedOperation, readSyncRevision } from './collection-queries'
 
 let SQL: SqlJsStatic
 let collection: Collection | undefined
@@ -22,8 +23,8 @@ beforeAll(async () => {
 
 afterEach(async () => {
   vi.restoreAllMocks()
-  await collection?.delete()
-  await syncReplica?.delete()
+  await collection?.removeLocalCollection()
+  await syncReplica?.removeLocalCollection()
   collection = undefined
   syncReplica = undefined
 })
@@ -221,8 +222,8 @@ describe('Anki package import', () => {
       await prepared.commit()
     }
 
-    const notes = await collection.notes.toArray()
-    const noteTypes = new Map((await collection.noteTypes.toArray()).map((type) => [type.id, type]))
+    const notes = await readAnkiExportSnapshot(collection).then(snapshot => snapshot.notes)
+    const noteTypes = new Map((await readAnkiExportSnapshot(collection).then(snapshot => snapshot.types)).map((type) => [type.id, type]))
     for (const note of notes) {
       const type = noteTypes.get(note.typeId)!
       if (type.kind === 'image-occlusion') {
@@ -230,7 +231,7 @@ describe('Anki package import', () => {
         continue
       }
       for (const template of type.templates) {
-        const card = (await collection.cards.where('noteId').equals(note.id).toArray()).find((candidate) => candidate.templateId === template.id)
+        const card = (await readCardsForNote(collection, note.id)).find((candidate) => candidate.templateId === template.id)
         if (!card) continue
         const rendered = renderNoteCard(type, template, note.fields, card.clozeOrdinal)
         expect(rendered.error).toBeUndefined()
@@ -241,15 +242,15 @@ describe('Anki package import', () => {
       }
     }
 
-    const sourceCards = await collection.cards.toArray()
+    const sourceCards = await readAnkiExportSnapshot(collection).then(snapshot => snapshot.cards)
     for (const note of notes) {
       const card = sourceCards.find((candidate) => candidate.noteId === note.id)
       if (card) await collection.answer(card.id, Rating.Good, new Date('2026-10-01T12:30:00.000Z'), 500, { allowEarly: true, reschedule: true })
     }
 
-    const expectedDigests = (await collection.mediaBlobs.toArray()).map((entry) => entry.digest).sort()
-    const expectedReviewCount = await collection.reviewEntries.count()
-    const expectedCardCount = await collection.cards.count()
+    const expectedDigests = (await readAnkiExportSnapshot(collection).then(snapshot => snapshot.blobs)).map((entry) => entry.digest).sort()
+    const expectedReviewCount = await readAnkiExportSnapshot(collection).then(snapshot => snapshot.reviews.length)
+    const expectedCardCount = await readAnkiExportSnapshot(collection).then(snapshot => snapshot.cards.length)
     const exported = await exportAnkiPackage(collection, { scheduling: true, history: true, media: true, SQL })
     const clean = createCollection(`kiroku-compatibility-reimport-${crypto.randomUUID()}`)
     syncReplica = clean
@@ -257,12 +258,13 @@ describe('Anki package import', () => {
     expect(roundtrip.issues.filter((issue) => issue.severity === 'error')).toEqual([])
     await roundtrip.commit()
 
-    expect(await clean.notes.count()).toBe(notes.length)
-    expect(await clean.cards.count()).toBe(expectedCardCount)
-    expect(await clean.reviewEntries.count()).toBe(expectedReviewCount)
-    expect((await clean.noteTypes.toArray()).filter((type) => !type.protected).map((type) => type.templates.length).sort()).toEqual([1, 2])
-    expect((await clean.mediaBlobs.toArray()).map((entry) => entry.digest).sort()).toEqual(expectedDigests)
-    const restoredNotes = await clean.notes.toArray()
+    const cleanSnapshot = await readAnkiExportSnapshot(clean)
+    expect(cleanSnapshot.notes).toHaveLength(notes.length)
+    expect(cleanSnapshot.cards).toHaveLength(expectedCardCount)
+    expect(cleanSnapshot.reviews).toHaveLength(expectedReviewCount)
+    expect(cleanSnapshot.types.filter((type) => !type.protected).map((type) => type.templates.length).sort()).toEqual([1, 2])
+    expect(cleanSnapshot.blobs.map((entry) => entry.digest).sort()).toEqual(expectedDigests)
+    const restoredNotes = cleanSnapshot.notes
     expect(restoredNotes.find((note) => note.id === 'anki-note:stable-occlusion-guid')?.imageOcclusion?.masks).toHaveLength(2)
     expect((await Promise.all(restoredNotes.map((note) => clean.mediaForNote(note.id)))).flat()).toHaveLength(3)
   })
@@ -286,15 +288,15 @@ describe('Anki package import', () => {
     expect(prepared.summary).toMatchObject({ notes: 2, cards: 4, media: 1 })
     await prepared.commit()
 
-    const sourceNotes = await collection.notes.toArray()
-    const sourceTypes = await collection.noteTypes.toArray()
+    const sourceNotes = await readAnkiExportSnapshot(collection).then(snapshot => snapshot.notes)
+    const sourceTypes = await readAnkiExportSnapshot(collection).then(snapshot => snapshot.types)
     const sourceType = sourceTypes.find((type) => type.name.includes('Kiroku corpus reverse card'))!
     const catNote = sourceNotes.find((note) => Object.values(note.fields).includes('猫'))!
     const sourceMedia = await collection.mediaForNote(catNote.id)
     expect(sourceMedia).toHaveLength(1)
     const allMediaReferences = (await Promise.all(sourceNotes.map((note) => collection!.mediaForNote(note.id)))).flat()
     expect(allMediaReferences).toHaveLength(2)
-    const blob = await collection.mediaBlobs.get(sourceMedia[0].digest)
+    const blob = (await readAnkiExportSnapshot(collection)).blobs.find((entry) => entry.digest === sourceMedia[0].digest)
     expect(blob).toBeDefined()
     expect(await digestMedia(blob!.blob)).toBe(manifest.media[0].sha256)
     expect(blob!.byteLength).toBe(manifest.media[0].byteLength)
@@ -310,14 +312,14 @@ describe('Anki package import', () => {
     const reversed = renderNoteCard(sourceType, sourceType.templates[1], catNote.fields)
     expect(reversed.front?.html).toBe('ねこ')
 
-    const originalDecks = await collection.decks.toArray()
+    const originalDecks = await readAnkiExportSnapshot(collection).then(snapshot => snapshot.decks)
     const sourceDeck = originalDecks.find((deck) => deck.name === 'Source')!
     expect(sourceDeck.parentId).toBe(originalDecks.find((deck) => deck.name === 'Kiroku Corpus')!.id)
     expect(originalDecks.some((deck) => deck.name === 'Filtered Practice')).toBe(false)
-    expect((await collection.cards.toArray()).every((card) => card.deckId === sourceDeck.id)).toBe(true)
-    const sourceCard = (await collection.cards.toArray()).find((card) => card.noteId === catNote.id)!
+    expect((await readAnkiExportSnapshot(collection).then(snapshot => snapshot.cards)).every((card) => card.deckId === sourceDeck.id)).toBe(true)
+    const sourceCard = (await readAnkiExportSnapshot(collection).then(snapshot => snapshot.cards)).find((card) => card.noteId === catNote.id)!
     await collection.answer(sourceCard.id, Rating.Good, new Date('2026-10-01T12:00:00Z'))
-    expect(await collection.reviewEntries.where('cardId').equals(sourceCard.id).count()).toBe(1)
+    expect(await readCardReviewHistory(collection, sourceCard.id).then(entries => entries.length)).toBe(1)
 
     const exported = await exportAnkiPackage(collection, { scheduling: true, history: true, media: true, SQL })
     const clean = createCollection(`kiroku-import-${crypto.randomUUID()}`)
@@ -325,18 +327,19 @@ describe('Anki package import', () => {
     const roundtrip = await prepareAnkiImport(new File([exported.bytes.slice().buffer], 'roundtrip.apkg'), clean, { SQL })
     expect(roundtrip.issues.filter((issue) => issue.severity === 'error')).toEqual([])
     await roundtrip.commit()
-    const cleanType = (await clean.noteTypes.toArray())[0]
-    expect((await clean.notes.toArray()).map((note) => cleanType.fields.map((field) => note.fields[field.id] ?? '').slice(0, 2)).sort()).toEqual(manifest.notes.map(({ front, back }) => [front, back]).sort())
-    const cleanCards = await clean.cards.toArray()
+    const cleanSnapshot = await readAnkiExportSnapshot(clean)
+    const cleanType = cleanSnapshot.types[0]
+    expect(cleanSnapshot.notes.map((note) => cleanType.fields.map((field) => note.fields[field.id] ?? '').slice(0, 2)).sort()).toEqual(manifest.notes.map(({ front, back }) => [front, back]).sort())
+    const cleanCards = cleanSnapshot.cards
     expect(cleanCards).toHaveLength(4)
-    expect((await clean.reviewEntries.toArray())).toHaveLength(1)
-    const cleanDecks = await clean.decks.toArray()
+    expect(cleanSnapshot.reviews).toHaveLength(1)
+    const cleanDecks = cleanSnapshot.decks
     const cleanSourceDeck = cleanDecks.find((deck) => deck.name === 'Source')!
     expect(cleanCards.every((card) => card.deckId === cleanSourceDeck.id)).toBe(true)
     expect(cleanDecks.some((deck) => deck.name === 'Filtered Practice')).toBe(false)
-    expect((await Promise.all((await clean.notes.toArray()).map((note) => clean.mediaForNote(note.id)))).flat()).toHaveLength(2)
-    expect(await clean.mediaBlobs.count()).toBe(1)
-    const roundtripDigests = await Promise.all((await clean.mediaBlobs.toArray()).map((entry) => digestMedia(entry.blob)))
+    expect((await Promise.all(cleanSnapshot.notes.map((note) => clean.mediaForNote(note.id)))).flat()).toHaveLength(2)
+    expect(cleanSnapshot.blobs).toHaveLength(1)
+    const roundtripDigests = await Promise.all(cleanSnapshot.blobs.map((entry) => digestMedia(entry.blob)))
     expect(roundtripDigests).toEqual([manifest.media[0].sha256])
   })
 
@@ -405,12 +408,12 @@ describe('Anki package import', () => {
     for (const bytes of fixtures) {
       const file = new File([bytes.slice().buffer], `hostile.${extension}`)
       await expect(prepareAnkiImport(file, collection, { SQL })).rejects.toThrow(/Unable to read/i)
-      expect(await collection.decks.count()).toBe(0)
-      expect(await collection.notes.count()).toBe(0)
-      expect(await collection.cards.count()).toBe(0)
-      expect(await collection.reviewEntries.count()).toBe(0)
-      expect(await collection.noteMedia.count()).toBe(0)
-      expect(await collection.mediaBlobs.count()).toBe(0)
+      expect(await readAnkiExportSnapshot(collection).then(snapshot => snapshot.decks.length)).toBe(0)
+      expect(await readAnkiExportSnapshot(collection).then(snapshot => snapshot.notes.length)).toBe(0)
+      expect(await readAnkiExportSnapshot(collection).then(snapshot => snapshot.cards.length)).toBe(0)
+      expect(await readAnkiExportSnapshot(collection).then(snapshot => snapshot.reviews.length)).toBe(0)
+      expect(await readAnkiExportSnapshot(collection).then(snapshot => snapshot.references.length)).toBe(0)
+      expect(await readAnkiExportSnapshot(collection).then(snapshot => snapshot.blobs.length)).toBe(0)
       expect(await collection.pendingOperations()).toHaveLength(0)
     }
     expect(consoleError).not.toHaveBeenCalled()
@@ -470,12 +473,12 @@ describe('Anki package import', () => {
 
     await prepared.commit()
 
-    const decks = await collection.decks.toArray()
+    const decks = await readAnkiExportSnapshot(collection).then(snapshot => snapshot.decks)
     expect(decks).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'Japanese', parentId: null, optionGroupId: DEFAULT_DECK_OPTION_GROUP_ID }),
       expect.objectContaining({ name: 'Core', parentId: expect.any(String), optionGroupId: DEFAULT_DECK_OPTION_GROUP_ID }),
     ]))
-    const types = (await collection.noteTypes.toArray()).filter((type) => !type.protected)
+    const types = (await readAnkiExportSnapshot(collection).then(snapshot => snapshot.types)).filter((type) => !type.protected)
     expect(types).toHaveLength(2)
     expect(types.find((type) => type.name === 'Japanese vocabulary')).toMatchObject({
       kind: 'standard',
@@ -484,12 +487,12 @@ describe('Anki package import', () => {
         expect.objectContaining({ name: 'Production', front: '{{type:Meaning}}' }),
       ],
     })
-    const notes = await collection.notes.toArray()
+    const notes = await readAnkiExportSnapshot(collection).then(snapshot => snapshot.notes)
     expect(notes.find((note) => note.id === 'anki-note:stable-vocabulary-guid')).toMatchObject({ tags: ['jlpt::n5', 'animal'] })
     expect(notes.find((note) => note.id === 'anki-note:stable-cloze-guid')?.fields).toEqual(expect.objectContaining({ 'anki-field:1700000000002:0': '{{c1::東京}}へ{{c2::行く}}' }))
-    const scheduled = (await collection.cards.toArray()).find((card) => card.reps === 5)
+    const scheduled = (await readAnkiExportSnapshot(collection).then(snapshot => snapshot.cards)).find((card) => card.reps === 5)
     expect(scheduled).toMatchObject({ state: State.Review, stability: 12.5, difficulty: 4.25, scheduledDays: 12, lapses: 1 })
-    await expect(collection.reviewEntries.toArray()).resolves.toEqual([
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.reviews)).resolves.toEqual([
       expect.objectContaining({
         id: 'anki-review:1725192000000',
         reviewedAt: '2024-09-01T12:00:00.000Z',
@@ -508,7 +511,7 @@ describe('Anki package import', () => {
       expect.objectContaining({ displayName: 'cat.png', kind: 'image', side: 'front' }),
       expect.objectContaining({ displayName: 'cat.wav', kind: 'audio', side: 'front', playback: 'automatic' }),
     ]))
-    await expect(collection.mediaBlobs.count()).resolves.toBe(2)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.blobs.length)).resolves.toBe(2)
     const pending = await collection.pendingOperations()
     expect(pending).toEqual(expect.arrayContaining([
       expect.objectContaining({ entityType: 'noteType', action: 'create' }),
@@ -516,7 +519,7 @@ describe('Anki package import', () => {
       expect.objectContaining({ entityType: 'noteMedia', action: 'create' }),
     ]))
     for (const operation of pending) {
-      expect(await collection.syncRevisions.get(operation.opId)).toMatchObject({ ...operation, key: `${operation.entityType}:${operation.entityId}` })
+      expect(await readSyncRevision(collection, operation.opId)).toMatchObject({ ...operation, key: `${operation.entityType}:${operation.entityId}` })
     }
   })
 
@@ -527,15 +530,15 @@ describe('Anki package import', () => {
     expect(prepared.summary.media).toBe(2)
     await prepared.commit()
 
-    const note = await collection.notes.get('anki-note:template-media-guid')
-    const type = await collection.noteTypes.get(note!.typeId)
+    const note = await readNote(collection, 'anki-note:template-media-guid')
+    const type = await readNoteType(collection, note!.typeId)
     const references = await collection.mediaForNote(note!.id)
     expect(references).toEqual(expect.arrayContaining([
       expect.objectContaining({ displayName: 'static.png', side: 'front', inline: true }),
       expect.objectContaining({ displayName: 'static.png', side: 'back', inline: true }),
       expect.objectContaining({ displayName: 'tone.wav', side: 'back', kind: 'audio', inline: true, playback: 'automatic' }),
     ]))
-    expect(await collection.mediaBlobs.count()).toBe(2)
+    expect(await readAnkiExportSnapshot(collection).then(snapshot => snapshot.blobs.length)).toBe(2)
     const sources = await prepareReviewMedia(references, new AbortController().signal, (digest) => collection!.verifiedMediaBytes(digest))
     expect(sources.byName).toHaveProperty('static.png')
     const rendered = renderNoteCard(type!, type!.templates[0], note!.fields, undefined, sources.byName)
@@ -574,7 +577,7 @@ describe('Anki package import', () => {
     collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
     const file = await japanesePackage()
     await (await prepareAnkiImport(file, collection, { SQL, now: new Date('2026-10-01T12:00:00.000Z') })).commit()
-    const note = await collection.notes.get('anki-note:stable-vocabulary-guid')
+    const note = await readNote(collection, 'anki-note:stable-vocabulary-guid')
     if (!note) throw new Error('imported note missing')
     await collection.updateNote(note.id, { ...note.fields, 'anki-field:1700000000001:2': 'feline' }, new Date('2030-01-01T00:00:00.000Z'))
     const existingMedia = await collection.mediaForNote(note.id)
@@ -592,9 +595,9 @@ describe('Anki package import', () => {
     expect(prepared.plan.decisions).toContainEqual({ entity: 'note', id: note.id, action: 'keepLocal' })
     expect(prepared.plan.writes.notes).not.toContainEqual(expect.objectContaining({ value: expect.objectContaining({ id: note.id }) }))
     await prepared.commit()
-    await expect(collection.notes.get(note.id)).resolves.toMatchObject({ fields: { 'anki-field:1700000000001:2': 'feline' } })
+    await expect(readNote(collection, note.id)).resolves.toMatchObject({ fields: { 'anki-field:1700000000001:2': 'feline' } })
     await expect(collection.mediaForNote(note.id)).resolves.toEqual(existingMedia)
-    await expect(collection.reviewEntries.count()).resolves.toBe(2)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.reviews.length)).resolves.toBe(2)
   })
 
   test('plans suspension only for local cards absent from the package and keeps present local card state', async () => {
@@ -602,12 +605,12 @@ describe('Anki package import', () => {
     const file = await japanesePackage()
     await (await prepareAnkiImport(file, collection, { SQL })).commit()
     const noteId = 'anki-note:stable-vocabulary-guid'
-    const localCards = await collection.cards.where('noteId').equals(noteId).toArray()
+    const localCards = await readCardsForNote(collection, noteId)
     const missingCard = localCards.find((card) => card.templateId === 'anki-template:1700000000001:1')
     const presentCard = localCards.find((card) => card.templateId === 'anki-template:1700000000001:0')
     if (!missingCard || !presentCard) throw new Error('Expected both generated vocabulary cards')
-    await collection.cards.put({ ...missingCard, suspended: false, templateSuspended: false, manualSuspended: true })
-    await collection.cards.put({ ...presentCard, suspended: true, manualSuspended: true })
+    await collection.suspendCard(missingCard.id)
+    await collection.suspendCard(presentCard.id)
 
     const source = AnkiCollection.open(await fileBytes(file), SQL)
     const sourceNote = source.data.notes.find((candidate) => candidate.guid === 'stable-vocabulary-guid')
@@ -627,12 +630,12 @@ describe('Anki package import', () => {
     syncReplica = createCollection(`kiroku-import-replica-${crypto.randomUUID()}`)
     await (await prepareAnkiImport(file, syncReplica, { SQL })).commit()
     await plan.commit()
-    await expect(collection.cards.get(missingCard.id)).resolves.toMatchObject({ suspended: true, templateSuspended: true, manualSuspended: true })
+    await expect(readCard(collection, missingCard.id)).resolves.toMatchObject({ suspended: true, templateSuspended: true, manualSuspended: true })
     const reconciliationOperation = (await collection.pendingOperations()).find((operation) => operation.entityType === 'card' && operation.entityId === missingCard.id && operation.action === 'update')
     if (!reconciliationOperation) throw new Error('Expected the committed card reconciliation operation in the outbox')
     await syncReplica.applyRemoteChanges([reconciliationOperation], 1)
-    await expect(syncReplica.receivedOperations.get(reconciliationOperation.opId)).resolves.toBeDefined()
-    await collection.cards.update(missingCard.id, { manualSuspended: false })
+    await expect(readReceivedOperation(syncReplica, reconciliationOperation.opId)).resolves.toBeDefined()
+    await collection.unsuspendCard(missingCard.id)
     await expect(collection.dueCards(missingCard.deckId, new Date('2026-10-02T12:00:00.000Z'))).resolves.not.toContainEqual(expect.objectContaining({ id: missingCard.id }))
   })
 
@@ -709,16 +712,16 @@ describe('Anki package import', () => {
     const updated = new File([(await source.toUint8Array(SQL)).slice().buffer as ArrayBuffer], 'updated.apkg')
 
     await (await prepareAnkiImport(updated, collection, { SQL, now: new Date('2027-01-01T12:00:00.000Z') })).commit()
-    const importedCard = (await collection.cards.toArray()).find((card) => card.reps === 5)
+    const importedCard = (await readAnkiExportSnapshot(collection).then(snapshot => snapshot.cards)).find((card) => card.reps === 5)
     expect(importedCard).toMatchObject({ stability: 20, difficulty: 3, scheduledDays: 20, sourceModifiedAt: new Date(sourceCard.mod * 1000).toISOString() })
 
     await collection.answer(importedCard!.id, 3, new Date('2030-01-01T12:00:00.000Z'))
-    const afterLocalReview = await collection.cards.get(importedCard!.id)
+    const afterLocalReview = await readCard(collection, importedCard!.id)
     sourceCard.mod = 1_830_000_000
     sourceCard.due = 60
     const staleSchedule = new File([(await source.toUint8Array(SQL)).slice().buffer as ArrayBuffer], 'stale-schedule.apkg')
     await (await prepareAnkiImport(staleSchedule, collection, { SQL, now: new Date('2030-01-02T12:00:00.000Z') })).commit()
-    await expect(collection.cards.get(importedCard!.id)).resolves.toEqual(afterLocalReview)
+    await expect(readCard(collection, importedCard!.id)).resolves.toEqual(afterLocalReview)
   })
 
   test('keeps a note aggregate intact when its locally newer note type wins', async () => {
@@ -727,11 +730,11 @@ describe('Anki package import', () => {
     await (await prepareAnkiImport(file, collection, { SQL })).commit()
     const noteId = 'anki-note:stable-vocabulary-guid'
     const typeId = 'anki-note-type:1700000000001'
-    const localType = await collection.noteTypes.get(typeId)
-    const localNote = await collection.notes.get(noteId)
+    const localType = await readNoteType(collection, typeId)
+    const localNote = await readNote(collection, noteId)
     if (!localType || !localNote) throw new Error('imported fixture missing')
-    await collection.noteTypes.put({ ...localType, name: 'Locally customized', updatedAt: '2030-01-01T00:00:00.000Z' })
-    const beforeCards = await collection.cards.where('noteId').equals(noteId).toArray()
+    await collection.updateNoteType(typeId, { name: 'Locally customized' }, new Date('2030-01-01T00:00:00.000Z'))
+    const beforeCards = await readCardsForNote(collection, noteId)
     const beforeMedia = await collection.mediaForNote(noteId)
     const source = AnkiCollection.open(await fileBytes(file), SQL)
     const sourceNote = source.data.notes.find((note) => note.guid === 'stable-vocabulary-guid')
@@ -746,8 +749,8 @@ describe('Anki package import', () => {
     expect(prepared.duplicates.keepLocal).toBeGreaterThan(0)
     expect(prepared.issues).toEqual(expect.arrayContaining([expect.objectContaining({ severity: 'warning', code: 'local-note-type-wins', subject: noteId })]))
     await prepared.commit()
-    await expect(collection.notes.get(noteId)).resolves.toEqual(localNote)
-    await expect(collection.cards.where('noteId').equals(noteId).toArray()).resolves.toEqual(beforeCards)
+    await expect(readNote(collection, noteId)).resolves.toEqual(localNote)
+    await expect(readCardsForNote(collection, noteId)).resolves.toEqual(beforeCards)
     await expect(collection.mediaForNote(noteId)).resolves.toEqual(beforeMedia)
   })
 
@@ -767,7 +770,7 @@ describe('Anki package import', () => {
     const filtered = new File([(await source.toUint8Array(SQL)).slice().buffer as ArrayBuffer], 'filtered.apkg')
 
     await (await prepareAnkiImport(filtered, collection, { SQL, now: new Date('2026-10-01T12:00:00.000Z') })).commit()
-    const imported = (await collection.cards.toArray()).find((card) => card.reps === 5)
+    const imported = (await readAnkiExportSnapshot(collection).then(snapshot => snapshot.cards)).find((card) => card.reps === 5)
     expect(imported).toMatchObject({
       deckId: `anki-deck:${homeDeck.id}`,
       due: new Date(source.data.col.crt * 1000 + 7 * 86_400_000).toISOString(),
@@ -782,7 +785,7 @@ describe('Anki package import', () => {
     expect(prepared.issues.filter((issue) => issue.severity === 'error')).toEqual([])
     await prepared.commit()
 
-    const note = await collection.notes.get('anki-note:stable-occlusion-guid')
+    const note = await readNote(collection, 'anki-note:stable-occlusion-guid')
     expect(note).toMatchObject({
       typeId: 'image-occlusion',
       fields: { header: 'Skull bones', backExtra: 'Name the hidden bone.\nImported fixture' },
@@ -791,20 +794,20 @@ describe('Anki package import', () => {
         expect.objectContaining({ ordinal: 2, x: .6, y: .5, width: .2, height: .3 }),
       ] },
     })
-    await expect(collection.cards.where('noteId').equals(note!.id).count()).resolves.toBe(2)
+    await expect(readCardsForNote(collection, note!.id).then(cards => cards.length)).resolves.toBe(2)
     await expect(collection.mediaForNote(note!.id)).resolves.toEqual([expect.objectContaining({ displayName: 'diagram.png', kind: 'image' })])
   })
 
   test('rejects a stale preview without partially writing the package', async () => {
     collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
     const prepared = await prepareAnkiImport(await japanesePackage(), collection, { SQL, now: new Date('2026-10-01T12:00:00.000Z') })
-    await collection.decks.put({ id: 'anki-deck:1700000000010', name: 'Concurrent deck', parentId: null, optionGroupId: DEFAULT_DECK_OPTION_GROUP_ID, createdAt: '2026-10-01T12:00:00.000Z', updatedAt: '2026-10-01T12:00:00.000Z' })
+    await collection.createDeck('Concurrent deck', new Date('2026-10-01T12:00:00.000Z'))
 
     await expect(prepared.commit()).rejects.toThrow(/preview again/i)
-    await expect(collection.decks.count()).resolves.toBe(1)
-    await expect(collection.notes.count()).resolves.toBe(0)
-    await expect(collection.cards.count()).resolves.toBe(0)
-    await expect(collection.mediaBlobs.count()).resolves.toBe(0)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.decks.length)).resolves.toBe(1)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.notes.length)).resolves.toBe(0)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.cards.length)).resolves.toBe(0)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.blobs.length)).resolves.toBe(0)
   })
 
   test('reports unsupported template features instead of silently dropping them', async () => {
@@ -816,8 +819,8 @@ describe('Anki package import', () => {
       expect.objectContaining({ severity: 'error', code: 'note-skipped', subject: 'unsupported-guid' }),
     ]))
     await expect(prepared.commit()).rejects.toThrow(/resolve package errors/i)
-    await expect(collection.decks.count()).resolves.toBe(0)
-    await expect(collection.notes.count()).resolves.toBe(0)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.decks.length)).resolves.toBe(0)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.notes.length)).resolves.toBe(0)
   })
 
   test('explicit partial choice imports supported note aggregates, records omissions, and keeps them excluded on refresh', async () => {
@@ -852,15 +855,15 @@ describe('Anki package import', () => {
       expect.objectContaining({ entity: 'card', id: expect.stringMatching(/^anki-card:/), action: 'skip' }),
     ]))
     await expect(prepared.commit()).rejects.toThrow(/explicitly choosing/i)
-    await expect(collection.notes.count()).resolves.toBe(0)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.notes.length)).resolves.toBe(0)
     await expect(collection.pendingOperations()).resolves.toHaveLength(0)
 
     await prepared.commit({ importRepresentableOnly: true })
-    await expect(collection.notes.count()).resolves.toBe(2)
-    await expect(collection.cards.count()).resolves.toBe(4)
-    await expect(collection.notes.get('anki-note:unsupported-guid')).resolves.toBeUndefined()
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.notes.length)).resolves.toBe(2)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.cards.length)).resolves.toBe(4)
+    await expect(readNote(collection, 'anki-note:unsupported-guid')).resolves.toBeUndefined()
     const receiptKey = `ankiPartialImport:${sourceIdentity}`
-    await expect(collection.settings.get(receiptKey)).resolves.toMatchObject({
+    await expect(readCollectionSetting(collection, receiptKey)).resolves.toMatchObject({
       key: receiptKey,
       value: { version: 1, sourceIdentity, sourceFingerprint: 'revision-hash-1', excludedNoteGuids: ['unsupported-guid'] },
     })
@@ -892,9 +895,9 @@ describe('Anki package import', () => {
     expect(refreshPlan.plan.savedPartialChoice).toBe(true)
     expect(refreshPlan.plan.skipped).toContainEqual(expect.objectContaining({ guid: 'unsupported-guid' }))
     await refreshPlan.commit()
-    await expect(collection.notes.count()).resolves.toBe(2)
-    await expect(collection.notes.get('anki-note:unsupported-guid')).resolves.toBeUndefined()
-    await expect(collection.settings.get(receiptKey)).resolves.toMatchObject({ value: { sourceFingerprint: 'revision-hash-2', excludedNoteGuids: ['unsupported-guid'] } })
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.notes.length)).resolves.toBe(2)
+    await expect(readNote(collection, 'anki-note:unsupported-guid')).resolves.toBeUndefined()
+    await expect(readCollectionSetting(collection, receiptKey)).resolves.toMatchObject({ value: { sourceFingerprint: 'revision-hash-2', excludedNoteGuids: ['unsupported-guid'] } })
   })
 
   test('ignores unsupported note types that are unused by the account snapshot', async () => {
@@ -913,7 +916,7 @@ describe('Anki package import', () => {
     expect(prepared.issues).not.toContainEqual(expect.objectContaining({ code: 'unsupported-note-type', subject: 'Unsupported custom filters' }))
     expect(prepared.summary.notes).toBe(2)
     await prepared.commit()
-    await expect(collection.notes.count()).resolves.toBe(2)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.notes.length)).resolves.toBe(2)
   })
 
   test('preserves safe field layout HTML and reports preserved markup in import findings', async () => {
@@ -961,9 +964,9 @@ describe('Anki package import', () => {
     expect(malformed.plan.canImportRepresentable).toBe(false)
     expect(malformed.issues).toEqual(expect.arrayContaining([expect.objectContaining({ severity: 'error', code: 'media-malformed', subject: 'broken.png' })]))
     await expect(malformed.commit({ importRepresentableOnly: true })).rejects.toThrow(/cannot be isolated safely/i)
-    await expect(collection.notes.count()).resolves.toBe(0)
-    await expect(collection.cards.count()).resolves.toBe(0)
-    await expect(collection.mediaBlobs.count()).resolves.toBe(0)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.notes.length)).resolves.toBe(0)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.cards.length)).resolves.toBe(0)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.blobs.length)).resolves.toBe(0)
   })
 
 })

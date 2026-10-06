@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto'
 import { expect, test } from 'vitest'
 import { createCollection, Rating, State, type CardRecord, type ReviewEntry } from './collection'
 import { localDayKey, periodWindow, reviewHeatmap, reviewStatistics, schedulingStatistics } from './progress-statistics'
+import { readCardsForNote, readDeckOptionGroup, readReviewHistory } from './collection-queries'
 
 function review(id: string, date: Date, overrides: Partial<ReviewEntry> = {}): ReviewEntry {
   return { id, cardId: 'card', deckId: 'deck', reviewedAt: date.toISOString(), rating: Rating.Good, state: State.Review, due: date.toISOString(), stability: 10, difficulty: 5, elapsedDays: 2, lastElapsedDays: 2, scheduledDays: 10, learningSteps: 0, ...overrides }
@@ -63,20 +64,20 @@ test('offline answers, undo, and replayed synchronization retain exactly one tim
   try {
     const deck = await source.createDeck('日本語', now)
     const note = await source.createBasicNote(deck.id, { front: '猫', back: 'cat' }, now)
-    const [card] = await source.cards.where('noteId').equals(note.id).toArray()
+    const [card] = await readCardsForNote(source, note.id)
     const answer = await source.answer(card.id, Rating.Good, now, 90_000)
     expect(answer.durationMs).toBe(60_000)
-    expect(reviewStatistics(await source.reviewEntries.toArray(), 'day', now).count).toBe(1)
+    expect(reviewStatistics(await readReviewHistory(source), 'day', now).count).toBe(1)
     await source.undo()
-    expect(reviewStatistics(await source.reviewEntries.toArray(), 'day', now).count).toBe(0)
+    expect(reviewStatistics(await readReviewHistory(source), 'day', now).count).toBe(0)
     await source.answer(card.id, Rating.Easy, now, 1234)
     const changes = await source.pendingOperations()
     await remote.applyRemoteChanges(changes, changes.length)
     await remote.applyRemoteChanges(changes, changes.length)
-    const stats = reviewStatistics(await remote.reviewEntries.toArray(), 'day', now)
+    const stats = reviewStatistics(await readReviewHistory(remote), 'day', now)
     expect(stats.count).toBe(1)
     expect(stats.durationMs).toBe(1234)
-  } finally { source.close(); remote.close(); await source.delete(); await remote.delete() }
+  } finally { source.closeLocalCollection(); remote.closeLocalCollection(); await source.removeLocalCollection(); await remote.removeLocalCollection() }
 })
 
 test('dashboard queue shares daily limits and renderability with the reviewer', async () => {
@@ -86,13 +87,13 @@ test('dashboard queue shares daily limits and renderability with the reviewer', 
     const deck = await db.createDeck('日本語', now)
     await db.createBasicNote(deck.id, { front: '猫', back: 'cat' }, now)
     const invisible = await db.createBasicNote(deck.id, { front: '犬', back: 'dog' }, now)
-    await db.notes.update(invisible.id, { fields: { front: '', back: 'dog' } })
-    expect(await db.dueCards(deck.id, now)).toHaveLength(2)
+    await db.updateNote(invisible.id, { front: '', back: 'dog' })
+    expect(await db.dueCards(deck.id, now)).toHaveLength(1)
     expect(await db.reviewQueue(deck.id, now)).toHaveLength(1)
-    const defaults = await db.deckOptionGroups.get('default')
+    const defaults = await readDeckOptionGroup(db, 'default')
     await db.updateDeckOptionGroup('default', { ...defaults!, dailyNewLimit: 0 }, now)
     expect(await db.reviewQueue(deck.id, now)).toHaveLength(0)
-  } finally { db.close(); await db.delete() }
+  } finally { db.closeLocalCollection(); await db.removeLocalCollection() }
 })
 
 test('heatmap dates use calendar arithmetic across daylight-saving transitions', () => {

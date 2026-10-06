@@ -4,6 +4,7 @@ import { App } from './App'
 import { Statistics, TodayWorkload } from './Statistics'
 import { collection, Rating, State } from './collection'
 import { localDayKey } from './progress-statistics'
+import { readCardsForNote } from './collection-queries'
 
 afterEach(() => { cleanup(); window.location.hash = '' })
 
@@ -24,7 +25,7 @@ test('live offline answers and undo update totals, heatmap selection, and chrono
   const deck = await collection.createDeck(`Statistics ${crypto.randomUUID()}`, earlier)
   try {
     const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' }, earlier)
-    const [card] = await collection.cards.where('noteId').equals(note.id).toArray()
+    const [card] = await readCardsForNote(collection, note.id)
     render(<Statistics />)
     await screen.findByRole('heading', { name: 'Every answer adds up' })
     fireEvent.change(screen.getByLabelText('Statistics deck'), { target: { value: deck.id } })
@@ -61,7 +62,7 @@ test('a selected deck workload excludes answers and cards from unrelated decks',
   try {
     await collection.createBasicNote(selected.id, { front: '猫', back: 'cat' }, now)
     const otherNote = await collection.createBasicNote(other.id, { front: '犬', back: 'dog' }, now)
-    const [otherCard] = await collection.cards.where('noteId').equals(otherNote.id).toArray()
+    const [otherCard] = await readCardsForNote(collection, otherNote.id)
     await collection.answer(otherCard.id, Rating.Easy, now, 1000)
     render(<TodayWorkload deckId={selected.id} showLink={false} />)
     const workload = screen.getByRole('region', { name: "Today's workload" })

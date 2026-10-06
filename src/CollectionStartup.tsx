@@ -6,8 +6,8 @@ import { snapshotBeforeCollectionUpgrade } from './upgrade-recovery'
 type StartupState = { status: 'opening' } | { status: 'ready' } | { status: 'failed'; reason: string; blocked?: boolean }
 const openCollectionByDefault = async () => {
   await requestPersistentStorage()
-  await snapshotBeforeCollectionUpgrade(collection.name, collection.verno)
-  return collection.open()
+  await snapshotBeforeCollectionUpgrade(collection.databaseName, collection.schemaVersion)
+  return collection.openLocalCollection()
 }
 
 export function CollectionStartup({
@@ -25,7 +25,7 @@ export function CollectionStartup({
     const onBlocked = () => {
       if (active) setState({ status: 'failed', reason: 'Another Kiroku tab is using the collection database.', blocked: true })
     }
-    if (openCollection === openCollectionByDefault) collection.on('blocked', onBlocked)
+    const unsubscribeBlocked = openCollection === openCollectionByDefault ? collection.onOpenBlocked(onBlocked) : undefined
     void openCollection().then(
       () => { if (active) setState({ status: 'ready' }) },
       (error: unknown) => {
@@ -34,7 +34,7 @@ export function CollectionStartup({
     )
     return () => {
       active = false
-      if (openCollection === openCollectionByDefault) collection.on('blocked').unsubscribe(onBlocked)
+      unsubscribeBlocked?.()
     }
   }, [attempt, openCollection])
 

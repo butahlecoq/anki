@@ -1,14 +1,14 @@
 import 'fake-indexeddb/auto'
 import { afterAll, test } from 'vitest'
 import { createCollection, Rating } from './collection'
-import { customStudyKey } from './custom-study-state'
+import { readCardsForNote, readAnkiExportSnapshot } from './collection-queries'
 
 const rootCount = 32
 const childrenPerRoot = 6
 const grandchildrenPerChild = 2
 const rowsPerDeck = 12
 const db = createCollection(`summary-profile-${crypto.randomUUID()}`)
-afterAll(async () => { await db.delete() })
+afterAll(async () => { await db.removeLocalCollection() })
 
 test.skipIf(!process.env.SUMMARY_PROFILE)('profile synthetic Deck summaries', async () => {
   const cards: Array<{ id: string; deckId: string }> = []
@@ -22,19 +22,13 @@ test.skipIf(!process.env.SUMMARY_PROFILE)('profile synthetic Deck summaries', as
     }
     for (const deck of decks) for (let row = 0; row < rowsPerDeck; row++) {
       const note = await db.createBasicNote(deck.id, { front: `${deck.name}-${row}`, back: 'answer' }, new Date(1_700_000_000_000 + cards.length))
-      const card = await db.cards.where('noteId').equals(note.id).first()
+      const card = (await readCardsForNote(db, note.id))[0]
       if (card) cards.push({ id: card.id, deckId: card.deckId })
     }
   }
   for (let index = 0; index < 8; index++) await db.createDeck(`Empty ${index}`)
-  const allCards = await db.cards.toArray()
-  await db.reviewEntries.bulkPut(allCards.filter((_, index) => index % 5 === 0).map((card, index) => ({
-    id: `profile-review-${index}`, cardId: card.id, deckId: card.deckId, rating: Rating.Good, state: card.state,
-    due: card.due, stability: card.stability, difficulty: card.difficulty, elapsedDays: card.elapsedDays,
-    lastElapsedDays: card.elapsedDays, scheduledDays: card.scheduledDays, learningSteps: card.learningSteps,
-    reviewedAt: new Date(1_700_000_000_000 + index).toISOString(),
-  })))
-  await db.settings.put({ key: customStudyKey, value: [{ id: 'profile', name: 'Profile session', search: 'deck:*', limit: allCards.length, order: 'added', reschedule: false, cardIds: allCards.filter((_, index) => index % 7 === 0).map((card) => card.id), completed: [], createdAt: '2023-11-14T00:00:00.000Z' }] })
+  const allCards = (await readAnkiExportSnapshot(db)).cards
+  for (const [index, card] of allCards.entries()) if (index % 5 === 0) await db.answer(card.id, Rating.Good, new Date(1_700_000_000_000 + index), undefined, { allowEarly: true, reschedule: false })
 
   await db.summaries() // warm Dexie and storage paths
   const samples: number[] = []
@@ -46,5 +40,5 @@ test.skipIf(!process.env.SUMMARY_PROFILE)('profile synthetic Deck summaries', as
     count = result.length
   }
   const medianMs = samples.sort((a, b) => a - b)[Math.floor(samples.length / 2)]
-  console.log(JSON.stringify({ roots: rootCount, childrenPerRoot, grandchildrenPerChild, decks: rootCount * (1 + childrenPerRoot * (1 + grandchildrenPerChild)) + 8, rowsPerDeck, notes: cards.length, cards: cards.length, reviews: Math.ceil(cards.length / 5), customSessionCards: allCards.filter((_, index) => index % 7 === 0).length, outputDecks: count, medianMs: +medianMs.toFixed(1), samplesMs: samples.map((sample) => +sample.toFixed(1)) }))
+  console.log(JSON.stringify({ roots: rootCount, childrenPerRoot, grandchildrenPerChild, decks: rootCount * (1 + childrenPerRoot * (1 + grandchildrenPerChild)) + 8, rowsPerDeck, notes: cards.length, cards: cards.length, reviews: Math.ceil(cards.length / 5), outputDecks: count, medianMs: +medianMs.toFixed(1), samplesMs: samples.map((sample) => +sample.toFixed(1)) }))
 }, 120_000)

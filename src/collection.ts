@@ -621,6 +621,8 @@ function canonicalCard(card: LegacyCard): CardRecord {
   return withPolicyDefaults({ ...card, templateId: card.templateId ?? BASIC_TEMPLATE_ID, buriedUntil })
 }
 
+export type CardScheduleUpdate = Partial<Pick<CardRecord, 'state' | 'due' | 'stability' | 'difficulty' | 'elapsedDays' | 'scheduledDays' | 'learningSteps' | 'reps' | 'lapses' | 'lastReview'>>
+
 /** Anki gathers intraday learning, interday learning, review, then new cards. */
 function queueGatherPriority(card: CardRecord) {
   if (isLearningCard(card) && !isInterdayLearning(card)) return 0
@@ -659,7 +661,7 @@ function countsFor(cards: CardRecord[]): DeckCounts {
   return counts
 }
 
-export class Collection extends Dexie {
+class DexieCollection extends Dexie {
   noteTypes!: EntityTable<NoteType, 'id'>
   decks!: EntityTable<Deck, 'id'>
   deckOptionGroups!: EntityTable<DeckOptionGroup, 'id'>
@@ -792,6 +794,27 @@ export class Collection extends Dexie {
       transaction.table('noteTypes').put(imageOcclusionNoteType)
       transaction.table('deckOptionGroups').put(defaultDeckOptionGroup)
     })
+  }
+
+  get databaseName() { return this.name }
+  get schemaVersion() { return this.verno }
+  async openLocalCollection(): Promise<Collection> {
+    if (!this.isOpen()) await this.open()
+    return this as Collection
+  }
+
+  closeLocalCollection() {
+    if (this.isOpen()) this.close()
+  }
+
+  async removeLocalCollection() {
+    this.closeLocalCollection()
+    await this.delete()
+  }
+
+  onOpenBlocked(listener: () => void) {
+    this.on('blocked', listener)
+    return () => this.on('blocked').unsubscribe(listener)
   }
 
   private async nextNewPosition() {
@@ -1150,7 +1173,9 @@ export class Collection extends Dexie {
       // The preview is only trustworthy if the rows it read are unchanged, so
       // this check shares the transaction rather than preceding it.
       for (const snapshot of expectUnchanged) {
-        const current = await (this as unknown as Record<string, { get(id: string): Promise<unknown> }>)[snapshot.table].get(snapshot.id)
+        const current = snapshot.table === '$tableCounts'
+          ? await Promise.all([this.decks, this.noteTypes, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.settings, this.mediaBlobs, this.outbox, this.syncRevisions, this.deletedEntities, this.deckOptionGroups].map((table) => table.count()))
+          : await (this as unknown as Record<string, { get(id: string): Promise<unknown> }>)[snapshot.table].get(snapshot.id)
         if (rowFingerprint(current) !== snapshot.value) throw new Error('The collection changed after this preview. Please preview again before importing.')
       }
       await this.assertImportedPackageValid(writes)
@@ -1666,17 +1691,39 @@ export class Collection extends Dexie {
   }
 
   async attachMedia(noteId: string, { file, side, playback = 'manual' }: NoteMediaAttachment, now = new Date()): Promise<NoteMediaReference> {
-    if (!await this.notes.get(noteId)) throw new Error('Note not found')
-    const definition = validateMedia(file)
-    const digest = await digestMedia(file)
-    const reference: NoteMediaReference = { id: id(), noteId, digest, kind: definition.kind, mimeType: file.type, displayName: file.name, side, playback, createdAt: now.toISOString(), updatedAt: now.toISOString() }
-    const blob: StoredMediaBlob = { digest, blob: await mediaBytes(file), byteLength: file.size, mimeType: file.type, verifiedAt: now.toISOString() }
-    await this.transaction('rw', this.noteMedia, this.mediaBlobs, this.outbox, this.syncRevisions, async () => {
-      await this.mediaBlobs.put(blob)
-      await this.noteMedia.add(reference)
-      await this.enqueueOperation({ opId: id(), entityType: 'noteMedia', entityId: reference.id, action: 'create', occurredAt: reference.createdAt, payload: reference })
+    const [reference] = await this.attachMediaBatch(noteId, [{ file, side, playback }], now)
+    return reference!
+  }
+
+  /** Applies native writeback fields while preserving the imported card schedule. */
+  async updateNativeNoteContent(noteId: string, fields: Record<string, string>, tags: string[], now = new Date()): Promise<void> {
+    const normalizedTags = normalizeTags(tags)
+    await this.transaction('rw', [this.notes, this.outbox, this.syncRevisions], async () => {
+      const note = await this.notes.get(noteId)
+      if (!note) throw new Error('Note not found')
+      const updated: Note = { ...note, fields: { ...fields }, tags: normalizedTags, updatedAt: now.toISOString() }
+      await this.notes.put(updated)
+      await this.enqueueOperation({ opId: id(), entityType: 'note', entityId: noteId, action: 'update', occurredAt: updated.updatedAt, payload: updated })
     })
-    return reference
+  }
+
+  async attachMediaBatch(noteId: string, attachments: NoteMediaAttachment[], now = new Date()): Promise<NoteMediaReference[]> {
+    if (!await this.notes.get(noteId)) throw new Error('Note not found')
+    const references: NoteMediaReference[] = []
+    const blobs: StoredMediaBlob[] = []
+    for (const { file, side, playback = 'manual' } of attachments) {
+      const definition = validateMedia(file)
+      const digest = await digestMedia(file)
+      references.push({ id: id(), noteId, digest, kind: definition.kind, mimeType: file.type, displayName: file.name, side, playback, createdAt: now.toISOString(), updatedAt: now.toISOString() })
+      blobs.push({ digest, blob: await mediaBytes(file), byteLength: file.size, mimeType: file.type, verifiedAt: now.toISOString() })
+    }
+    if (!references.length) return references
+    await this.transaction('rw', this.noteMedia, this.mediaBlobs, this.outbox, this.syncRevisions, async () => {
+      await this.mediaBlobs.bulkPut(blobs)
+      await this.noteMedia.bulkAdd(references)
+      for (const reference of references) await this.enqueueOperation({ opId: id(), entityType: 'noteMedia', entityId: reference.id, action: 'create', occurredAt: reference.createdAt, payload: reference })
+    })
+    return references
   }
 
   async mediaForNote(noteId: string) {
@@ -1694,6 +1741,25 @@ export class Collection extends Dexie {
     if (!stored) return undefined
     if (stored.blob instanceof Blob) return stored as MediaBlob
     return { ...stored, blob: new Blob([stored.blob], { type: stored.mimeType }) }
+  }
+
+  /** Evicts downloaded bytes while preserving references so sync can fetch them again. */
+  async evictCachedMedia(digest: string): Promise<boolean> {
+    return this.transaction('rw', [this.noteMedia, this.mediaBlobs], async () => {
+      if (!await this.noteMedia.where('digest').equals(digest).count()) return false
+      await this.mediaBlobs.delete(digest)
+      return true
+    })
+  }
+
+  /** Removes bytes after checking their content address inside the storage boundary. */
+  async discardCorruptMediaBlob(digest: string): Promise<boolean> {
+    const stored = await this.mediaBlobs.get(digest)
+    if (!stored) return false
+    const actualDigest = await digestMedia(stored.blob instanceof Blob ? stored.blob : new Blob([stored.blob], { type: stored.mimeType }))
+    if (actualDigest === digest) return false
+    await this.mediaBlobs.delete(digest)
+    return true
   }
 
   async verifiedMediaBytes(digest: string): Promise<MediaBytes | undefined> {
@@ -2084,12 +2150,21 @@ export class Collection extends Dexie {
 
   async rescheduleCard(cardId: string, due: Date, now = new Date()): Promise<void> {
     if (Number.isNaN(due.getTime())) throw new Error('Reschedule time is invalid')
+    await this.updateCardSchedule(cardId, { due: due.toISOString() }, now, true)
+  }
+
+  /** Applies a validated scheduler result and journals it as one Collection operation. */
+  async updateCardSchedule(cardId: string, schedule: CardScheduleUpdate, now = new Date(), graduateNewCard = false): Promise<void> {
+    if (schedule.due !== undefined && (Number.isNaN(new Date(schedule.due).getTime()) || !/^\d{4}-\d{2}-\d{2}T/.test(schedule.due))) throw new Error('Card due time is invalid')
+    for (const field of ['stability', 'difficulty'] as const) if (schedule[field] !== undefined && (!Number.isFinite(schedule[field]) || schedule[field]! < 0)) throw new Error(`Card ${field} is invalid`)
+    for (const field of ['elapsedDays', 'scheduledDays', 'learningSteps', 'reps', 'lapses'] as const) if (schedule[field] !== undefined && (!Number.isSafeInteger(schedule[field]) || schedule[field]! < 0)) throw new Error(`Card ${field} is invalid`)
+    if (schedule.lastReview !== undefined && schedule.lastReview !== null && Number.isNaN(new Date(schedule.lastReview).getTime())) throw new Error('Card last review time is invalid')
     await this.transaction('rw', [this.cards, this.outbox, this.syncRevisions], async () => {
       const card = await this.cards.get(cardId)
       if (!card) throw new Error('Card not found')
-      const state = card.state === State.New ? State.Review : card.state
-      if (state !== State.Learning && state !== State.Relearning && state !== State.Review) throw new Error('Card state cannot be rescheduled')
-      const updated = withPolicyDefaults({ ...card, state, due: due.toISOString() })
+      const state = schedule.state ?? (graduateNewCard && card.state === State.New ? State.Review : card.state)
+      if (state !== State.New && state !== State.Learning && state !== State.Relearning && state !== State.Review) throw new Error('Card state is invalid')
+      const updated = canonicalCard({ ...card, ...schedule, state })
       await this.cards.put(updated)
       await this.enqueueOperation({ opId: id(), entityType: 'card', entityId: cardId, action: 'update', occurredAt: now.toISOString(), payload: updated })
     })
@@ -2244,11 +2319,46 @@ export class Collection extends Dexie {
   }
 
   async configureSync(settings: SyncSettings) {
+    let endpoint: URL
+    try { endpoint = new URL(settings.endpoint) } catch { throw new Error('Sync endpoint must be a valid URL.') }
+    if (!['https:', 'http:'].includes(endpoint.protocol) || !settings.token.trim() || !Number.isSafeInteger(settings.cursor) || settings.cursor < 0) throw new Error('Sync configuration is invalid.')
     await this.settings.put({ key: 'sync', value: settings })
+  }
+
+  /** Removes the paired-device configuration when the learner disconnects it. */
+  async clearSyncConfiguration() {
+    await this.settings.delete('sync')
   }
 
   async syncSettings(): Promise<SyncSettings | undefined> {
     return (await this.settings.get('sync'))?.value as SyncSettings | undefined
+  }
+
+  /** Persists validated custom-study membership as one settings update. */
+  async replaceCustomStudySessions(sessions: CustomStudySession[]) {
+    if (!Array.isArray(sessions) || sessions.length > 100) throw new Error('Custom study session list is invalid.')
+    const ids = new Set<string>(), names = new Set<string>()
+    for (const session of sessions) {
+      const name = session.name.trim().toLocaleLowerCase()
+      if (!session.id.trim() || !name || name.length > 100 || session.search.length > 4000 || !Number.isInteger(session.limit) || session.limit < 1 || session.limit > 5000 || !['due', 'added', 'random', 'forgotten'].includes(session.order) || typeof session.reschedule !== 'boolean' || !Array.isArray(session.cardIds) || !Array.isArray(session.completed) || Number.isNaN(Date.parse(session.createdAt))) throw new Error('Custom study session is invalid.')
+      if (ids.has(session.id) || names.has(name) || new Set(session.cardIds).size !== session.cardIds.length || session.cardIds.some((cardId) => typeof cardId !== 'string' || !cardId.trim()) || session.completed.some((entry) => !entry.cardId?.trim() || !entry.reviewId?.trim())) throw new Error('Custom study session identities are invalid.')
+      ids.add(session.id); names.add(name)
+    }
+    await this.transaction('rw', this.settings, () => this.settings.put({ key: customStudyKey, value: structuredClone(sessions) }))
+  }
+
+  /** Records the native Anki card identity used when writing a portable package. */
+  async assignAnkiCardIdentity(cardId: string, ankiId: number, now = new Date()): Promise<void> {
+    if (!Number.isSafeInteger(ankiId) || ankiId <= 0) throw new Error('Anki card identity must be a positive safe integer')
+    await this.transaction('rw', [this.cards, this.outbox, this.syncRevisions], async () => {
+      const card = await this.cards.get(cardId)
+      if (!card) throw new Error('Card not found')
+      const owner = (await this.cards.toArray()).find((candidate) => candidate.ankiId === ankiId)
+      if (owner && owner.id !== cardId) throw new Error('Anki card identity is already assigned')
+      const updated = { ...card, ankiId }
+      await this.cards.put(updated)
+      await this.enqueueOperation({ opId: id(), entityType: 'card', entityId: cardId, action: 'update', occurredAt: now.toISOString(), payload: updated })
+    })
   }
 
   async recordVerifiedPcBackup(receipt: VerifiedPcBackupReceipt) {
@@ -2575,8 +2685,20 @@ export class Collection extends Dexie {
   }
 }
 
-export function createCollection(name = 'kiroku-collection') {
-  return new Collection(name)
+type CollectionTables = 'noteTypes' | 'decks' | 'deckOptionGroups' | 'notes' | 'cards' | 'reviewEntries' | 'outbox' | 'syncRevisions' | 'syncConflicts' | 'settings' | 'receivedOperations' | 'deletedEntities' | 'noteMedia' | 'mediaBlobs'
+/** Internal storage type. Import only from collection query/mutation infrastructure. */
+export type CollectionStorage = DexieCollection
+export type Collection = Omit<DexieCollection, keyof Dexie | CollectionTables> & {
+  readonly databaseName: string
+  readonly schemaVersion: number
+  openLocalCollection(): Promise<Collection>
+  closeLocalCollection(): void
+  removeLocalCollection(): Promise<void>
+  onOpenBlocked(listener: () => void): () => void
+}
+
+export function createCollection(name = 'kiroku-collection'): Collection {
+  return new DexieCollection(name) as Collection
 }
 
 export const collection = createCollection()

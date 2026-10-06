@@ -1,10 +1,11 @@
 import 'fake-indexeddb/auto'
 import { afterEach, expect, test } from 'vitest'
 import { createCollection, Rating, type Collection } from './collection'
+import { readCard, readCardsForNote, readDeck, readNote, readDeletedEntity, readNoteMediaReference, readReceivedOperation, readReviewHistory, readAnkiExportSnapshot, readSyncConflicts } from './collection-queries'
 
 const collections: Collection[] = []
 const time = new Date('2026-10-01T12:00:00Z')
-afterEach(async () => { for (const collection of collections.splice(0)) await collection.delete() })
+afterEach(async () => { for (const collection of collections.splice(0)) await collection.removeLocalCollection() })
 
 async function clients() {
   const a = createCollection(`concurrent-a-${crypto.randomUUID()}`)
@@ -15,7 +16,7 @@ async function clients() {
   const operations = await a.pendingOperations()
   await b.applyRemoteChanges(structuredClone(operations), operations.length)
   await a.acknowledgeOperations(operations.map((operation) => operation.opId))
-  const card = (await a.cards.where('noteId').equals(note.id).first())!
+  const card = (await readCardsForNote(a, note.id))[0]
   return { a, b, deck, note, card, seed: operations }
 }
 
@@ -34,9 +35,9 @@ test('independent offline Japanese field edits converge without losing either ch
   await a.updateBasicNote(note.id, { front: 'ねこ', back: 'cat' }, new Date('2026-10-02T12:00:00Z'))
   await b.updateBasicNote(note.id, { front: '猫', back: 'кот' }, new Date('2026-10-02T12:00:01Z'))
   await exchange(a, b, true)
-  expect(await a.notes.get(note.id)).toEqual(await b.notes.get(note.id))
-  expect(await a.notes.get(note.id)).toMatchObject({ fields: { front: 'ねこ', back: 'кот' } })
-  expect(await a.syncConflicts.count()).toBe(0)
+  expect(await readNote(a, note.id)).toEqual(await readNote(b, note.id))
+  expect(await readNote(a, note.id)).toMatchObject({ fields: { front: 'ねこ', back: 'кот' } })
+  expect(await readSyncConflicts(a)).toHaveLength(0)
 })
 
 test('conflicting edits survive reopening and an explicit revision choice converges', async () => {
@@ -44,19 +45,19 @@ test('conflicting edits survive reopening and an explicit revision choice conver
   await a.updateBasicNote(note.id, { front: 'ねこ', back: 'кот · feline' }, new Date('2026-10-02T12:00:00Z'))
   await b.updateBasicNote(note.id, { front: 'ネコ', back: 'cat' }, new Date('2026-10-02T12:00:01Z'))
   await exchange(a, b)
-  const conflict = (await a.syncConflicts.toArray())[0]
+  const conflict = (await readSyncConflicts(a))[0]
   expect(conflict.conflicts).toContain('fields.front')
   expect(conflict.versions).toHaveLength(2)
-  const name = a.name
-  a.close()
+  const name = a.databaseName
+  a.closeLocalCollection()
   const reopened = createCollection(name); collections.push(reopened)
-  expect(await reopened.syncConflicts.get(conflict.key)).toEqual(conflict)
+  expect((await readSyncConflicts(reopened)).find((item) => item.key === conflict.key)).toEqual(conflict)
   const selected = conflict.versions.find((version) => (version.value as { fields: { front: string } }).fields.front === 'ネコ')!
   await reopened.resolveSyncConflict(conflict.key, selected.opId, conflict.heads)
   await exchange(reopened, b)
-  expect(await reopened.notes.get(note.id)).toEqual(await b.notes.get(note.id))
-  expect(await reopened.notes.get(note.id)).toMatchObject({ fields: { front: 'ネコ', back: 'кот · feline' } })
-  expect(await b.syncConflicts.count()).toBe(0)
+  expect(await readNote(reopened, note.id)).toEqual(await readNote(b, note.id))
+  expect(await readNote(reopened, note.id)).toMatchObject({ fields: { front: 'ネコ', back: 'кот · feline' } })
+  expect(await readSyncConflicts(b)).toHaveLength(0)
   await expect(b.resolveSyncConflict(conflict.key, conflict.heads[1], conflict.heads)).rejects.toThrow(/changed/i)
 })
 
@@ -68,28 +69,28 @@ test('a newer peer edit cannot be replaced by an interrupted offline conflict ch
   await a.updateBasicNote(note.id, { front: 'ねこ office', back: 'кот · feline' }, new Date('2026-10-02T12:01:00Z'))
   await b.updateBasicNote(note.id, { front: 'ネコ home', back: 'кот' }, new Date('2026-10-02T12:01:01Z'))
   await exchange(a, b)
-  const conflict = (await a.syncConflicts.toArray())[0]
+  const conflict = (await readSyncConflicts(a))[0]
   const chooseA = conflict.versions.find((version) => (version.value as { fields: { front: string } }).fields.front === 'ねこ office')!
   const chooseB = conflict.versions.find((version) => (version.value as { fields: { front: string } }).fields.front === 'ネコ home')!
   await a.resolveSyncConflict(conflict.key, chooseA.opId, conflict.heads)
   await b.resolveSyncConflict(conflict.key, chooseB.opId, conflict.heads)
-  const name = b.name
-  b.close()
+  const name = b.databaseName
+  b.closeLocalCollection()
   const reopened = createCollection(name); collections.push(reopened)
-  await reopened.open()
+  await reopened.openLocalCollection()
   await a.updateBasicNote(note.id, { front: 'ねこ peer after choice', back: 'кот · feline' }, new Date('2026-10-02T12:02:00Z'))
   await exchange(a, reopened)
-  const resumed = (await reopened.syncConflicts.toArray())[0]
+  const resumed = (await readSyncConflicts(reopened))[0]
   expect(resumed).toBeDefined()
   expect(resumed.conflicts).toContain('fields.front')
   expect(resumed.versions.map((version) => (version.value as { fields: { front: string } }).fields.front)).toEqual(expect.arrayContaining(['ねこ peer after choice', 'ネコ home']))
   const newer = resumed.versions.find((version) => (version.value as { fields: { front: string } }).fields.front === 'ねこ peer after choice')!
   await reopened.resolveSyncConflict(resumed.key, newer.opId, resumed.heads)
   await exchange(reopened, a)
-  expect(await a.notes.get(note.id)).toEqual(await reopened.notes.get(note.id))
-  expect(await a.notes.get(note.id)).toMatchObject({ fields: { front: 'ねこ peer after choice', back: 'кот · feline' } })
-  expect(await a.syncConflicts.count()).toBe(0)
-  expect(await reopened.syncConflicts.count()).toBe(0)
+  expect(await readNote(a, note.id)).toEqual(await readNote(reopened, note.id))
+  expect(await readNote(a, note.id)).toMatchObject({ fields: { front: 'ねこ peer after choice', back: 'кот · feline' } })
+  expect(await readSyncConflicts(a)).toHaveLength(0)
+  expect(await readSyncConflicts(reopened)).toHaveLength(0)
 })
 
 test('offline reviews merge once and produce the same chronological FSRS schedule', async () => {
@@ -99,10 +100,10 @@ test('offline reviews merge once and produce the same chronological FSRS schedul
   const changes = await exchange(a, b, true)
   await a.applyRemoteChanges(structuredClone(changes), changes.length)
   await b.applyRemoteChanges(structuredClone(changes), changes.length)
-  expect(await a.reviewEntries.count()).toBe(2)
-  expect(await b.reviewEntries.count()).toBe(2)
-  expect(await a.cards.get(card.id)).toEqual(await b.cards.get(card.id))
-  expect(await a.cards.get(card.id)).toMatchObject({ reps: 2, lastReview: '2026-10-01T12:00:20.000Z' })
+  expect(await readReviewHistory(a)).toHaveLength(2)
+  expect(await readReviewHistory(b)).toHaveLength(2)
+  expect(await readCard(a, card.id)).toEqual(await readCard(b, card.id))
+  expect(await readCard(a, card.id)).toMatchObject({ reps: 2, lastReview: '2026-10-01T12:00:20.000Z' })
 })
 
 test('a deletion remains effective when an offline client uploads a stale edit', async () => {
@@ -110,10 +111,10 @@ test('a deletion remains effective when an offline client uploads a stale edit',
   await a.deleteNote(note.id, new Date('2026-10-02T12:00:00Z'))
   await b.updateBasicNote(note.id, { front: 'ねこ', back: 'cat' }, new Date('2026-10-02T13:00:00Z'))
   await exchange(a, b, true)
-  expect(await a.notes.get(note.id)).toBeUndefined()
-  expect(await b.notes.get(note.id)).toBeUndefined()
-  expect(await b.cards.get(card.id)).toBeUndefined()
-  expect((await b.syncConflicts.toArray()).some((conflict) => conflict.deleted)).toBe(true)
+  expect(await readNote(a, note.id)).toBeUndefined()
+  expect(await readNote(b, note.id)).toBeUndefined()
+  expect(await readCard(b, card.id)).toBeUndefined()
+  expect((await readSyncConflicts(b)).some((conflict) => conflict.deleted)).toBe(true)
 })
 
 for (const reverse of [false, true]) {
@@ -127,11 +128,11 @@ for (const reverse of [false, true]) {
     await a.applyRemoteChanges(structuredClone(batch), batch.length)
     await b.applyRemoteChanges(structuredClone(batch), batch.length)
     for (const client of [a, b]) {
-      expect(await client.decks.get(deck.id)).toBeDefined()
-      expect(await client.notes.get(note.id)).toBeUndefined()
-      expect(await client.cards.get(card.id)).toBeUndefined()
-      expect(await client.noteMedia.where('noteId').equals(note.id).count()).toBe(0)
-      expect(await client.deletedEntities.get(`note:${note.id}`)).toBeDefined()
+      expect(await readDeck(client, deck.id)).toBeDefined()
+      expect(await readNote(client, note.id)).toBeUndefined()
+      expect(await readCard(client, card.id)).toBeUndefined()
+      expect((await readAnkiExportSnapshot(client)).references.filter((reference) => reference.noteId === note.id)).toHaveLength(0)
+      expect(await readDeletedEntity(client, `note:${note.id}`)).toBeDefined()
     }
   })
 
@@ -148,21 +149,21 @@ for (const reverse of [false, true]) {
     await a.applyRemoteChanges(structuredClone(batch), batch.length)
     await b.applyRemoteChanges(structuredClone(batch), batch.length)
     for (const client of [a, b]) {
-      expect(await client.noteMedia.get(reference.id)).toBeUndefined()
-      expect(await client.deletedEntities.get(`noteMedia:${reference.id}`)).toBeDefined()
+      expect(await readNoteMediaReference(client, reference.id)).toBeUndefined()
+      expect(await readDeletedEntity(client, `noteMedia:${reference.id}`)).toBeDefined()
     }
     await unseen.applyRemoteChanges([structuredClone(deletion)], 1)
-    expect(await unseen.receivedOperations.get(create.opId)).toBeUndefined()
-    expect(await unseen.deletedEntities.get(`noteMedia:${reference.id}`)).toBeDefined()
-    const name = unseen.name
-    unseen.close()
+    expect(await readReceivedOperation(unseen, create.opId)).toBeUndefined()
+    expect(await readDeletedEntity(unseen, `noteMedia:${reference.id}`)).toBeDefined()
+    const name = unseen.databaseName
+    unseen.closeLocalCollection()
     const reopened = createCollection(name)
     collections.push(reopened)
-    await reopened.open()
-    expect(await reopened.receivedOperations.get(create.opId)).toBeUndefined()
+    await reopened.openLocalCollection()
+    expect(await readReceivedOperation(reopened, create.opId)).toBeUndefined()
     await reopened.applyRemoteChanges([structuredClone(create)], 1)
-    expect(await reopened.noteMedia.get(reference.id)).toBeUndefined()
-    expect(await reopened.deletedEntities.get(`noteMedia:${reference.id}`)).toBeDefined()
+    expect(await readNoteMediaReference(reopened, reference.id)).toBeUndefined()
+    expect(await readDeletedEntity(reopened, `noteMedia:${reference.id}`)).toBeDefined()
   })
 }
 
@@ -172,9 +173,9 @@ test('undoing an unpublished deletion removes its causal revision before later s
   await a.undo()
   await b.updateBasicNote(note.id, { front: 'ねこ', back: 'cat' }, new Date('2026-10-02T12:01:00Z'))
   await exchange(a, b)
-  expect(await a.notes.get(note.id)).toEqual(await b.notes.get(note.id))
-  expect(await a.notes.get(note.id)).toMatchObject({ fields: { front: 'ねこ' } })
-  expect(await a.syncConflicts.count()).toBe(0)
+  expect(await readNote(a, note.id)).toEqual(await readNote(b, note.id))
+  expect(await readNote(a, note.id)).toMatchObject({ fields: { front: 'ねこ' } })
+  expect(await readSyncConflicts(a)).toHaveLength(0)
 })
 
 for (const reverse of [false, true]) {
@@ -186,10 +187,10 @@ for (const reverse of [false, true]) {
     const changes = await exchange(a, b, reverse)
     for (const client of [a, b]) {
       await client.applyRemoteChanges(structuredClone(changes), changes.length)
-      expect(await client.decks.get(deck.id)).toBeUndefined()
-      expect(await client.notes.get(note.id)).toBeUndefined()
-      expect(await client.cards.get(card.id)).toBeUndefined()
-      expect(await client.reviewEntries.count()).toBe(0)
+      expect(await readDeck(client, deck.id)).toBeUndefined()
+      expect(await readNote(client, note.id)).toBeUndefined()
+      expect(await readCard(client, card.id)).toBeUndefined()
+      expect(await readReviewHistory(client)).toHaveLength(0)
     }
   })
 
@@ -208,8 +209,8 @@ for (const reverse of [false, true]) {
     await b.answer(card.id, Rating.Good, reviewedAt, undefined, { allowEarly: true, reschedule: true })
     await oracle.answer(card.id, Rating.Good, reviewedAt, undefined, { allowEarly: true, reschedule: true })
     await exchange(a, b, reverse)
-    expect(await a.cards.get(card.id)).toEqual(await b.cards.get(card.id))
-    expect(await a.cards.get(card.id)).toEqual(await oracle.cards.get(card.id))
-    expect(await a.syncConflicts.count()).toBe(0)
+    expect(await readCard(a, card.id)).toEqual(await readCard(b, card.id))
+    expect(await readCard(a, card.id)).toEqual(await readCard(oracle, card.id))
+    expect(await readSyncConflicts(a)).toHaveLength(0)
   })
 }

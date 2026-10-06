@@ -3,12 +3,13 @@ import { afterEach, describe, expect, test } from 'vitest'
 import { fsrs, get_fuzz_range, type Card as FsrsCard } from 'ts-fsrs'
 import { Rating, State, type Grade } from './scheduler'
 import { createCollection, type CardRecord, type Collection } from './collection'
+import { readCard, readCardsForNote, readDeckList, readDeckOptionGroup, readReviewEntry } from './collection-queries'
 import nativeStateGradeMatrix from '../tests/fixtures/anki-26.9.3-scheduler-matrix.json'
 
 let collection: Collection | undefined
 
 afterEach(async () => {
-  await collection?.delete()
+  await collection?.removeLocalCollection()
   collection = undefined
 })
 
@@ -16,25 +17,25 @@ const DAY = 86_400_000
 
 async function freshCollection(name: string) {
   collection = createCollection(`kiroku-${name}-${crypto.randomUUID()}`)
-  await collection.open()
+  await collection.openLocalCollection()
   return collection
 }
 
 /** The one deck every helper in this file seeds into. */
 async function ensureDeck() {
-  const existing = (await collection!.decks.toArray())[0]
+  const existing = (await readDeckList(collection!))[0]
   return existing ?? collection!.createDeck('Japanese')
 }
 
 /** Creates a note and returns its single generated card. */
 async function seedNote(deckId: string, front: string, back = front) {
   const note = await collection!.createBasicNote(deckId, { front, back })
-  return (await collection!.cards.where('noteId').equals(note.id).first())!
+  return (await readCardsForNote(collection!, note.id))[0]
 }
 
 async function setCard(cardId: string, patch: Partial<CardRecord>) {
-  await collection!.cards.update(cardId, patch)
-  return (await collection!.cards.get(cardId))!
+  await collection!.updateCardSchedule(cardId, patch)
+  return (await readCard(collection!, cardId))!
 }
 
 /**
@@ -110,13 +111,17 @@ describe('Anki scheduling parity', () => {
         lapses: expected.before === 'Relearning' ? 1 : 0,
         lastReview: null,
       }
-      await collection!.cards.delete(generated.id)
-      await collection!.cards.add(card)
-      const choices = await collection!.reviewChoices(card.id, answeredAt, true)
+      await collection!.assignAnkiCardIdentity(generated.id, card.ankiId!)
+      await collection!.updateCardSchedule(generated.id, {
+        state: card.state, due: card.due, stability: card.stability, difficulty: card.difficulty,
+        elapsedDays: card.elapsedDays, scheduledDays: card.scheduledDays, learningSteps: card.learningSteps,
+        reps: card.reps, lapses: card.lapses, lastReview: card.lastReview,
+      })
+      const choices = await collection!.reviewChoices(generated.id, answeredAt, true)
       const preview = choices.map(({ interval }) => interval)
-      const review = await collection!.answer(card.id, gradeMap[expected.grade], answeredAt, undefined, { allowEarly: true, reschedule: true })
-      const actual = (await collection!.cards.get(card.id))!
-      const persistedReview = (await collection!.reviewEntries.get(review.id))!
+      const review = await collection!.answer(generated.id, gradeMap[expected.grade], answeredAt, undefined, { allowEarly: true, reschedule: true })
+      const actual = (await readCard(collection!, generated.id))!
+      const persistedReview = (await readReviewEntry(collection!, review.id))!
       const actualOutcome = {
         type: actual.state,
         intervalDays: actual.scheduledDays,
@@ -180,11 +185,11 @@ describe('Anki scheduling parity', () => {
     const expected: Array<{ min_ivl: number; max_ivl: number }> = []
     for (let index = 0; index < 12; index += 1) {
       const cardId = await matureCard(`猫${index}`, now, { reps: 4 + index })
-      const before = (await collection!.cards.get(cardId))!
+      const before = (await readCard(collection!, cardId))!
       const unfuzzed = baseline.next(toFsrs(before), now, Rating.Good).card.scheduled_days
       expected.push(get_fuzz_range(unfuzzed, before.elapsedDays, 36500))
       await collection!.answer(cardId, Rating.Good, now)
-      scheduled.push((await collection!.cards.get(cardId))!.scheduledDays)
+      scheduled.push((await readCard(collection!, cardId))!.scheduledDays)
     }
 
     // Anki always fuzzes, so sibling cards in the same state must not all collapse
@@ -199,7 +204,7 @@ describe('Anki scheduling parity', () => {
   test('matches Anki 26.9.3 FSRS-6 new-card previews and keeps fuzz in the same native interval band', async () => {
     await freshCollection('anki-26-9-3-new-oracle')
     const deck = await ensureDeck()
-    const group = await collection!.deckOptionGroups.get(deck.optionGroupId)
+    const group = await readDeckOptionGroup(collection!, deck.optionGroupId)
     expect(group).toMatchObject({ desiredRetention: 0.9, learningSteps: ['1m', '10m'], relearningSteps: ['10m'], dailyNewLimit: 20, dailyReviewLimit: 200 })
     const before = await seedNote(deck.id, '公式 Anki 26.9.3 oracle')
     const now = new Date(Date.now() + 60_000)
@@ -224,7 +229,7 @@ describe('Anki scheduling parity', () => {
     expect(officialAnkiEasyDays).toBeLessThanOrEqual(nativeFuzzBand.max_ivl)
   })
 
-  test.each(['numeric', 'imported'] as const)('matches Anki persisted new-card fuzz draws across 64 equivalent %s identities', async (identityKind) => {
+  test('matches Anki persisted new-card fuzz draws across 64 equivalent native identities', async () => {
     await freshCollection('anki-26-9-3-exact-fresh-fuzz')
     const deck = await ensureDeck()
     const now = new Date('2026-10-03T22:12:55.003Z')
@@ -235,15 +240,15 @@ describe('Anki scheduling parity', () => {
 
     for (let offset = 0; offset < nativeDays.length; offset += 1) {
       const generated = await seedNote(deck.id, `Anki exact new fuzz ${offset}`)
-      await collection!.cards.delete(generated.id)
       const ankiId = 1_234_567_890_000 + offset
-      const cardId = identityKind === 'numeric' ? String(ankiId) : `${generated.noteId}:${generated.templateId}`
-      await collection!.cards.add({ ...generated, id: cardId, ...(identityKind === 'imported' ? { ankiId } : {}), due: now.toISOString() })
+      const cardId = generated.id
+      await collection!.assignAnkiCardIdentity(cardId, ankiId)
+      await collection!.updateCardSchedule(cardId, { due: now.toISOString() })
       const choices = await collection!.reviewChoices(cardId, now, true)
       previews.push(Number(choices[3].interval.match(/^(\d+)d$/)?.[1]))
       const answer = await collection!.answer(cardId, Rating.Easy, now)
-      const persisted = (await collection!.cards.get(cardId))!
-      const history = (await collection!.reviewEntries.get(answer.id))!
+      const persisted = (await readCard(collection!, cardId))!
+      const history = (await readReviewEntry(collection!, answer.id))!
       persistedDays.push(persisted.scheduledDays)
       historyDays.push(history.afterScheduledDays ?? -1)
     }
@@ -269,12 +274,10 @@ describe('Anki scheduling parity', () => {
     // requiring matching fuzz draws.
     for (let offset = 0; offset < 64; offset += 1) {
       const generated = await seedNote(deck.id, `Anki review oracle ${offset}`)
-      await collection!.cards.delete(generated.id)
-      const cardId = `anki-review-oracle-${offset}`
-      await collection!.cards.add({ ...generated, due: reviewedAt.toISOString(), id: cardId })
-      await collection!.answer(cardId, Rating.Easy, reviewedAt)
-      const graduated = (await collection!.cards.get(cardId))!
-      const choices = await collection!.reviewChoices(cardId, now, true)
+      await collection!.updateCardSchedule(generated.id, { due: reviewedAt.toISOString() })
+      await collection!.answer(generated.id, Rating.Easy, reviewedAt)
+      const graduated = (await readCard(collection!, generated.id))!
+      const choices = await collection!.reviewChoices(generated.id, now, true)
       const unfuzzed = fsrs({ request_retention: 0.9, maximum_interval: 36500, enable_fuzz: false, enable_short_term: true, learning_steps: ['1m', '10m'], relearning_steps: ['10m'] })
 
       for (const [grade, rating] of [['Hard', Rating.Hard], ['Good', Rating.Good], ['Easy', Rating.Easy]] as const) {
@@ -302,11 +305,8 @@ describe('Anki scheduling parity', () => {
     const deck = await ensureDeck()
     const now = new Date('2026-10-03T12:00:00.000Z')
     const generated = await seedNote(deck.id, 'Early review scheduled interval floor')
-    await collection!.cards.delete(generated.id)
-    const cardId = 'candidate-11'
-    await collection!.cards.add({
-      ...generated,
-      id: cardId,
+    const cardId = generated.id
+    await collection!.updateCardSchedule(cardId, {
       state: State.Review,
       due: new Date(now.getTime() + 30 * DAY).toISOString(),
       stability: 32,
@@ -346,25 +346,25 @@ describe('Anki scheduling parity', () => {
     await freshCollection('parity')
 
     const cardId = await matureCard('鳥', now)
-    const before = (await collection!.cards.get(cardId))!
+    const before = (await readCard(collection!, cardId))!
 
     // The seed comes from the card, not the clock. Rewinding this one card to the
     // state it started in and answering again must reproduce the identical interval,
     // or a replayed or synchronised review drifts away from the device that scheduled it.
     await collection!.answer(cardId, Rating.Good, now)
-    const firstDue = (await collection!.cards.get(cardId))!.due
+    const firstDue = (await readCard(collection!, cardId))!.due
     await setCard(cardId, before)
     await collection!.answer(cardId, Rating.Good, now)
-    expect((await collection!.cards.get(cardId))!.due).toBe(firstDue)
+    expect((await readCard(collection!, cardId))!.due).toBe(firstDue)
 
     // Fuzz must actually be moving the interval. A single card can land back on the
     // unfuzzed value by chance, so assert across a group rather than one card.
     const unfuzzed = fsrs({ enable_fuzz: false, enable_short_term: true })
     const moved: number[] = []
     for (const cardId of await Promise.all([0, 1, 2, 3, 4, 5, 6, 7].map((n) => matureCard(`犬${n}`, now)))) {
-      const card = (await collection!.cards.get(cardId))!
+      const card = (await readCard(collection!, cardId))!
       await collection!.answer(cardId, Rating.Good, now)
-      const after = (await collection!.cards.get(cardId))!
+      const after = (await readCard(collection!, cardId))!
       if (after.scheduledDays !== unfuzzed.next(toFsrs(card), now, Rating.Good).card.scheduled_days) moved.push(after.scheduledDays)
     }
     expect(moved.length).toBeGreaterThan(0)

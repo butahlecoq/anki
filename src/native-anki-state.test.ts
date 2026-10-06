@@ -7,6 +7,7 @@ import { NativeAnkiClient, NativeSyncConflict } from './native-anki-sync'
 import { NativeAnkiMedia } from './native-anki-media'
 import { createCollection } from './collection'
 import { prepareNativeAccountImport, type NativeAnkiAccountSession } from './native-anki-account-session'
+import { readAnkiExportSnapshot } from './collection-queries'
 
 let state: NativeAnkiState
 let SQL: SqlJsStatic
@@ -60,11 +61,12 @@ it('refuses an empty native account snapshot without changing the editable colle
     await expect(prepareNativeAccountImport({ state } as unknown as NativeAnkiAccountSession, target))
       .rejects.toThrow(/account collection is empty/i)
     expect(await state.projectionManifest()).toMatchObject({ version: 1, notes: [], cards: [], reviews: [] })
-    await expect(target.decks.count()).resolves.toBe(0)
-    await expect(target.notes.count()).resolves.toBe(0)
-    await expect(target.cards.count()).resolves.toBe(0)
+    const projection = await readAnkiExportSnapshot(target)
+    expect(projection.decks).toHaveLength(0)
+    expect(projection.notes).toHaveLength(0)
+    expect(projection.cards).toHaveLength(0)
   } finally {
-    await target.delete()
+    await target.removeLocalCollection()
   }
 })
 

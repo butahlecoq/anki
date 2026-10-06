@@ -2,6 +2,7 @@ import { expect, test, vi } from 'vitest'
 import { createAndDownloadPcBackup, foregroundSync, pairCollection, preflightSync, rotateCredential, syncCollection, type SyncProgress } from './sync-client'
 import { createCollection, DEFAULT_DECK_OPTION_GROUP_ID, Rating } from './collection'
 import { digestMedia } from './media'
+import { readCardReviewHistory, readCardsForNote, readDeck, readNoteMediaReference } from './collection-queries'
 import { CLIENT_COLLECTION_SCHEMA_VERSION, SYNC_OPERATION_BATCH_SIZE, SYNC_REQUESTS_PER_ATTEMPT } from '../sync-capabilities.js'
 
 const health = (collectionSchemaVersion = CLIENT_COLLECTION_SCHEMA_VERSION, maximumCollectionSchemaVersion = CLIENT_COLLECTION_SCHEMA_VERSION) => new Response(JSON.stringify({ ready: true, schemaVersion: 1, protocolVersion: 2, collectionSchemaVersion, maximumCollectionSchemaVersion, collectionGeneration: '11111111-1111-4111-8111-111111111111', requiresCollectionGeneration: false, store: 'sqlite' }), { status: 200 })
@@ -34,7 +35,7 @@ test('does not upload media or acknowledge local operations when the preflight r
   expect(fetcher).toHaveBeenCalledTimes(1)
   expect(fetcher).toHaveBeenCalledWith('https://pc.example.test/api/health')
   await expect(collection.pendingOperations()).resolves.not.toHaveLength(0)
-  await collection.delete()
+  await collection.removeLocalCollection()
 })
 
 test('holds local sync changes when the PC requires a newer collection generation', async () => {
@@ -49,7 +50,7 @@ test('holds local sync changes when the PC requires a newer collection generatio
     await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'collection-generation-required' })
     expect(fetcher).toHaveBeenCalledTimes(1)
     await expect(collection.pendingOperations()).resolves.not.toHaveLength(0)
-  } finally { await collection.delete() }
+  } finally { await collection.removeLocalCollection() }
 })
 
 test('distinguishes authentication and unreachable service failures', async () => {
@@ -99,17 +100,17 @@ test('invalidates local undo before an in-flight sync can capture review operati
     const now = new Date('2026-10-01T12:00:00.000Z')
     const deck = await collection.createDeck('Undo sync', now)
     const note = await collection.createBasicNote(deck.id, { front: '戻す', back: 'restore' }, now)
-    const card = (await collection.cards.where('noteId').equals(note.id).first())!
+    const card = (await readCardsForNote(collection, note.id).then(cards => cards[0]))!
     await collection.answer(card.id, Rating.Good, now)
     const fetcher = vi.fn(async () => {
       await expect(collection.undo()).rejects.toThrow(/sync attempt/i)
       throw new TypeError('network')
     })
     await expect(syncCollection(collection, fetcher)).resolves.toMatchObject({ state: 'unreachable' })
-    expect(await collection.reviewEntries.where('cardId').equals(card.id).count()).toBe(1)
+    expect(await readCardReviewHistory(collection, card.id).then(entries => entries.length)).toBe(1)
     expect(await collection.pendingOperations()).not.toHaveLength(0)
   } finally {
-    await collection.delete()
+    await collection.removeLocalCollection()
   }
 })
 
@@ -120,7 +121,7 @@ test('also invalidates undo for a review recorded during sync preflight', async 
     const now = new Date('2026-10-01T12:00:00.000Z')
     const deck = await collection.createDeck('Concurrent review', now)
     const note = await collection.createBasicNote(deck.id, { front: '同時', back: 'concurrent' }, now)
-    const card = (await collection.cards.where('noteId').equals(note.id).first())!
+    const card = (await readCardsForNote(collection, note.id).then(cards => cards[0]))!
     const fetcher = vi.fn(async (url: RequestInfo | URL) => {
       if (String(url).endsWith('/api/health')) {
         await collection.answer(card.id, Rating.Good, now)
@@ -131,9 +132,9 @@ test('also invalidates undo for a review recorded during sync preflight', async 
       return new Response(JSON.stringify({ accepted: 4, cursor: 4, changes: [] }), { status: 200 })
     })
     await expect(syncCollection(collection, fetcher)).resolves.toMatchObject({ state: 'complete' })
-    expect(await collection.reviewEntries.where('cardId').equals(card.id).count()).toBe(1)
+    expect(await readCardReviewHistory(collection, card.id).then(entries => entries.length)).toBe(1)
   } finally {
-    await collection.delete()
+    await collection.removeLocalCollection()
   }
 })
 
@@ -144,7 +145,7 @@ test('pairs a collection and persists only the returned device credential', asyn
   await expect(pairCollection(collection, 'https://pc.example.test/', 'ABCD1234', fetcher)).resolves.toEqual({ state: 'paired' })
   await expect(collection.syncSettings()).resolves.toEqual({ endpoint: 'https://pc.example.test', token: 'device-token', cursor: 0 })
   expect(fetcher).toHaveBeenCalledWith('https://pc.example.test/api/pair', expect.objectContaining({ method: 'POST' }))
-  await collection.delete()
+  await collection.removeLocalCollection()
 })
 
 test('does not pair old local history onto a replacement PC collection', async () => {
@@ -156,7 +157,7 @@ test('does not pair old local history onto a replacement PC collection', async (
   await expect(pairCollection(collection, settings.endpoint, 'new-code', fetcher)).resolves.toEqual({ state: 'collection-generation-required' })
   await expect(collection.syncSettings()).resolves.toEqual(settings)
   expect(fetcher).toHaveBeenCalledTimes(1)
-  await collection.delete()
+  await collection.removeLocalCollection()
 })
 
 test('does not treat pre-generation local sync settings as a clean device after restore', async () => {
@@ -168,7 +169,7 @@ test('does not treat pre-generation local sync settings as a clean device after 
   await expect(pairCollection(collection, settings.endpoint, 'new-code', fetcher)).resolves.toEqual({ state: 'collection-generation-required' })
   await expect(collection.syncSettings()).resolves.toEqual(settings)
   expect(fetcher).toHaveBeenCalledTimes(1)
-  await collection.delete()
+  await collection.removeLocalCollection()
 })
 
 test('keeps existing sync settings when pairing fails', async () => {
@@ -177,7 +178,7 @@ test('keeps existing sync settings when pairing fails', async () => {
 
   await expect(pairCollection(collection, 'https://pc.example.test', 'wrong', vi.fn().mockResolvedValue(new Response('', { status: 400 })))).resolves.toEqual({ state: 'pairing-error' })
   await expect(collection.syncSettings()).resolves.toEqual({ endpoint: 'https://old.example.test', token: 'old-token', cursor: 5 })
-  await collection.delete()
+  await collection.removeLocalCollection()
 })
 
 test('does not send pairing codes to a non-loopback HTTP endpoint', async () => {
@@ -186,7 +187,7 @@ test('does not send pairing codes to a non-loopback HTTP endpoint', async () => 
 
   await expect(pairCollection(collection, 'http://192.168.1.20:4174', 'code', fetcher)).resolves.toEqual({ state: 'pairing-error' })
   expect(fetcher).not.toHaveBeenCalled()
-  await collection.delete()
+  await collection.removeLocalCollection()
 })
 
 test('syncs a configured collection, applies remote reviews, and clears acknowledged operations', async () => {
@@ -194,14 +195,14 @@ test('syncs a configured collection, applies remote reviews, and clears acknowle
   await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 })
   const deck = await collection.createDeck('Japanese foundations')
   const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
-  const card = (await collection.cards.where('noteId').equals(note.id).first())!
+  const card = (await readCardsForNote(collection, note.id).then(cards => cards[0]))!
   const fetcher = vi.fn((url: string) => Promise.resolve(url.endsWith('/api/health')
     ? health()
     : new Response(JSON.stringify({ accepted: 0, cursor: 1, changes: [{ opId: 'review-1', entityType: 'review', entityId: 'review-1', action: 'create', occurredAt: '2026-10-01T12:00:00.000Z', payload: { id: 'review-1', cardId: card.id, deckId: deck.id, rating: 3, state: 0, due: '2026-10-01T12:00:00.000Z', stability: 1, difficulty: 1, elapsedDays: 0, lastElapsedDays: 0, scheduledDays: 0, learningSteps: 0, reviewedAt: '2026-10-01T12:00:00.000Z' } }] }), { status: 200 })))
   await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'complete', cursor: 1 })
-  await expect(collection.reviewEntries.count()).resolves.toBe(1)
+  await expect(readCardReviewHistory(collection, card.id).then(entries => entries.length)).resolves.toBe(1)
   await expect(collection.pendingOperations()).resolves.toHaveLength(0)
-  await collection.delete()
+  await collection.removeLocalCollection()
 })
 
 test('sends pending collection changes in bounded batches and acknowledges each durable response', async () => {
@@ -227,7 +228,7 @@ test('sends pending collection changes in bounded batches and acknowledges each 
     expect(requests.map((request) => request.cursor)).toEqual([0, SYNC_OPERATION_BATCH_SIZE, SYNC_OPERATION_BATCH_SIZE * 2])
     await expect(collection.pendingOperations()).resolves.toHaveLength(0)
     await expect(collection.syncSettings()).resolves.toMatchObject({ cursor: SYNC_OPERATION_BATCH_SIZE * 2 + 5 })
-  } finally { await collection.delete() }
+  } finally { await collection.removeLocalCollection() }
 })
 
 test('replays a batch with stable operation IDs after the server commits but its response is lost', async () => {
@@ -254,7 +255,7 @@ test('replays a batch with stable operation IDs after the server commits but its
     expect(interruptedProgress).toContainEqual(expect.objectContaining({ phase: 'retry', task: 'records', pending: 1, cursor: 0 }))
     expect(interruptedProgress.some((progress) => progress.phase === 'complete')).toBe(false)
     await expect(collection.pendingOperations()).resolves.toHaveLength(1)
-    collection.close()
+    collection.closeLocalCollection()
     collection = createCollection(databaseName)
     await expect(collection.pendingOperations()).resolves.toHaveLength(1)
     await expect(collection.syncSettings()).resolves.toMatchObject({ cursor: 0 })
@@ -263,7 +264,7 @@ test('replays a batch with stable operation IDs after the server commits but its
     expect(resumedProgress.at(-1)).toMatchObject({ phase: 'complete', accepted: 0, cursor: 1, conflicts: 0, media: { pending: 0 } })
     expect(committed).toEqual(new Set(['lost-response-op']))
     await expect(collection.pendingOperations()).resolves.toHaveLength(0)
-  } finally { await collection.delete() }
+  } finally { await collection.removeLocalCollection() }
 })
 
 test('resumes at the acknowledged batch when a later committed batch loses its response', async () => {
@@ -295,7 +296,7 @@ test('resumes at the acknowledged batch when a later committed batch loses its r
     await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'complete', accepted: 5 })
     expect(committed.size).toBe(SYNC_OPERATION_BATCH_SIZE * 2 + 5)
     await expect(collection.pendingOperations()).resolves.toHaveLength(0)
-  } finally { await collection.delete() }
+  } finally { await collection.removeLocalCollection() }
 })
 
 test('does not split an unsent revision parent from its child at a batch boundary', async () => {
@@ -303,10 +304,10 @@ test('does not split an unsent revision parent from its child at a batch boundar
   try {
     await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'token', cursor: 0 })
     const occurredAt = '2026-10-01T12:00:00.000Z'
-    await collection.outbox.bulkAdd([
+    await collection.enqueueOperations([
+      { opId: 'z-parent', entityType: 'note', entityId: 'note-chain', action: 'update', occurredAt, payload: { id: 'note-chain', front: 'parent' } },
       { opId: 'a-child', entityType: 'note', entityId: 'note-chain', action: 'update', occurredAt, payload: { id: 'note-chain', front: 'child' }, parents: ['z-parent'] },
       ...Array.from({ length: SYNC_OPERATION_BATCH_SIZE - 1 }, (_, index) => ({ opId: `b-filler-${index.toString().padStart(3, '0')}`, entityType: 'note' as const, entityId: `note-${index}`, action: 'update' as const, occurredAt, payload: { id: `note-${index}` } })),
-      { opId: 'z-parent', entityType: 'note', entityId: 'note-chain', action: 'update', occurredAt, payload: { id: 'note-chain', front: 'parent' } },
     ])
     const committed = new Set<string>()
     const fetcher = vi.fn((url: string, init?: RequestInit) => {
@@ -325,7 +326,7 @@ test('does not split an unsent revision parent from its child at a batch boundar
     expect(requests[0].map((operation) => operation.opId)).toContain('z-parent')
     expect(requests[0].map((operation) => operation.opId)).not.toContain('a-child')
     expect(requests[1].map((operation) => operation.opId)).toEqual(['a-child'])
-  } finally { await collection.delete() }
+  } finally { await collection.removeLocalCollection() }
 })
 
 test('follows paginated remote changes and durably advances the cursor after each page', async () => {
@@ -349,10 +350,10 @@ test('follows paginated remote changes and durably advances the cursor after eac
 
     await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'complete', cursor: 2 })
     expect(syncCursors).toEqual([0, 1])
-    await expect(collection.decks.get('remote-1')).resolves.toMatchObject({ name: 'Remote 1' })
-    await expect(collection.decks.get('remote-2')).resolves.toMatchObject({ name: 'Remote 2' })
+    await expect(readDeck(collection, 'remote-1')).resolves.toMatchObject({ name: 'Remote 1' })
+    await expect(readDeck(collection, 'remote-2')).resolves.toMatchObject({ name: 'Remote 2' })
     await expect(collection.syncSettings()).resolves.toMatchObject({ cursor: 2 })
-  } finally { await collection.delete() }
+  } finally { await collection.removeLocalCollection() }
 })
 
 test('caps one sync attempt and reports remote work that must resume on the next attempt', async () => {
@@ -372,7 +373,7 @@ test('caps one sync attempt and reports remote work that must resume on the next
     keepPaging = false
     await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'complete', cursor: 0 })
     expect(requests).toBe(SYNC_REQUESTS_PER_ATTEMPT + 1)
-  } finally { await collection.delete() }
+  } finally { await collection.removeLocalCollection() }
 })
 
 test('resumes a long paginated backlog from its durable cursor after the client restarts', async () => {
@@ -396,10 +397,10 @@ test('resumes a long paginated backlog from its durable cursor after the client 
     })
 
     await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'incomplete', cursor: SYNC_REQUESTS_PER_ATTEMPT, pendingOperations: 0, remoteChangesPending: true })
-    await expect(collection.decks.get(`remote-${SYNC_REQUESTS_PER_ATTEMPT}`)).resolves.toMatchObject({ name: `Remote ${SYNC_REQUESTS_PER_ATTEMPT}` })
+    await expect(readDeck(collection, `remote-${SYNC_REQUESTS_PER_ATTEMPT}`)).resolves.toMatchObject({ name: `Remote ${SYNC_REQUESTS_PER_ATTEMPT}` })
     await expect(collection.syncSettings()).resolves.toMatchObject({ cursor: SYNC_REQUESTS_PER_ATTEMPT })
 
-    collection.close()
+    collection.closeLocalCollection()
     collection = createCollection(databaseName)
     online = false
     await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'unreachable' })
@@ -407,9 +408,9 @@ test('resumes a long paginated backlog from its durable cursor after the client 
 
     online = true
     await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'complete', cursor: SYNC_REQUESTS_PER_ATTEMPT + 1 })
-    await expect(collection.decks.get(`remote-${SYNC_REQUESTS_PER_ATTEMPT + 1}`)).resolves.toMatchObject({ name: `Remote ${SYNC_REQUESTS_PER_ATTEMPT + 1}` })
+    await expect(readDeck(collection, `remote-${SYNC_REQUESTS_PER_ATTEMPT + 1}`)).resolves.toMatchObject({ name: `Remote ${SYNC_REQUESTS_PER_ATTEMPT + 1}` })
     await expect(collection.syncSettings()).resolves.toMatchObject({ cursor: SYNC_REQUESTS_PER_ATTEMPT + 1 })
-  } finally { await collection.delete() }
+  } finally { await collection.removeLocalCollection() }
 })
 
 test('reports a media upload failure separately while syncing card changes', async () => {
@@ -430,7 +431,7 @@ test('reports a media upload failure separately while syncing card changes', asy
   expect(progress.at(-1)).toMatchObject({ phase: 'complete', accepted: 3, conflicts: 0, media: { pending: 1 } })
   expect(fetcher).toHaveBeenCalledWith('https://pc.example.test/api/sync', expect.anything())
   await expect(collection.pendingOperations()).resolves.toHaveLength(0)
-  await collection.delete()
+  await collection.removeLocalCollection()
 })
 
 test('retries a media upload after the server stored it but the response was lost', async () => {
@@ -461,7 +462,7 @@ test('retries a media upload after the server stored it but the response was los
   expect(objects.size).toBe(1)
   expect(putDigests).toHaveLength(2)
   expect(new Set(putDigests).size).toBe(1)
-  await collection.delete()
+  await collection.removeLocalCollection()
 })
 
 test('does not expose downloaded media when its content digest fails verification', async () => {
@@ -479,7 +480,7 @@ test('does not expose downloaded media when its content digest fails verificatio
 
   await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'complete', media: { downloaded: 0, pending: 1, downloadError: 'unreachable' } })
   await expect(collection.verifiedMediaBlob(expectedDigest)).resolves.toBeUndefined()
-  await collection.delete()
+  await collection.removeLocalCollection()
 })
 
 test('resumes an interrupted remote media download after a client restart', async () => {
@@ -512,15 +513,15 @@ test('resumes an interrupted remote media download after a client restart', asyn
 
     await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'complete', cursor: 1, media: { downloaded: 0, pending: 1, downloadError: 'unreachable' } })
     await expect(collection.syncSettings()).resolves.toMatchObject({ cursor: 1 })
-    await expect(collection.noteMedia.get(reference.id)).resolves.toMatchObject({ digest: remoteDigest })
+    await expect(readNoteMediaReference(collection, reference.id)).resolves.toMatchObject({ digest: remoteDigest })
     await expect(collection.verifiedMediaBlob(remoteDigest)).resolves.toBeUndefined()
 
-    collection.close()
+    collection.closeLocalCollection()
     collection = createCollection(databaseName)
     await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'complete', cursor: 1, media: { downloaded: 1, pending: 0 } })
     await expect(collection.verifiedMediaBlob(remoteDigest)).resolves.toMatchObject({ digest: remoteDigest, byteLength: remoteBytes.byteLength })
-    await expect(collection.noteMedia.get(reference.id)).resolves.toMatchObject({ digest: remoteDigest })
-  } finally { await collection.delete() }
+    await expect(readNoteMediaReference(collection, reference.id)).resolves.toMatchObject({ digest: remoteDigest })
+  } finally { await collection.removeLocalCollection() }
 })
 
 test('downloads remote media even when an unrelated local upload fails', async () => {
@@ -541,5 +542,5 @@ test('downloads remote media even when an unrelated local upload fails', async (
 
   await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'complete', media: { uploaded: 0, downloaded: 1, pending: 1, uploadError: 'unreachable' } })
   await expect(collection.verifiedMediaBlob(remoteDigest)).resolves.toMatchObject({ digest: remoteDigest })
-  await collection.delete()
+  await collection.removeLocalCollection()
 })
