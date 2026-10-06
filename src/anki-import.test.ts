@@ -214,6 +214,25 @@ async function executableTemplatePackage() {
 }
 
 describe('Anki package import', () => {
+  test('restores a deleted package deck after reopening and re-imports it idempotently', async () => {
+    const name = `kiroku-delete-reimport-${crypto.randomUUID()}`
+    collection = createCollection(name)
+    const file = await japanesePackage()
+    await (await prepareAnkiImport(file, collection, { SQL })).commit()
+    const before = await readAnkiExportSnapshot(collection)
+    const deck = before.decks.find((candidate) => before.notes.some((note) => note.deckId === candidate.id))!
+    await collection.deleteDeck(deck.id, { mode: 'delete' })
+    collection.close()
+    collection = createCollection(name)
+    await (await prepareAnkiImport(file, collection, { SQL })).commit()
+    const restored = await readAnkiExportSnapshot(collection)
+    expect(restored.notes.map((note) => note.id).sort()).toEqual(before.notes.map((note) => note.id).sort())
+    expect(restored.cards.map((card) => card.id).sort()).toEqual(before.cards.map((card) => card.id).sort())
+    expect(restored.references.map((reference) => reference.id).sort()).toEqual(before.references.map((reference) => reference.id).sort())
+    await (await prepareAnkiImport(file, collection, { SQL })).commit()
+    expect((await readAnkiExportSnapshot(collection)).notes).toHaveLength(before.notes.length)
+  })
+
   test('takes the redistributable synthetic compatibility corpus through import, render/study, export, and clean re-import', async () => {
     collection = createCollection(`kiroku-compatibility-corpus-${crypto.randomUUID()}`)
     for (const file of [await japanesePackage(), await imageOcclusionPackage()]) {
