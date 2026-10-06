@@ -28,6 +28,26 @@ test('navigation marks the note-type manager as the current page', () => {
   expect(within(navigation).getByRole('link', { name: 'Decks' })).not.toHaveAttribute('aria-current')
 })
 
+test('a learner can choose the review activity before starting a Deck session', async () => {
+  const deck = await collection.createDeck(`Activity selection ${crypto.randomUUID()}`)
+  await collection.createBasicNote(deck.id, { front: '選ぶ', back: 'choose' })
+  window.location.hash = `#deck/${deck.id}`
+  render(<CollectionWorkspace />)
+  try {
+    const chooseActivity = await screen.findByRole('button', { name: 'Choose activity' })
+    await waitFor(() => expect(chooseActivity).toBeEnabled())
+    fireEvent.click(chooseActivity)
+    expect(window.location.hash).toBe(`#activity/deck/${deck.id}`)
+    fireEvent(window, new Event('hashchange'))
+    expect(await screen.findByRole('heading', { name: 'Choose how to study' })).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Start Review cards' }))
+    expect(await screen.findByRole('button', { name: 'Show answer' })).toBeVisible()
+    expect(window.location.hash).toBe(`#review/${deck.id}/review`)
+  } finally {
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+  }
+})
+
 test('rotates a paired device key from the visible sync controls', async () => {
   const priorFetch = globalThis.fetch
   const fetcher = vi.fn((input: RequestInfo | URL) => {

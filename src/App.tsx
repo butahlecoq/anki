@@ -59,7 +59,7 @@ export function App() {
   const onStatistics = route.view === 'statistics'
   const onNoteTypes = route.view === 'note-types'
   const onBrowse = route.view === 'browse'
-  const onStudy = route.view === 'study' || route.view === 'custom-review'
+  const onStudy = route.view === 'study' || route.view === 'activity-selection' || route.view === 'review' || route.view === 'custom-review'
 
   async function activateUpdate() {
     setActivatingUpdate(true)
