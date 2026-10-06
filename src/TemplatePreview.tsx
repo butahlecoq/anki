@@ -1,7 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, useCallback } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
 import { useTemplateNavigation } from './use-template-navigation'
 import { renderedNavigationActions } from './template-navigation'
 import { isRenderedCardDisplayable, type RenderedCard } from './card-rendering'
+import { resolveAppearance, readAppearance, watchResolvedTheme } from './appearance'
 
 interface TemplatePreviewProps {
   rendering: RenderedCard
@@ -27,8 +28,22 @@ export function TemplatePreview({ rendering, side, title = 'Card preview', templ
   const sideError = (side === 'front' ? rendering.error : rendering.backError) ?? ''
   const error = sideError
   const html = (side === 'front' ? rendering.front : rendering.back)?.html ?? ''
-  const srcDoc = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:"><style>body{font-family:system-ui,sans-serif;color:#202a22;background:#fff;padding:24px;overflow-wrap:anywhere}.card-image{display:block;max-width:100%;max-height:290px;object-fit:contain}.card-audio{width:min(100%,400px)}a[data-kiroku-href]{color:#175fa6;text-decoration:underline;cursor:pointer}.card-hint{display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:center}.card-hint-toggle{width:20px;height:20px;margin:0}.card-hint label{cursor:pointer}.card-hint-content{grid-column:1 / -1}.card-hint-toggle:not(:checked) + label + .card-hint-content{display:none}${rendering.css}</style></head><body class="card card${templateOrdinal}">${html}</body></html>`
+  // The card document is themed by custom property, not by a themed selector on
+  // `body`. A `:root[data-theme='light'] body { ... }` rule would out-specify a
+  // deck's own `body { background: ... }` and silently override the import;
+  // declaring the values on `:root` leaves the body's own declaration at
+  // specificity (0,0,1), so `${rendering.css}` still wins on source order and on
+  // specificity for `.card`. The dark values are the `:root` default for the
+  // same reason src/appearance.ts treats an absent data-theme as dark.
+  // src/design-tokens.test.ts checks both pairings against WCAG AA.
+  const srcDoc = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:"><style>:root{color-scheme:dark;--kiroku-card-surface:#101317;--kiroku-card-ink:#e9ede3;--kiroku-card-link:#8ab4f8}:root[data-theme='light']{color-scheme:light;--kiroku-card-surface:#ffffff;--kiroku-card-ink:#1c2118;--kiroku-card-link:#175fa6}body{font-family:system-ui,sans-serif;color:var(--kiroku-card-ink);background:var(--kiroku-card-surface);padding:24px;overflow-wrap:anywhere}.card-image{display:block;max-width:100%;max-height:290px;object-fit:contain}.card-audio{width:min(100%,400px)}a[data-kiroku-href]{color:var(--kiroku-card-link);text-decoration:underline;cursor:pointer}.card-hint{display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:center}.card-hint-toggle{width:20px;height:20px;margin:0}.card-hint label{cursor:pointer}.card-hint-content{grid-column:1 / -1}.card-hint-toggle:not(:checked) + label + .card-hint-content{display:none}${rendering.css}</style></head><body class="card card${templateOrdinal}">${html}</body></html>`
   const navigationActions = renderedNavigationActions(html)
+  // The frame is a separate document with no access to this one's storage or
+  // media query, so the resolved theme is delivered to it explicitly. Setting an
+  // attribute repaints without rebuilding srcDoc, which would otherwise reload
+  // the card document and re-fetch its blob media mid-review.
+  const [cardTheme, setCardTheme] = useState<'light' | 'dark'>(() => resolveAppearance(readAppearance(), window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? true))
+  useEffect(() => watchResolvedTheme(setCardTheme), [])
   useLayoutEffect(() => {
     const frame = frameRef.current
     if (!frame) return
@@ -89,6 +104,11 @@ export function TemplatePreview({ rendering, side, title = 'Card preview', templ
       document?.removeEventListener('load', schedule, true)
       document = frame.contentDocument
       if (!document?.body) return
+      // An absent data-theme is dark, matching applyAppearance in
+      // src/appearance.ts, so the two documents cannot disagree about which
+      // block of the frame's custom properties applies.
+      if (cardTheme === 'dark') document.documentElement.removeAttribute('data-theme')
+      else document.documentElement.setAttribute('data-theme', cardTheme)
       document.addEventListener('load', schedule, true)
       if (typeof ResizeObserver !== 'undefined') {
         observer = new ResizeObserver(schedule)
@@ -110,7 +130,7 @@ export function TemplatePreview({ rendering, side, title = 'Card preview', templ
       observer?.disconnect()
       cancelAnimationFrame(scheduled)
     }
-  }, [srcDoc, error])
+  }, [srcDoc, error, cardTheme])
 
   return (
     <div className="template-preview">

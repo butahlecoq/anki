@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import { APPEARANCE_FALLBACK_COLORS } from './appearance'
-import { indexHtml, rule, stylesheet } from './stylesheet-under-test'
+import { indexHtml, rule, source, stylesheet } from './stylesheet-under-test'
 
 /*
  * Design-token contract for issue #23.
@@ -112,8 +112,69 @@ test('component styles reference tokens instead of raw color literals', () => {
   const lightEnd = stylesheet.indexOf("--shadow-dialog: 0 28px 90px rgba(24, 28, 20, .22);\n}")
   expect(lightEnd).toBeGreaterThanOrEqual(0)
   const body = stylesheet.slice(stylesheet.indexOf('}', lightEnd) + 1)
-  const literals = [...body.matchAll(/#[0-9a-f]{3,8}\b|rgba?\([^)]*\)/gi)].map((match) => match[0])
+  // The colour keywords are included because `background: white` is what
+  // .template-preview iframe carried for as long as this rule existed: a hex or
+  // rgb() scan reads it as compliant, and it painted the card white under the
+  // dark theme. Only values in a colour-bearing property are matched, so
+  // `white-space` and `font-weight: bold` do not trip it.
+  const literals = [...body.matchAll(/#[0-9a-f]{3,8}\b|rgba?\([^)]*\)|\b(?:background|background-color|color|border|border-color|outline-color|fill|stroke)\s*:[^;}]*\b(?:white|black|red|green|blue|grey|gray|silver|maroon|purple|fuchsia|lime|olive|navy|teal|aqua|orange)\b/gi)].map((match) => match[0])
   expect(literals).toEqual([])
+})
+
+/*
+ * Card surface contract.
+ *
+ * The card renders in a separate document, so its colours cannot come from the
+ * tokens above and are declared in the srcDoc string instead. They are held to
+ * the same WCAG AA rule here, because a themed card that nobody can read is a
+ * worse defect than the white card this replaced.
+ */
+const cardDocument = source('src/TemplatePreview.tsx')
+
+/**
+ * The srcDoc template literal on its own.
+ *
+ * Scoping to it matters: the comment above it names `${rendering.css}` to
+ * explain the ordering, so a search over the whole file finds the explanation
+ * before the declaration and reports the stylesheet backwards.
+ */
+const cardSrcDoc = /const srcDoc = `([\s\S]*?)<\/html>`/.exec(cardDocument)?.[1]
+  ?? (() => { throw new Error('src/TemplatePreview.tsx no longer builds a srcDoc literal') })()
+
+function cardTokens(block: RegExp): Palette {
+  const found: Palette = {}
+  // The last declaration in each block is closed by the block's brace rather
+  // than a semicolon, so both are accepted as terminators.
+  for (const [, name, value] of block.exec(cardSrcDoc)?.[0].matchAll(/(--kiroku-card-[a-z-]+)\s*:\s*([^;}]+)[;}]/g) ?? []) found[name] = value.trim()
+  return found
+}
+
+test('the card document themes its own surface and ink in both themes', () => {
+  const darkCard = cardTokens(/:root\{[^}]*\}/)
+  const lightCard = cardTokens(/:root\[data-theme='light'\]\{[^}]*\}/)
+  expect(Object.keys(darkCard).sort()).toEqual(['--kiroku-card-ink', '--kiroku-card-link', '--kiroku-card-surface'])
+  expect(Object.keys(lightCard).sort()).toEqual(Object.keys(darkCard).sort())
+
+  // The body must consume the properties rather than name a colour, and the deck
+  // CSS must still be appended after them so an import can override the default.
+  expect(cardSrcDoc).toContain('color:var(--kiroku-card-ink);background:var(--kiroku-card-surface)')
+  expect(cardSrcDoc).toContain('a[data-kiroku-href]{color:var(--kiroku-card-link)')
+  expect(cardSrcDoc.indexOf('${rendering.css}')).toBeGreaterThan(cardSrcDoc.indexOf('--kiroku-card-surface:#101317'))
+  // An absent data-theme means dark, which is the convention applyAppearance uses.
+  expect(cardSrcDoc).toContain(":root{color-scheme:dark;")
+  expect(cardSrcDoc).toContain(":root[data-theme='light']{color-scheme:light;")
+})
+
+test('card ink and links clear WCAG AA against the card surface in both themes', () => {
+  const darkCard = cardTokens(/:root\{[^}]*\}/)
+  const lightCard = cardTokens(/:root\[data-theme='light'\]\{[^}]*\}/)
+  for (const [name, tokens] of [['dark', darkCard], ['light', lightCard]] as const) {
+    const surface = tokens['--kiroku-card-surface']
+    for (const ink of ['--kiroku-card-ink', '--kiroku-card-link'] as const) {
+      const ratio = contrast(tokens[ink], surface)
+      expect(ratio, `${name}: ${ink} on ${surface}`).toBeGreaterThanOrEqual(4.5)
+    }
+  }
 })
 
 test('every referenced token is defined by a theme block', () => {

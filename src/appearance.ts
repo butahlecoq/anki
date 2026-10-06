@@ -1,10 +1,15 @@
 /*
  * Appearance preference for issue #23.
  *
- * Only application chrome is themed. Card content renders inside a sandboxed
- * iframe with its own stylesheet, so this preference never rewrites imported
- * card styling. The default stays dark so the installed PWA matches the
- * manifest colors asserted by tests/e2e/shell.spec.ts.
+ * Card content renders inside a sandboxed iframe with its own stylesheet, so
+ * this preference cannot reach an imported deck's rules. It supplies the card's
+ * *default* surface and ink for a deck that names neither; a note type that sets
+ * its own background still wins, because the themed values are declared on
+ * `:root` as custom properties and the deck's CSS is appended after them. See
+ * src/TemplatePreview.tsx.
+ *
+ * The default stays dark so the installed PWA matches the manifest colors
+ * asserted by tests/e2e/shell.spec.ts.
  */
 
 export const APPEARANCE_STORAGE_KEY = 'kiroku:appearance'
@@ -88,6 +93,33 @@ export function watchAppearance(onChange?: (theme: 'light' | 'dark') => void): (
     applyAppearance(theme)
     onChange?.(theme)
   }
+  const onSystemChange = () => publish()
+  const onPreferenceChange = () => publish()
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === APPEARANCE_STORAGE_KEY) publish()
+  }
+  publish()
+  query?.addEventListener('change', onSystemChange)
+  window.addEventListener(APPEARANCE_STORAGE_KEY, onPreferenceChange)
+  window.addEventListener('storage', onStorage)
+  return () => {
+    query?.removeEventListener('change', onSystemChange)
+    window.removeEventListener(APPEARANCE_STORAGE_KEY, onPreferenceChange)
+    window.removeEventListener('storage', onStorage)
+  }
+}
+
+/**
+ * Subscribes to the resolved theme *without* re-applying it to this document.
+ *
+ * A sandboxed card iframe is a separate document, so it has to be told which
+ * theme is on screen rather than read it. This reports the resolved theme and
+ * leaves the host document alone, which is what a subscriber that only paints
+ * something else needs; `watchAppearance` is the one that owns the host.
+ */
+export function watchResolvedTheme(onChange: (theme: 'light' | 'dark') => void): () => void {
+  const query = window.matchMedia?.('(prefers-color-scheme: dark)')
+  const publish = () => onChange(resolveAppearance(readAppearance(), query?.matches ?? true))
   const onSystemChange = () => publish()
   const onPreferenceChange = () => publish()
   const onStorage = (event: StorageEvent) => {
