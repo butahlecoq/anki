@@ -41,14 +41,11 @@ test('Collection landing actions have matching desktop and phone dimensions', as
   const actions = page.locator('.compact-hero .collection-actions')
   const importPackage = actions.getByRole('button', { name: 'Import Anki package', exact: true })
   const newDeck = actions.getByRole('button', { name: 'New deck', exact: true })
-  await expect(importPackage).toBeVisible()
-  await expect(newDeck).toBeVisible()
+  await expectSameButtonSize(importPackage, newDeck)
 
   const [importBox, newDeckBox] = await Promise.all([importPackage.boundingBox(), newDeck.boundingBox()])
   expect(importBox).not.toBeNull()
   expect(newDeckBox).not.toBeNull()
-  expect(Math.abs(importBox!.width - newDeckBox!.width)).toBeLessThanOrEqual(1)
-  expect(Math.abs(importBox!.height - newDeckBox!.height)).toBeLessThanOrEqual(1)
 
   const viewportWidth = page.viewportSize()!.width
   if (viewportWidth < 600) {
@@ -57,6 +54,7 @@ test('Collection landing actions have matching desktop and phone dimensions', as
     expect(importBox!.height).toBeGreaterThanOrEqual(54)
     expect(importBox!.x).toBeGreaterThanOrEqual(actionsBox!.x)
     expect(importBox!.x + importBox!.width).toBeLessThanOrEqual(actionsBox!.x + actionsBox!.width + 1)
+    expect(newDeckBox!.x).toBeGreaterThanOrEqual(actionsBox!.x)
     expect(newDeckBox!.x + newDeckBox!.width).toBeLessThanOrEqual(actionsBox!.x + actionsBox!.width + 1)
     expect(await page.evaluate(width => document.documentElement.scrollWidth <= width, viewportWidth)).toBe(true)
   } else {
