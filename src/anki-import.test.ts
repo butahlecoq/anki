@@ -221,7 +221,7 @@ describe('Anki package import', () => {
     await (await prepareAnkiImport(file, collection, { SQL })).commit()
     const before = await readAnkiExportSnapshot(collection)
     const deck = before.decks.find((candidate) => before.notes.some((note) => note.deckId === candidate.id))!
-    await collection.deleteDeck(deck.id, { mode: 'delete' })
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
     collection.close()
     collection = createCollection(name)
     await (await prepareAnkiImport(file, collection, { SQL })).commit()
