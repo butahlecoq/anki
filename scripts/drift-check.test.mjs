@@ -1,11 +1,12 @@
 // @vitest-environment node
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   analyseDrift,
+  branchDispositionEvidence,
   formatReport,
   gitArgs,
   mentionsPath,
@@ -14,6 +15,8 @@ import {
   parseNumstat,
   parseStatus,
   parseWorktreePorcelain,
+  referencedNumbers,
+  relandingPullRequest,
   revision,
   untrackedFilesMatchingRemote,
   USAGE,
@@ -265,6 +268,127 @@ describe('branches', () => {
     const [finding] = findingsFor(input, 'branch-stale-snapshot')
     expect(finding.level).toBe('drift')
     expect(report.exitCode).toBe(1)
+  })
+
+  // On 2026-10-06 this check reported six `LOSS` findings and exit code 2, all
+  // false: every branch had been re-landed on a differently named branch that
+  // merged. The remedy it printed - "open a pull request from the branch" - would
+  // have re-landed about 2,400 lines of already-merged code. Byte-identity cannot
+  // see this, because main holds the branch's work *plus* later improvements, so
+  // the diff has additions as well as deletions.
+  describe('work re-landed on another branch', () => {
+    it('reads the issue and pull request numbers a branch name carries', () => {
+      expect(referencedNumbers('feat/21-offline-storage-protection')).toEqual({ issues: [21], pulls: [] })
+      expect(referencedNumbers('fix/85-ios-hint-disclosure')).toEqual({ issues: [85], pulls: [] })
+      expect(referencedNumbers('feat/172-export-indexes')).toEqual({ issues: [172], pulls: [] })
+      expect(referencedNumbers('review-pr174')).toEqual({ issues: [], pulls: [174] })
+      expect(referencedNumbers('pr/113')).toEqual({ issues: [], pulls: [113] })
+      // `pr/113` must not also answer as issue 113, or a merged pull request for
+      // an unrelated issue 113 would suppress a genuine loss.
+      expect(referencedNumbers('review-pr174').issues).not.toContain(174)
+      expect(referencedNumbers('main-ish')).toEqual({ issues: [], pulls: [] })
+    })
+
+    it('reports an abandoned branch as re-landed when the same issue was re-landed and merged', () => {
+      const input = withBranch({ name: 'feat/21-offline-storage-protection', additions: 2003, deletions: 117 }, [
+        { number: 135, state: 'CLOSED', mergedAt: null, headRefName: 'feat/21-offline-storage-protection' },
+        { number: 198, state: 'MERGED', mergedAt: '2026-10-05T21:39:18Z', headRefName: 'feat/21-offline-storage-rebased' },
+      ])
+      const [finding] = findingsFor(input, 'branch-relanded')
+      expect(finding.level).toBe('drift')
+      expect(finding.message).toMatch(/#198 merged/)
+      expect(finding.message).toMatch(/feat\/21-offline-storage-rebased/)
+      expect(findingsFor(input, 'branch-closed-superseded')).toEqual([])
+      expect(analyseDrift(input).exitCode).toBe(1)
+    })
+
+    it('recognises a review branch through the pull request it names', () => {
+      const input = withBranch({ name: 'review-pr174', additions: 148, deletions: 21 }, [
+        { number: 174, state: 'MERGED', mergedAt: '2026-10-04T09:46:06Z', headRefName: 'feat/172-export-indexes' },
+      ])
+      const [finding] = findingsFor(input, 'branch-relanded')
+      expect(finding.level).toBe('drift')
+      expect(finding.message).toMatch(/#174 merged/)
+      expect(findingsFor(input, 'branch-no-pr')).toEqual([])
+      // The level and the exit code are the point of the verdict: a loss sends an
+      // agent to open a duplicate pull request, so both are pinned here too.
+      expect(analyseDrift(input).exitCode).toBe(1)
+    })
+
+    it('never reports a re-landed branch as disposable', () => {
+      // A number in a branch name is a convention's fingerprint, not proof the
+      // content is identical: two pull requests can work one issue and the second
+      // need not contain all of the first. So nothing becomes auto-deletable.
+      const pullRequests = [
+        { number: 135, state: 'CLOSED', mergedAt: null, headRefName: 'feat/21-offline-storage-protection' },
+        { number: 198, state: 'MERGED', mergedAt: '2026-10-05T21:39:18Z', headRefName: 'feat/21-offline-storage-rebased' },
+      ]
+      const branch = { name: 'feat/21-offline-storage-protection', additions: 2003, deletions: 117 }
+      const finding = findingsFor(withBranch(branch, pullRequests), 'branch-relanded')[0]
+      expect(
+        branchDispositionEvidence(branch, finding, { dirtyFiles: [], untrackedFiles: [] }, pullRequests).disposable,
+      ).toBe(false)
+    })
+
+    it('still reports loss when the issue was never re-landed', () => {
+      const input = withBranch({ name: 'feat/3-review', additions: 120, deletions: 0 }, [
+        { number: 41, state: 'MERGED', mergedAt: '2026-09-30T10:00:00Z', headRefName: 'feat/9-unrelated' },
+      ])
+      expect(findingsFor(input, 'branch-relanded')).toEqual([])
+      expect(findingsFor(input, 'branch-no-pr')[0].level).toBe('loss')
+      expect(analyseDrift(input).exitCode).toBe(2)
+    })
+
+    it('still reports loss when the pull request sharing the number only closed', () => {
+      const input = withBranch({ name: 'pr119', additions: 12, deletions: 3 }, [
+        { number: 119, state: 'CLOSED', mergedAt: null, headRefName: 'pr119' },
+      ])
+      expect(findingsFor(input, 'branch-relanded')).toEqual([])
+      expect(findingsFor(input, 'branch-closed-superseded')[0].level).toBe('loss')
+    })
+
+    it('does not treat a branch as re-landed by its own merged pull request', () => {
+      const pullRequests = [
+        { number: 27, state: 'MERGED', mergedAt: '2026-09-30T10:00:00Z', headRefName: 'feat/2-pwa-shell' },
+      ]
+      expect(relandingPullRequest({ name: 'feat/2-pwa-shell' }, pullRequests)).toBeUndefined()
+    })
+
+    it('leaves a branch alone when its pull request is still open', () => {
+      const input = withBranch({ name: 'feat/2-pwa-shell', additions: 40, deletions: 0 }, [
+        { number: 27, state: 'OPEN', mergedAt: null, headRefName: 'feat/2-pwa-shell' },
+      ])
+      expect(analyseDrift(input).findings).toEqual([])
+    })
+
+    it('softens to a note while an agent is in the worktree, as the guide states', () => {
+      const branch = { name: 'feat/21-offline-storage-protection', additions: 2003, deletions: 117, worktree: 'D:/work/anki-21' }
+      const input = {
+        ...withBranch(branch, [
+          { number: 198, state: 'MERGED', mergedAt: '2026-10-05T21:39:18Z', headRefName: 'feat/21-offline-storage-rebased' },
+        ]),
+        // In progress means a worktree whose path a running process names.
+        worktrees: [
+          { path: 'D:/work/anki', branch: 'main', dirtyFiles: [], untrackedFiles: [] },
+          { path: 'D:/work/anki-21', branch: 'feat/21-offline-storage-protection', dirtyFiles: [], untrackedFiles: [] },
+        ],
+        commandLines: ['node D:/work/anki-21/node_modules/vite/bin/vite.js'],
+      }
+      const [finding] = findingsFor(input, 'branch-relanded')
+      expect(finding.level).toBe('info')
+      expect(finding.message).toMatch(/An agent is in it/)
+      expect(analyseDrift(input).exitCode).toBe(0)
+    })
+
+    it('is documented at the level the check reports it', () => {
+      // The guide is what an agent reads to decide what an exit code means, so a
+      // renamed verdict or a dropped table row has to fail here rather than be
+      // discovered by someone trusting the document.
+      const guide = readFileSync(resolve(process.cwd(), 'docs/agents/drift-check.md'), 'utf8')
+      expect(guide).toContain('branch-relanded')
+      expect(guide).toMatch(/\| 1 \| recoverable drift \|[^\n]*re-landed/)
+      expect(guide).toMatch(/reported at level \*\*`drift`\*\*/)
+    })
   })
 
   it('reports commits beyond a merged pull request even when the tree diff only deletes files', () => {
