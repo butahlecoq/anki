@@ -40,9 +40,21 @@ export function resolveAppearance(preference: Appearance, prefersDark: boolean):
 }
 
 export function applyAppearance(theme: 'light' | 'dark', root: HTMLElement = document.documentElement): void {
+  applyThemeAttribute(theme, root)
+  applyThemeColor(theme, root)
+}
+
+/**
+ * States the theme on a document as `data-theme`, with dark as its absence.
+ *
+ * This is the whole of the theme convention, so it lives here once. The card
+ * frame is a separate document that this module cannot reach, and it needs the
+ * same convention or the two documents disagree about which block of custom
+ * properties applies. See src/TemplatePreview.tsx.
+ */
+export function applyThemeAttribute(theme: 'light' | 'dark', root: HTMLElement): void {
   if (theme === 'dark') root.removeAttribute('data-theme')
   else root.setAttribute('data-theme', theme)
-  applyThemeColor(theme, root)
 }
 
 /**
@@ -81,24 +93,23 @@ function safeStorage(): Storage | undefined {
 }
 
 /**
- * Subscribes to appearance changes and keeps the document attribute in sync
- * with both the stored preference and the OS setting.
+ * Subscribes to the resolved theme and calls `publish` with it.
+ *
+ * One subscription serves both callers; what they do with the theme is theirs.
+ * The listeners, and the reason storage is re-read on every notification rather
+ * than captured once, are stated here so neither caller restates them.
  */
-export function watchAppearance(onChange?: (theme: 'light' | 'dark') => void): () => void {
+function subscribeToResolvedTheme(publish: (theme: 'light' | 'dark') => void): () => void {
   const query = window.matchMedia?.('(prefers-color-scheme: dark)')
   // Always re-read storage so a choice made in another tab, or a storage write
   // that happened before this effect ran, is not ignored.
-  const publish = () => {
-    const theme = resolveAppearance(readAppearance(), query?.matches ?? true)
-    applyAppearance(theme)
-    onChange?.(theme)
-  }
-  const onSystemChange = () => publish()
-  const onPreferenceChange = () => publish()
+  const notify = () => publish(resolveAppearance(readAppearance(), query?.matches ?? true))
+  const onSystemChange = () => notify()
+  const onPreferenceChange = () => notify()
   const onStorage = (event: StorageEvent) => {
-    if (event.key === APPEARANCE_STORAGE_KEY) publish()
+    if (event.key === APPEARANCE_STORAGE_KEY) notify()
   }
-  publish()
+  notify()
   query?.addEventListener('change', onSystemChange)
   window.addEventListener(APPEARANCE_STORAGE_KEY, onPreferenceChange)
   window.addEventListener('storage', onStorage)
@@ -110,6 +121,17 @@ export function watchAppearance(onChange?: (theme: 'light' | 'dark') => void): (
 }
 
 /**
+ * Subscribes to appearance changes and keeps the document attribute in sync
+ * with both the stored preference and the OS setting.
+ */
+export function watchAppearance(onChange?: (theme: 'light' | 'dark') => void): () => void {
+  return subscribeToResolvedTheme((theme) => {
+    applyAppearance(theme)
+    onChange?.(theme)
+  })
+}
+
+/**
  * Subscribes to the resolved theme *without* re-applying it to this document.
  *
  * A sandboxed card iframe is a separate document, so it has to be told which
@@ -118,22 +140,7 @@ export function watchAppearance(onChange?: (theme: 'light' | 'dark') => void): (
  * something else needs; `watchAppearance` is the one that owns the host.
  */
 export function watchResolvedTheme(onChange: (theme: 'light' | 'dark') => void): () => void {
-  const query = window.matchMedia?.('(prefers-color-scheme: dark)')
-  const publish = () => onChange(resolveAppearance(readAppearance(), query?.matches ?? true))
-  const onSystemChange = () => publish()
-  const onPreferenceChange = () => publish()
-  const onStorage = (event: StorageEvent) => {
-    if (event.key === APPEARANCE_STORAGE_KEY) publish()
-  }
-  publish()
-  query?.addEventListener('change', onSystemChange)
-  window.addEventListener(APPEARANCE_STORAGE_KEY, onPreferenceChange)
-  window.addEventListener('storage', onStorage)
-  return () => {
-    query?.removeEventListener('change', onSystemChange)
-    window.removeEventListener(APPEARANCE_STORAGE_KEY, onPreferenceChange)
-    window.removeEventListener('storage', onStorage)
-  }
+  return subscribeToResolvedTheme(onChange)
 }
 
 /** Applies and persists a learner choice, notifying any active watcher. */

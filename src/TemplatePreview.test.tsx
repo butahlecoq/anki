@@ -2,6 +2,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, expect, test } from 'vitest'
 import { TemplatePreview } from './TemplatePreview'
 import { renderCard } from './card-rendering'
+import { APPEARANCE_STORAGE_KEY, chooseAppearance } from './appearance'
 
 function preview(front: string, back: string, fields: Record<string, string>, options: { kind?: 'standard' | 'cloze'; ordinal?: number; css?: string } = {}) {
   return renderCard({ front, back, css: options.css ?? '' }, fields, { kind: options.kind, ordinal: options.ordinal })
@@ -49,4 +50,23 @@ test('an imported deck still overrides the themed card default', () => {
   // more specific selector than the themed body, so the import owns its colours.
   expect(srcDoc).toContain('.card{background:#123456;color:#fedcba}')
   expect(srcDoc.lastIndexOf('.card{background:#123456')).toBeGreaterThan(srcDoc.lastIndexOf('--kiroku-card-surface:#101317'))
+})
+
+test('switching the theme repaints the card without rebuilding its document', () => {
+  // The theme reaches the frame as an attribute on its documentElement, so the
+  // srcDoc is identical in both themes. That is what keeps cached blob media
+  // alive across a theme change: rebuilding srcDoc would reload the document.
+  const rendering = preview('{{Front}}', '{{FrontSide}}', { Front: 'question' })
+  const { rerender } = render(<TemplatePreview rendering={rendering} side="front" />)
+  const frame = screen.getByTitle('Card preview')
+  const before = frame.getAttribute('srcdoc')
+
+  chooseAppearance('light')
+  rerender(<TemplatePreview rendering={rendering} side="front" />)
+  expect(window.localStorage.getItem(APPEARANCE_STORAGE_KEY)).toBe('light')
+  expect(screen.getByTitle('Card preview').getAttribute('srcdoc')).toBe(before)
+
+  chooseAppearance('dark')
+  rerender(<TemplatePreview rendering={rendering} side="front" />)
+  expect(screen.getByTitle('Card preview').getAttribute('srcdoc')).toBe(before)
 })

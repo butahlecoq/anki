@@ -115,10 +115,28 @@ test('component styles reference tokens instead of raw color literals', () => {
   // The colour keywords are included because `background: white` is what
   // .template-preview iframe carried for as long as this rule existed: a hex or
   // rgb() scan reads it as compliant, and it painted the card white under the
-  // dark theme. Only values in a colour-bearing property are matched, so
-  // `white-space` and `font-weight: bold` do not trip it.
-  const literals = [...body.matchAll(/#[0-9a-f]{3,8}\b|rgba?\([^)]*\)|\b(?:background|background-color|color|border|border-color|outline-color|fill|stroke)\s*:[^;}]*\b(?:white|black|red|green|blue|grey|gray|silver|maroon|purple|fuchsia|lime|olive|navy|teal|aqua|orange)\b/gi)].map((match) => match[0])
-  expect(literals).toEqual([])
+  // dark theme. A list of colour names was tried first and rejected: it is a
+  // standing invitation to add the next one, and `gold`, `rebeccapurple` and
+  // `1px solid whitesmoke` all passed it.
+  //
+  // What is flagged instead is a *bare word* in a colour-bearing property that is
+  // not a structural keyword. Every CSS named colour is a bare word, and the
+  // structural keywords - widths, line styles, gradients, var() - are either not
+  // bare words or are in a list that is fixed by the CSS specification rather
+  // than by the palette. So this needs no maintenance as colours are added.
+  const structural = /^(?:inherit|initial|unset|revert(?:-layer)?|none|auto|hidden|transparent|currentcolor|solid|dashed|dotted|double|groove|ridge|inset|outset|collapse|separate|medium|thick|thin|butt|bevel|miter|italic|normal|lighter|darker|oblique|small-caps|underline|overline|line-through|wavy|solid|space-around|space-between|space-evenly|start|end|center|left|right|top|bottom|both|repeat|no-repeat|cover|contain|border-box|padding-box|content-box|screen|print|all|local|scroll|clip|ellipsis|pre|pre-wrap|pre-line|break-word|anywhere|ltr|rtl|uppercase|lowercase|capitalize|nowrap|min-content|max-content|fit-content|min|max|clamp|calc|env|attr|counter|counters|url|local)$/i
+  const paint = /\b(color|background|background-color|border|border-color|border-top|border-right|border-bottom|border-left|border-top-color|border-right-color|border-bottom-color|border-left-color|outline|outline-color|fill|stroke|caret-color|accent-color|text-decoration|text-decoration-color|text-shadow|box-shadow)\s*:\s*([^;}]+)/gi
+  const offenders = [...body.matchAll(paint)]
+    // A value containing a function is built rather than named: gradients,
+    // color-mix() and var() are all legitimate, and their interior words
+    // (`radial-gradient`, `at`, `srgb`) are not colours.
+    .filter(([, , value]) => !value.includes('('))
+    .flatMap(([, property, value]) =>
+      value
+        .split(/[\s,/]+/)
+        .filter((token) => /^[a-z]+$/i.test(token) && !structural.test(token))
+        .map((token) => `${property}: ${token}`))
+  expect(offenders).toEqual([])
 })
 
 /*
@@ -161,8 +179,40 @@ test('the card document themes its own surface and ink in both themes', () => {
   expect(cardSrcDoc).toContain('a[data-kiroku-href]{color:var(--kiroku-card-link)')
   expect(cardSrcDoc.indexOf('${rendering.css}')).toBeGreaterThan(cardSrcDoc.indexOf('--kiroku-card-surface:#101317'))
   // An absent data-theme means dark, which is the convention applyAppearance uses.
-  expect(cardSrcDoc).toContain(":root{color-scheme:dark;")
-  expect(cardSrcDoc).toContain(":root[data-theme='light']{color-scheme:light;")
+  expect(cardSrcDoc).toContain(':root{--kiroku-card-surface:#101317;')
+  expect(cardSrcDoc).toContain(":root[data-theme='light']{--kiroku-card-surface:#ffffff;")
+  // `color-scheme` would repaint scrollbars and form controls inside an imported
+  // deck. Story 13 asks that imported cards keep their intended presentation.
+  expect(cardSrcDoc).not.toContain('color-scheme')
+})
+
+test('the card palette is pinned to the tokens it stands in for', () => {
+  // The card is a separate document, so it cannot read the host's custom
+  // properties and has to carry literal values. That makes these a second home
+  // for the same colours, which is the "same fact in several homes" shape ADR
+  // 0002 is about. This is the guard that keeps them one fact, exactly as
+  // APPEARANCE_FALLBACK_COLORS is pinned to --surface-page above.
+  const darkCard = cardTokens(/:root\{[^}]*\}/)
+  const lightCard = cardTokens(/:root\[data-theme='light'\]\{[^}]*\}/)
+  expect(darkCard['--kiroku-card-surface']).toBe(dark['--surface-panel'])
+  expect(darkCard['--kiroku-card-ink']).toBe(dark['--text-primary'])
+  expect(lightCard['--kiroku-card-surface']).toBe(light['--surface-panel'])
+  expect(lightCard['--kiroku-card-ink']).toBe(light['--text-primary'])
+})
+
+test('a deck that overrides only one half of the themed pair is a known, visible hazard', () => {
+  // There is no CSS-only fix. Colouring the surface without colouring the ink
+  // leaves dark ink on a dark card; colouring both means a deck that overrides
+  // only its background keeps the themed ink, and in the dark theme
+  // #e9ede3 on #ffffff is 1.19:1. Real Anki has the same behaviour. It is pinned
+  // here so the trade-off is a decision rather than an accident, and so a future
+  // change that alters either value has to confront it.
+  const darkCard = cardTokens(/:root\{[^}]*\}/)
+  const halfSpecified = contrast(darkCard['--kiroku-card-ink'], '#ffffff')
+  expect(halfSpecified).toBeLessThan(4.5)
+  expect(
+    contrast(darkCard['--kiroku-card-ink'], darkCard['--kiroku-card-surface']),
+  ).toBeGreaterThanOrEqual(4.5)
 })
 
 test('card ink and links clear WCAG AA against the card surface in both themes', () => {
