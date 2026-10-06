@@ -6,7 +6,7 @@ import { customStudySessions } from './custom-study-state'
 import { userFacingStorageError } from './offline-storage'
 
 /** Shared queue, progression, and review-writing rules for every study activity. */
-export function useStudyLifecycle(source: Collection, { deckId, sessionId }: { deckId?: string; sessionId?: string }) {
+export function useStudyLifecycle(source: Collection, { deckId, sessionId, cardScope }: { deckId?: string; sessionId?: string; cardScope: 'current' | 'queue' }) {
   const [skippedCardIds, setSkippedCardIds] = useState<ReadonlySet<string>>(() => new Set())
   const [reviewsRecorded, setReviewsRecorded] = useState(0)
   const [isAnswering, setIsAnswering] = useState(false)
@@ -16,15 +16,21 @@ export function useStudyLifecycle(source: Collection, { deckId, sessionId }: { d
   const dueQueue = useLiveQuery(() => sessionId ? customStudyQueue(source, sessionId, new Date()) : source.reviewQueue(deckId ?? '', new Date()), [source, deckId, sessionId])
   const queue = dueQueue?.filter((candidate) => !skippedCardIds.has(candidate.id))
   const cardId = queue?.[0]?.id
-  const choices = useLiveQuery(() => cardId ? sessionId && customSession?.reschedule === false ? practiceChoices : source.reviewChoices(cardId, new Date(), Boolean(sessionId)) : [], [source, cardId, sessionId, customSession?.reschedule], [])
+  const candidateIds = cardScope === 'queue' ? queue?.map((candidate) => candidate.id) ?? [] : cardId ? [cardId] : []
+  const candidateKey = candidateIds.join('\u0000')
+  const choicesByCardId = useLiveQuery(async () => Object.fromEntries(await Promise.all(candidateIds.map(async (candidateId) => [
+    candidateId,
+    sessionId && customSession?.reschedule === false ? practiceChoices : await source.reviewChoices(candidateId, new Date(), Boolean(sessionId)),
+  ]))), [source, candidateKey, sessionId, customSession?.reschedule])
+  const choices = cardId ? choicesByCardId?.[cardId] ?? [] : []
 
-  const answer = useCallback(async (rating: Grade, durationMs: number) => {
-    if (!cardId || isAnswering) return false
+  const answer = useCallback(async (targetCardId: string, rating: Grade, durationMs: number) => {
+    if (!queue?.some((candidate) => candidate.id === targetCardId) || isAnswering) return false
     setIsAnswering(true)
     setActionError('')
     try {
-      if (sessionId) await answerCustomStudy(source, sessionId, cardId, rating, new Date(), durationMs)
-      else await source.answer(cardId, rating, new Date(), durationMs)
+      if (sessionId) await answerCustomStudy(source, sessionId, targetCardId, rating, new Date(), durationMs)
+      else await source.answer(targetCardId, rating, new Date(), durationMs)
       setReviewsRecorded((count) => count + 1)
       setReviewAnnouncement(`Recorded ${Rating[rating]}. ${reviewsRecorded + 1} rated this session.`)
       return true
@@ -34,7 +40,7 @@ export function useStudyLifecycle(source: Collection, { deckId, sessionId }: { d
     } finally {
       setIsAnswering(false)
     }
-  }, [source, cardId, isAnswering, sessionId, reviewsRecorded])
+  }, [source, queue, isAnswering, sessionId, reviewsRecorded])
 
   const skipCard = useCallback(() => {
     if (!cardId) return
@@ -48,6 +54,8 @@ export function useStudyLifecycle(source: Collection, { deckId, sessionId }: { d
     queue,
     cardId,
     choices,
+    choicesByCardId: choicesByCardId ?? {},
+    choicesLoading: choicesByCardId === undefined,
     reviewsRecorded,
     setReviewsRecorded,
     isAnswering,

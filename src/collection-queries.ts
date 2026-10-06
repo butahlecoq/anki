@@ -160,6 +160,25 @@ export function readCardsByIds(collection: Collection, cardIds: string[]) {
   return storage(collection).cards.bulkGet(cardIds)
 }
 
+/** Reads the card content available to one study activity without exposing Collection tables. */
+export function readStudyActivityRows(collection: Collection, cardIds: readonly string[]) {
+  const cardsTable = storage(collection).cards
+  const notesTable = storage(collection).notes
+  const noteTypesTable = storage(collection).noteTypes
+  const mediaTable = storage(collection).noteMedia
+  return readLiveSnapshot(collection, [cardsTable, notesTable, noteTypesTable, mediaTable], async () => {
+    const cards = (await cardsTable.bulkGet([...cardIds])).filter((card) => card !== undefined)
+    const noteIds = [...new Set(cards.map((card) => card.noteId))]
+    const notes = (await notesTable.bulkGet(noteIds)).filter((note) => note !== undefined)
+    const typeIds = [...new Set(notes.map((note) => note.typeId))]
+    const [noteTypes, media] = await Promise.all([
+      noteTypesTable.bulkGet(typeIds),
+      noteIds.length ? mediaTable.where('noteId').anyOf(noteIds).toArray() : Promise.resolve([]),
+    ])
+    return { cards, notes, noteTypes: noteTypes.filter((noteType) => noteType !== undefined), media }
+  })
+}
+
 /** Reads one Note Type by its stable Collection identity. */
 export function readNoteType(collection: Collection, noteTypeId: string) {
   return storage(collection).noteTypes.get(noteTypeId)

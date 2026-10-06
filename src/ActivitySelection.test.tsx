@@ -12,6 +12,7 @@ test('lists built-in activities and starts the selected activity', () => {
 
   expect(screen.getByRole('heading', { name: 'Choose how to study' })).toBeVisible()
   expect(screen.getByRole('heading', { name: 'Review cards' })).toBeVisible()
+  expect(screen.getByRole('heading', { name: 'Match cards' })).toBeVisible()
   fireEvent.click(screen.getByRole('button', { name: 'Start Review cards' }))
   expect(onSelect).toHaveBeenCalledOnce()
   expect(onSelect).toHaveBeenCalledWith(DEFAULT_LEARNING_ACTIVITY_ID)
