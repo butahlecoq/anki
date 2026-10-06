@@ -15,8 +15,8 @@ import { isShortcutBlocked } from './keyboard-shortcuts'
 import { useDialogKeyboard } from './use-dialog-keyboard'
 import { useDialogSubmit } from './use-dialog-submit'
 import { userFacingStorageError } from './offline-storage'
-import { readCard, readCardReviewHistory, readDeckList, readNote, readNoteType, readNoteTypeList } from './collection-queries'
-import { DEFAULT_LEARNING_ACTIVITY_ID, learningActivity } from './learning-activities'
+import { readCard, readCardReviewHistory, readDeckList, readNote, readNoteType, readNoteTypeList, readStudyActivityRows } from './collection-queries'
+import { DEFAULT_LEARNING_ACTIVITY_ID, learningActivity, type StudyActivityCandidate, type StudyActivityPrompt } from './learning-activities'
 import { useStudyLifecycle } from './study-lifecycle'
 type PendingAttachment = { file: File; side: 'front' | 'back'; playback: 'automatic' | 'manual' }
 
@@ -181,6 +181,7 @@ export function NoteTagsDialog({ note, onClose }: { note: Note; onClose: () => v
 export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEARNING_ACTIVITY_ID, onBack }: { deckId?: string; sessionId?: string; activityId?: string; onBack: () => void }) {
   const activity = learningActivity(activityId)
   const [activityInteractionRevision, setActivityInteractionRevision] = useState(0)
+  const [lastActivityPrompt, setLastActivityPrompt] = useState<StudyActivityPrompt | undefined>()
   /*
    * Rating a card moves it out of view without moving focus, so a learner
    * driving the reviewer from the keyboard or a screen reader gets no sign
@@ -197,9 +198,35 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
   const reviewCardRef = useRef<HTMLElement>(null)
   const {
     customSession, queue, cardId, choices, reviewsRecorded, setReviewsRecorded,
+    choicesByCardId,
+    choicesLoading,
     isAnswering, setIsAnswering, actionError, setActionError, reviewAnnouncement,
     setReviewAnnouncement, answer, skipCard,
-  } = useStudyLifecycle(collection, { deckId, sessionId })
+  } = useStudyLifecycle(collection, { deckId, sessionId, cardScope: activity?.cardScope ?? 'current' })
+  const candidateIds = useMemo(() => activity?.cardScope === 'queue' ? queue?.map((candidate) => candidate.id) ?? [] : [], [queue, activity?.cardScope])
+  const candidateKey = candidateIds.join('\u0000')
+  const activityRows = useLiveQuery(() => candidateIds.length ? readStudyActivityRows(collection, candidateIds) : undefined, [candidateKey])
+  const activityCandidates = useMemo<StudyActivityCandidate[]>(() => {
+    if (!activityRows) return []
+    const notes = new Map(activityRows.notes.map((candidate) => [candidate.id, candidate]))
+    const noteTypes = new Map(activityRows.noteTypes.map((candidate) => [candidate.id, candidate]))
+    return activityRows.cards.flatMap((candidateCard) => {
+      const candidateNote = notes.get(candidateCard.noteId)
+      const candidateNoteType = candidateNote && noteTypes.get(candidateNote.typeId)
+      const candidateTemplate = candidateNoteType?.templates.find((candidate) => candidate.id === candidateCard.templateId)
+      if (!candidateNote || !candidateNoteType || !candidateTemplate) return []
+      const attachments = activityRows.media
+        .filter((reference) => reference.noteId === candidateNote.id && (!reference.templateId || reference.templateId === candidateCard.templateId))
+        .map((reference) => describeCardMedia(reference))
+      const rendering = renderNoteCard(candidateNoteType, candidateTemplate, candidateNote.fields, candidateCard.clozeOrdinal, undefined, attachments, candidateNote.renderedHtmlFields)
+      const prompt: StudyActivityPrompt = {
+        card: candidateCard, note: candidateNote, noteType: candidateNoteType, template: candidateTemplate,
+        rendering, attachments, mediaBlocked: false,
+      }
+      const unsupportedReason = activity?.unsupportedReason(prompt)
+      return [{ prompt, ...(unsupportedReason ? { unsupportedReason } : {}) }]
+    })
+  }, [activityRows, activity])
   const card = useLiveQuery(async () => cardId ? await readCard(collection, cardId) ?? null : undefined, [cardId])
   const note = useLiveQuery(async () => card ? await readNote(collection, card.noteId) ?? null : undefined, [card?.noteId])
   const noteType = useLiveQuery(async () => note ? await readNoteType(collection, note.typeId) ?? null : undefined, [note?.typeId])
@@ -219,17 +246,22 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
   // so a pending read cannot be mistaken for a card that has no attachments. Prepared
   // sources are keyed by this list inside the hook, so no extra memoization is needed.
   const activeCard = card?.id === cardId ? card : undefined
-  const activeMedia = activeCard
+  const activeMedia = useMemo(() => activeCard
     ? media.filter((reference) => (!reference.templateId || reference.templateId === activeCard.templateId))
-    : []
+    : [], [activeCard, media])
   const preparedMedia = useReviewMedia(activeMedia, cardId)
-  const attachments = activeMedia.filter((reference) => !reference.inline).map((reference) => describeCardMedia(
+  const attachments = useMemo(() => activeMedia.filter((reference) => !reference.inline).map((reference) => describeCardMedia(
     reference,
     preparedMedia.sources.byReference[reference.id]?.url,
-  ))
-  const renderedCard = template && noteType && note && card
+  )), [activeMedia, preparedMedia.sources.byReference])
+  const renderedCard = useMemo(() => template && noteType && note && card
     ? renderNoteCard(noteType, template, note.fields, card.clozeOrdinal, preparedMedia.sources.byName, attachments, note.renderedHtmlFields)
-    : undefined
+    : undefined, [template, noteType, note, card, preparedMedia.sources.byName, attachments])
+  const currentActivityPrompt = useMemo<StudyActivityPrompt | undefined>(() => card && note && noteType && template && renderedCard ? {
+    card, note, noteType, template, rendering: renderedCard,
+    imageOcclusionImage: preparedMedia.sources.byReference[note.imageOcclusion?.sourceMediaId ?? '']?.url,
+    attachments, mediaBlocked: !mediaQuery || preparedMedia.pending, mediaError: preparedMedia.error,
+  } : undefined, [card, note, noteType, template, renderedCard, preparedMedia.sources.byReference, preparedMedia.pending, preparedMedia.error, mediaQuery, attachments])
   const renderError = renderedCard?.error
   // A media failure is reported but never blocks the card: a single corrupt or
   // unsupported attachment must not make the card permanently unanswerable.
@@ -259,11 +291,14 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
     }
   }, [cardId, editingNote, movingNote, editingTags, deletingNote, showCardInfo, unavailable, note, mediaBlocked])
 
-  const answerCurrent = useCallback(async (rating: Grade) => {
-    if (!cardId || isAnswering || mediaBlocked) return
-    const duration = activeTime.current.elapsed + (activeTime.current.started === null ? 0 : performance.now() - activeTime.current.started)
-    if (await answer(rating, duration)) setActivityInteractionRevision((revision) => revision + 1)
-  }, [cardId, isAnswering, mediaBlocked, answer])
+  const answerCurrent = useCallback(async (targetCardId: string, rating: Grade) => {
+    if (isAnswering || (targetCardId === cardId && mediaBlocked)) return false
+    if (currentActivityPrompt) setLastActivityPrompt(currentActivityPrompt)
+    const duration = targetCardId === cardId
+      ? activeTime.current.elapsed + (activeTime.current.started === null ? 0 : performance.now() - activeTime.current.started)
+      : 0
+    return answer(targetCardId, rating, duration)
+  }, [cardId, isAnswering, mediaBlocked, answer, currentActivityPrompt])
 
   const skipCurrentCard = useCallback(() => {
     setActivityInteractionRevision((revision) => revision + 1)
@@ -366,8 +401,33 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
     <button className="text-button" type="button" onClick={onBack}>Back to study</button>
   </section>
 
+  const ActivityView = activity.View
+
   if (queue === undefined || (cardId && (card === undefined || note === undefined || noteType === undefined || unavailable))) return <div className="loading-state" role="status">Preparing review…</div>
   if (!cardId || !card || !note || !noteType || !template) {
+    if (activity.completion === 'activity' && lastActivityPrompt) return <>
+      <section className="review-session">
+        {sessionId && <p className="custom-review-mode">{customSession?.name ?? 'Custom session'} · {customSession?.reschedule ? 'Ratings reschedule the home card' : 'Practice: original schedule stays unchanged'}. Each rated card returns to its home deck.</p>}
+        <div className="review-progress"><span>ACTIVITY // COMPLETE</span><div className="review-session-actions">{pendingUndo && <button className="text-button" type="button" disabled={isAnswering} onClick={() => void undoLastAction()}>{undoLabel(pendingUndo)}</button>}<button className="text-button" type="button" onClick={onBack}>End session</button></div></div>
+        {actionError && <p className="form-error" role="alert">{actionError}</p>}
+        {announcementRegion}
+        {audioMessage && <p className="review-feedback" role="status">{audioMessage}</p>}
+        <ActivityView key={activityInteractionRevision} session={{
+          prompt: lastActivityPrompt,
+          candidates: activityCandidates,
+          candidatesLoading: false,
+          choicesLoading: false,
+          minimumCandidateCount: activity.minimumCandidateCount,
+          busy: isAnswering,
+          choices: [],
+          choicesFor: (targetCardId) => choicesByCardId[targetCardId] ?? [],
+          grade: answerCurrent,
+          announceAnswer: () => setReviewAnnouncement('Answer shown. Rate the card with 1 to 4.'),
+          cardSurface: reviewCardRef,
+        }} />
+      </section>
+      <></>
+    </>
     return (
       <section className="session-complete">
         <span className="completion-mark">✓</span>
@@ -427,8 +487,6 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
     <button className="primary-action" type="button" onClick={skipCurrentCard}>Skip card</button>
   </section>{reviewerDialogs}</>
 
-  const ActivityView = activity.View
-
   return (
     <>
     <section className="review-session">
@@ -438,21 +496,16 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
       {actionError && <p className="form-error" role="alert">{actionError}</p>}
       {announcementRegion}
       {audioMessage && <p className="review-feedback" role="status">{audioMessage}</p>}
-      <ActivityView key={`${cardId}:${reviewsRecorded}:${activityInteractionRevision}`} session={{
-        prompt: {
-          card,
-          note,
-          noteType,
-          template,
-          rendering: renderedCard!,
-          imageOcclusionImage: preparedMedia.sources.byReference[note.imageOcclusion?.sourceMediaId ?? '']?.url,
-          attachments,
-          mediaBlocked,
-          mediaError: preparedMedia.error,
-        },
+      <ActivityView key={activityInteractionRevision} session={{
+        prompt: currentActivityPrompt!,
+        candidates: activityCandidates,
+        candidatesLoading: activity.cardScope === 'queue' && (queue === undefined || (candidateIds.length > 0 && activityRows === undefined)),
+        choicesLoading,
+        minimumCandidateCount: activity.minimumCandidateCount,
         busy: isAnswering,
         choices,
-        grade: (rating) => { void answerCurrent(rating) },
+        choicesFor: (targetCardId) => choicesByCardId[targetCardId] ?? [],
+        grade: answerCurrent,
         announceAnswer: () => setReviewAnnouncement('Answer shown. Rate the card with 1 to 4.'),
         cardSurface: reviewCardRef,
       }} />

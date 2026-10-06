@@ -10,10 +10,12 @@ import type { StudyActivityViewProps } from './learning-activities'
 export function ReviewActivity({ session }: StudyActivityViewProps) {
   const { prompt, busy, choices, grade, announceAnswer, cardSurface } = session
   const { card, note, noteType, template, rendering, imageOcclusionImage, attachments, mediaBlocked, mediaError } = prompt
-  const [answerShown, setAnswerShown] = useState(false)
-  const [typedInput, setTypedInput] = useState('')
+  const [shownAnswerCardId, setShownAnswerCardId] = useState<string | null>(null)
+  const [typedDraft, setTypedDraft] = useState<{ cardId: string; value: string } | null>(null)
   const typedResult = useRef<HTMLDivElement>(null)
   const typedAnswer = rendering.typedAnswer
+  const answerShown = shownAnswerCardId === card.id
+  const typedInput = typedDraft?.cardId === card.id ? typedDraft.value : ''
   const answerDiff = answerShown && typedAnswer !== undefined ? compareTypedAnswer(typedAnswer, typedInput) : []
 
   useEffect(() => {
@@ -29,15 +31,15 @@ export function ReviewActivity({ session }: StudyActivityViewProps) {
         if (mediaBlocked) return
         event.preventDefault()
         announceAnswer()
-        setAnswerShown(true)
+        setShownAnswerCardId(card.id)
       } else if (answerShown && /^[1-4]$/.test(key)) {
         const choice = choices[Number(key) - 1]
-        if (choice) { event.preventDefault(); grade(choice.rating) }
+        if (choice) { event.preventDefault(); void grade(card.id, choice.rating) }
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [answerShown, busy, choices, grade, mediaBlocked, announceAnswer])
+  }, [answerShown, busy, choices, grade, mediaBlocked, announceAnswer, card.id])
 
   return <>
     <article className="review-card" ref={cardSurface}>
@@ -49,7 +51,7 @@ export function ReviewActivity({ session }: StudyActivityViewProps) {
       {!mediaBlocked && noteType.kind !== 'image-occlusion' && attachments.filter((description) => description.side === 'front').map((description) => <MediaRenderer key={description.id} description={description} />)}
       {!mediaBlocked && noteType.kind !== 'image-occlusion' && answerShown && attachments.filter((description) => description.side === 'back').map((description) => <MediaRenderer key={description.id} description={description} />)}
       {typedAnswer !== undefined && !answerShown && <label className="typed-answer">Type your answer
-        <input autoComplete="off" value={typedInput} onChange={(event) => setTypedInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); if (!mediaBlocked) { announceAnswer(); setAnswerShown(true) } } }} />
+        <input autoComplete="off" value={typedInput} onChange={(event) => setTypedDraft({ cardId: card.id, value: event.target.value })} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); if (!mediaBlocked) { announceAnswer(); setShownAnswerCardId(card.id) } } }} />
       </label>}
       {typedAnswer !== undefined && answerShown && <div ref={typedResult} className="typed-answer-result" role="status" aria-live="polite" aria-label="Typed answer comparison" tabIndex={-1}>
         <span className="section-code">YOUR ANSWER</span>
@@ -58,11 +60,11 @@ export function ReviewActivity({ session }: StudyActivityViewProps) {
       </div>}
     </article>
     {!answerShown ? (
-      <button className="primary-action reveal-action" type="button" disabled={busy || mediaBlocked} onClick={() => { announceAnswer(); setAnswerShown(true) }}>Show answer</button>
+      <button className="primary-action reveal-action" type="button" disabled={busy || mediaBlocked} onClick={() => { announceAnswer(); setShownAnswerCardId(card.id) }}>Show answer</button>
     ) : (
       <div className="rating-grid" role="group" aria-label="Rate answer">
         {choices.map((choice) => (
-          <button aria-label={`${choice.label} · ${choice.interval}`} className={`rating rating-${Rating[choice.rating].toLowerCase()}`} type="button" disabled={busy || mediaBlocked} key={choice.rating} onClick={() => grade(choice.rating)}>
+          <button aria-label={`${choice.label} · ${choice.interval}`} className={`rating rating-${Rating[choice.rating].toLowerCase()}`} type="button" disabled={busy || mediaBlocked} key={choice.rating} onClick={() => { void grade(card.id, choice.rating) }}>
             <strong>{choice.label}</strong><span aria-hidden="true">·</span><small>{choice.interval}</small>
           </button>
         ))}
