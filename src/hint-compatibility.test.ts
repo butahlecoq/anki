@@ -4,6 +4,7 @@ import initSqlJs from 'sql.js'
 import { createCollection, tryRenderNoteTemplate } from './collection'
 import { exportAnkiPackage } from './anki-export'
 import { prepareAnkiImport } from './anki-import'
+import { readAnkiExportSnapshot } from './collection-queries'
 
 test('Japanese hint meaning and template survive portable export and a clean import', async () => {
   const source = createCollection(crypto.randomUUID()), target = createCollection(crypto.randomUUID())
@@ -16,11 +17,12 @@ test('Japanese hint meaning and template survive portable export and a clean imp
     const preview = await prepareAnkiImport(new File([exported.bytes.slice().buffer], 'hints.apkg'), target, { SQL })
     expect(preview.issues.filter((issue) => issue.severity === 'error')).toEqual([])
     await preview.commit()
-    const note = (await target.notes.toArray())[0], restored = (await target.noteTypes.toArray()).find((entry) => entry.id === note.typeId)!
+    const snapshot = await readAnkiExportSnapshot(target)
+    const note = snapshot.notes[0], restored = snapshot.types.find((entry) => entry.id === note.typeId)!
     expect(restored.templates[0].front).toBe('{{Word}} {{hint:Meaning}}')
     expect(restored.fields.map((field) => note.fields[field.id])).toEqual(['猫', 'cat · ねこ'])
     const rendered = tryRenderNoteTemplate(restored.templates[0].front, restored, note.fields)
     expect(rendered.ok).toBe(true)
     if (rendered.ok) expect(new DOMParser().parseFromString(rendered.value.html, 'text/html').querySelector('.card-hint-content')?.textContent).toBe('cat · ねこ')
-  } finally { await source.delete(); await target.delete() }
+  } finally { await source.removeLocalCollection(); await target.removeLocalCollection() }
 })

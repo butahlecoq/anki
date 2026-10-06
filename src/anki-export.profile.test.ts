@@ -9,7 +9,7 @@ const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAA
 let sql: Awaited<ReturnType<typeof initSqlJs>>
 const db = createCollection(crypto.randomUUID())
 beforeAll(async () => { sql = await initSqlJs({ locateFile: () => './node_modules/sql.js/dist/sql-wasm.wasm' }) })
-afterAll(async () => { await db.delete() })
+afterAll(async () => { await db.removeLocalCollection() })
 
 test.skipIf(!process.env.EXPORT_PROFILE_NOTES)('profile synthetic package export', async () => {
   const deck = await db.createDeck('Profile')

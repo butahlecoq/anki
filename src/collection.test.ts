@@ -1,9 +1,11 @@
 import 'fake-indexeddb/auto'
 import Dexie from 'dexie'
 import { afterEach, describe, expect, test } from 'vitest'
-import { BASIC_NOTE_TYPE_ID, createCollection, Rating, State, type CardRecord, type Collection, type DeckOptionSettings } from './collection'
+import { BASIC_NOTE_TYPE_ID, createCollection, Rating, State, type CardRecord, type Collection, type DeckOptionSettings, type SyncOperation } from './collection'
+import { readAnkiExportSnapshot, readCard, readCardReviewHistory, readCardsForNote, readDeck, readDeckOptionGroup, readDeletedEntity, readNote, readNoteMediaReference, readNoteType, readReceivedOperationCount, readReviewEntry } from './collection-queries'
 import { intervalLabel } from './scheduler'
-import { customStudyKey } from './custom-study-state'
+import { createCustomStudy } from './custom-study'
+import { deleteIndexedDbFixtureRow, insertIndexedDbLegacyMediaBlob, overwriteIndexedDbBackupReceipt, overwriteIndexedDbLegacyCard } from '../tests/helpers/damage-indexeddb-media'
 
 let collection: Collection | undefined
 
@@ -14,11 +16,24 @@ type SpawnSync = (command: string, args: string[], options: { cwd: string; encod
 function directCard(id: string, deckId: string, noteId: string, state: State, due: string): CardRecord {
   return { id, deckId, noteId, templateId: 'basic', due, stability: 0, difficulty: 0, elapsedDays: 0, scheduledDays: 0, learningSteps: 0, reps: 0, lapses: 0, state, lastReview: null }
 }
+function directNote(id: string, deckId: string, createdAt = '2026-10-01T00:00:00.000Z') {
+  return { id, deckId, type: 'basic', typeId: BASIC_NOTE_TYPE_ID, fields: { front: id, back: id }, createdAt, updatedAt: createdAt }
+}
+
+let fixtureOperation = 0
+async function applyRemoteFixtures<T extends { id: string }>(db: Collection, entityType: SyncOperation['entityType'], rows: readonly T[], action: 'create' | 'update' = 'create') {
+  const occurredAt = '2026-10-01T12:00:00.000Z'
+  const operations = rows.map((payload) => ({
+    opId: `collection-test-fixture-${++fixtureOperation}`, entityType, entityId: payload.id,
+    action, occurredAt, payload,
+  } satisfies SyncOperation))
+  await db.applyRemoteChanges(operations, fixtureOperation)
+}
 
 
 
 afterEach(async () => {
-  await collection?.delete()
+  await collection?.removeLocalCollection()
   collection = undefined
 })
 
@@ -31,9 +46,9 @@ describe('local collection', () => {
     await old.table('cards').add({ id: 'old-card', deckId: 'deck-1', noteId: 'note-1', templateId: 'old-template', due: '2026-01-02', stability: 4, difficulty: 5, elapsedDays: 1, scheduledDays: 2, learningSteps: 0, reps: 2, lapses: 0, state: 2, lastReview: '2026-01-01' })
     old.close()
     collection = createCollection(databaseName)
-    await expect(collection.noteTypes.get('old-type')).resolves.toMatchObject({ kind: 'standard' })
-    await expect(collection.noteTypes.get(BASIC_NOTE_TYPE_ID)).resolves.toMatchObject({ kind: 'standard' })
-    await expect(collection.cards.get('old-card')).resolves.toMatchObject({ id: 'old-card', reps: 2, stability: 4 })
+    await expect(readNoteType(collection, 'old-type')).resolves.toMatchObject({ kind: 'standard' })
+    await expect(readNoteType(collection, BASIC_NOTE_TYPE_ID)).resolves.toMatchObject({ kind: 'standard' })
+    await expect(readCard(collection, 'old-card')).resolves.toMatchObject({ id: 'old-card', reps: 2, stability: 4 })
   })
 
   test('upgrades existing decks into the protected Default option group without changing their identities', async () => {
@@ -45,8 +60,8 @@ describe('local collection', () => {
 
     collection = createCollection(databaseName)
 
-    await expect(collection.decks.get('legacy-deck')).resolves.toMatchObject({ id: 'legacy-deck', parentId: null, optionGroupId: 'default' })
-    await expect(collection.deckOptionGroups.get('default')).resolves.toMatchObject({ id: 'default', name: 'Default', protected: true })
+    await expect(readDeck(collection, 'legacy-deck')).resolves.toMatchObject({ id: 'legacy-deck', parentId: null, optionGroupId: 'default' })
+    await expect(readDeckOptionGroup(collection, 'default')).resolves.toMatchObject({ id: 'default', name: 'Default', protected: true })
     await expect(collection.pendingOperations()).resolves.toHaveLength(0)
   })
 
@@ -63,9 +78,9 @@ describe('local collection', () => {
 
     collection = createCollection(databaseName)
 
-    await expect(collection.deckOptionGroups.get('legacy-group')).resolves.toMatchObject({ dailyNewLimit: 20, dailyReviewLimit: 200, desiredRetention: 0.9, learningSteps: ['1m', '10m'], relearningSteps: ['10m'], newCardOrder: 'added', reviewCardOrder: 'due' })
-    await expect(collection.cards.get(card.id)).resolves.toMatchObject(card)
-    await expect(collection.reviewEntries.get(review.id)).resolves.toEqual(review)
+    await expect(readDeckOptionGroup(collection, 'legacy-group')).resolves.toMatchObject({ dailyNewLimit: 20, dailyReviewLimit: 200, desiredRetention: 0.9, learningSteps: ['1m', '10m'], relearningSteps: ['10m'], newCardOrder: 'added', reviewCardOrder: 'due' })
+    await expect(readCard(collection, card.id)).resolves.toMatchObject(card)
+    await expect(readReviewEntry(collection, review.id)).resolves.toEqual(review)
     await expect(collection.updateDeckOptionGroup('legacy-group', { dailyNewLimit: -1, dailyReviewLimit: 1, desiredRetention: 0.9, learningSteps: ['1m'], relearningSteps: [], newCardOrder: 'added', reviewCardOrder: 'due' })).rejects.toThrow(/daily new/i)
     await expect(collection.updateDeckOptionGroup('legacy-group', { dailyNewLimit: 1, dailyReviewLimit: 1, desiredRetention: 0, learningSteps: ['1m'], relearningSteps: [], newCardOrder: 'added', reviewCardOrder: 'due' })).rejects.toThrow(/retention/i)
     await expect(collection.updateDeckOptionGroup('legacy-group', { dailyNewLimit: 1, dailyReviewLimit: 1, desiredRetention: 0.9, learningSteps: ['soon'], relearningSteps: [], newCardOrder: 'added', reviewCardOrder: 'due' })).rejects.toThrow(/learning step/i)
@@ -86,9 +101,9 @@ describe('local collection', () => {
 
     collection = createCollection(databaseName)
 
-    await expect(collection.cards.get(card.id)).resolves.toMatchObject({ ...card, manualSuspended: false, templateSuspended: true, buriedUntil: null })
-    await expect(collection.reviewEntries.get(review.id)).resolves.toEqual(review)
-    await expect(collection.deckOptionGroups.get('legacy-policy-group')).resolves.toMatchObject({ buryNewSiblings: false, buryReviewSiblings: false, buryInterdayLearningSiblings: false, leechThreshold: 8, leechAction: 'suspend', leechTag: 'leech' })
+    await expect(readCard(collection, card.id)).resolves.toMatchObject({ ...card, manualSuspended: false, templateSuspended: true, buriedUntil: null })
+    await expect(readReviewEntry(collection, review.id)).resolves.toEqual(review)
+    await expect(readDeckOptionGroup(collection, 'legacy-policy-group')).resolves.toMatchObject({ buryNewSiblings: false, buryReviewSiblings: false, buryInterdayLearningSiblings: false, leechThreshold: 8, leechAction: 'suspend', leechTag: 'leech' })
     await expect(collection.pendingOperations()).resolves.toHaveLength(0)
   })
 
@@ -112,10 +127,10 @@ describe('local collection', () => {
     old.close()
 
     collection = createCollection(databaseName)
-    await expect(collection.cards.get('earlier-first')).resolves.toMatchObject({ newPosition: 0, templateOrdinal: 1 })
-    await expect(collection.cards.get('later-second')).resolves.toMatchObject({ newPosition: 1, templateOrdinal: 0 })
-    await expect(collection.cards.get('later-first')).resolves.toMatchObject({ newPosition: 1, templateOrdinal: 1 })
-    await expect(collection.deckOptionGroups.get('default')).resolves.toMatchObject({ newCardGatherOrder: 'deck', newCardSortOrder: 'template', newReviewOrder: 'mix', buryInterdayLearningSiblings: false })
+    await expect(readCard(collection, 'earlier-first')).resolves.toMatchObject({ newPosition: 0, templateOrdinal: 1 })
+    await expect(readCard(collection, 'later-second')).resolves.toMatchObject({ newPosition: 1, templateOrdinal: 0 })
+    await expect(readCard(collection, 'later-first')).resolves.toMatchObject({ newPosition: 1, templateOrdinal: 1 })
+    await expect(readDeckOptionGroup(collection, 'default')).resolves.toMatchObject({ newCardGatherOrder: 'deck', newCardSortOrder: 'template', newReviewOrder: 'mix', buryInterdayLearningSiblings: false })
   })
 
   test('upgrades v11 option groups with the explicit interday-learning order', async () => {
@@ -127,7 +142,7 @@ describe('local collection', () => {
 
     collection = createCollection(databaseName)
 
-    await expect(collection.deckOptionGroups.get('v11-policy-group')).resolves.toMatchObject({ newReviewOrder: 'mix', interdayLearningOrder: 'mix', buryInterdayLearningSiblings: false })
+    await expect(readDeckOptionGroup(collection, 'v11-policy-group')).resolves.toMatchObject({ newReviewOrder: 'mix', interdayLearningOrder: 'mix', buryInterdayLearningSiblings: false })
     await expect(collection.pendingOperations()).resolves.toHaveLength(0)
   })
 
@@ -136,7 +151,7 @@ describe('local collection', () => {
     const active = collection
     const deck = await active.createDeck('Policies')
     const note = await active.createBasicNote(deck.id, { front: '猫', back: 'cat' })
-    const card = (await active.cards.where('noteId').equals(note.id).first())!
+    const card = (await readCardsForNote(active, note.id).then(cards => cards[0]))!
     const operation = (opId: string, payload: unknown) => active.applyRemoteChanges([{ opId, entityType: 'card', entityId: card.id, action: 'update', occurredAt: '2026-10-01T12:00:00.000Z', payload }], 1)
 
     await expect(operation('bad-manual-suspension', { ...card, manualSuspended: 'yes' })).rejects.toThrow(/manual suspension/i)
@@ -148,33 +163,33 @@ describe('local collection', () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const deck = await collection.createDeck('Policies')
     const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
-    const card = (await collection.cards.where('noteId').equals(note.id).first())!
+    const card = (await readCardsForNote(collection, note.id).then(cards => cards[0]))!
     const now = new Date('2026-10-01T12:00:00.000Z')
 
     await collection.suspendCard(card.id, now)
     await expect(collection.dueCards(deck.id, now)).resolves.toEqual([])
-    await expect(collection.cards.get(card.id)).resolves.toMatchObject({ manualSuspended: true, templateSuspended: false })
+    await expect(readCard(collection, card.id)).resolves.toMatchObject({ manualSuspended: true, templateSuspended: false })
     await collection.unsuspendCard(card.id, now)
     await expect(collection.dueCards(deck.id, now)).resolves.toEqual([expect.objectContaining({ id: card.id })])
 
     await collection.buryCard(card.id, now)
-    const buried = (await collection.cards.get(card.id))!
+    const buried = (await readCard(collection, card.id))!
     expect(buried.buriedUntil).toBe(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 4).toISOString())
     await expect(collection.dueCards(deck.id, now)).resolves.toEqual([])
     await expect(collection.dueCards(deck.id, new Date(buried.buriedUntil!))).resolves.toEqual([expect.objectContaining({ id: card.id })])
     await collection.unburyCard(card.id, now)
 
-    await collection.cards.update(card.id, { state: State.Review, due: now.toISOString(), stability: 2, difficulty: 5, reps: 3 })
-    await collection.reviewEntries.add({ id: 'preserved-review', cardId: card.id, deckId: deck.id, rating: Rating.Good, state: State.Review, due: now.toISOString(), stability: 2, difficulty: 5, elapsedDays: 1, lastElapsedDays: 1, scheduledDays: 2, learningSteps: 0, reviewedAt: now.toISOString() })
+    await collection.updateCardSchedule(card.id, { state: State.Review, due: now.toISOString(), stability: 2, difficulty: 5, reps: 3 })
+    await applyRemoteFixtures(collection, 'review', [{ id: 'preserved-review', cardId: card.id, deckId: deck.id, rating: Rating.Good, state: State.Review, due: now.toISOString(), stability: 2, difficulty: 5, elapsedDays: 1, lastElapsedDays: 1, scheduledDays: 2, learningSteps: 0, reviewedAt: now.toISOString() }])
     const rescheduled = new Date('2026-10-03T09:00:00.000Z')
     await collection.rescheduleCard(card.id, rescheduled, now)
     await expect(collection.dueCards(deck.id, now)).resolves.toEqual([])
-    await expect(collection.cards.get(card.id)).resolves.toMatchObject({ due: rescheduled.toISOString(), state: State.Review, reps: 3 })
-    await expect(collection.reviewEntries.where('cardId').equals(card.id).toArray()).resolves.toEqual([expect.objectContaining({ id: 'preserved-review' })])
+    await expect(readCard(collection, card.id)).resolves.toMatchObject({ due: rescheduled.toISOString(), state: State.Review, reps: 3 })
+    await expect(readCardReviewHistory(collection, card.id)).resolves.toEqual([expect.objectContaining({ id: 'preserved-review' })])
 
-    const reopened = createCollection(collection.name)
-    await expect(reopened.cards.get(card.id)).resolves.toMatchObject({ manualSuspended: false, buriedUntil: null, due: rescheduled.toISOString() })
-    await reopened.delete()
+    const reopened = createCollection(collection.databaseName)
+    await expect(readCard(reopened, card.id)).resolves.toMatchObject({ manualSuspended: false, buriedUntil: null, due: rescheduled.toISOString() })
+    await reopened.removeLocalCollection()
     collection = undefined
   })
 
@@ -182,23 +197,23 @@ describe('local collection', () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const deck = await collection.createDeck('Policies')
     const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
-    const card = (await collection.cards.where('noteId').equals(note.id).first())!
+    const card = (await readCardsForNote(collection, note.id).then(cards => cards[0]))!
     const now = new Date('2026-10-01T12:00:00.000Z')
     const future = new Date('2026-10-03T12:00:00.000Z')
 
-    await collection.cards.update(card.id, { state: State.Review, due: now.toISOString(), stability: 2, difficulty: 5, reps: 3 })
+    await collection.updateCardSchedule(card.id, { state: State.Review, due: now.toISOString(), stability: 2, difficulty: 5, reps: 3 })
     await collection.rescheduleCard(card.id, future, now)
     await expect(collection.reviewChoices(card.id, now)).resolves.toEqual([])
     await expect(collection.answer(card.id, Rating.Good, now)).rejects.toThrow(/not due/i)
 
     for (const state of [State.Learning, State.Relearning]) {
-      await collection.cards.update(card.id, { state, due: future.toISOString(), stability: 2, difficulty: 5, reps: 3, scheduledDays: state === State.Learning ? 0 : 1 })
+      await collection.updateCardSchedule(card.id, { state, due: future.toISOString(), stability: 2, difficulty: 5, reps: 3, scheduledDays: state === State.Learning ? 0 : 1 })
       await expect(collection.reviewChoices(card.id, now)).resolves.toEqual([])
       await expect(collection.answer(card.id, Rating.Good, now)).rejects.toThrow(/not due/i)
     }
-    await expect(collection.reviewEntries.where('cardId').equals(card.id).count()).resolves.toBe(0)
+    await expect(readCardReviewHistory(collection, card.id).then(entries => entries.length)).resolves.toBe(0)
 
-    await collection.cards.update(card.id, { state: State.New, due: future.toISOString(), stability: 0, difficulty: 0, reps: 0, lapses: 0, scheduledDays: 0, learningSteps: 0, lastReview: null })
+    await collection.updateCardSchedule(card.id, { state: State.New, due: future.toISOString(), stability: 0, difficulty: 0, reps: 0, lapses: 0, scheduledDays: 0, learningSteps: 0, lastReview: null })
     await expect(collection.reviewChoices(card.id, now)).resolves.toHaveLength(4)
     await expect(collection.answer(card.id, Rating.Good, now)).resolves.toMatchObject({ cardId: card.id, rating: Rating.Good })
   })
@@ -207,14 +222,14 @@ describe('local collection', () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const deck = await collection.createDeck('Choices')
     const note = await collection.createBasicNote(deck.id, { front: 'front', back: 'back' })
-    const [card] = await collection.cards.where('noteId').equals(note.id).toArray()
+    const [card] = await readCardsForNote(collection, note.id)
     const now = new Date('2026-10-01T12:00:00.000Z')
     // An eligible card in a deck that has lost its option group is a real fault.
-    await collection.deckOptionGroups.delete(deck.optionGroupId)
+    await deleteIndexedDbFixtureRow(collection.databaseName, 'deckOptionGroups', deck.optionGroupId)
     await expect(collection.reviewChoices(card.id, now)).rejects.toThrow(/option group/i)
     // An ineligible one is refused on eligibility alone, before the deck policy
     // is read, so the reviewer's poll cannot fail on a card it would not show.
-    await collection.cards.update(card.id, { manualSuspended: true })
+    await collection.suspendCard(card.id, now)
     await expect(collection.reviewChoices(card.id, now)).resolves.toEqual([])
     await expect(collection.reviewChoices(card.id, now, true)).resolves.toEqual([])
   })
@@ -223,10 +238,10 @@ describe('local collection', () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const deck = await collection.createDeck('Legacy suspension')
     const note = await collection.createBasicNote(deck.id, { front: 'front', back: 'back' })
-    const [card] = await collection.cards.where('noteId').equals(note.id).toArray()
+    const [card] = await readCardsForNote(collection, note.id)
     const now = new Date('2026-10-01T12:00:00.000Z')
     // Package import and note-type deletion write `suspended` alone.
-    await collection.cards.update(card.id, { templateSuspended: false, suspended: true })
+    await overwriteIndexedDbLegacyCard(collection.databaseName, { ...card, templateSuspended: false, suspended: true })
     await expect(collection.reviewChoices(card.id, now)).resolves.toEqual([])
     await expect(collection.reviewChoices(card.id, now, true)).resolves.toEqual([])
     await expect(collection.answer(card.id, Rating.Good, now)).rejects.toThrow(/suspended or buried/i)
@@ -237,14 +252,14 @@ describe('local collection', () => {
     const deck = await collection.createDeck('Policies')
     const type = await collection.createNoteType({ name: 'Term', fields: [{ name: 'Term' }], templates: [{ name: 'Forward', front: '{{Term}}', back: '{{Term}}', css: '' }] })
     const note = await collection.createNote(deck.id, type.id, { [type.fields[0].id]: '猫' })
-    const card = (await collection.cards.where('noteId').equals(note.id).first())!
+    const card = (await readCardsForNote(collection, note.id).then(cards => cards[0]))!
     const now = new Date('2026-10-01T12:00:00.000Z')
 
     await collection.suspendCard(card.id, now)
     await collection.updateNote(note.id, { [type.fields[0].id]: '' }, now)
-    await expect(collection.cards.get(card.id)).resolves.toMatchObject({ manualSuspended: true, templateSuspended: true, suspended: true })
+    await expect(readCard(collection, card.id)).resolves.toMatchObject({ manualSuspended: true, templateSuspended: true, suspended: true })
     await collection.updateNote(note.id, { [type.fields[0].id]: '猫' }, now)
-    await expect(collection.cards.get(card.id)).resolves.toMatchObject({ manualSuspended: true, templateSuspended: false, suspended: false })
+    await expect(readCard(collection, card.id)).resolves.toMatchObject({ manualSuspended: true, templateSuspended: false, suspended: false })
     await expect(collection.dueCards(deck.id, now)).resolves.toEqual([])
     await collection.unsuspendCard(card.id, now)
     await expect(collection.dueCards(deck.id, now)).resolves.toEqual([expect.objectContaining({ id: card.id })])
@@ -256,20 +271,20 @@ describe('local collection', () => {
     await collection.updateDeckOptionGroup(group.id, { ...group, buryNewSiblings: true, buryReviewSiblings: true, leechThreshold: 1, leechAction: 'suspend', leechTag: ' leech ' })
     const deck = await collection.createDeck('Policies', { optionGroupId: group.id })
     const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
-    const first = (await collection.cards.where('noteId').equals(note.id).first())!
+    const first = (await readCardsForNote(collection, note.id).then(cards => cards[0]))!
     const sibling = { ...directCard('sibling-card', deck.id, note.id, State.New, first.due), manualSuspended: false, templateSuspended: false, buriedUntil: null }
-    await collection.cards.add(sibling)
+    await applyRemoteFixtures(collection, 'card', [sibling])
     const now = new Date('2026-10-01T12:00:00.000Z')
 
     await collection.answer(first.id, Rating.Good, now)
-    await expect(collection.cards.get(sibling.id)).resolves.toMatchObject({ buriedUntil: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 4).toISOString() })
+    await expect(readCard(collection, sibling.id)).resolves.toMatchObject({ buriedUntil: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 4).toISOString() })
 
     await collection.unburyCard(sibling.id, now)
-    await collection.cards.update(sibling.id, { state: State.Review, due: now.toISOString(), stability: 2, difficulty: 5, reps: 3, lapses: 0 })
+    await collection.updateCardSchedule(sibling.id, { state: State.Review, due: now.toISOString(), stability: 2, difficulty: 5, reps: 3, lapses: 0 })
     const review = await collection.answer(sibling.id, Rating.Again, now)
-    await expect(collection.cards.get(sibling.id)).resolves.toMatchObject({ manualSuspended: true, templateSuspended: false, buriedUntil: null })
-    await expect(collection.notes.get(note.id)).resolves.toMatchObject({ tags: ['leech'] })
-    await expect(collection.reviewEntries.get(review.id)).resolves.toMatchObject({ cardId: sibling.id })
+    await expect(readCard(collection, sibling.id)).resolves.toMatchObject({ manualSuspended: true, templateSuspended: false, buriedUntil: null })
+    await expect(readNote(collection, note.id)).resolves.toMatchObject({ tags: ['leech'] })
+    await expect(readReviewEntry(collection, review.id)).resolves.toMatchObject({ cardId: sibling.id })
     await expect(collection.pendingOperations()).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({ entityType: 'card', entityId: sibling.id, action: 'update' }),
       expect.objectContaining({ entityType: 'note', entityId: note.id, action: 'update' }),
@@ -278,11 +293,11 @@ describe('local collection', () => {
 
     await collection.updateDeckOptionGroup(group.id, { ...group, buryNewSiblings: false, buryReviewSiblings: false, leechThreshold: 1, leechAction: 'tag-only', leechTag: 'needs-attention' })
     const tagOnlyNote = await collection.createBasicNote(deck.id, { front: '犬', back: 'dog' })
-    const tagOnlyCard = (await collection.cards.where('noteId').equals(tagOnlyNote.id).first())!
-    await collection.cards.update(tagOnlyCard.id, { state: State.Review, due: now.toISOString(), stability: 2, difficulty: 5, reps: 3, lapses: 0 })
+    const tagOnlyCard = (await readCardsForNote(collection, tagOnlyNote.id).then(cards => cards[0]))!
+    await collection.updateCardSchedule(tagOnlyCard.id, { state: State.Review, due: now.toISOString(), stability: 2, difficulty: 5, reps: 3, lapses: 0 })
     await collection.answer(tagOnlyCard.id, Rating.Again, now)
-    await expect(collection.cards.get(tagOnlyCard.id)).resolves.toMatchObject({ manualSuspended: false })
-    await expect(collection.notes.get(tagOnlyNote.id)).resolves.toMatchObject({ tags: ['needs-attention'] })
+    await expect(readCard(collection, tagOnlyCard.id)).resolves.toMatchObject({ manualSuspended: false })
+    await expect(readNote(collection, tagOnlyNote.id)).resolves.toMatchObject({ tags: ['needs-attention'] })
   })
 
   test('buries later sibling types with separate review and interday-learning policies', async () => {
@@ -296,7 +311,7 @@ describe('local collection', () => {
     })
     const deck = await collection.createDeck('Policies', { optionGroupId: group.id })
     const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
-    const reviewed = (await collection.cards.where('noteId').equals(note.id).first())!
+    const reviewed = (await readCardsForNote(collection, note.id).then(cards => cards[0]))!
     const now = new Date('2026-10-01T12:00:00.000Z')
     const intraday = {
       ...directCard('intraday-learning-sibling', deck.id, note.id, State.Learning, new Date(now.getTime() - 60_000).toISOString()),
@@ -313,28 +328,28 @@ describe('local collection', () => {
       scheduledDays: 1,
     }
     const reviewSibling = { ...directCard('review-sibling', deck.id, note.id, State.Review, now.toISOString()), manualSuspended: false, templateSuspended: false, buriedUntil: null }
-    await collection.cards.bulkAdd([intraday, interday, reviewSibling])
-    await collection.cards.update(reviewed.id, { state: State.Review, due: now.toISOString(), stability: 2, difficulty: 5, reps: 3 })
+    await applyRemoteFixtures(collection, 'card', [intraday, interday, reviewSibling])
+    await collection.updateCardSchedule(reviewed.id, { state: State.Review, due: now.toISOString(), stability: 2, difficulty: 5, reps: 3 })
 
     await collection.answer(reviewed.id, Rating.Good, now)
 
     const nextBoundary = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 4).toISOString()
-    await expect(collection.cards.get(reviewSibling.id)).resolves.toMatchObject({ buriedUntil: nextBoundary })
-    await expect(collection.cards.get(intraday.id)).resolves.toMatchObject({ buriedUntil: null })
-    await expect(collection.cards.get(interday.id)).resolves.toMatchObject({ buriedUntil: null })
+    await expect(readCard(collection, reviewSibling.id)).resolves.toMatchObject({ buriedUntil: nextBoundary })
+    await expect(readCard(collection, intraday.id)).resolves.toMatchObject({ buriedUntil: null })
+    await expect(readCard(collection, interday.id)).resolves.toMatchObject({ buriedUntil: null })
     const due = await collection.dueCards(deck.id, now)
     expect(due).toEqual(expect.arrayContaining([expect.objectContaining({ id: intraday.id }), expect.objectContaining({ id: interday.id })]))
 
     await collection.updateDeckOptionGroup(group.id, { ...group, buryReviewSiblings: false, buryInterdayLearningSiblings: true })
     const secondNote = await collection.createBasicNote(deck.id, { front: '鳥', back: 'bird' })
-    const intradaySource = (await collection.cards.where('noteId').equals(secondNote.id).first())!
-    await collection.cards.update(intradaySource.id, { state: State.Learning, due: now.toISOString(), scheduledDays: 0 })
+    const intradaySource = (await readCardsForNote(collection, secondNote.id).then(cards => cards[0]))!
+    await collection.updateCardSchedule(intradaySource.id, { state: State.Learning, due: now.toISOString(), scheduledDays: 0 })
     const intradaySibling = { ...directCard('intraday-sibling', deck.id, secondNote.id, State.Relearning, now.toISOString()), manualSuspended: false, templateSuspended: false, buriedUntil: null, scheduledDays: 0 }
     const interdaySibling = { ...directCard('interday-sibling', deck.id, secondNote.id, State.Relearning, now.toISOString()), manualSuspended: false, templateSuspended: false, buriedUntil: null, scheduledDays: 1 }
-    await collection.cards.bulkAdd([intradaySibling, interdaySibling])
+    await applyRemoteFixtures(collection, 'card', [intradaySibling, interdaySibling])
     await collection.answer(intradaySource.id, Rating.Good, now)
-    await expect(collection.cards.get(intradaySibling.id)).resolves.toMatchObject({ buriedUntil: null })
-    await expect(collection.cards.get(interdaySibling.id)).resolves.toMatchObject({ buriedUntil: nextBoundary })
+    await expect(readCard(collection, intradaySibling.id)).resolves.toMatchObject({ buriedUntil: null })
+    await expect(readCard(collection, interdaySibling.id)).resolves.toMatchObject({ buriedUntil: nextBoundary })
   })
 
   test('matches Anki sibling bury precedence for every answering card stage', async () => {
@@ -354,10 +369,14 @@ describe('local collection', () => {
 
     for (const answeringStage of stages) {
       const note = await collection.createBasicNote(deck.id, { front: answeringStage.name, back: 'sibling test' })
-      const [created] = await collection.cards.where('noteId').equals(note.id).toArray()
+      const [created] = await readCardsForNote(collection, note.id)
       const due = new Date(now.getTime() - 60_000).toISOString()
       const source = { ...created, ...answeringStage, due, lastReview: answeringStage.state === State.New ? null : due }
-      await collection.cards.put(source)
+      await collection.updateCardSchedule(created.id, {
+        state: source.state, due: source.due, stability: source.stability, difficulty: source.difficulty,
+        elapsedDays: source.elapsedDays, scheduledDays: source.scheduledDays, learningSteps: source.learningSteps,
+        reps: source.reps, lapses: source.lapses, lastReview: source.lastReview,
+      })
       const siblings = stages.flatMap((stage) => [0, 1].map((copy) => ({
         ...directCard(`${answeringStage.name}-${stage.name}-${copy}`, deck.id, note.id, stage.state, due),
         ...stage,
@@ -368,13 +387,13 @@ describe('local collection', () => {
         suspended: false,
         buriedUntil: null,
       })))
-      await collection.cards.bulkAdd(siblings)
+      await applyRemoteFixtures(collection, 'card', siblings)
 
       await collection.answer(source.id, Rating.Good, now)
 
       for (const sibling of siblings) {
         const shouldBury = priority(sibling.name) >= priority(answeringStage.name) && sibling.name !== 'intraday'
-        await expect(collection.cards.get(sibling.id)).resolves.toMatchObject({ buriedUntil: shouldBury ? nextBoundary : null })
+        await expect(readCard(collection, sibling.id)).resolves.toMatchObject({ buriedUntil: shouldBury ? nextBoundary : null })
       }
     }
   })
@@ -385,10 +404,10 @@ describe('local collection', () => {
     const now = new Date('2026-10-01T12:00:00.000Z')
     for (const [rating, label] of [[Rating.Again, 'Again'], [Rating.Hard, 'Hard'], [Rating.Good, 'Good'], [Rating.Easy, 'Easy']] as const) {
       const note = await collection.createBasicNote(deck.id, { front: label, back: label })
-      const card = (await collection.cards.where('noteId').equals(note.id).first())!
+      const card = (await readCardsForNote(collection, note.id).then(cards => cards[0]))!
       const choice = (await collection.reviewChoices(card.id, now)).find((candidate) => candidate.rating === rating)!
       const review = await collection.answer(card.id, rating, now)
-      const persisted = (await collection.cards.get(card.id))!
+      const persisted = (await readCard(collection, card.id))!
       expect(review.rating).toBe(rating)
       expect(persisted.state).not.toBe(State.New)
       expect(intervalLabel(new Date(persisted.due), now)).toBe(choice.interval)
@@ -408,12 +427,12 @@ describe('local collection', () => {
     ] as const
     for (const scenario of cases) {
       const note = await collection.createBasicNote(deck.id, { front: scenario.name, back: 'result' })
-      const [created] = await collection.cards.where('noteId').equals(note.id).toArray()
+      const [created] = await readCardsForNote(collection, note.id)
       const initial = { ...created, ...scenario.initial }
-      await collection.cards.put(initial)
+      await collection.updateCardSchedule(created.id, scenario.initial)
       const result = await collection.answer(created.id, scenario.rating, now)
-      const after = (await collection.cards.get(created.id))!
-      const stored = (await collection.reviewEntries.get(result.id))!
+      const after = (await readCard(collection, created.id))!
+      const stored = (await readReviewEntry(collection, result.id))!
       expect(stored).toMatchObject({ state: initial.state, due: initial.due, scheduledDays: initial.scheduledDays, afterState: scenario.after, afterDue: after.due, afterScheduledDays: after.scheduledDays })
     }
   })
@@ -439,14 +458,14 @@ describe('local collection', () => {
     for (const stateCase of stateCases) {
       for (const grade of grades) {
         const note = await collection.createBasicNote(deck.id, { front: `${stateCase.name} ${grade.label}`, back: 'matrix' })
-        const card = (await collection.cards.where('noteId').equals(note.id).first())!
-        await collection.cards.put({ ...card, ...stateCase.initial, state: stateCase.state, due: now.toISOString() })
+        const card = (await readCardsForNote(collection, note.id).then(cards => cards[0]))!
+        await collection.updateCardSchedule(card.id, { ...stateCase.initial, state: stateCase.state, due: now.toISOString() })
         const choices = await collection.reviewChoices(card.id, now, true)
         const choice = choices.find((candidate) => candidate.rating === grade.rating)
         expect(choice).toBeDefined()
         const review = await collection.answer(card.id, grade.rating, now, undefined, { allowEarly: true, reschedule: true })
-        const persisted = (await collection.cards.get(card.id))!
-        const history = (await collection.reviewEntries.get(review.id))!
+        const persisted = (await readCard(collection, card.id))!
+        const history = (await readReviewEntry(collection, review.id))!
         expect(intervalLabel(new Date(persisted.due), now)).toBe(choice!.interval)
         expect(history).toMatchObject({
           rating: grade.rating,
@@ -459,11 +478,11 @@ describe('local collection', () => {
       }
     }
 
-    collection.close()
-    await collection.open()
+    collection.closeLocalCollection()
+    await collection.openLocalCollection()
     for (const item of expected) {
-      const card = (await collection.cards.get(item.cardId))!
-      const review = (await collection.reviewEntries.get(item.reviewId))!
+      const card = (await readCard(collection, item.cardId))!
+      const review = (await readReviewEntry(collection, item.reviewId))!
       expect(review.rating).toBe(item.rating)
       expect(review.afterDue).toBe(card.due)
       expect(intervalLabel(new Date(card.due), now)).toBe(item.choice)
@@ -478,21 +497,21 @@ describe('local collection', () => {
       const createdAt = new Date('2026-10-01T11:59:00.000Z')
       const deck = await source.createDeck('Sync policy', createdAt)
       const note = await source.createBasicNote(deck.id, { front: '猫', back: 'cat' }, createdAt)
-      const card = (await source.cards.where('noteId').equals(note.id).first())!
+      const card = (await readCardsForNote(source, note.id).then(cards => cards[0]))!
       await source.suspendCard(card.id, now)
       await source.buryCard(card.id, new Date('2026-10-01T12:01:00.000Z'))
       await source.rescheduleCard(card.id, new Date('2026-10-03T12:00:00.000Z'), new Date('2026-10-01T12:02:00.000Z'))
       const outbound = await source.pendingOperations()
       await remote.applyRemoteChanges(outbound, outbound.length)
 
-      await expect(remote.cards.get(card.id)).resolves.toMatchObject({ manualSuspended: true, templateSuspended: false, buriedUntil: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 4).toISOString(), due: '2026-10-03T12:00:00.000Z', state: State.Review })
+      await expect(readCard(remote, card.id)).resolves.toMatchObject({ manualSuspended: true, templateSuspended: false, buriedUntil: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 4).toISOString(), due: '2026-10-03T12:00:00.000Z', state: State.Review })
       await remote.unsuspendCard(card.id, new Date('2026-10-01T12:01:00.000Z'))
       const returnOperations = await remote.pendingOperations()
       await source.applyRemoteChanges(returnOperations, outbound.length + returnOperations.length)
-      await expect(source.cards.get(card.id)).resolves.toMatchObject({ manualSuspended: false, buriedUntil: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 4).toISOString(), due: '2026-10-03T12:00:00.000Z' })
+      await expect(readCard(source, card.id)).resolves.toMatchObject({ manualSuspended: false, buriedUntil: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 4).toISOString(), due: '2026-10-03T12:00:00.000Z' })
     } finally {
-      await source.delete()
-      await remote.delete()
+      await source.removeLocalCollection()
+      await remote.removeLocalCollection()
     }
   })
 
@@ -502,23 +521,23 @@ describe('local collection', () => {
     await collection.updateDeckOptionGroup(group.id, { ...group, buryNewSiblings: true, leechThreshold: 1, leechAction: 'suspend', leechTag: 'leech' })
     const deck = await collection.createDeck('Undo review', { optionGroupId: group.id })
     const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
-    const card = (await collection.cards.where('noteId').equals(note.id).first())!
+    const card = (await readCardsForNote(collection, note.id).then(cards => cards[0]))!
     const now = new Date('2026-10-01T12:00:00.000Z')
-    await collection.cards.update(card.id, { state: State.Review, due: now.toISOString(), stability: 2, difficulty: 5, reps: 3 })
+    await collection.updateCardSchedule(card.id, { state: State.Review, due: now.toISOString(), stability: 2, difficulty: 5, reps: 3 })
     const sibling = directCard('undo-sibling', deck.id, note.id, State.New, now.toISOString())
-    await collection.cards.add(sibling)
-    const before = (await collection.cards.get(card.id))!
+    await applyRemoteFixtures(collection, 'card', [sibling])
+    const before = (await readCard(collection, card.id))!
     const pendingBefore = (await collection.pendingOperations()).map((operation) => operation.opId)
     const review = await collection.answer(card.id, Rating.Again, now)
-    expect(await collection.cards.get(card.id)).toMatchObject({ manualSuspended: true })
-    expect(await collection.cards.get(sibling.id)).toMatchObject({ buriedUntil: expect.any(String) })
-    expect(await collection.notes.get(note.id)).toMatchObject({ tags: ['leech'] })
+    expect(await readCard(collection, card.id)).toMatchObject({ manualSuspended: true })
+    expect(await readCard(collection, sibling.id)).toMatchObject({ buriedUntil: expect.any(String) })
+    expect(await readNote(collection, note.id)).toMatchObject({ tags: ['leech'] })
 
     await expect(collection.undo()).resolves.toBe(card.id)
-    expect(await collection.cards.get(card.id)).toEqual(before)
-    expect(await collection.cards.get(sibling.id)).toEqual(sibling)
-    expect(await collection.notes.get(note.id)).toEqual(note)
-    expect(await collection.reviewEntries.get(review.id)).toBeUndefined()
+    expect(await readCard(collection, card.id)).toEqual(before)
+    expect(await readCard(collection, sibling.id)).toMatchObject(sibling)
+    expect(await readNote(collection, note.id)).toEqual(note)
+    expect(await readReviewEntry(collection, review.id)).toBeUndefined()
     expect((await collection.pendingOperations()).map((operation) => operation.opId)).toEqual(pendingBefore)
   })
 
@@ -526,19 +545,19 @@ describe('local collection', () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const deck = await collection.createDeck('Undo boundary')
     const note = await collection.createBasicNote(deck.id, { front: '犬', back: 'dog' })
-    const card = (await collection.cards.where('noteId').equals(note.id).first())!
+    const card = (await readCardsForNote(collection, note.id).then(cards => cards[0]))!
     const now = new Date('2026-10-01T12:00:00.000Z')
     const review = await collection.answer(card.id, Rating.Good, now)
     await collection.beginSyncAttempt()
     await expect(collection.latestReviewUndo()).resolves.toBeNull()
     await expect(collection.undo()).rejects.toThrow(/sync attempt/i)
-    expect(await collection.reviewEntries.get(review.id)).toBeDefined()
+    expect(await readReviewEntry(collection, review.id)).toBeDefined()
 
-    await collection.cards.put({ ...card, due: now.toISOString() })
+    await collection.updateCardSchedule(card.id, { due: now.toISOString() })
     await collection.answer(card.id, Rating.Good, now)
     await collection.setCardFlag(card.id, 1, now)
     // A later edit to the same card invalidates the record that captured it.
-    await collection.cards.update(card.id, { flag: 7 })
+    await applyRemoteFixtures(collection, 'card', [{ ...(await readCard(collection, card.id))!, flag: 7 }], 'update')
     await expect(collection.undo()).rejects.toThrow(/changed since/i)
   })
 
@@ -547,23 +566,23 @@ describe('local collection', () => {
     const createdAt = new Date('2026-10-01T11:59:00.000Z')
     const deck = await collection.createDeck('Delete note', createdAt)
     const note = await collection.createBasicNote(deck.id, { front: '音', back: 'sound' }, createdAt)
-    const card = (await collection.cards.where('noteId').equals(note.id).first())!
+    const card = (await readCardsForNote(collection, note.id).then(cards => cards[0]))!
     const media = await collection.attachMedia(note.id, { file: new File(['sound'], 'sound.mp3', { type: 'audio/mpeg' }), side: 'front' })
     const review = await collection.answer(card.id, Rating.Good, new Date('2026-10-01T12:00:00.000Z'))
-    const answered = (await collection.cards.get(card.id))!
+    const answered = (await readCard(collection, card.id))!
     await collection.deleteNote(note.id, new Date('2026-10-01T12:01:00.000Z'))
-    expect(await collection.notes.get(note.id)).toBeUndefined()
-    expect(await collection.cards.get(card.id)).toBeUndefined()
-    expect(await collection.reviewEntries.get(review.id)).toBeUndefined()
-    expect(await collection.noteMedia.get(media.id)).toBeUndefined()
-    expect(await collection.deletedEntities.get(`note:${note.id}`)).toBeDefined()
+    expect(await readNote(collection, note.id)).toBeUndefined()
+    expect(await readCard(collection, card.id)).toBeUndefined()
+    expect(await readReviewEntry(collection, review.id)).toBeUndefined()
+    expect(await readNoteMediaReference(collection, media.id)).toBeUndefined()
+    expect(await readDeletedEntity(collection, `note:${note.id}`)).toBeDefined()
 
     await expect(collection.undo()).resolves.toBe(note.id)
-    expect(await collection.notes.get(note.id)).toEqual(note)
-    expect(await collection.cards.get(card.id)).toEqual(answered)
-    expect(await collection.reviewEntries.get(review.id)).toEqual(review)
-    expect(await collection.noteMedia.get(media.id)).toEqual(media)
-    expect(await collection.deletedEntities.get(`note:${note.id}`)).toBeUndefined()
+    expect(await readNote(collection, note.id)).toEqual(note)
+    expect(await readCard(collection, card.id)).toEqual(answered)
+    expect(await readReviewEntry(collection, review.id)).toEqual(review)
+    expect(await readNoteMediaReference(collection, media.id)).toEqual(media)
+    expect(await readDeletedEntity(collection, `note:${note.id}`)).toBeUndefined()
     expect((await collection.pendingOperations()).some((operation) => operation.entityType === 'note' && operation.entityId === note.id && operation.action === 'delete')).toBe(false)
 
     await collection.deleteNote(note.id, new Date('2026-10-01T12:02:00.000Z'))
@@ -578,22 +597,22 @@ describe('local collection', () => {
       const createdAt = new Date('2026-10-01T11:59:00.000Z')
       const deck = await source.createDeck('Delete sync', createdAt)
       const note = await source.createBasicNote(deck.id, { front: '古い', back: 'old' }, createdAt)
-      const card = (await source.cards.where('noteId').equals(note.id).first())!
+      const card = (await readCardsForNote(source, note.id).then(cards => cards[0]))!
       const created = await source.pendingOperations()
       await remote.applyRemoteChanges(created, created.length)
       await source.deleteNote(note.id, new Date('2026-10-01T12:00:00.000Z'))
       const deletion = (await source.pendingOperations()).filter((operation) => operation.action === 'delete')
       await remote.applyRemoteChanges(deletion, created.length + deletion.length)
-      expect(await remote.notes.get(note.id)).toBeUndefined()
-      expect(await remote.cards.get(card.id)).toBeUndefined()
-      expect(await remote.deletedEntities.get(`card:${card.id}`)).toBeDefined()
+      expect(await readNote(remote, note.id)).toBeUndefined()
+      expect(await readCard(remote, card.id)).toBeUndefined()
+      expect(await readDeletedEntity(remote, `card:${card.id}`)).toBeDefined()
       await remote.applyRemoteChanges([{ opId: 'stale-card', entityType: 'card', entityId: card.id, action: 'update', occurredAt: '2026-10-01T12:01:00.000Z', payload: { ...card, flag: 1 } }], created.length + deletion.length + 1)
-      expect(await remote.cards.get(card.id)).toBeUndefined()
+      expect(await readCard(remote, card.id)).toBeUndefined()
       await remote.applyRemoteChanges([{ opId: 'stale-review', entityType: 'review', entityId: 'stale-review', action: 'create', occurredAt: '2026-10-01T12:02:00.000Z', payload: { id: 'stale-review', cardId: card.id, deckId: deck.id } }], created.length + deletion.length + 2)
-      expect(await remote.reviewEntries.get('stale-review')).toBeUndefined()
+      expect(await readReviewEntry(remote, 'stale-review')).toBeUndefined()
     } finally {
-      await source.delete()
-      await remote.delete()
+      await source.removeLocalCollection()
+      await remote.removeLocalCollection()
     }
   })
 
@@ -605,7 +624,7 @@ describe('local collection', () => {
     await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
     await expect(collection.latestNoteDeletionUndo()).resolves.toBeNull()
     await expect(collection.undo()).rejects.toThrow(/original deck/i)
-    expect(await collection.notes.get(note.id)).toBeUndefined()
+    expect(await readNote(collection, note.id)).toBeUndefined()
   })
 
   test('note deletion undo refuses a changed note type instead of restoring obsolete cards', async () => {
@@ -617,33 +636,33 @@ describe('local collection', () => {
     await collection.updateNoteType(type.id, { ...type, templates: [{ ...type.templates[0], front: 'Changed {{Term}}' }] })
     await expect(collection.latestNoteDeletionUndo()).resolves.toBeNull()
     await expect(collection.undo()).rejects.toThrow(/note type changed/i)
-    expect(await collection.notes.get(note.id)).toBeUndefined()
+    expect(await readNote(collection, note.id)).toBeUndefined()
   })
 
   test('card maintenance undo restores suspension and burial only before sync', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const deck = await collection.createDeck('Card undo')
     const note = await collection.createBasicNote(deck.id, { front: '戻す', back: 'restore' })
-    const card = (await collection.cards.where('noteId').equals(note.id).first())!
+    const card = (await readCardsForNote(collection, note.id).then(cards => cards[0]))!
     const now = new Date('2026-10-01T12:00:00.000Z')
-    const before = (await collection.cards.get(card.id))!
+    const before = (await readCard(collection, card.id))!
     const pendingBefore = (await collection.pendingOperations()).map((operation) => operation.opId)
 
     await collection.suspendCard(card.id, now)
     await expect(collection.undo()).resolves.toBe(card.id)
-    expect(await collection.cards.get(card.id)).toEqual(before)
+    expect(await readCard(collection, card.id)).toEqual(before)
     expect((await collection.pendingOperations()).map((operation) => operation.opId)).toEqual(pendingBefore)
 
     await collection.buryCard(card.id, now)
     await expect(collection.latestCardMaintenanceUndo()).resolves.toMatchObject({ action: 'bury' })
     await collection.undo()
-    expect(await collection.cards.get(card.id)).toEqual(before)
+    expect(await readCard(collection, card.id)).toEqual(before)
 
     await collection.setCardFlag(card.id, 1, now)
     await collection.beginSyncAttempt()
     await expect(collection.latestCardMaintenanceUndo()).resolves.toBeNull()
     await expect(collection.undo()).rejects.toThrow(/sync attempt/i)
-    expect(await collection.cards.get(card.id)).toMatchObject({ flag: 1 })
+    expect(await readCard(collection, card.id)).toMatchObject({ flag: 1 })
   })
 
   test('preserves and syncs a card flag across review scheduling', async () => {
@@ -653,17 +672,17 @@ describe('local collection', () => {
       const createdAt = new Date('2026-10-01T11:59:00.000Z')
       const deck = await source.createDeck('Flagged', createdAt)
       const note = await source.createBasicNote(deck.id, { front: '旗', back: 'flag' }, createdAt)
-      const card = (await source.cards.where('noteId').equals(note.id).first())!
+      const card = (await readCardsForNote(source, note.id).then(cards => cards[0]))!
       await source.setCardFlag(card.id, 1, new Date('2026-10-01T12:00:00.000Z'))
       await source.answer(card.id, Rating.Good, new Date('2026-10-01T12:01:00.000Z'))
-      expect(await source.cards.get(card.id)).toMatchObject({ flag: 1, reps: 1 })
+      expect(await readCard(source, card.id)).toMatchObject({ flag: 1, reps: 1 })
       const outbound = await source.pendingOperations()
       await remote.applyRemoteChanges(outbound, outbound.length)
-      expect(await remote.cards.get(card.id)).toMatchObject({ flag: 1, reps: 1 })
+      expect(await readCard(remote, card.id)).toMatchObject({ flag: 1, reps: 1 })
       await expect(source.setCardFlag(card.id, 8)).rejects.toThrow('Card flag is invalid')
     } finally {
-      await source.delete()
-      await remote.delete()
+      await source.removeLocalCollection()
+      await remote.removeLocalCollection()
     }
   })
 
@@ -679,21 +698,21 @@ describe('local collection', () => {
       await source.updateDeckOptionGroup(group.id, { ...group, buryNewSiblings: true, buryReviewSiblings: true, leechThreshold: 1, leechAction: 'suspend', leechTag: 'leech' }, new Date('2026-10-01T08:02:00.000Z'))
       const deck = await source.createDeck('Sync policy', { optionGroupId: group.id }, new Date('2026-10-01T08:03:00.000Z'))
       const note = await source.createNote(deck.id, type.id, { [type.fields[0].id]: '猫' }, new Date('2026-10-01T08:04:00.000Z'))
-      const [reviewed, sibling] = await source.cards.where('noteId').equals(note.id).sortBy('id')
+      const [reviewed, sibling] = await readCardsForNote(source, note.id).then(cards => cards.sort((left, right) => left.id.localeCompare(right.id)))
       const now = new Date('2026-10-01T12:00:00.000Z')
-      await source.cards.update(reviewed.id, { state: State.Review, due: now.toISOString(), stability: 2, difficulty: 5, reps: 3, lapses: 0 })
+      await source.updateCardSchedule(reviewed.id, { state: State.Review, due: now.toISOString(), stability: 2, difficulty: 5, reps: 3, lapses: 0 })
       await source.answer(reviewed.id, Rating.Again, now)
       const changes = await source.pendingOperations()
 
       await remote.applyRemoteChanges(changes, changes.length)
 
-      await expect(remote.cards.get(reviewed.id)).resolves.toMatchObject({ manualSuspended: true })
-      await expect(remote.cards.get(sibling.id)).resolves.toMatchObject({ buriedUntil: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 4).toISOString() })
-      await expect(remote.notes.get(note.id)).resolves.toMatchObject({ tags: ['leech'] })
-      await expect(remote.reviewEntries.where('cardId').equals(reviewed.id).count()).resolves.toBe(1)
+      await expect(readCard(remote, reviewed.id)).resolves.toMatchObject({ manualSuspended: true })
+      await expect(readCard(remote, sibling.id)).resolves.toMatchObject({ buriedUntil: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 4).toISOString() })
+      await expect(readNote(remote, note.id)).resolves.toMatchObject({ tags: ['leech'] })
+      await expect(readCardReviewHistory(remote, reviewed.id).then(reviews => reviews.length)).resolves.toBe(1)
     } finally {
-      await source.delete()
-      await remote.delete()
+      await source.removeLocalCollection()
+      await remote.removeLocalCollection()
     }
   })
 
@@ -704,31 +723,31 @@ describe('local collection', () => {
     const second = await collection.createDeck('Second', { optionGroupId: group.id })
     const firstNote = await collection.createBasicNote(first.id, { front: '一', back: 'one' }, new Date('2026-10-01T08:00:00.000Z'))
     const secondNote = await collection.createBasicNote(second.id, { front: '二', back: 'two' }, new Date('2026-10-01T08:00:00.000Z'))
-    const firstCard = (await collection.cards.where('noteId').equals(firstNote.id).first())!
-    const secondCard = (await collection.cards.where('noteId').equals(secondNote.id).first())!
+    const firstCard = (await readCardsForNote(collection, firstNote.id).then(cards => cards[0]))!
+    const secondCard = (await readCardsForNote(collection, secondNote.id).then(cards => cards[0]))!
     const settings: SchedulingSettings = { dailyNewLimit: 5, dailyReviewLimit: 15, desiredRetention: 0.9, learningSteps: ['2h'], relearningSteps: ['30m'], newCardOrder: 'added', reviewCardOrder: 'due' }
 
     await collection.updateDeckOptionGroup(group.id, settings, new Date('2026-10-01T09:00:00.000Z'))
-    await expect(collection.deckOptionGroups.get(group.id)).resolves.toMatchObject(settings)
+    await expect(readDeckOptionGroup(collection, group.id)).resolves.toMatchObject(settings)
     await expect(collection.reviewChoices(firstCard.id, new Date('2026-10-01T10:00:00.000Z'))).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ label: 'Again', interval: '2h' })]))
     await expect(collection.reviewChoices(secondCard.id, new Date('2026-10-01T10:00:00.000Z'))).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ label: 'Again', interval: '2h' })]))
 
     await collection.answer(firstCard.id, Rating.Good, new Date('2026-10-01T10:00:00.000Z'))
-    const scheduled = await collection.cards.get(firstCard.id)
-    const history = await collection.reviewEntries.where('cardId').equals(firstCard.id).toArray()
+    const scheduled = await readCard(collection, firstCard.id)
+    const history = await readCardReviewHistory(collection, firstCard.id)
     await collection.updateDeckOptionGroup(group.id, { ...settings, desiredRetention: 0.95, learningSteps: ['4h'] }, new Date('2026-10-01T11:00:00.000Z'))
 
-    await expect(collection.cards.get(firstCard.id)).resolves.toEqual(scheduled)
-    await expect(collection.reviewEntries.where('cardId').equals(firstCard.id).toArray()).resolves.toEqual(history)
+    await expect(readCard(collection, firstCard.id)).resolves.toEqual(scheduled)
+    await expect(readCardReviewHistory(collection, firstCard.id)).resolves.toEqual(history)
   })
 
   test('syncs Default settings while rejecting a changed protected-group identity', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
-    const defaults = (await collection.deckOptionGroups.get('default'))!
+    const defaults = (await readDeckOptionGroup(collection, 'default'))!
     const changedSettings = { ...defaults, dailyNewLimit: 7, updatedAt: '2026-10-01T10:00:00.000Z' }
 
     await collection.applyRemoteChanges([{ opId: 'default-settings', entityType: 'deckOptionGroup', entityId: defaults.id, action: 'update', occurredAt: changedSettings.updatedAt, payload: changedSettings }], 1)
-    await expect(collection.deckOptionGroups.get(defaults.id)).resolves.toMatchObject({ name: 'Default', protected: true, dailyNewLimit: 7 })
+    await expect(readDeckOptionGroup(collection, defaults.id)).resolves.toMatchObject({ name: 'Default', protected: true, dailyNewLimit: 7 })
     await expect(collection.applyRemoteChanges([{ opId: 'changed-default-name', entityType: 'deckOptionGroup', entityId: defaults.id, action: 'update', occurredAt: '2026-10-01T10:01:00.000Z', payload: { ...changedSettings, name: 'Changed default', updatedAt: '2026-10-01T10:01:00.000Z' } }], 2)).rejects.toThrow(/Default deck option group/i)
   })
 
@@ -741,20 +760,21 @@ describe('local collection', () => {
     await active.updateDeckOptionGroup(childGroup.id, { dailyNewLimit: 2, dailyReviewLimit: 1, desiredRetention: 0.9, learningSteps: ['1m'], relearningSteps: ['10m'], newCardOrder: 'added', reviewCardOrder: 'due' })
     const rootNote = await active.createBasicNote(root.id, { front: 'root', back: 'root' }, new Date('2026-10-01T08:00:00.000Z'))
     const childNotes = await Promise.all(['a', 'b', 'c'].map((front) => active.createBasicNote(child.id, { front, back: front }, new Date('2026-10-01T08:00:00.000Z'))))
-    const childCards = await Promise.all(childNotes.map((note) => active.cards.where('noteId').equals(note.id).first()))
+    const childCards = await Promise.all(childNotes.map((note) => readCardsForNote(active, note.id).then(cards => cards[0])))
     const reviewedNew = childCards[0]!
-    await collection.cards.update(reviewedNew.id, { state: State.Learning, due: '2026-10-02T08:00:00.000Z' })
-    await collection.reviewEntries.add({ id: 'already-new', cardId: reviewedNew.id, deckId: child.id, rating: Rating.Good, state: State.New, due: '2026-10-02T08:00:00.000Z', stability: 1, difficulty: 5, elapsedDays: 0, lastElapsedDays: 0, scheduledDays: 0, learningSteps: 1, reviewedAt: '2026-10-01T09:00:00.000Z' })
+    await collection.updateCardSchedule(reviewedNew.id, { state: State.Learning, due: '2026-10-02T08:00:00.000Z' })
+    await applyRemoteFixtures(collection, 'review', [{ id: 'already-new', cardId: reviewedNew.id, deckId: child.id, rating: Rating.Good, state: State.New, due: '2026-10-02T08:00:00.000Z', stability: 1, difficulty: 5, elapsedDays: 0, lastElapsedDays: 0, scheduledDays: 0, learningSteps: 1, reviewedAt: '2026-10-01T09:00:00.000Z' }])
     const reviewed = directCard('reviewed', child.id, 'reviewed-note', State.Learning, '2026-10-01T08:00:00.000Z')
     const reviewDue = directCard('review-due', child.id, 'review-note', State.Review, '2026-10-01T08:00:00.000Z')
-    await collection.cards.bulkAdd([reviewed, reviewDue])
-    await collection.reviewEntries.add({ id: 'already-review', cardId: reviewed.id, deckId: child.id, rating: Rating.Good, state: State.Review, due: reviewed.due, stability: 1, difficulty: 5, elapsedDays: 0, lastElapsedDays: 0, scheduledDays: 1, learningSteps: 0, reviewedAt: '2026-10-01T09:00:00.000Z' })
+    await applyRemoteFixtures(collection, 'note', [directNote('reviewed-note', child.id), directNote('review-note', child.id)])
+    await applyRemoteFixtures(collection, 'card', [reviewed, reviewDue])
+    await applyRemoteFixtures(collection, 'review', [{ id: 'already-review', cardId: reviewed.id, deckId: child.id, rating: Rating.Good, state: State.Review, due: reviewed.due, stability: 1, difficulty: 5, elapsedDays: 0, lastElapsedDays: 0, scheduledDays: 1, learningSteps: 0, reviewedAt: '2026-10-01T09:00:00.000Z' }])
 
     const queue = await collection.dueCards(root.id, new Date('2026-10-01T12:00:00.000Z'))
 
-    expect(queue.map((card) => card.id)).toEqual(expect.arrayContaining([(await collection.cards.where('noteId').equals(rootNote.id).first())!.id]))
+    expect(queue.map((card) => card.id)).toEqual(expect.arrayContaining([(await readCardsForNote(collection, rootNote.id).then(cards => cards[0]))!.id]))
     expect(queue.filter((card) => card.deckId === child.id && card.state === State.New)).toHaveLength(0)
-    expect(queue).toEqual(expect.arrayContaining([reviewed]))
+    expect(queue).toEqual(expect.arrayContaining([expect.objectContaining({ id: reviewed.id })]))
     expect(queue.find((card) => card.id === reviewDue.id)).toBeUndefined()
   })
 
@@ -770,7 +790,8 @@ describe('local collection', () => {
     const review = directCard('review', deck.id, 'review-note', State.Review, '2026-10-01T08:00:00.000Z')
     const firstNew = directCard('new-first', deck.id, 'new-note', State.New, '2026-10-01T07:00:00.000Z')
     const secondNew = directCard('new-second', deck.id, 'new-note-2', State.New, '2026-10-01T07:01:00.000Z')
-    await collection.cards.bulkAdd([intradayFirst, intradaySecond, interday, review, firstNew, secondNew])
+    await applyRemoteFixtures(collection, 'note', [intradayFirst, intradaySecond, interday, review, firstNew, secondNew].map((card) => directNote(card.noteId, deck.id)))
+    await applyRemoteFixtures(collection, 'card', [intradayFirst, intradaySecond, interday, review, firstNew, secondNew])
 
     await expect(collection.dueCards(deck.id, now)).resolves.toEqual([
       expect.objectContaining({ id: intradayFirst.id }),
@@ -785,7 +806,7 @@ describe('local collection', () => {
     await collection.updateDeckOptionGroup(group.id, { ...group, dailyNewLimit: 0, dailyReviewLimit: 5, interdayLearningOrder: 'mix' })
     expect((await collection.dueCards(deck.id, now)).map((card) => card.id)).toEqual([intradayFirst.id, intradaySecond.id, review.id, interday.id])
 
-    await collection.reviewEntries.add({ id: 'already-interday', cardId: interday.id, deckId: deck.id, rating: Rating.Good, state: State.Learning, due: interday.due, stability: 1, difficulty: 5, elapsedDays: 0, lastElapsedDays: 0, scheduledDays: 1, learningSteps: 1, reviewedAt: now.toISOString() })
+    await applyRemoteFixtures(collection, 'review', [{ id: 'already-interday', cardId: interday.id, deckId: deck.id, rating: Rating.Good, state: State.Learning, due: interday.due, stability: 1, difficulty: 5, elapsedDays: 0, lastElapsedDays: 0, scheduledDays: 1, learningSteps: 1, reviewedAt: now.toISOString() }])
     await collection.updateDeckOptionGroup(group.id, { ...group, dailyNewLimit: 1, dailyReviewLimit: 1, interdayLearningOrder: 'after-reviews' })
     const capped = await collection.dueCards(deck.id, now)
     expect(capped.map((card) => card.id)).toEqual([intradayFirst.id, intradaySecond.id])
@@ -804,13 +825,14 @@ describe('local collection', () => {
     const rootReview = directCard('root-review', root.id, 'root-review-note', State.Review, '2026-10-01T08:00:00.000Z')
     const childInterday = { ...directCard('child-interday', child.id, 'child-interday-note', State.Relearning, '2026-10-01T09:00:00.000Z'), scheduledDays: 1 }
     const childReview = directCard('child-review', child.id, 'child-review-note', State.Review, '2026-10-01T08:00:00.000Z')
-    await collection.cards.bulkAdd([rootInterday, rootReview, childInterday, childReview])
+    await applyRemoteFixtures(collection, 'note', [rootInterday, rootReview, childInterday, childReview].map((card) => directNote(card.noteId, card.deckId)))
+    await applyRemoteFixtures(collection, 'card', [rootInterday, rootReview, childInterday, childReview])
 
     const queue = await collection.dueCards(root.id, now)
 
     expect(queue.map((card) => card.id)).toEqual([rootInterday.id])
-    await expect(collection.dueCards(child.id, now)).resolves.toEqual([childInterday])
-    await collection.reviewEntries.add({ id: 'child-reviewed-today', cardId: childReview.id, deckId: child.id, rating: Rating.Good, state: State.Review, due: childReview.due, stability: 10, difficulty: 5, elapsedDays: 1, lastElapsedDays: 1, scheduledDays: 1, learningSteps: 0, reviewedAt: now.toISOString() })
+    await expect(collection.dueCards(child.id, now)).resolves.toEqual([expect.objectContaining({ id: childInterday.id })])
+    await applyRemoteFixtures(collection, 'review', [{ id: 'child-reviewed-today', cardId: childReview.id, deckId: child.id, rating: Rating.Good, state: State.Review, due: childReview.due, stability: 10, difficulty: 5, elapsedDays: 1, lastElapsedDays: 1, scheduledDays: 1, learningSteps: 0, reviewedAt: now.toISOString() }])
     await expect(collection.dueCards(root.id, now)).resolves.toEqual([])
   })
 
@@ -822,7 +844,8 @@ describe('local collection', () => {
     const now = new Date('2026-10-01T12:00:00.000Z')
     const reviews = [1, 2, 3, 4, 5].map((index) => directCard(`review-${index}`, deck.id, `review-note-${index}`, State.Review, `2026-10-01T0${index}:00:00.000Z`))
     const newCards = [1, 2].map((index) => directCard(`new-${index}`, deck.id, `new-note-${index}`, State.New, `2026-10-01T0${index}:30:00.000Z`))
-    await collection.cards.bulkAdd([...reviews, ...newCards])
+    await applyRemoteFixtures(collection, 'note', [...reviews, ...newCards].map((card) => directNote(card.noteId, deck.id)))
+    await applyRemoteFixtures(collection, 'card', [...reviews, ...newCards])
 
     const defaultMix = await collection.dueCards(deck.id, now)
     expect(defaultMix.map((card) => card.state === State.New ? 'new' : 'review')).toEqual(['review', 'review', 'new', 'review', 'review', 'new', 'review'])
@@ -875,16 +898,16 @@ describe('local collection', () => {
     const parentNote = await collection.createBasicNote(parent.id, { front: '読む', back: 'read' })
     const childNote = await collection.createBasicNote(child.id, { front: '書く', back: 'write' })
     const grandchildNote = await collection.createBasicNote(grandchild.id, { front: '泳ぐ', back: 'swim' })
-    const parentCard = (await collection.cards.where('noteId').equals(parentNote.id).first())!
-    const childCard = (await collection.cards.where('noteId').equals(childNote.id).first())!
-    const grandchildCard = (await collection.cards.where('noteId').equals(grandchildNote.id).first())!
-    await collection.cards.update(childCard.id, { state: State.Learning })
-    await collection.cards.update(grandchildCard.id, { state: State.Review })
-    await collection.reviewEntries.bulkPut([
+    const parentCard = (await readCardsForNote(collection, parentNote.id).then(cards => cards[0]))!
+    const childCard = (await readCardsForNote(collection, childNote.id).then(cards => cards[0]))!
+    const grandchildCard = (await readCardsForNote(collection, grandchildNote.id).then(cards => cards[0]))!
+    await collection.updateCardSchedule(childCard.id, { state: State.Learning })
+    await collection.updateCardSchedule(grandchildCard.id, { state: State.Review })
+    await applyRemoteFixtures(collection, 'review', [
       { id: 'parent-review', cardId: parentCard.id, deckId: parent.id },
       { id: 'grandchild-review', cardId: grandchildCard.id, deckId: grandchild.id },
-    ] as never[])
-    await collection.settings.put({ key: customStudyKey, value: [{ id: 'session', name: 'Practice', cardIds: [parentCard.id, grandchildCard.id] }] })
+    ])
+    await createCustomStudy(collection, { name: 'Practice', search: '読む OR 泳ぐ', limit: 2, order: 'added', reschedule: false }, new Date('2026-10-01T12:00:00.000Z'))
 
     const summaries = await collection.summaries()
     const byId = new Map(summaries.map((summary) => [summary.id, summary]))
@@ -934,13 +957,13 @@ describe('local collection', () => {
     const deck = await collection.createDeck('Local day', { optionGroupId: group.id })
     const first = await collection.createBasicNote(deck.id, { front: 'first', back: 'first' })
     const second = await collection.createBasicNote(deck.id, { front: 'second', back: 'second' })
-    const firstCard = (await collection.cards.where('noteId').equals(first.id).first())!
-    const secondCard = (await collection.cards.where('noteId').equals(second.id).first())!
+    const firstCard = (await readCardsForNote(collection, first.id).then(cards => cards[0]))!
+    const secondCard = (await readCardsForNote(collection, second.id).then(cards => cards[0]))!
     const rollover = new Date(2026, 9, 1, 4, 0, 0, 0)
     const previousLocalDay = new Date(rollover.getTime() - 15 * 60 * 1000)
     const currentLocalDay = new Date(rollover.getTime() + 15 * 60 * 1000)
-    await collection.cards.update(firstCard.id, { state: State.Learning, due: new Date(currentLocalDay.getTime() + 60 * 60 * 1000).toISOString() })
-    await collection.reviewEntries.add({ id: 'previous-local-day', cardId: firstCard.id, deckId: deck.id, rating: Rating.Good, state: State.New, due: firstCard.due, stability: 1, difficulty: 5, elapsedDays: 0, lastElapsedDays: 0, scheduledDays: 0, learningSteps: 1, reviewedAt: previousLocalDay.toISOString() })
+    await collection.updateCardSchedule(firstCard.id, { state: State.Learning, due: new Date(currentLocalDay.getTime() + 60 * 60 * 1000).toISOString() })
+    await applyRemoteFixtures(collection, 'review', [{ id: 'previous-local-day', cardId: firstCard.id, deckId: deck.id, rating: Rating.Good, state: State.New, due: firstCard.due, stability: 1, difficulty: 5, elapsedDays: 0, lastElapsedDays: 0, scheduledDays: 0, learningSteps: 1, reviewedAt: previousLocalDay.toISOString() }])
 
     await expect(collection.dueCards(deck.id, currentLocalDay)).resolves.toEqual([expect.objectContaining({ id: secondCard.id })])
   }, 20_000)
@@ -948,16 +971,17 @@ describe('local collection', () => {
   test('uses deck identity to make parent queues deterministic when child groups use different orders', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const timestamp = '2026-10-01T00:00:00.000Z'
-    await collection.deckOptionGroups.bulkAdd([
+    await applyRemoteFixtures(collection, 'deckOptionGroup', [
       { id: 'a-due-options', name: 'Due', protected: false, dailyNewLimit: 10, dailyReviewLimit: 10, desiredRetention: 0.9, learningSteps: ['1m'], relearningSteps: ['10m'], newCardOrder: 'added', newCardGatherOrder: 'deck', newCardSortOrder: 'template', reviewCardOrder: 'due', newReviewOrder: 'mix', interdayLearningOrder: 'before-reviews', buryNewSiblings: false, buryReviewSiblings: false, buryInterdayLearningSiblings: false, leechThreshold: 8, leechAction: 'suspend', leechTag: 'leech', createdAt: timestamp, updatedAt: timestamp },
       { id: 'z-random-options', name: 'Random', protected: false, dailyNewLimit: 10, dailyReviewLimit: 10, desiredRetention: 0.9, learningSteps: ['1m'], relearningSteps: ['10m'], newCardOrder: 'random', newCardGatherOrder: 'random-cards', newCardSortOrder: 'random', reviewCardOrder: 'random', newReviewOrder: 'mix', interdayLearningOrder: 'before-reviews', buryNewSiblings: false, buryReviewSiblings: false, buryInterdayLearningSiblings: false, leechThreshold: 8, leechAction: 'suspend', leechTag: 'leech', createdAt: timestamp, updatedAt: timestamp },
     ])
-    await collection.decks.bulkAdd([
+    await applyRemoteFixtures(collection, 'deck', [
       { id: 'parent', name: 'Parent', parentId: null, optionGroupId: 'default', createdAt: timestamp, updatedAt: timestamp },
       { id: 'a-due-deck', name: 'Due', parentId: 'parent', optionGroupId: 'a-due-options', createdAt: timestamp, updatedAt: timestamp },
       { id: 'z-random-deck', name: 'Random', parentId: 'parent', optionGroupId: 'z-random-options', createdAt: timestamp, updatedAt: timestamp },
     ])
-    await collection.cards.bulkAdd([
+    await applyRemoteFixtures(collection, 'note', ['a-note', 'z-note'].map((id) => ({ id, deckId: id === 'a-note' ? 'a-due-deck' : 'z-random-deck', type: 'basic', typeId: BASIC_NOTE_TYPE_ID, fields: { front: id, back: id }, createdAt: timestamp, updatedAt: timestamp })))
+    await applyRemoteFixtures(collection, 'card', [
       directCard('a-new', 'a-due-deck', 'a-note', State.New, '2026-10-01T09:00:00.000Z'),
       directCard('z', 'z-random-deck', 'z-note', State.New, '2026-10-01T08:00:00.000Z'),
     ])
@@ -972,16 +996,18 @@ describe('local collection', () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const group = { id: 'ordering-group', name: 'Ordering', protected: false, dailyNewLimit: 10, dailyReviewLimit: 10, desiredRetention: 0.9, learningSteps: ['1m'], relearningSteps: ['10m'], newCardOrder: 'added' as const, newCardGatherOrder: 'deck' as const, newCardSortOrder: 'template' as const, reviewCardOrder: 'due' as const, newReviewOrder: 'mix' as const, interdayLearningOrder: 'before-reviews' as const, buryNewSiblings: false, buryReviewSiblings: false, buryInterdayLearningSiblings: false, leechThreshold: 8, leechAction: 'suspend' as const, leechTag: 'leech', createdAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-01T00:00:00.000Z' }
     const deck = { id: 'ordering-deck', name: 'Ordered', parentId: null, optionGroupId: group.id, createdAt: group.createdAt, updatedAt: group.updatedAt }
-    await collection.deckOptionGroups.add(group)
-    await collection.decks.add(deck)
-    await collection.notes.bulkAdd([
-      { id: 'late', deckId: deck.id, type: 'basic', typeId: 'basic', fields: {}, createdAt: '2026-10-01T09:00:00.000Z', updatedAt: '2026-10-01T09:00:00.000Z' },
-      { id: 'early', deckId: deck.id, type: 'basic', typeId: 'basic', fields: {}, createdAt: '2026-10-01T08:00:00.000Z', updatedAt: '2026-10-01T08:00:00.000Z' },
-      { id: 'middle', deckId: deck.id, type: 'basic', typeId: 'basic', fields: {}, createdAt: '2026-10-01T08:30:00.000Z', updatedAt: '2026-10-01T08:30:00.000Z' },
-      { id: 'fourth', deckId: deck.id, type: 'basic', typeId: 'basic', fields: {}, createdAt: '2026-10-01T08:45:00.000Z', updatedAt: '2026-10-01T08:45:00.000Z' },
-      { id: 'fifth', deckId: deck.id, type: 'basic', typeId: 'basic', fields: {}, createdAt: '2026-10-01T08:50:00.000Z', updatedAt: '2026-10-01T08:50:00.000Z' },
-    ])
-    await collection.cards.bulkAdd([
+    await applyRemoteFixtures(collection, 'deckOptionGroup', [group])
+    await applyRemoteFixtures(collection, 'deck', [deck])
+    const orderingNotes = [
+      directNote('late', deck.id, '2026-10-01T09:00:00.000Z'),
+      directNote('early', deck.id, '2026-10-01T08:00:00.000Z'),
+      directNote('middle', deck.id, '2026-10-01T08:30:00.000Z'),
+      directNote('fourth', deck.id, '2026-10-01T08:45:00.000Z'),
+      directNote('fifth', deck.id, '2026-10-01T08:50:00.000Z'),
+    ]
+    const reviewNotes = ['review-late-note', 'review-early-note', 'review-middle-note', 'review-fourth-note', 'review-fifth-note']
+    await applyRemoteFixtures(collection, 'note', [...orderingNotes, ...reviewNotes.map((id) => ({ id, deckId: deck.id, type: 'basic', typeId: BASIC_NOTE_TYPE_ID, fields: { front: id, back: id }, createdAt: group.createdAt, updatedAt: group.updatedAt }))])
+    await applyRemoteFixtures(collection, 'card', [
       directCard('new-late', deck.id, 'late', State.New, '2026-10-01T09:00:00.000Z'),
       directCard('new-early', deck.id, 'early', State.New, '2026-10-01T08:00:00.000Z'),
       directCard('new-middle', deck.id, 'middle', State.New, '2026-10-01T08:30:00.000Z'),
@@ -1012,7 +1038,7 @@ describe('local collection', () => {
     const child = await collection.createDeck('Words', { parentId: parent.id })
     const destination = await collection.createDeck('Sentences')
     const note = await collection.createBasicNote(child.id, { front: '猫', back: 'cat' })
-    const card = (await collection.cards.where('noteId').equals(note.id).first())!
+    const card = (await readCardsForNote(collection, note.id).then(cards => cards[0]))!
     await collection.answer(card.id, Rating.Good, new Date('2026-10-01T12:00:00Z'))
 
     await collection.moveNote(note.id, destination.id, new Date('2026-10-02T00:00:00Z'))
@@ -1021,9 +1047,9 @@ describe('local collection', () => {
       payload: { id: 'historical-review', cardId: card.id, deckId: child.id, rating: Rating.Good, state: 0, due: '2026-10-01T12:01:00Z', stability: 1, difficulty: 1, elapsedDays: 0, lastElapsedDays: 0, scheduledDays: 0, learningSteps: 0, reviewedAt: '2026-10-01T12:01:00Z' },
     }], 1)
 
-    await expect(collection.notes.get(note.id)).resolves.toMatchObject({ deckId: destination.id })
-    await expect(collection.cards.get(card.id)).resolves.toMatchObject({ id: card.id, deckId: destination.id, reps: 1 })
-    await expect(collection.reviewEntries.where('cardId').equals(card.id).toArray()).resolves.toEqual(expect.arrayContaining([
+    await expect(readNote(collection, note.id)).resolves.toMatchObject({ deckId: destination.id })
+    await expect(readCard(collection, card.id)).resolves.toMatchObject({ id: card.id, deckId: destination.id, reps: 1 })
+    await expect(readCardReviewHistory(collection, card.id)).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({ deckId: child.id }),
       expect.objectContaining({ id: 'historical-review', deckId: child.id }),
     ]))
@@ -1054,11 +1080,11 @@ describe('local collection', () => {
     await collection.assignDeckOptionGroup(source.id, 'default')
     await collection.deleteDeck(source.id, { mode: 'relocate', destinationDeckId: target.id }, new Date('2026-10-02T00:00:00Z'))
 
-    await expect(collection.decks.get(source.id)).resolves.toBeUndefined()
-    await expect(collection.decks.get(child.id)).resolves.toMatchObject({ parentId: target.id })
-    await expect(collection.notes.get(note.id)).resolves.toMatchObject({ deckId: target.id })
+    await expect(readDeck(collection, source.id)).resolves.toBeUndefined()
+    await expect(readDeck(collection, child.id)).resolves.toMatchObject({ parentId: target.id })
+    await expect(readNote(collection, note.id)).resolves.toMatchObject({ deckId: target.id })
     await collection.deleteDeckOptionGroup(custom.id)
-    await expect(collection.deckOptionGroups.get(custom.id)).resolves.toBeUndefined()
+    await expect(readDeckOptionGroup(collection, custom.id)).resolves.toBeUndefined()
   })
 
   test('rejects remote deck cycles, missing option groups, and cards that do not match a moved note deck', async () => {
@@ -1066,7 +1092,7 @@ describe('local collection', () => {
     const root = await collection.createDeck('Root')
     const child = await collection.createDeck('Child', { parentId: root.id })
     const note = await collection.createBasicNote(child.id, { front: '鳥', back: 'bird' })
-    const card = (await collection.cards.where('noteId').equals(note.id).first())!
+    const card = (await readCardsForNote(collection, note.id).then(cards => cards[0]))!
     const changedRoot = { ...root, parentId: child.id, updatedAt: '2026-10-02T00:00:00Z' }
     await expect(collection.applyRemoteChanges([{ opId: 'cycle', entityType: 'deck', entityId: root.id, action: 'update', occurredAt: changedRoot.updatedAt, payload: changedRoot }], 1)).rejects.toThrow(/cycle/i)
     const badGroup = { ...child, optionGroupId: 'missing-group', updatedAt: '2026-10-02T00:01:00Z' }
@@ -1088,8 +1114,8 @@ describe('local collection', () => {
       { opId: 'remote-group', entityType: 'deckOptionGroup', entityId: group.id, action: 'create', occurredAt: timestamp, payload: group },
     ], 3)
 
-    await expect(collection.decks.get(child.id)).resolves.toMatchObject({ parentId: parent.id, optionGroupId: group.id })
-    await expect(collection.deckOptionGroups.get(group.id)).resolves.toMatchObject(group)
+    await expect(readDeck(collection, child.id)).resolves.toMatchObject({ parentId: parent.id, optionGroupId: group.id })
+    await expect(readDeckOptionGroup(collection, group.id)).resolves.toMatchObject(group)
   })
 
   test('rejects inbound notes, cards, reviews, and media with missing owners', async () => {
@@ -1104,7 +1130,7 @@ describe('local collection', () => {
     await expect(collection.applyRemoteChanges([{ opId: 'orphan-card', entityType: 'card', entityId: card.id, action: 'create', occurredAt: timestamp, payload: card }], 1)).rejects.toThrow(/note/i)
     await expect(collection.applyRemoteChanges([{ opId: 'orphan-review', entityType: 'review', entityId: review.id, action: 'create', occurredAt: timestamp, payload: review }], 1)).rejects.toThrow(/card/i)
     await expect(collection.applyRemoteChanges([{ opId: 'orphan-media', entityType: 'noteMedia', entityId: media.id, action: 'create', occurredAt: timestamp, payload: media }], 1)).rejects.toThrow(/note/i)
-    await expect(collection.receivedOperations.count()).resolves.toBe(0)
+    await expect(readReceivedOperationCount(collection)).resolves.toBe(0)
   })
 
   test('suppresses a historical create-and-subtree-delete batch without orphaned records', async () => {
@@ -1127,12 +1153,12 @@ describe('local collection', () => {
       { opId: 'history-media-create', entityType: 'noteMedia', entityId: media.id, action: 'create', occurredAt: timestamp, payload: media },
     ], 7)
 
-    await expect(collection.decks.count()).resolves.toBe(0)
-    await expect(collection.notes.count()).resolves.toBe(0)
-    await expect(collection.cards.count()).resolves.toBe(0)
-    await expect(collection.reviewEntries.count()).resolves.toBe(0)
-    await expect(collection.noteMedia.count()).resolves.toBe(0)
-    await expect(collection.receivedOperations.count()).resolves.toBe(7)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.decks.length)).resolves.toBe(0)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.notes.length)).resolves.toBe(0)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.cards.length)).resolves.toBe(0)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.reviews.length)).resolves.toBe(0)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.references.length)).resolves.toBe(0)
+    await expect(readReceivedOperationCount(collection)).resolves.toBe(7)
   })
 
   test('deletes an entire deck subtree and rejects a delayed child note update', async () => {
@@ -1142,13 +1168,13 @@ describe('local collection', () => {
     const note = await collection.createBasicNote(child.id, { front: '木', back: 'tree' })
     await collection.deleteDeck(root.id, { mode: 'delete-subtree' }, new Date('2026-10-02T00:00:00Z'))
 
-    await expect(collection.decks.get(root.id)).resolves.toBeUndefined()
-    await expect(collection.decks.get(child.id)).resolves.toBeUndefined()
-    await expect(collection.notes.get(note.id)).resolves.toBeUndefined()
-    await expect(collection.deletedEntities.get(`deck:${child.id}`)).resolves.toMatchObject({ entityType: 'deck' })
-    await expect(collection.deletedEntities.get(`note:${note.id}`)).resolves.toMatchObject({ entityType: 'note' })
+    await expect(readDeck(collection, root.id)).resolves.toBeUndefined()
+    await expect(readDeck(collection, child.id)).resolves.toBeUndefined()
+    await expect(readNote(collection, note.id)).resolves.toBeUndefined()
+    await expect(readDeletedEntity(collection, `deck:${child.id}`)).resolves.toMatchObject({ entityType: 'deck' })
+    await expect(readDeletedEntity(collection, `note:${note.id}`)).resolves.toMatchObject({ entityType: 'note' })
     await collection.applyRemoteChanges([{ opId: 'late-child-note', entityType: 'note', entityId: note.id, action: 'update', occurredAt: '2026-10-02T00:01:00Z', payload: { ...note, updatedAt: '2026-10-02T00:01:00Z' } }], 1)
-    await expect(collection.notes.get(note.id)).resolves.toBeUndefined()
+    await expect(readNote(collection, note.id)).resolves.toBeUndefined()
   })
 
   test('moves referenced option groups before their delete operation on another collection', async () => {
@@ -1166,10 +1192,10 @@ describe('local collection', () => {
       const changes = await collection.pendingOperations()
       await remote.applyRemoteChanges(changes, initial.length + changes.length)
 
-      await expect(remote.decks.get(deck.id)).resolves.toMatchObject({ optionGroupId: replacement.id })
-      await expect(remote.deckOptionGroups.get(source.id)).resolves.toBeUndefined()
+      await expect(readDeck(remote, deck.id)).resolves.toMatchObject({ optionGroupId: replacement.id })
+      await expect(readDeckOptionGroup(remote, source.id)).resolves.toBeUndefined()
     } finally {
-      await remote.delete()
+      await remote.removeLocalCollection()
     }
   })
 
@@ -1181,8 +1207,8 @@ describe('local collection', () => {
     await old.table('notes').add({ id: 'legacy-note', deckId: 'deck-1', type: 'custom', typeId: 'legacy-type', fields: { 'legacy-field': '猫' }, createdAt: '2026-01-01', updatedAt: '2026-01-01' })
     old.close()
     collection = createCollection(databaseName)
-    const type = await collection.noteTypes.get('legacy-type')
-    const note = await collection.notes.get('legacy-note')
+    const type = await readNoteType(collection, 'legacy-type')
+    const note = await readNote(collection, 'legacy-note')
     expect(type && note && collection.cardGenerationStatus(type, note.fields).eligible).toHaveLength(1)
     expect(type && note && collection.tryCardGenerationStatus(type, note.fields)).toMatchObject({ ok: true })
     const renamed = await collection.updateNoteType('legacy-type', { fields: [{ id: 'legacy-field', name: 'Prompt' }] })
@@ -1197,15 +1223,15 @@ describe('local collection', () => {
     const note = await collection.createNote(deck.id, type.id, { [field]: '{{c1::東京}}と{{c3::大阪}}、{{c1::日本}}' })
     const firstId = `${note.id}:${type.templates[0].id}:c1`
     const thirdId = `${note.id}:${type.templates[0].id}:c3`
-    expect((await collection.cards.where('noteId').equals(note.id).toArray()).map((card) => card.id).sort()).toEqual([firstId, thirdId].sort())
+    expect((await readCardsForNote(collection, note.id)).map((card) => card.id).sort()).toEqual([firstId, thirdId].sort())
     await collection.answer(thirdId, Rating.Good, new Date('2026-10-01T12:00:00Z'))
     await collection.updateNote(note.id, { [field]: '{{c1::東京}}と大阪' })
-    await expect(collection.cards.get(thirdId)).resolves.toMatchObject({ suspended: true, reps: 1, clozeOrdinal: 3 })
+    await expect(readCard(collection, thirdId)).resolves.toMatchObject({ suspended: true, reps: 1, clozeOrdinal: 3 })
     await collection.updateNote(note.id, { [field]: '{{c3::京都}}と{{c1::東京}}' })
-    await expect(collection.cards.get(thirdId)).resolves.toMatchObject({ suspended: false, reps: 1, clozeOrdinal: 3 })
-    await expect(collection.cards.get(firstId)).resolves.toMatchObject({ reps: 0 })
-    expect((await collection.cards.get(firstId))?.suspended).toBeFalsy()
-    await expect(collection.cards.where('noteId').equals(note.id).count()).resolves.toBe(2)
+    await expect(readCard(collection, thirdId)).resolves.toMatchObject({ suspended: false, reps: 1, clozeOrdinal: 3 })
+    await expect(readCard(collection, firstId)).resolves.toMatchObject({ reps: 0 })
+    expect((await readCard(collection, firstId))?.suspended).toBeFalsy()
+    await expect(readCardsForNote(collection, note.id).then(cards => cards.length)).resolves.toBe(2)
   })
 
   test('ignores inbound card updates and reviews for removed cloze ordinals', async () => {
@@ -1215,12 +1241,12 @@ describe('local collection', () => {
     const field = type.fields[0].id
     const note = await collection.createNote(deck.id, type.id, { [field]: '{{c1::東京}} {{c2::大阪}}' })
     const secondId = `${note.id}:${type.templates[0].id}:c2`
-    const stale = await collection.cards.get(secondId)
+    const stale = await readCard(collection, secondId)
     await collection.updateNote(note.id, { [field]: '{{c1::東京}} 大阪' })
     await collection.applyRemoteChanges([{ opId: 'stale-cloze-card', entityType: 'card', entityId: secondId, action: 'update', occurredAt: '2026-10-02', payload: stale }], 1)
-    await expect(collection.cards.get(secondId)).resolves.toMatchObject({ suspended: true })
+    await expect(readCard(collection, secondId)).resolves.toMatchObject({ suspended: true })
     await collection.applyRemoteChanges([{ opId: 'stale-cloze-review', entityType: 'review', entityId: 'review-1', action: 'create', occurredAt: '2026-10-02', payload: { id: 'review-1', cardId: secondId, deckId: deck.id } }], 2)
-    await expect(collection.reviewEntries.get('review-1')).resolves.toBeUndefined()
+    await expect(readReviewEntry(collection, 'review-1')).resolves.toBeUndefined()
   })
 
   test('rejects malformed cloze type definitions and preserves filtered references on field rename', async () => {
@@ -1242,8 +1268,8 @@ describe('local collection', () => {
     const note = await collection.createNote(deck.id, type.id, { [field]: '{{c1::猫}}' })
     expect(collection.tryCardGenerationStatus(type, { [field]: '{{c2::unclosed' })).toMatchObject({ ok: false, error: expect.stringMatching(/Unclosed cloze deletion/) })
     await expect(collection.updateNote(note.id, { [field]: '{{c2::unclosed' })).rejects.toThrow(/Unclosed cloze deletion/)
-    await expect(collection.notes.get(note.id)).resolves.toMatchObject({ fields: { [field]: '{{c1::猫}}' } })
-    await expect(collection.cards.where('noteId').equals(note.id).count()).resolves.toBe(1)
+    await expect(readNote(collection, note.id)).resolves.toMatchObject({ fields: { [field]: '{{c1::猫}}' } })
+    await expect(readCardsForNote(collection, note.id).then(cards => cards.length)).resolves.toBe(1)
   })
 
   test('replays cloze type, note, and generated cards on another collection', async () => {
@@ -1256,10 +1282,10 @@ describe('local collection', () => {
       const operations = await collection.pendingOperations()
       await remote.applyRemoteChanges(operations, operations.length)
       await remote.applyRemoteChanges(operations, operations.length)
-      expect(await remote.cards.where('noteId').equals(note.id).toArray()).toEqual(await collection.cards.where('noteId').equals(note.id).toArray())
-      await expect(remote.receivedOperations.count()).resolves.toBe(operations.length)
+      expect(await readCardsForNote(remote, note.id)).toEqual(await readCardsForNote(collection, note.id))
+      await expect(readReceivedOperationCount(remote)).resolves.toBe(operations.length)
     } finally {
-      await remote.delete()
+      await remote.removeLocalCollection()
     }
   })
 
@@ -1279,11 +1305,11 @@ describe('local collection', () => {
       await remote.updateNote(note.id, { [field]: '{{c1::猫}} {{c2::犬}}！' }, new Date('2026-10-03T00:00:00Z'))
       const retained = await remote.pendingOperations()
       await remote.applyRemoteChanges([...removal, ...retained], initial.length + removal.length + retained.length)
-      await expect(remote.notes.get(note.id)).resolves.toMatchObject({ fields: { [field]: '{{c1::猫}} {{c2::犬}}！' } })
-      await expect(remote.cards.get(`${note.id}:${type.templates[0].id}:c2`)).resolves.toMatchObject({ suspended: false })
+      await expect(readNote(remote, note.id)).resolves.toMatchObject({ fields: { [field]: '{{c1::猫}} {{c2::犬}}！' } })
+      await expect(readCard(remote, `${note.id}:${type.templates[0].id}:c2`)).resolves.toMatchObject({ suspended: false })
       await expect(remote.pendingOperations()).resolves.toHaveLength(retained.length)
     } finally {
-      await remote.delete()
+      await remote.removeLocalCollection()
     }
   })
 
@@ -1297,10 +1323,10 @@ describe('local collection', () => {
     old.close()
 
     collection = createCollection(databaseName)
-    await expect(collection.noteTypes.get(BASIC_NOTE_TYPE_ID)).resolves.toMatchObject({ name: 'Basic', protected: true })
-    await expect(collection.notes.get('note-1')).resolves.toMatchObject({ typeId: BASIC_NOTE_TYPE_ID, fields: { front: '猫', back: 'cat' } })
-    await expect(collection.cards.get('legacy-card')).resolves.toMatchObject({ templateId: 'basic', reps: 2 })
-    await expect(collection.reviewEntries.get('review-1')).resolves.toMatchObject({ cardId: 'legacy-card' })
+    await expect(readNoteType(collection, BASIC_NOTE_TYPE_ID)).resolves.toMatchObject({ name: 'Basic', protected: true })
+    await expect(readNote(collection, 'note-1')).resolves.toMatchObject({ typeId: BASIC_NOTE_TYPE_ID, fields: { front: '猫', back: 'cat' } })
+    await expect(readCard(collection, 'legacy-card')).resolves.toMatchObject({ templateId: 'basic', reps: 2 })
+    await expect(readReviewEntry(collection, 'review-1')).resolves.toMatchObject({ cardId: 'legacy-card' })
     await expect(collection.pendingOperations()).resolves.toHaveLength(0)
   })
 
@@ -1313,12 +1339,12 @@ describe('local collection', () => {
     ] })
     const note = await collection.createNote(deck.id, type.id, { [type.fields[0].id]: '猫', [type.fields[1].id]: 'cat' })
     expect(note.fields).toEqual({ [type.fields[0].id]: '猫', [type.fields[1].id]: 'cat' })
-    const cards = await collection.cards.where('noteId').equals(note.id).toArray()
+    const cards = await readCardsForNote(collection, note.id)
     expect(cards.map((card) => card.id).sort()).toEqual(type.templates.map((template) => `${note.id}:${template.id}`).sort())
     await collection.answer(cards[0].id, Rating.Good, new Date('2026-10-01T12:00:00Z'))
     await collection.updateNote(note.id, { [type.fields[0].id]: '犬', [type.fields[1].id]: 'dog' })
-    await expect(collection.cards.get(cards[0].id)).resolves.toMatchObject({ reps: 1, templateId: cards[0].templateId })
-    await expect(collection.cards.where('noteId').equals(note.id).count()).resolves.toBe(2)
+    await expect(readCard(collection, cards[0].id)).resolves.toMatchObject({ reps: 1, templateId: cards[0].templateId })
+    await expect(readCardsForNote(collection, note.id).then(cards => cards.length)).resolves.toBe(2)
     await expect(collection.pendingOperations()).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({ entityType: 'noteType', entityId: type.id, action: 'create' }),
     ]))
@@ -1332,7 +1358,7 @@ describe('local collection', () => {
       { name: 'Hint', front: '<b>{{hint}}</b>', back: 'answer', css: '' },
     ] })
     const note = await collection.createNote(deck.id, type.id, { [type.fields[0].id]: '猫', [type.fields[1].id]: '' })
-    await expect(collection.cards.where('noteId').equals(note.id).count()).resolves.toBe(1)
+    await expect(readCardsForNote(collection, note.id).then(cards => cards.length)).resolves.toBe(1)
     expect(collection.cardGenerationStatus(type, note.fields).skipped).toEqual([{ templateId: type.templates[1].id, reason: 'Front has no visible field content' }])
   })
 
@@ -1344,7 +1370,7 @@ describe('local collection', () => {
     ] })
     const note = await collection.createNote(deck.id, type.id, { [type.fields[0].id]: '猫' })
     expect(collection.cardGenerationStatus(type, note.fields).eligible).toHaveLength(1)
-    await expect(collection.cards.where('noteId').equals(note.id).count()).resolves.toBe(1)
+    await expect(readCardsForNote(collection, note.id).then(cards => cards.length)).resolves.toBe(1)
     await expect(collection.dueCards(deck.id)).resolves.toHaveLength(1)
   })
 
@@ -1358,10 +1384,10 @@ describe('local collection', () => {
     const cardId = `${note.id}:${type.templates[0].id}`
     await collection.answer(cardId, Rating.Good, new Date('2026-10-01T12:00:00Z'))
     await collection.updateNote(note.id, { [type.fields[0].id]: '' })
-    await expect(collection.cards.get(cardId)).resolves.toMatchObject({ suspended: true, reps: 1 })
+    await expect(readCard(collection, cardId)).resolves.toMatchObject({ suspended: true, reps: 1 })
     await expect(collection.dueCards(deck.id)).resolves.toHaveLength(0)
     await collection.updateNote(note.id, { [type.fields[0].id]: 'restored' })
-    await expect(collection.cards.get(cardId)).resolves.toMatchObject({ id: cardId, templateId: type.templates[0].id, suspended: false, reps: 1 })
+    await expect(readCard(collection, cardId)).resolves.toMatchObject({ id: cardId, templateId: type.templates[0].id, suspended: false, reps: 1 })
   })
 
   test('keeps field values under stable IDs when display metadata is renamed', async () => {
@@ -1373,12 +1399,12 @@ describe('local collection', () => {
     const fieldId = type.fields[0].id
     const note = await collection.createNote(deck.id, type.id, { [fieldId]: '猫' })
     const renamed = { ...type, fields: [{ ...type.fields[0], name: 'Term' }], templates: [{ ...type.templates[0], front: '{{Term}}' }] }
-    await collection.noteTypes.put(renamed)
+    await collection.updateNoteType(type.id, { fields: renamed.fields, templates: renamed.templates })
 
     expect(collection.cardGenerationStatus(renamed, note.fields).eligible).toHaveLength(1)
     await collection.updateNote(note.id, { [fieldId]: '犬' })
-    await expect(collection.notes.get(note.id)).resolves.toMatchObject({ fields: { [fieldId]: '犬' } })
-    await expect(collection.cards.where('noteId').equals(note.id).count()).resolves.toBe(1)
+    await expect(readNote(collection, note.id)).resolves.toMatchObject({ fields: { [fieldId]: '犬' } })
+    await expect(readCardsForNote(collection, note.id).then(cards => cards.length)).resolves.toBe(1)
   })
 
   test('renames and reorders fields without moving values or resetting a reviewed card', async () => {
@@ -1393,9 +1419,9 @@ describe('local collection', () => {
 
     expect(updated.name).toBe('Vocabulary')
     expect(updated.fields.map((field) => field.id)).toEqual([type.fields[1].id, type.fields[0].id])
-    await expect(collection.notes.get(note.id)).resolves.toMatchObject({ fields: { [type.fields[0].id]: '猫', [type.fields[1].id]: 'cat' } })
-    expect(await collection.cards.get(cardId)).toMatchObject({ reps: 1 })
-    expect((await collection.cards.get(cardId))?.suspended).toBeFalsy()
+    await expect(readNote(collection, note.id)).resolves.toMatchObject({ fields: { [type.fields[0].id]: '猫', [type.fields[1].id]: 'cat' } })
+    expect(await readCard(collection, cardId)).toMatchObject({ reps: 1 })
+    expect((await readCard(collection, cardId))?.suspended).toBeFalsy()
     await expect(collection.pendingOperations()).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ entityType: 'noteType', entityId: type.id, action: 'update' })]))
   })
 
@@ -1411,9 +1437,9 @@ describe('local collection', () => {
 
     expect(updated.templates[0].front).toBe('{{#Term}}<b>{{Term}}</b>{{/Term}}')
     expect(updated.templates[0].back).toBe('{{^Term}}empty{{/Term}}{{Term}}')
-    await expect(collection.notes.get(note.id)).resolves.toMatchObject({ fields: { [type.fields[0].id]: '猫' } })
-    expect((await collection.cards.get(cardId))?.reps).toBe(1)
-    expect((await collection.cards.get(cardId))?.suspended).toBeFalsy()
+    await expect(readNote(collection, note.id)).resolves.toMatchObject({ fields: { [type.fields[0].id]: '猫' } })
+    expect((await readCard(collection, cardId))?.reps).toBe(1)
+    expect((await readCard(collection, cardId))?.suspended).toBeFalsy()
     await expect(collection.pendingOperations()).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ entityType: 'noteType', entityId: type.id, action: 'update', payload: expect.objectContaining({ templates: updated.templates }) })]))
   })
 
@@ -1427,7 +1453,7 @@ describe('local collection', () => {
     expect(clone.templates[0].id).not.toBe(original.templates[0].id)
     await expect(collection.pendingOperations()).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ entityType: 'noteType', entityId: clone.id, action: 'create' })]))
     await collection.deleteNoteType(clone.id)
-    await expect(collection.noteTypes.get(clone.id)).resolves.toBeUndefined()
+    await expect(readNoteType(collection, clone.id)).resolves.toBeUndefined()
   })
 
   test('requires an explicit mode for removed fields and retains or discards their values', async () => {
@@ -1440,14 +1466,14 @@ describe('local collection', () => {
 
     await expect(collection.updateNoteType(type.id, { fields, templates })).rejects.toThrow(/removal mode/i)
     await expect(collection.updateNoteType(type.id, { fields, templates, removedFields: { [type.fields[1].id]: 'unexpected' as 'discard' } })).rejects.toThrow(/removal mode/i)
-    await expect(collection.noteTypes.get(type.id)).resolves.toEqual(type)
+    await expect(readNoteType(collection, type.id)).resolves.toEqual(type)
     await collection.updateNoteType(type.id, { fields, templates, removedFields: { [type.fields[1].id]: 'keep-as-extra' } })
-    await expect(collection.notes.get(note.id)).resolves.toMatchObject({ fields: { [type.fields[0].id]: '猫' }, retiredFields: { [type.fields[1].id]: 'feline' } })
+    await expect(readNote(collection, note.id)).resolves.toMatchObject({ fields: { [type.fields[0].id]: '猫' }, retiredFields: { [type.fields[1].id]: 'feline' } })
 
     const disposable = await collection.createNoteType({ name: 'Disposable', fields: [{ name: 'Word' }, { name: 'Hint' }], templates: [{ name: 'Card', front: '{{Word}}', back: '{{Hint}}', css: '' }] })
     const other = await collection.createNote(deck.id, disposable.id, { [disposable.fields[0].id]: '犬', [disposable.fields[1].id]: 'canine' })
     await collection.updateNoteType(disposable.id, { fields: [disposable.fields[0]], templates: [{ ...disposable.templates[0], back: '{{Word}}' }], removedFields: { [disposable.fields[1].id]: 'discard' } })
-    const changed = await collection.notes.get(other.id)
+    const changed = await readNote(collection, other.id)
     expect(changed?.fields).toEqual({ [disposable.fields[0].id]: '犬' })
     expect(changed?.retiredFields?.[disposable.fields[1].id]).toBeUndefined()
   })
@@ -1462,15 +1488,15 @@ describe('local collection', () => {
 
     const expanded = await collection.updateNoteType(type.id, { fields: [...type.fields, { name: 'Meaning' }], templates: [...type.templates, { name: 'Reverse', front: '{{Word}}', back: '{{Meaning}}', css: '' }] })
     expect(expanded.fields[1].id).toBeTruthy()
-    await expect(collection.notes.get(note.id)).resolves.toMatchObject({ fields: { [expanded.fields[1].id]: '' } })
+    await expect(readNote(collection, note.id)).resolves.toMatchObject({ fields: { [expanded.fields[1].id]: '' } })
     const secondId = `${note.id}:${expanded.templates[1].id}`
-    expect(await collection.cards.get(secondId)).toMatchObject({ reps: 0 })
-    expect((await collection.cards.get(secondId))?.suspended).toBeFalsy()
+    expect(await readCard(collection, secondId)).toMatchObject({ reps: 0 })
+    expect((await readCard(collection, secondId))?.suspended).toBeFalsy()
 
     await collection.updateNoteType(type.id, { templates: [expanded.templates[1]] })
-    await expect(collection.cards.get(firstId)).resolves.toMatchObject({ reps: 1, suspended: true })
-    expect((await collection.cards.get(secondId))?.suspended).toBeFalsy()
-    await expect(collection.reviewEntries.where('cardId').equals(firstId).count()).resolves.toBe(1)
+    await expect(readCard(collection, firstId)).resolves.toMatchObject({ reps: 1, suspended: true })
+    expect((await readCard(collection, secondId))?.suspended).toBeFalsy()
+    await expect(readCardReviewHistory(collection, firstId).then(entries => entries.length)).resolves.toBe(1)
   })
 
   test('deletes a used type only with replacement mapping and archives old cards', async () => {
@@ -1486,16 +1512,16 @@ describe('local collection', () => {
     await expect(collection.deleteNoteType(oldType.id, { replacementTypeId: replacement.id })).rejects.toThrow(/field mapping/i)
     const operationsBefore = (await collection.pendingOperations()).length
     await expect(collection.deleteNoteType(oldType.id, { replacementTypeId: replacement.id, fieldMapping: { [oldType.fields[0].id]: 'missing-field' } })).rejects.toThrow(/unknown replacement field/i)
-    await expect(collection.notes.get(note.id)).resolves.toMatchObject({ typeId: oldType.id })
+    await expect(readNote(collection, note.id)).resolves.toMatchObject({ typeId: oldType.id })
     await expect(collection.pendingOperations()).resolves.toHaveLength(operationsBefore)
     await collection.deleteNoteType(oldType.id, { replacementTypeId: replacement.id, fieldMapping: { [oldType.fields[0].id]: replacement.fields[0].id } })
 
-    await expect(collection.noteTypes.get(oldType.id)).resolves.toBeUndefined()
-    await expect(collection.notes.get(note.id)).resolves.toMatchObject({ typeId: replacement.id, fields: { [replacement.fields[0].id]: '猫' }, retiredFields: { [oldType.fields[1].id]: 'feline' } })
-    await expect(collection.cards.get(oldCardId)).resolves.toMatchObject({ reps: 1, suspended: true })
-    expect(await collection.cards.get(`${note.id}:${replacement.templates[0].id}`)).toMatchObject({ reps: 0 })
-    expect((await collection.cards.get(`${note.id}:${replacement.templates[0].id}`))?.suspended).toBeFalsy()
-    await expect(collection.reviewEntries.where('cardId').equals(oldCardId).count()).resolves.toBe(1)
+    await expect(readNoteType(collection, oldType.id)).resolves.toBeUndefined()
+    await expect(readNote(collection, note.id)).resolves.toMatchObject({ typeId: replacement.id, fields: { [replacement.fields[0].id]: '猫' }, retiredFields: { [oldType.fields[1].id]: 'feline' } })
+    await expect(readCard(collection, oldCardId)).resolves.toMatchObject({ reps: 1, suspended: true })
+    expect(await readCard(collection, `${note.id}:${replacement.templates[0].id}`)).toMatchObject({ reps: 0 })
+    expect((await readCard(collection, `${note.id}:${replacement.templates[0].id}`))?.suspended).toBeFalsy()
+    await expect(readCardReviewHistory(collection, oldCardId).then(entries => entries.length)).resolves.toBe(1)
     await expect(collection.pendingOperations()).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ entityType: 'noteType', entityId: oldType.id, action: 'delete' })]))
   })
 
@@ -1506,19 +1532,19 @@ describe('local collection', () => {
     const replacement = await collection.createNoteType({ name: 'New', fields: [{ name: 'Term' }], templates: [{ name: 'Card', front: '{{Term}}', back: '{{Term}}', css: '' }] })
     const note = await collection.createNote(deck.id, source.id, { [source.fields[0].id]: '猫' })
     const oldCardId = `${note.id}:${source.templates[0].id}`
-    const staleCard = await collection.cards.get(oldCardId)
+    const staleCard = await readCard(collection, oldCardId)
     await collection.deleteNoteType(source.id, { replacementTypeId: replacement.id, fieldMapping: { [source.fields[0].id]: replacement.fields[0].id } })
-    const migrated = await collection.notes.get(note.id)
-    const archived = await collection.cards.get(oldCardId)
+    const migrated = await readNote(collection, note.id)
+    const archived = await readCard(collection, oldCardId)
 
     await collection.applyRemoteChanges([
       { opId: 'delayed-old-note', entityType: 'note', entityId: note.id, action: 'update', occurredAt: '2026-10-02T00:00:00.000Z', payload: { ...note, fields: { [source.fields[0].id]: 'dog' } } },
       { opId: 'delayed-old-card', entityType: 'card', entityId: oldCardId, action: 'update', occurredAt: '2026-10-02T00:00:00.000Z', payload: staleCard },
     ], 2)
 
-    await expect(collection.notes.get(note.id)).resolves.toEqual(migrated)
-    await expect(collection.cards.get(oldCardId)).resolves.toEqual(archived)
-    await expect(collection.receivedOperations.count()).resolves.toBe(2)
+    await expect(readNote(collection, note.id)).resolves.toEqual(migrated)
+    await expect(readCard(collection, oldCardId)).resolves.toEqual(archived)
+    await expect(readReceivedOperationCount(collection)).resolves.toBe(2)
   })
 
   test('ignores a delayed review for an archived card after type replacement', async () => {
@@ -1533,8 +1559,8 @@ describe('local collection', () => {
 
     await collection.applyRemoteChanges([{ opId: 'delayed-review-op', entityType: 'review', entityId: 'delayed-review', action: 'create', occurredAt: '2026-10-02T00:00:00.000Z', payload: { ...review, id: 'delayed-review' } }], 1)
 
-    await expect(collection.reviewEntries.where('cardId').equals(oldCardId).count()).resolves.toBe(1)
-    await expect(collection.receivedOperations.count()).resolves.toBe(1)
+    await expect(readCardReviewHistory(collection, oldCardId).then(entries => entries.length)).resolves.toBe(1)
+    await expect(readReceivedOperationCount(collection)).resolves.toBe(1)
   })
 
   test('suspends dependent cards when a remote note type deletion arrives before note migration', async () => {
@@ -1543,16 +1569,16 @@ describe('local collection', () => {
     const type = await collection.createNoteType({ name: 'Old', fields: [{ name: 'Word' }], templates: [{ name: 'Card', front: '{{Word}}', back: '{{Word}}', css: '' }] })
     const note = await collection.createNote(deck.id, type.id, { [type.fields[0].id]: '猫' })
     const cardId = `${note.id}:${type.templates[0].id}`
-    const staleCard = await collection.cards.get(cardId)
+    const staleCard = await readCard(collection, cardId)
 
     await collection.applyRemoteChanges([{ opId: 'remote-type-delete', entityType: 'noteType', entityId: type.id, action: 'delete', occurredAt: '2026-10-02T00:00:00.000Z', payload: { id: type.id } }], 1)
     await collection.applyRemoteChanges([{ opId: 'old-card-after-type-delete', entityType: 'card', entityId: cardId, action: 'update', occurredAt: '2026-10-02T00:01:00.000Z', payload: staleCard }], 2)
 
-    await expect(collection.noteTypes.get(type.id)).resolves.toBeUndefined()
-    await expect(collection.cards.get(cardId)).resolves.toMatchObject({ suspended: true })
+    await expect(readNoteType(collection, type.id)).resolves.toBeUndefined()
+    await expect(readCard(collection, cardId)).resolves.toMatchObject({ suspended: true })
     await expect(collection.dueCards(deck.id)).resolves.toHaveLength(0)
-    await expect(collection.notes.get(note.id)).resolves.toMatchObject({ typeId: type.id })
-    await expect(collection.receivedOperations.count()).resolves.toBe(2)
+    await expect(readNote(collection, note.id)).resolves.toMatchObject({ typeId: type.id })
+    await expect(readReceivedOperationCount(collection)).resolves.toBe(2)
   })
 
   test('replays note type mutation and deletion operations only once on a second client', async () => {
@@ -1571,21 +1597,21 @@ describe('local collection', () => {
       const updates = await collection.pendingOperations()
       await remote.applyRemoteChanges(updates, initial.length + updates.length)
       await remote.applyRemoteChanges(updates, initial.length + updates.length)
-      await expect(remote.noteTypes.get(source.id)).resolves.toMatchObject({ name: 'Renamed words' })
-      await expect(remote.notes.get(note.id)).resolves.toMatchObject({ retiredFields: { [source.fields[1].id]: 'feline' } })
+      await expect(readNoteType(remote, source.id)).resolves.toMatchObject({ name: 'Renamed words' })
+      await expect(readNote(remote, note.id)).resolves.toMatchObject({ retiredFields: { [source.fields[1].id]: 'feline' } })
       await collection.acknowledgeOperations(updates.map((operation) => operation.opId))
 
       await collection.deleteNoteType(source.id, { replacementTypeId: replacement.id, fieldMapping: { [source.fields[0].id]: replacement.fields[0].id } })
       const deletion = await collection.pendingOperations()
       await remote.applyRemoteChanges(deletion, initial.length + updates.length + deletion.length)
       await remote.applyRemoteChanges(deletion, initial.length + updates.length + deletion.length)
-      await expect(remote.noteTypes.get(source.id)).resolves.toBeUndefined()
-      await expect(remote.notes.get(note.id)).resolves.toEqual(await collection.notes.get(note.id))
-      await expect(remote.cards.where('noteId').equals(note.id).toArray()).resolves.toEqual(await collection.cards.where('noteId').equals(note.id).toArray())
-      await expect(remote.receivedOperations.count()).resolves.toBe(initial.length + updates.length + deletion.length)
+      await expect(readNoteType(remote, source.id)).resolves.toBeUndefined()
+      await expect(readNote(remote, note.id)).resolves.toEqual(await readNote(collection, note.id))
+      await expect(readCardsForNote(remote, note.id)).resolves.toEqual(await readCardsForNote(collection, note.id))
+      await expect(readReceivedOperationCount(remote)).resolves.toBe(initial.length + updates.length + deletion.length)
       await expect(remote.pendingOperations()).resolves.toHaveLength(0)
     } finally {
-      await remote.delete()
+      await remote.removeLocalCollection()
     }
   })
 
@@ -1594,19 +1620,19 @@ describe('local collection', () => {
     const input = { name: 'Words', fields: [{ name: 'Word' }], templates: [{ name: 'Card', front: '{{Missing}}', back: '{{Word}}', css: '' }] }
     await expect(collection.createNoteType(input)).rejects.toThrow(/unknown field/i)
     await expect(collection.createNoteType({ ...input, templates: [{ ...input.templates[0], front: '{{FrontSide}}' }] })).rejects.toThrow(/FrontSide.*front/i)
-    await expect(collection.noteTypes.count()).resolves.toBe(2)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.types.length)).resolves.toBe(2)
   })
 
   test('keeps the protected Basic type when an older Basic note syncs in twice', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
-    const basic = await collection.noteTypes.get(BASIC_NOTE_TYPE_ID)
+    const basic = await readNoteType(collection, BASIC_NOTE_TYPE_ID)
     const deck = await collection.createDeck('Remote')
     const note = { id: 'old-note', deckId: deck.id, type: 'basic', fields: { front: '猫', back: 'cat' }, createdAt: '2026-01-01', updatedAt: '2026-01-01' }
     const operation = { opId: 'old-note-create', entityType: 'note' as const, entityId: note.id, action: 'create' as const, occurredAt: note.createdAt, payload: note }
     await collection.applyRemoteChanges([operation], 1)
     await collection.applyRemoteChanges([operation], 1)
-    await expect(collection.noteTypes.get(BASIC_NOTE_TYPE_ID)).resolves.toEqual(basic)
-    await expect(collection.notes.get(note.id)).resolves.toEqual({ ...note, typeId: BASIC_NOTE_TYPE_ID })
+    await expect(readNoteType(collection, BASIC_NOTE_TYPE_ID)).resolves.toEqual(basic)
+    await expect(readNote(collection, note.id)).resolves.toEqual({ ...note, typeId: BASIC_NOTE_TYPE_ID })
   })
 
   test('creates a Japanese Basic note with one new card in its deck', async () => {
@@ -1630,18 +1656,18 @@ describe('local collection', () => {
     const due = (await collection.dueCards(deck.id, new Date('2026-09-30T12:00:00.000Z')))[0]
     const choices = await collection.reviewChoices(due.id, new Date('2026-09-30T12:00:00.000Z'))
 
-    await expect(collection.notes.get(note.id)).resolves.toMatchObject({ fields: { back: 'ねこ — feline' } })
+    await expect(readNote(collection, note.id)).resolves.toMatchObject({ fields: { back: 'ねこ — feline' } })
     expect(due.noteId).toBe(note.id)
     expect(choices.find((choice) => choice.label === 'Good')?.interval).toMatch(/m|d/)
 
     await collection.answer(due.id, Rating.Good, new Date('2026-09-30T12:00:00.000Z'))
     await expect(collection.counts(deck.id)).resolves.toEqual({ new: 0, learning: 1, review: 0 })
-    await expect(collection.reviewEntries.where('deckId').equals(deck.id).count()).resolves.toBe(1)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.reviews.filter(review => review.deckId === deck.id).length)).resolves.toBe(1)
 
     const reopened = createCollection(databaseName)
-    await expect(reopened.notes.get(note.id)).resolves.toMatchObject({ fields: { back: 'ねこ — feline' } })
-    await expect(reopened.reviewEntries.where('deckId').equals(deck.id).count()).resolves.toBe(1)
-    await reopened.delete()
+    await expect(readNote(reopened, note.id)).resolves.toMatchObject({ fields: { back: 'ねこ — feline' } })
+    await expect(readAnkiExportSnapshot(reopened).then(snapshot => snapshot.reviews.filter(review => review.deckId === deck.id).length)).resolves.toBe(1)
+    await reopened.removeLocalCollection()
     collection = undefined
   })
 
@@ -1672,10 +1698,10 @@ describe('local collection', () => {
     const secondReference = await collection.attachMedia(second.id, { file: image, side: 'back' })
 
     expect(firstReference.digest).toBe(secondReference.digest)
-    await expect(collection.mediaBlobs.count()).resolves.toBe(1)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.blobs.length)).resolves.toBe(1)
     await expect(collection.mediaForNote(first.id)).resolves.toHaveLength(1)
     await collection.removeMedia(firstReference.id)
-    await expect(collection.mediaBlobs.count()).resolves.toBe(1)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.blobs.length)).resolves.toBe(1)
     await expect(collection.mediaForNote(second.id)).resolves.toHaveLength(1)
   })
 
@@ -1685,9 +1711,9 @@ describe('local collection', () => {
     const image = new File(['image'], 'cat.png', { type: 'image/png' })
     const note = await collection.createBasicNoteWithMedia(deck.id, { front: '猫', back: 'cat' }, [{ file: image, side: 'front' }, { file: image, side: 'back' }])
     await expect(collection.mediaForNote(note.id)).resolves.toHaveLength(2)
-    await expect(collection.mediaBlobs.count()).resolves.toBe(1)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.blobs.length)).resolves.toBe(1)
     await expect(collection.createBasicNoteWithMedia(deck.id, { front: '犬', back: 'dog' }, [{ file: new File(['bad'], 'bad.txt', { type: 'text/plain' }), side: 'front' }])).rejects.toThrow('not a supported')
-    await expect(collection.notes.count()).resolves.toBe(1)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.notes.length)).resolves.toBe(1)
   })
 
   test('removes media references with their deleted deck while retaining shared bytes', async () => {
@@ -1698,8 +1724,8 @@ describe('local collection', () => {
 
     await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
 
-    await expect(collection.noteMedia.count()).resolves.toBe(0)
-    await expect(collection.mediaBlobs.count()).resolves.toBe(1)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.references.length)).resolves.toBe(0)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.blobs.length)).resolves.toBe(1)
   })
 
   test('keeps a paired sync credential in local collection settings', async () => {
@@ -1720,7 +1746,7 @@ describe('local collection', () => {
     await expect(collection.lastVerifiedPcBackup()).resolves.toEqual(receipt)
     await expect(collection.recordVerifiedPcBackup({ ...receipt, archiveSha256: 'invalid' })).rejects.toThrow(/receipt is invalid/i)
     await expect(collection.lastVerifiedPcBackup()).resolves.toEqual(receipt)
-    await collection.settings.put({ key: 'lastVerifiedPcBackup', value: { ...receipt, archiveSha256: 'corrupt' } })
+    await overwriteIndexedDbBackupReceipt(collection.databaseName, { ...receipt, archiveSha256: 'corrupt' })
     await expect(collection.lastVerifiedPcBackup()).rejects.toThrow(/saved pc backup verification receipt is invalid/i)
   })
 
@@ -1728,26 +1754,26 @@ describe('local collection', () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const deck = await collection.createDeck('Remote')
     const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
-    const card = (await collection.cards.where('noteId').equals(note.id).first())!
+    const card = (await readCardsForNote(collection, note.id).then(cards => cards[0]))!
     const operation = { opId: 'remote-review', entityType: 'review' as const, entityId: 'review-1', action: 'create' as const, occurredAt: '2026-10-01T12:00:00.000Z', payload: { id: 'review-1', cardId: card.id, deckId: deck.id, rating: 3, state: 0, due: '2026-10-01T12:00:00.000Z', stability: 1, difficulty: 1, elapsedDays: 0, lastElapsedDays: 0, scheduledDays: 0, learningSteps: 0, reviewedAt: '2026-10-01T12:00:00.000Z' } }
     await collection.applyRemoteChanges([operation], 1)
     await collection.applyRemoteChanges([operation], 1)
-    await expect(collection.reviewEntries.count()).resolves.toBe(1)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.reviews.length)).resolves.toBe(1)
   })
 
   test('replays a synced review with the same card-seeded schedule', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const deck = await collection.createDeck('Remote')
     const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
-    const card = (await collection.cards.where('noteId').equals(note.id).first())!
+    const card = (await readCardsForNote(collection, note.id).then(cards => cards[0]))!
     const reviewedAt = new Date('2026-10-01T12:00:00.000Z')
 
     await collection.answer(card.id, Rating.Good, reviewedAt, undefined, { allowEarly: true, reschedule: true })
-    const expected = await collection.cards.get(card.id)
+    const expected = await readCard(collection, card.id)
     const review = (await collection.captureSyncOperations()).find((operation) => operation.entityType === 'review')!
     await collection.applyRemoteChanges([review], 1)
 
-    await expect(collection.cards.get(card.id)).resolves.toEqual(expected)
+    await expect(readCard(collection, card.id)).resolves.toEqual(expected)
   })
 
   test('applies remote deck, note, and card entities only once', async () => {
@@ -1764,10 +1790,10 @@ describe('local collection', () => {
     await collection.applyRemoteChanges(changes, 3)
     await collection.applyRemoteChanges(changes, 3)
 
-    await expect(collection.decks.get(deck.id)).resolves.toEqual({ ...deck, parentId: null, optionGroupId: 'default' })
-    await expect(collection.notes.get(note.id)).resolves.toEqual({ ...note, typeId: BASIC_NOTE_TYPE_ID })
-    await expect(collection.cards.get(card.id)).resolves.toEqual({ ...card, templateId: 'basic', suspended: false, manualSuspended: false, templateSuspended: false, buriedUntil: null, flag: 0 })
-    await expect(collection.receivedOperations.count()).resolves.toBe(3)
+    await expect(readDeck(collection, deck.id)).resolves.toEqual({ ...deck, parentId: null, optionGroupId: 'default' })
+    await expect(readNote(collection, note.id)).resolves.toEqual({ ...note, typeId: BASIC_NOTE_TYPE_ID })
+    await expect(readCard(collection, card.id)).resolves.toEqual({ ...card, templateId: 'basic', suspended: false, manualSuspended: false, templateSuspended: false, buriedUntil: null, flag: 0 })
+    await expect(readReceivedOperationCount(collection)).resolves.toBe(3)
     await expect(collection.pendingOperations()).resolves.toHaveLength(0)
   })
 
@@ -1782,9 +1808,9 @@ describe('local collection', () => {
       opId: 'offline-note-edit', entityType: 'note', entityId: note.id, action: 'update', occurredAt: editedNote.updatedAt, payload: editedNote,
     }], 1)
 
-    await expect(collection.decks.get(deck.id)).resolves.toBeUndefined()
-    await expect(collection.notes.get(note.id)).resolves.toBeUndefined()
-    await expect(collection.cards.where('deckId').equals(deck.id).count()).resolves.toBe(0)
+    await expect(readDeck(collection, deck.id)).resolves.toBeUndefined()
+    await expect(readNote(collection, note.id)).resolves.toBeUndefined()
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.cards.filter(card => card.deckId === deck.id).length)).resolves.toBe(0)
   })
 
   test('applies a remote media reference only once', async () => {
@@ -1795,19 +1821,19 @@ describe('local collection', () => {
     const operation = { opId: 'remote-media', entityType: 'noteMedia' as const, entityId: reference.id, action: 'create' as const, occurredAt: reference.createdAt, payload: reference }
     await collection.applyRemoteChanges([operation], 1)
     await collection.applyRemoteChanges([operation], 1)
-    await expect(collection.noteMedia.count()).resolves.toBe(1)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.references.length)).resolves.toBe(1)
   })
 
   test('rejects downloaded media whose bytes do not match its digest', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     await expect(collection.storeDownloadedMedia('a'.repeat(64), new Blob(['wrong'], { type: 'image/png' }))).rejects.toThrow('content digest')
-    await expect(collection.mediaBlobs.count()).resolves.toBe(0)
+    await expect(readAnkiExportSnapshot(collection).then(snapshot => snapshot.blobs.length)).resolves.toBe(0)
   })
 
   test('reconstructs byte-backed media records for browsers that cannot persist Blobs', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const bytes = new Uint8Array([137, 80, 78, 71]).buffer
-    await collection.mediaBlobs.put({ digest: 'b'.repeat(64), blob: bytes, byteLength: 4, mimeType: 'image/png', verifiedAt: '2026-10-01' })
+    await insertIndexedDbLegacyMediaBlob(collection.databaseName, { digest: 'b'.repeat(64), blob: bytes, byteLength: 4, mimeType: 'image/png', verifiedAt: '2026-10-01' })
     const media = await collection.verifiedMediaBlob('b'.repeat(64))
     expect(media?.blob).toBeInstanceOf(Blob)
     expect(media?.blob.type).toBe('image/png')

@@ -3,6 +3,7 @@ import Dexie from 'dexie'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { BASIC_NOTE_TYPE_ID, createCollection } from './collection'
 import { readCollectionRecoverySnapshot, snapshotBeforeCollectionUpgrade } from './upgrade-recovery'
+import { readAnkiExportSnapshot, readNote, readReviewHistory } from './collection-queries'
 
 const openDatabases: Dexie[] = []
 
@@ -51,13 +52,13 @@ describe('pre-upgrade local recovery snapshot', () => {
     expect(recovery.records.find((record) => record.storeName === 'outbox')?.value).toMatchObject({ opId: 'offline-edit' })
 
     const migrated = createCollection(name)
-    openDatabases.push(migrated)
-    await expect(migrated.notes.get('note')).resolves.toMatchObject({ typeId: BASIC_NOTE_TYPE_ID, fields: { front: '猫', back: 'cat' } })
-    await expect(migrated.cards.get('card')).resolves.toMatchObject({ id: 'card', reps: 2 })
-    await expect(migrated.reviewEntries.get('review')).resolves.toMatchObject({ id: 'review', cardId: 'card' })
+    await expect(readNote(migrated, 'note')).resolves.toMatchObject({ typeId: BASIC_NOTE_TYPE_ID, fields: { front: '猫', back: 'cat' } })
+    await expect((await readAnkiExportSnapshot(migrated)).cards.find(({ id }) => id === 'card')).toMatchObject({ id: 'card', reps: 2 })
+    await expect((await readReviewHistory(migrated)).find(({ id }) => id === 'review')).toMatchObject({ id: 'review', cardId: 'card' })
     await expect(migrated.pendingOperations()).resolves.toMatchObject([expect.objectContaining({ opId: 'offline-edit' })])
-    await expect(migrated.mediaBlobs.get('a'.repeat(64))).resolves.toMatchObject({ byteLength: 4 })
+    await expect((await readAnkiExportSnapshot(migrated)).blobs.find(({ digest }) => digest === 'a'.repeat(64))).toMatchObject({ byteLength: 4 })
     expect((await readCollectionRecoverySnapshot(name)).manifest?.sourceVersion).toBe(5)
+    await migrated.removeLocalCollection()
   })
 
   test('keeps the previous verified generation when a replacement snapshot runs out of space', async () => {
@@ -86,9 +87,9 @@ describe('pre-upgrade local recovery snapshot', () => {
   test('does not duplicate storage when the collection is already on the current version', async () => {
     const name = `kiroku-upgrade-${crypto.randomUUID()}`
     const current = createCollection(name)
-    openDatabases.push(current)
     await current.createDeck('Current collection')
-    await expect(snapshotBeforeCollectionUpgrade(name, current.verno)).resolves.toBeNull()
+    await expect(snapshotBeforeCollectionUpgrade(name, current.schemaVersion)).resolves.toBeNull()
+    await current.removeLocalCollection()
   })
 
   test('copies records across multiple bounded batches without changing their keys', async () => {

@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto'
 import { afterEach, describe, expect, test } from 'vitest'
 import { createCollection, DEFAULT_DECK_OPTION_GROUP_ID, type Collection } from './collection'
 import { ImportedPackageRejected, type ImportedPackageWrites } from './import-contract'
+import { readDeck, readNote } from './collection-queries'
 
 /**
  * The invariants the hand-written write routes enforce, asserted against the
@@ -15,7 +16,7 @@ import { ImportedPackageRejected, type ImportedPackageWrites } from './import-co
 let collection: Collection | undefined
 
 afterEach(async () => {
-  await collection?.delete()
+  await collection?.removeLocalCollection()
   collection = undefined
 })
 
@@ -111,7 +112,7 @@ describe('an imported package passes the same invariants as a hand-written write
     const writes = { ...empty(), decks: [deck('good', 'Good', null), deck('bad', 'Bad', 'missing')], notes: [] }
     await expect(collection.applyImportedPackage(writes, '2026-10-01T12:00:00.000Z')).rejects.toThrow(ImportedPackageRejected)
     // The valid deck in the same batch must not have landed.
-    await expect(collection.decks.get('good')).resolves.toBeUndefined()
+    await expect(readDeck(collection, 'good')).resolves.toBeUndefined()
     await expect(collection.pendingOperations()).resolves.toEqual([])
   })
 
@@ -120,7 +121,7 @@ describe('an imported package passes the same invariants as a hand-written write
     const target = await collection.createDeck('Landing')
     const writes = { ...empty(), decks: [], notes: [note('note:lands', target.id)] }
     await collection.applyImportedPackage(writes, '2026-10-01T12:00:00.000Z')
-    await expect(collection.notes.get('note:lands')).resolves.toMatchObject({ id: 'note:lands', tags: [] })
+    await expect(readNote(collection, 'note:lands')).resolves.toMatchObject({ id: 'note:lands', tags: [] })
     await expect(collection.pendingOperations()).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ entityType: 'note', entityId: 'note:lands', action: 'create' })]))
   })
 
@@ -145,7 +146,7 @@ describe('an imported package passes the same invariants as a hand-written write
     const target = await collection.createDeck('Tombstones')
     const doomed = await collection.createBasicNote(target.id, { front: '犬', back: 'dog' })
     await collection.deleteNote(doomed.id)
-    await expect(collection.notes.get(doomed.id)).resolves.toBeUndefined()
+    await expect(readNote(collection, doomed.id)).resolves.toBeUndefined()
     // Re-importing a package carrying that note must not resurrect it: inbound
     // sync suppresses every operation for a tombstoned identity, so a live row
     // here could never be synchronised or deleted again.
@@ -191,7 +192,7 @@ describe('an imported package passes the same invariants as a hand-written write
     collection = createCollection(`import-invariants-${crypto.randomUUID()}`)
     const target = await collection.createDeck('Normalising')
     await collection.applyImportedPackage({ ...empty(), notes: [note('note:tags', target.id, { tags: ['  Animal  ', 'JLPT::N5', 'Animal', ''] })] }, '2026-10-01T12:00:00.000Z')
-    const stored = await collection.notes.get('note:tags')
+    const stored = await readNote(collection, 'note:tags')
     // Trimmed, empties dropped, exact duplicates collapsed - the same result
     // `updateNoteTags` produces.
     expect(stored?.tags).toEqual(['Animal', 'JLPT::N5'])
@@ -200,12 +201,12 @@ describe('an imported package passes the same invariants as a hand-written write
   test('a deck the same batch deletes does not make an incoming sibling a duplicate', async () => {
     collection = createCollection(`import-invariants-${crypto.randomUUID()}`)
     const superseded = await collection.createDeck('Shared')
-    const existing = (await collection.decks.get(superseded.id))!
+    const existing = (await readDeck(collection, superseded.id))!
     const incoming = { ...existing, id: 'deck:incoming' }
     // The reconciliation writes the replacement and deletes the old row in one
     // batch; if the old row still counted, every rekeyed import would fail.
     await collection.applyImportedPackage({ ...empty(), decks: [{ value: incoming, action: 'create' }], deletedDecks: [superseded] }, '2026-10-01T12:00:00.000Z')
-    await expect(collection.decks.get('deck:incoming')).resolves.toMatchObject({ name: 'Shared' })
-    await expect(collection.decks.get(superseded.id)).resolves.toBeUndefined()
+    await expect(readDeck(collection, 'deck:incoming')).resolves.toMatchObject({ name: 'Shared' })
+    await expect(readDeck(collection, superseded.id)).resolves.toBeUndefined()
   })
 })

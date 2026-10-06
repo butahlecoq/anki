@@ -23,7 +23,7 @@ import { loadSampleDeck, removeSampleDeck, SAMPLE_DECK_NAME } from './sample-dec
 import { useRoute } from './route'
 import { useDialogKeyboard } from './use-dialog-keyboard'
 import { useDialogSubmit } from './use-dialog-submit'
-import { readCardsForNote, readDeckList, readDeckMediaReferences, readDeckMediaSnapshot, readDeckWorkspaceSnapshot } from './collection-queries'
+import { readCardsForNote, readDeckList, readDeckMediaReferences, readDeckMediaSnapshot, readDeckOptionGroups, readDeckWorkspaceSnapshot } from './collection-queries'
 import { SyncControls } from './SyncControls'
 import { ImportDialog } from './ImportDialog'
 import { MoveNoteDialog, NoteDialog, ReviewSession } from './ReviewSession'
@@ -236,7 +236,7 @@ function DeleteDeckDialog({ deck, onClose, onDeleted }: { deck: Deck; onClose: (
 
 function DeckOptionsDialog({ deck, onClose }: { deck: Deck; onClose: () => void }) {
   const dialogKeyboard = useDialogKeyboard(onClose)
-  const groups = useLiveQuery(() => collection.deckOptionGroups.orderBy('name').toArray(), [], [])
+  const groups = useLiveQuery(() => readDeckOptionGroups(collection), [], [])
   const decks = useLiveQuery(() => readDeckList(collection), [], [])
   const [groupId, setGroupId] = useState(deck.optionGroupId)
   const [creating, setCreating] = useState(false)
@@ -397,18 +397,21 @@ function DeckDetail({ deckId, onBack, onStudy }: { deckId: string; onBack: () =>
 
   async function prepareDeckOffline() {
     if (!offlineReadiness) return
-    if (offlineReadiness.missing === 0) {
-      setOfflineMessage('This deck is ready for offline review. All referenced media is stored on this device.')
-      return
-    }
     setPreparingOffline(true)
-    setOfflineMessage('Syncing the collection to download this deck’s missing media…')
+    setOfflineMessage('Checking this deck’s media before offline review…')
     try {
       const references = await readDeckMediaReferences(collection, deckId)
       for (const digest of new Set(references.map((reference) => reference.digest))) {
         const blob = await collection.verifiedMediaBlob(digest)
-        if (blob && await digestMedia(blob.blob) !== digest) await collection.mediaBlobs.delete(digest)
+        if (blob) await collection.discardCorruptMediaBlob(digest)
       }
+      const initiallyMissing = new Set((await collection.missingReferencedMedia()).map((reference) => reference.digest))
+      const initiallyMissingFromDeck = new Set(references.map((reference) => reference.digest).filter((digest) => initiallyMissing.has(digest))).size
+      if (initiallyMissingFromDeck === 0) {
+        setOfflineMessage('This deck is ready for offline review. All referenced media is stored on this device.')
+        return
+      }
+      setOfflineMessage('Syncing the collection to download this deck’s missing media…')
       const result = await syncCollection(collection)
       const latestReferences = await readDeckMediaReferences(collection, deckId)
       const missing = new Set((await collection.missingReferencedMedia()).map((reference) => reference.digest))

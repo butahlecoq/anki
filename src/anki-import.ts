@@ -131,7 +131,7 @@ export interface AnkiImportPlan {
 
 export interface AnkiImportCommitOptions { importRepresentableOnly?: boolean }
 
-type Snapshot = { table: 'decks' | 'noteTypes' | 'notes' | 'cards' | 'reviewEntries' | 'noteMedia' | 'mediaBlobs'; id: string; value: string }
+type Snapshot = { table: 'decks' | 'noteTypes' | 'notes' | 'cards' | 'reviewEntries' | 'noteMedia' | 'mediaBlobs' | '$tableCounts'; id: string; value: string }
 
 export interface PrepareAnkiImportOptions { SQL?: SqlJsStatic; now?: Date; sourceIdentity?: string; sourceFingerprint?: string }
 
@@ -1207,6 +1207,7 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
   }
   const writes: ImportWrites = { decks: [], noteTypes: [], notes: [], cards: [], reviews: [], updatedReviews: [], references: [], deletedReferences: [], deletedDecks: [], undoSettings: [], blobs: [] }
   const snapshots: Snapshot[] = []
+  snapshots.push({ table: '$tableCounts', id: 'collection', value: fingerprint(local.tableCounts) })
 const decisions: AnkiImportDecision[] = []
   const recordDecision = (entity: AnkiImportEntity, id: string, action: AnkiImportDecisionAction) => decisions.push({ entity, id, action })
   // A deck reconciled away leaves its row behind, and everything pointing at it

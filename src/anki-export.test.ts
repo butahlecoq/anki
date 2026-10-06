@@ -2,16 +2,16 @@ import 'fake-indexeddb/auto'
 import initSqlJs, { type SqlJsStatic } from 'sql.js'
 import { Collection as AnkiCollection, Deck, Note as AnkiNote, Notetype, Package } from 'ankipack'
 import { afterEach, beforeAll, expect, test } from 'vitest'
-import { createCollection, Rating, State, type Collection } from './collection'
+import { createCollection, Rating, type Collection } from './collection'
 import { exportAnkiPackage } from './anki-export'
 import { prepareAnkiImport } from './anki-import'
-import { digestMedia } from './media'
+import { readAnkiExportSnapshot, readCardsForNote, readSyncMediaReferences } from './collection-queries'
 
 let SQL: SqlJsStatic
 const databases: Collection[] = []
 function database() { const db = createCollection(crypto.randomUUID()); databases.push(db); return db }
 beforeAll(async () => { SQL = await initSqlJs({ locateFile: () => './node_modules/sql.js/dist/sql-wasm.wasm' }) })
-afterEach(async () => { await Promise.all(databases.splice(0).map((db) => db.delete())) })
+afterEach(async () => { await Promise.all(databases.splice(0).map((db) => db.removeLocalCollection())) })
 const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL4+QAAAABJRU5ErkJggg=='), (character) => character.charCodeAt(0))
 const all = { scheduling: true, history: true, media: true }
 async function nativeFixture(bytes: Uint8Array, name: string) {
@@ -28,11 +28,13 @@ test('Japanese native package preserves field meaning, tags, decks, templates, s
   const source = database()
   const deck = await source.createDeck('日本語')
   const note = await source.createBasicNote(deck.id, { front: '猫 & <cat>', back: 'ねこ' })
-  await source.notes.update(note.id, { tags: ['animal'] })
+  await source.updateNoteTags(note.id, ['animal'])
   await source.attachMedia(note.id, { file: new File([png], 'cat.png', { type: 'image/png' }), side: 'front' })
-  const card = (await source.cards.toArray())[0]
+  const card = (await readAnkiExportSnapshot(source)).cards[0]
   await source.answer(card.id, Rating.Easy, new Date('2026-10-01T12:00:00Z'))
-  await source.cards.update(card.id, { due: '2026-10-05T11:23:45Z', state: State.Review, stability: 4.25, difficulty: 6.2, elapsedDays: 2, scheduledDays: 4, reps: 3, lapses: 1, flag: 4 })
+  await source.rescheduleCard(card.id, new Date('2026-10-05T11:23:45Z'))
+  await source.setCardFlag(card.id, 4)
+  const scheduledCard = (await readAnkiExportSnapshot(source)).cards[0]
   const output = await exportAnkiPackage(source, { ...all, SQL })
   await nativeFixture(output.bytes, 'native-export')
   const native = AnkiCollection.open(output.bytes, SQL)
@@ -43,18 +45,26 @@ test('Japanese native package preserves field meaning, tags, decks, templates, s
   const preview = await prepareAnkiImport(new File([output.bytes.slice().buffer], 'backup.apkg'), target, { SQL })
   expect(preview.issues.filter((issue) => issue.severity === 'error')).toEqual([])
   await preview.commit()
-  const restored = (await target.notes.toArray())[0]
+  const targetSnapshot = await readAnkiExportSnapshot(target)
+  const restored = targetSnapshot.notes[0]
   expect(Object.values(restored.fields)).toEqual(['猫 & <cat>', 'ねこ'])
   expect(restored.tags).toEqual(['animal'])
-  const restoredType = await target.noteTypes.get(restored.typeId)
+  const restoredType = targetSnapshot.types.find(({ id }) => id === restored.typeId)
   expect(restoredType?.templates.map(({ front, back }) => ({ front, back }))).toEqual([{ front: '{{front}}', back: '{{FrontSide}}<hr>{{back}}' }])
-  expect((await target.cards.toArray())[0]).toMatchObject({ noteId: restored.id, due: '2026-10-05T11:23:45.000Z', stability: 4.25, difficulty: 6.2, elapsedDays: 2, scheduledDays: 4, reps: 3, lapses: 1, flag: 4 })
-  expect((await target.reviewEntries.toArray())[0]).toMatchObject({ rating: Rating.Easy, reviewedAt: '2026-10-01T12:00:00.000Z' })
+  expect(targetSnapshot.cards[0]).toMatchObject({
+    noteId: restored.id, ankiId: native.data.cards[0].id, due: '2026-10-05T11:23:45.000Z', flag: 4,
+    state: scheduledCard.state, stability: scheduledCard.stability, difficulty: scheduledCard.difficulty,
+    elapsedDays: scheduledCard.elapsedDays, scheduledDays: scheduledCard.scheduledDays,
+    learningSteps: scheduledCard.learningSteps, reps: scheduledCard.reps, lapses: scheduledCard.lapses,
+    lastReview: scheduledCard.lastReview,
+  })
+  expect(targetSnapshot.reviews[0]).toMatchObject({ rating: Rating.Easy, reviewedAt: '2026-10-01T12:00:00.000Z' })
   // Causal replay policy is local sync metadata; Anki revlog preserves review facts.
-  const expectedReview = Object.fromEntries(Object.entries((await source.reviewEntries.toArray())[0]).filter(([key]) => !['id', 'cardId', 'deckId', 'scheduling'].includes(key)))
-  expect((await target.reviewEntries.toArray())[0]).toMatchObject(expectedReview)
-  expect((await target.mediaBlobs.toArray()).map((blob) => blob.digest)).toEqual((await source.mediaBlobs.toArray()).map((blob) => blob.digest))
-  expect((await target.noteMedia.toArray())[0]).toMatchObject({ displayName: 'cat.png', side: 'front', inline: false, playback: 'manual' })
+  const sourceSnapshot = await readAnkiExportSnapshot(source)
+  const expectedReview = Object.fromEntries(Object.entries(sourceSnapshot.reviews[0]!).filter(([key]) => !['id', 'cardId', 'deckId', 'scheduling'].includes(key)))
+  expect(targetSnapshot.reviews[0]).toMatchObject(expectedReview)
+  expect(targetSnapshot.blobs.map((blob) => blob.digest)).toEqual(sourceSnapshot.blobs.map((blob) => blob.digest))
+  expect(targetSnapshot.references[0]).toMatchObject({ displayName: 'cat.png', side: 'front', inline: false, playback: 'manual' })
 })
 
 test('exports and reimports media whose original filename contains Japanese and spaces', async () => {
@@ -81,7 +91,7 @@ test('exports and reimports media whose original filename contains Japanese and 
   expect(preview.issues.filter((issue) => issue.severity === 'error')).toEqual([])
   await preview.commit()
 
-  const restored = (await target.notes.toArray())[0]
+  const restored = (await readAnkiExportSnapshot(target)).notes[0]
   expect(restored).toBeDefined()
   expect(Object.values(restored?.fields ?? {}).join(' ')).toContain(`[[kiroku-media:${encodeURIComponent(displayName)}]]`)
   await expect(target.mediaForNote(restored!.id)).resolves.toEqual(expect.arrayContaining([expect.objectContaining({ displayName, kind: 'image' })]))
@@ -95,20 +105,16 @@ test('exports packages with thousands of distinct media windows inside the archi
   const note = await source.createBasicNote(deck.id, { front: '音声', back: 'audio' })
   const count = 2_100
   const now = new Date('2026-10-01T12:00:00.000Z').toISOString()
-  const references = []
-  const blobs = []
+  const attachments = []
   for (let index = 0; index < count; index += 1) {
     const bytes = new Uint8Array(46)
     bytes.set([0x52, 0x49, 0x46, 0x46, 38, 0, 0, 0, 0x57, 0x41, 0x56, 0x45, 0x66, 0x6d, 0x74, 0x20, 16, 0, 0, 0, 1, 0, 1, 0, 0x40, 0x1f, 0, 0, 0x40, 0x1f, 0, 0, 1, 0, 8, 0, 0x64, 0x61, 0x74, 0x61, 2, 0, 0, 0])
     bytes[44] = index & 0xff
     bytes[45] = index >>> 8
     const payload = bytes.slice().buffer as ArrayBuffer
-    const digest = await digestMedia(payload)
-    references.push({ id: `many-audio-${index}`, noteId: note.id, digest, kind: 'audio' as const, mimeType: 'audio/wav', displayName: `audio-${index}.wav`, side: 'front' as const, playback: 'manual' as const, createdAt: now, updatedAt: now })
-    blobs.push({ digest, blob: payload, byteLength: bytes.length, mimeType: 'audio/wav', verifiedAt: now })
+    attachments.push({ file: new File([payload], `audio-${index}.wav`, { type: 'audio/wav' }), side: 'front' as const })
   }
-  await source.noteMedia.bulkAdd(references)
-  await source.mediaBlobs.bulkAdd(blobs)
+  await source.attachMediaBatch(note.id, attachments, new Date(now))
 
   const output = await exportAnkiPackage(source, { ...all, SQL })
   expect(output.media).toBe(count)
@@ -134,9 +140,10 @@ test('missing media blocks export before success', async () => {
   const source = database()
   const deck = await source.createDeck('Media')
   const note = await source.createBasicNote(deck.id, { front: '猫', back: 'cat' })
-  await source.notes.update(note.id, { tags: ['animal'] })
+  await source.updateNoteTags(note.id, ['animal'])
   await source.attachMedia(note.id, { file: new File([png], 'cat.png', { type: 'image/png' }), side: 'front' })
-  await source.mediaBlobs.clear()
+  const reference = (await readAnkiExportSnapshot(source)).references[0]!
+  await source.evictCachedMedia(reference.digest)
   await expect(exportAnkiPackage(source, { ...all, SQL })).rejects.toThrow('Missing media')
 })
 
@@ -147,8 +154,8 @@ test('large note, card, and media relationship sets retain exported identities a
   for (let index = 0; index < 128; index++) {
     const note = await source.createBasicNote(deck.id, { front: `front-${index}`, back: `back-${index}` }, new Date(1_700_000_000_000 + index))
     notes.push(note)
-    const card = (await source.cards.where('noteId').equals(note.id).first())!
-    await source.cards.update(card.id, { ankiId: 10_000 + index })
+    const card = (await readCardsForNote(source, note.id))[0]!
+    await source.assignAnkiCardIdentity(card.id, 10_000 + index)
     await source.attachMedia(note.id, { file: new File([png], `image-${index}.png`, { type: 'image/png' }), side: 'front' }, new Date(1_700_000_000_000 + index))
   }
 
@@ -157,6 +164,7 @@ test('large note, card, and media relationship sets retain exported identities a
   expect(native.data.cards).toHaveLength(notes.length)
   expect(native.data.media).toHaveLength(1) // one digest is shared by all references
   const exportedNotes = new Map(native.data.notes.map((note) => [note.guid, note]))
+  const storedReferences = await readSyncMediaReferences(source)
   expect(new Set(exportedNotes.keys())).toEqual(new Set(notes.map((note) => note.id)))
   expect(new Set(native.data.cards.map((card) => card.id)).size).toBe(notes.length)
   for (const [index, note] of notes.entries()) {
@@ -164,7 +172,8 @@ test('large note, card, and media relationship sets retain exported identities a
     const matchingCards = native.data.cards.filter((card) => card.nid === row.id)
     expect(matchingCards).toHaveLength(1)
     expect(matchingCards[0]!.id).toBe(10_000 + index)
-    expect(JSON.parse(row.data).kirokuMedia).toMatchObject([{ name: `${(await source.noteMedia.where('noteId').equals(note.id).first())!.digest}.png`, displayName: `image-${index}.png`, side: 'front' }])
+    const mediaReference = storedReferences.find((reference) => reference.noteId === note.id)!
+    expect(JSON.parse(row.data).kirokuMedia).toMatchObject([{ name: `${mediaReference.digest}.png`, displayName: `image-${index}.png`, side: 'front' }])
   }
 })
 
@@ -181,9 +190,10 @@ test('multiple templates and cloze ordinals keep their note relationships and na
   const preview = await prepareAnkiImport(new File([output.bytes.slice().buffer], 'backup.apkg'), target, { SQL })
   expect(preview.issues.filter((issue) => issue.severity === 'error')).toEqual([])
   await preview.commit()
-  expect(await target.notes.count()).toBe(2)
-  expect(await target.cards.count()).toBe(4)
-  expect((await target.cards.toArray()).filter((card) => card.clozeOrdinal).map((card) => card.clozeOrdinal).sort()).toEqual([1, 3])
+  const targetSnapshot = await readAnkiExportSnapshot(target)
+  expect(targetSnapshot.notes).toHaveLength(2)
+  expect(targetSnapshot.cards).toHaveLength(4)
+  expect(targetSnapshot.cards.filter((card) => card.clozeOrdinal).map((card) => card.clozeOrdinal).sort()).toEqual([1, 3])
   const second = AnkiCollection.open((await exportAnkiPackage(target, { ...all, SQL })).bytes, SQL)
   await nativeFixture(output.bytes, 'native-multiple-cloze')
   expect(second.data.notes.map((note) => [note.id, note.guid, note.mid]).sort()).toEqual(native.data.notes.map((note) => [note.id, note.guid, note.mid]).sort())
@@ -203,18 +213,19 @@ test('rectangular image occlusion restores its masks and image hash', async () =
   const preview = await prepareAnkiImport(new File([output.bytes.slice().buffer], 'backup.apkg'), target, { SQL })
   expect(preview.issues.filter((issue) => issue.severity === 'error')).toEqual([])
   await preview.commit()
-  const restored = (await target.notes.toArray())[0]
+  const targetSnapshot = await readAnkiExportSnapshot(target)
+  const restored = targetSnapshot.notes[0]
   expect(restored.imageOcclusion?.masks[0]).toMatchObject({ x: .1, y: .2, width: .3, height: .2 })
   expect(restored.fields).toEqual(note.fields)
-  expect((await target.mediaBlobs.toArray())[0].digest).toBe((await source.mediaBlobs.toArray())[0].digest)
-  expect((await target.noteTypes.toArray()).every((type) => type.templates.every((template) => !template.front.includes('<script') && !template.back.includes('<script')))).toBe(true)
+  expect(targetSnapshot.blobs[0].digest).toBe((await readAnkiExportSnapshot(source)).blobs[0].digest)
+  expect(targetSnapshot.types.every((type) => type.templates.every((template) => !template.front.includes('<script') && !template.back.includes('<script')))).toBe(true)
 })
 
 test('a first Good learning answer remains a native intraday learning review', async () => {
   const source = database()
   const deck = await source.createDeck('Learning')
   await source.createBasicNote(deck.id, { front: '学ぶ', back: 'learn' }, new Date('2026-10-01T11:00:00Z'))
-  await source.answer((await source.cards.toArray())[0].id, Rating.Good, new Date('2026-10-01T12:00:00Z'), 1234)
+  await source.answer((await readAnkiExportSnapshot(source)).cards[0]!.id, Rating.Good, new Date('2026-10-01T12:00:00Z'), 1234)
   const output = await exportAnkiPackage(source, { ...all, SQL })
   await nativeFixture(output.bytes, 'native-good-learning')
   const native = AnkiCollection.open(output.bytes, SQL)
@@ -225,12 +236,14 @@ test('review transitions keep Anki pre-answer revlog fields while exporting the 
   const source = database()
   const deck = await source.createDeck('Review transition')
   const note = await source.createBasicNote(deck.id, { front: '復習', back: 'review' })
-  const [card] = await source.cards.where('noteId').equals(note.id).toArray()
   const now = new Date('2026-10-01T12:00:00Z')
-  await source.cards.put({ ...card, state: State.Review, due: now.toISOString(), stability: 5, difficulty: 5, elapsedDays: 2, scheduledDays: 5, learningSteps: 0, reps: 3, lapses: 0, lastReview: now.toISOString() })
+  const card = (await readCardsForNote(source, note.id))[0]!
+  const introduced = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+  await source.answer(card.id, Rating.Easy, introduced)
+  await source.rescheduleCard(card.id, now, introduced)
+  const scheduledCard = (await readCardsForNote(source, note.id))[0]!
   const review = await source.answer(card.id, Rating.Again, now)
   const native = AnkiCollection.open((await exportAnkiPackage(source, { ...all, SQL })).bytes, SQL)
-  expect(review).toMatchObject({ state: State.Review, scheduledDays: 5, afterState: State.Relearning, afterScheduledDays: 0 })
-  expect(native.data.revlog[0]).toMatchObject({ type: 1, lastIvl: 5, ivl: -600 })
+  expect(review).toMatchObject({ state: scheduledCard.state, scheduledDays: scheduledCard.scheduledDays, afterScheduledDays: 0 })
+  expect(native.data.revlog.at(-1)).toMatchObject({ lastIvl: scheduledCard.scheduledDays, ivl: -600 })
 })
-

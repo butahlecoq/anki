@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, expect, test, vi } from 'vitest'
 import { collection } from './collection'
 import { CollectionBrowser } from './CollectionBrowser'
+import { readAnkiExportSnapshot, readCardsForNote } from './collection-queries'
 
 vi.mock('./browser-maintenance', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./browser-maintenance')>()
@@ -22,7 +23,7 @@ test('invalid searches retain valid Japanese results and selection survives sort
   const parent = await deck()
   const cat = await collection.createBasicNote(parent.id, { front: '猫', back: 'cat' })
   await collection.createBasicNote(parent.id, { front: '犬', back: 'dog' })
-  const [card] = await collection.cards.where('noteId').equals(cat.id).toArray()
+  const [card] = await readCardsForNote(collection, cat.id)
   render(<CollectionBrowser />)
   await screen.findByRole('table')
   await search('猫')
@@ -74,15 +75,16 @@ test('bulk note deletion requires reviewed counts and removes the selected ident
   fireEvent.click(within(dialog).getByRole('checkbox', { name: /I reviewed the affected counts/ }))
   fireEvent.click(apply)
   await screen.findByText('Applied delete to 2 notes.')
-  expect(await collection.notes.count()).toBe(0)
-  expect(await collection.cards.count()).toBe(0)
+  const snapshot = await readAnkiExportSnapshot(collection)
+  expect(snapshot.notes).toHaveLength(0)
+  expect(snapshot.cards).toHaveLength(0)
 })
 
 test('find/replace previews a selected field and preserves card IDs when applied', async () => {
   const parent = await deck()
   await collection.createBasicNote(parent.id, { front: '猫', back: 'cat one' })
   await collection.createBasicNote(parent.id, { front: '猫', back: 'cat two' })
-  const ids = (await collection.cards.toArray()).map((card) => card.id).sort()
+  const ids = (await readAnkiExportSnapshot(collection)).cards.map((card) => card.id).sort()
   render(<CollectionBrowser />)
   await screen.findByRole('table')
   fireEvent.click(screen.getByRole('button', { name: 'Select all results' }))
@@ -99,10 +101,10 @@ test('find/replace previews a selected field and preserves card IDs when applied
   fireEvent.click(within(dialog).getByRole('checkbox', { name: /I reviewed this preview/ }))
   fireEvent.click(within(dialog).getByRole('button', { name: 'Apply field changes' }))
   await screen.findByText('Updated fields in 2 notes.')
-  const notes = await collection.notes.toArray()
-  expect(notes.map((note) => note.fields.front)).toEqual(['犬', '犬'])
-  expect(notes.map((note) => note.fields.back).sort()).toEqual(['cat one', 'cat two'])
-  expect((await collection.cards.toArray()).map((card) => card.id).sort()).toEqual(ids)
+  const snapshot = await readAnkiExportSnapshot(collection)
+  expect(snapshot.notes.map((note) => note.fields.front)).toEqual(['犬', '犬'])
+  expect(snapshot.notes.map((note) => note.fields.back).sort()).toEqual(['cat one', 'cat two'])
+  expect(snapshot.cards.map((card) => card.id).sort()).toEqual(ids)
 })
 
 test('duplicate and empty-card reports expose affected records in the result surface', async () => {

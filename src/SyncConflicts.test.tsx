@@ -2,8 +2,9 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, expect, test } from 'vitest'
 import { collection, createCollection } from './collection'
 import { SyncConflicts } from './SyncConflicts'
+import { readSyncConflicts } from './collection-queries'
 
-afterEach(async () => { cleanup(); await collection.delete() })
+afterEach(async () => { cleanup(); await collection.removeLocalCollection() })
 
 test('conflict choices label the record and fields, reject a changed version, and resume the latest context', async () => {
   const peer = createCollection(`conflict-peer-${crypto.randomUUID()}`)
@@ -50,7 +51,7 @@ test('conflict choices label the record and fields, reject a changed version, an
     await collection.applyRemoteChanges(structuredClone(latest), latest.length)
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save choice' }))
     await waitFor(() => expect(within(dialog).getByRole('alert')).toHaveTextContent('This conflict changed'))
-    expect(await collection.syncConflicts.count()).toBe(1)
+    expect(await readSyncConflicts(collection)).toHaveLength(1)
     fireEvent.click(within(dialog).getByRole('button', { name: 'Decide later' }))
     fireEvent.click(screen.getByRole('button', { name: 'Review note conflict' }))
     const resumed = screen.getByRole('dialog', { name: 'Choose the saved version' })
@@ -62,5 +63,5 @@ test('conflict choices label the record and fields, reject a changed version, an
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     expect(screen.queryByRole('button', { name: 'Review note conflict' })).not.toBeInTheDocument()
     expect(screen.getByRole('region', { name: 'Sync conflicts' })).toHaveFocus()
-  } finally { cleanup(); peer.close(); await peer.delete() }
+  } finally { cleanup(); peer.closeLocalCollection(); await peer.removeLocalCollection() }
 })
