@@ -621,8 +621,8 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .today-workload small { display: block; color: var(--text-muted); line-height: 1.8; }
 .today-workload > a { display: inline-flex; margin-top: 12px; }
 .statistics-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 16px; margin-top: 28px; }
-.statistics-controls label { display: grid; gap: 8px; color: var(--text-muted); font-size: 11px; min-width: 0; }
-.statistics-controls input, .statistics-controls select { max-width: 100%; min-height: 44px; padding: 10px; color: var(--text-primary); border: 1px solid var(--border-subtle); background: var(--surface-panel); font: inherit; }
+.statistics-controls label { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; color: var(--text-muted); font-size: 11px; min-width: 0; }
+.statistics-controls input, .statistics-controls select { width: 100%; min-width: 0; max-width: 100%; min-height: 44px; padding: 10px; color: var(--text-primary); border: 1px solid var(--border-subtle); background: var(--surface-panel); font: inherit; }
 .statistics-controls button { min-height: 44px; }
 .statistics-period { color: var(--text-muted); font-size: 11px; line-height: 1.8; margin: 16px 0; }
 .statistics-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }

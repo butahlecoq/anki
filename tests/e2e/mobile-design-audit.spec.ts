@@ -81,6 +81,36 @@ test('Study controls and preview avoid horizontal overflow on small screens', as
   }
 })
 
+test('populated Statistics filters fit and remain usable on small screens', async ({ page, hostScale }, testInfo) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Load sample deck' }).click()
+  await page.getByRole('button', { name: 'Open Sample — Japanese Starter', exact: true }).click()
+  await page.getByRole('button', { name: 'Study now', exact: true }).click()
+  const card = page.frameLocator('iframe[title="Review card"]').locator('ruby')
+  await expect(card).toContainText(/猫|犬/)
+  const firstWord = await card.innerText()
+  await page.getByRole('button', { name: 'Show answer', exact: true }).click()
+  await page.getByRole('button', { name: /^Easy ·/ }).click()
+  await expect(card).toContainText(firstWord.includes('猫') ? '犬' : '猫')
+  await page.getByRole('button', { name: 'End session', exact: true }).click()
+  await page.getByRole('navigation', { name: 'Mobile navigation' }).getByRole('link', { name: 'Statistics', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '84 days of practice' })).toBeVisible()
+  for (const width of [320, 390]) {
+    await page.setViewportSize({ width: Math.round(width * hostScale), height: Math.round(844 * hostScale) })
+    const geometry = await page.evaluate(() => ({ width: innerWidth, root: document.documentElement.getBoundingClientRect().width, scroll: document.documentElement.scrollWidth }))
+    expect(geometry.width, JSON.stringify(geometry)).toBe(width)
+    expect(geometry.scroll, JSON.stringify(geometry)).toBeLessThanOrEqual(Math.ceil(geometry.root))
+    const deck = page.getByRole('combobox', { name: 'Statistics deck', exact: true })
+    await deck.selectOption({ label: 'Sample — Japanese Starter (with children)' })
+    await expect(deck).not.toHaveValue('')
+    await deck.selectOption('')
+    await expect(page.getByRole('heading', { name: '84 days of practice' })).toBeVisible()
+    await deck.evaluate(element => element.scrollIntoView({ block: 'center', behavior: 'instant' }))
+    await expect(deck).toBeInViewport()
+    await page.screenshot({ path: testInfo.outputPath(`populated-statistics-${width}.png`) })
+  }
+})
+
 test('audit every route and its main dialogs on an iPhone sized screen', async ({ page }, testInfo) => {
   test.setTimeout(120_000)
   const errors: string[] = []

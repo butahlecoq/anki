@@ -288,3 +288,29 @@ isolated ports 4182/4183. Log: `audit-scroll-green.log`. Both WebKit repeats now
 open Add note and complete review, custom study and account-dialog captures.
 These focused results require a fresh whole gate and review of the committed
 helper correction before acceptance or merge.
+
+## Populated Statistics filter overflow
+
+The independent spec review of `588ec19` identified populated Statistics at
+320px as uncovered by AC-02. Its whole gate was intentionally interrupted to
+address that finding, with partial artifacts in `runtime/235-interrupted-588ec19`;
+it is not a completed or passing gate.
+
+A new public UI regression loads the sample deck, records one answer, ends the
+session and opens Statistics. On unchanged product source it fails in both
+engines: Chromium reports inner width 331px for a 320px root; calibrated WebKit
+reports a 320px root with scroll width 341px. Red evidence:
+`populated-statistics-red.log`, `runtime/235-populated-statistics-red`.
+
+The label grid track now uses `minmax(0, 1fr)` and native inputs/selects use
+`width: 100%; min-width: 0`. The regression checks actual viewport width and
+document overflow at 320/390 and selects the real deck filter, then All decks.
+Its WebKit 320px ordinary viewport screenshot was inspected: native deck,
+period and date controls fit within the page and navigation remains visible.
+
+All four mobile audit journeys pass in both engines: **8 passed in 1.7 minutes**,
+including completion dimensions, Study controls, populated Statistics, and the
+complete page/dialog audit. Command: `npx playwright test
+tests/e2e/mobile-design-audit.spec.ts --output=runtime/235-statistics-audit-green`
+on isolated ports 4182/4183. Log: `statistics-audit-green.log`. A fresh full gate
+and final committed-head review remain required before acceptance or merge.
