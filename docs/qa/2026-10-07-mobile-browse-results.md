@@ -44,6 +44,10 @@ git diff --check
   assertions cover its optional long-tag, long-deck and sorting suggestions.
 - Full repository gate will be recorded on the PR at its exact commit; focused
   verification above does not claim the complete gate has finished.
+- The first whole gate exposed Windows EBUSY while removing the generated Anki
+  fixture in both current-session account projects after the UI journey. Added
+  bounded filesystem retries to fixture cleanup; application/storage code is
+  unchanged. Final account and whole-gate verification must include this correction.
 
 Before artifacts: `runtime/247-red`. Final generated-fixture screenshots:
 `runtime/247-green-final/*/browse-cards-320.png`, `browse-cards-390.png`,
