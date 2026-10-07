@@ -75,3 +75,32 @@ the final full gate and independent review remain required before acceptance.
 Rebased onto e272c96d5e59915e9d9d51fe15e516e1f7c0dbbd. The Statistics merge preserves the local Study dates scroller and mobile grid minimum of 44px, and adds the visible month/day time element inside every date. Shared filter shrink constraints are already on main from #235.
 
 The date-label regression now measures all 84 target widths/heights (43.99px subpixel tolerance) and verifies the local horizontal scroller at actual 320/390 widths. Screenshot positioning is instant, matching the earlier audit helper correction. Build passed. Combined populated-label/heatmap tests pass in both engines: 4 passed, 1.0 minute, visible-dates-rebased-focus.log; artifacts runtime/240-integrated-focus. These cover both-theme contrast, pre-selection labels, daily/deck filters, active/empty dates, native touch/full keyboard traversal from #239 and absence of page overflow. Full final-head gate and independent reviews remain pending.
+
+
+## Complete before-image comparison and full-check result
+
+The separate baseline build uses `src/Statistics.tsx` and `src/styles.css`
+from merged base `e272c96d5e59915e9d9d51fe15e516e1f7c0dbbd`; original
+working bytes were restored before browser execution. The capture script
+`runtime/240-capture-before.mjs` follows the visible sample-deck study flow,
+records one answer, opens Statistics and uses the public appearance selector.
+It captures September30, October1 and October7 at actual320/390 widths,
+in both themes and engines:24 viewport images. The assertion that all
+heatmap `time` elements are absent confirms the before state.
+
+Baseline artifacts: `runtime/240-before-captures/evidence.json` and
+`{chromium,webkit}-{320,390}-{light,dark}-2026-{09-30,10-01,10-07}.png`.
+The WebKit320lightOctober1 and Chromium390darkOctober7 images were inspected:
+individual dates are blank before selection, including the active day.
+Corresponding final-code viewport captures and measured contrast/target-size
+checks are in `runtime/240-integrated-focus/test-results` and cover both
+engines, themes, widths and zero/nonzero activity.
+
+Full check on `39e0c028` failed:153 browser tests passed,12 skipped, and one
+WebKit offline-media test stayed on deck detail after Study now. It passed
+three uninstrumented and twelve instrumented isolated reruns. The native
+mouse probe also hit its intended controls. No product fix or passing full
+check is claimed from those diagnostic reruns. Failed artifacts remain in
+`runtime/240-full-failed-39e0c02`; diagnostic artifacts remain in
+`runtime/240-offline-click-diagnostic`. The full gate must be rerun at the
+final commit, with any remaining failure diagnosed before merging.
