@@ -261,3 +261,30 @@ checks pass in both engines: **18 passed, 53.5 seconds**
 (`completion-actions-green.log`, `runtime/235-completion-actions-green`). The 320px
 WebKit viewport screenshot was inspected: both actions share dimensions and stay
 above navigation. A new whole gate and review of this follow-up remain required.
+
+## Audit scrolling correction
+
+The complete `2e5de34` gate finished with **145 browser passes, 12 skips and one
+failure** in 13.0 minutes. Type/lint/build, 687 unit tests (3 skips), 22 tracker
+tests and 45 server tests passed. The WebKit all-page audit clicked Add note but
+did not open its dialog. Full artifacts are preserved in
+`runtime/235-full-check-2e5de34-failed`. This is not a green gate.
+
+Its capture helper calls `scrollTo(0, position)` while the app stylesheet uses
+smooth scrolling. Two deterministic position checks expose that helper defect:
+the first requested capture is **330px** short (`audit-scroll-restoration-red.log`);
+changing only capture traversal to instant scrolling leaves restoration **679px**
+short (`audit-scroll-restore-only-red.log`). The original trace records unstable
+element retries before the unsuccessful click. This supports a scrolling race
+in the audit; no product dialog or scrolling behaviour was changed.
+
+Capture traversal and restoration now request instant scrolling and retain
+one-pixel position assertions before screenshots and subsequent interactions.
+The restored position also waits two animation frames. Repeated complete audits
+pass twice in each engine: **4 passed in 2.4 minutes**, including all 32 page/dialog
+captures per run. Commands: `npx playwright test tests/e2e/mobile-design-audit.spec.ts
+-g 'audit every route' --repeat-each=2 --output=runtime/235-audit-scroll-green` on
+isolated ports 4182/4183. Log: `audit-scroll-green.log`. Both WebKit repeats now
+open Add note and complete review, custom study and account-dialog captures.
+These focused results require a fresh whole gate and review of the committed
+helper correction before acceptance or merge.

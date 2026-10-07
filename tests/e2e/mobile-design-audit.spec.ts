@@ -120,14 +120,20 @@ test('audit every route and its main dialogs on an iPhone sized screen', async (
       let segment = 0
       for (let y = 0; y <= maximumScroll; y = Math.min(y + step, maximumScroll)) {
         await page.evaluate(async position => {
-          scrollTo(0, position)
+          scrollTo({ top: position, behavior: 'instant' })
           await new Promise(requestAnimationFrame)
           await new Promise(requestAnimationFrame)
         }, y)
+        expect(Math.abs((await page.evaluate(() => scrollY)) - y), `${name} screenshot scroll position is settled`).toBeLessThanOrEqual(1)
         await page.screenshot({ path: testInfo.outputPath(`${name}-scroll-${segment++}.png`), animations: 'disabled', timeout: 10_000 })
         if (y === maximumScroll) break
       }
-      await page.evaluate(position => scrollTo(0, position), originalScroll)
+      await page.evaluate(async position => {
+        scrollTo({ top: position, behavior: 'instant' })
+        await new Promise(requestAnimationFrame)
+        await new Promise(requestAnimationFrame)
+      }, originalScroll)
+      expect(Math.abs((await page.evaluate(() => scrollY)) - originalScroll), `${name} restores the scroll position before interacting`).toBeLessThanOrEqual(1)
     }
   }
   async function dialog(button: string, name: string) {
