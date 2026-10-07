@@ -153,13 +153,17 @@ test('bulk move and suspension preserve identities and empty reports open affect
   await page.screenshot({ path: test.info().outputPath('collection-empty-report.png'), fullPage: true })
 })
 
-test('large imported collections page results, report duplicates, and stop expensive regex previews', async ({ page }) => {
+test('large imported collections page results, report duplicates, and stop expensive regex previews', async ({ page, browserName }) => {
+  // The complete 72-note journey measured 28.4s on Windows WebKit, with most
+  // time in the durable import. Keep the subsequent editing assertions in budget.
+  if (browserName === 'webkit') test.setTimeout(90_000)
   await page.goto('/')
   await page.getByRole('button', { name: 'Import Anki package', exact: true }).click()
   const importer = page.getByRole('dialog', { name: 'Import Anki package' })
   await importer.getByLabel('Anki package', { exact: true }).setInputFiles({ name: 'browser.apkg', mimeType: 'application/octet-stream', buffer: await largeFixture() })
   await expect(importer.getByText('72 notes', { exact: true })).toBeVisible({ timeout: PACKAGE_PREVIEW_TIMEOUT })
   await importer.getByRole('button', { name: 'Import package', exact: true }).click()
+  await expect(importer).toBeHidden({ timeout: 45_000 })
   await page.getByRole('link', { name: 'Browse', exact: true }).click()
   await expect(page.getByRole('table').locator('tbody tr')).toHaveCount(50)
   await expect(page.getByText('Page 1 of 2', { exact: true })).toBeVisible()

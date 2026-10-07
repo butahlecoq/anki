@@ -33,6 +33,27 @@ async function withService(run: (service: ReturnType<typeof createSyncService>, 
 
 const request = (origin: string, token: string, operations: unknown[], schema = 22, generation?: string) => fetch(`${origin}/api/sync`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, collectionSchemaVersion: schema, cursor: 0, operations, ...(generation ? { collectionGeneration: generation } : {}) }) })
 
+for (const currentNoteLifetime of [false, true]) test(`media restoration requires the lifetime of its actual note deletion (current: ${currentNoteLifetime})`, async () => {
+  await withService(async (service, token, origin) => {
+    const note = { entityType: 'note', entityId: 'note' }
+    const media = { entityType: 'noteMedia', entityId: 'media' }
+    const createdNote = { ...original, ...note, opId: 'note-created', payload: { id: 'note', deckId: 'deck' }, relatedLifetimes: [{ entityType: 'deck', entityId: 'deck', lifetime: [] }] }
+    const firstDeletion = { ...createdNote, opId: 'note-deleted-first', action: 'delete', parents: ['note-created'], payload: { id: 'note' } }
+    const firstRestore = { ...createdNote, opId: 'note-restored-first', action: 'restore', parents: ['note-deleted-first'], lifetime: ['note-deleted-first'], restoreOf: [{ source: note, opId: 'note-deleted-first', deletedLifetime: [] }] }
+    const createdMedia = { ...original, ...media, opId: 'media-created', payload: { id: 'media', noteId: 'note' }, relatedLifetimes: [{ ...note, lifetime: currentNoteLifetime ? ['note-deleted-first'] : [] }] }
+    const secondDeletion = { ...firstDeletion, opId: 'note-deleted-second', parents: ['note-restored-first'], lifetime: ['note-deleted-first'] }
+    const history = [original, createdNote, ...(currentNoteLifetime ? [] : [createdMedia]), firstDeletion, firstRestore, ...(currentNoteLifetime ? [createdMedia] : []), secondDeletion]
+    assert.equal((await request(origin, token, history)).status, 200)
+    const restoredNote = { ...firstRestore, opId: 'note-restored-second', parents: ['note-deleted-second'], lifetime: ['note-deleted-second'], restoreOf: [{ source: note, opId: 'note-deleted-second', deletedLifetime: ['note-deleted-first'] }] }
+    const restoredMedia = { ...createdMedia, opId: 'media-restored', action: 'restore', parents: ['media-created'], lifetime: ['note-deleted-second'], relatedLifetimes: [{ ...note, lifetime: ['note-deleted-second'] }], restoreOf: [{ source: note, opId: 'note-deleted-second', deletedLifetime: [] }] }
+    const response = await request(origin, token, [restoredNote, restoredMedia])
+    assert.equal(response.status, currentNoteLifetime ? 200 : 400)
+    assert.equal(service.changeCount(), currentNoteLifetime ? history.length + 2 : history.length)
+    if (!currentNoteLifetime) assert.match((await response.json() as { error: string }).error, /provenance|lifetime/i)
+    else assert.equal((await request(origin, token, [restoredNote, restoredMedia])).status, 200)
+  })
+})
+
 test('schema 21 cannot acknowledge a schema 22 restored collection', async () => {
   await withService(async (service, token, origin) => {
     assert.equal((await request(origin, token, [original, deletion, restoration])).status, 200)

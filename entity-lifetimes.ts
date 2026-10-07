@@ -82,16 +82,18 @@ export function validateRestorationEvidence(target: EntityRef, causes: readonly 
     if (!source || source.action !== 'delete' || source.entityType !== cause.source.entityType || source.entityId !== cause.source.entityId) throw new Error('Deletion provenance does not match retained deletion history.')
     if (target.entityType === source.entityType && target.entityId === source.entityId && JSON.stringify(cause.deletedLifetime) !== JSON.stringify(source.lifetime ?? [])) throw new Error('Deletion provenance names the wrong deleted lifetime.')
     const visited = new Set<string>()
-    const belongs = (ref: EntityRef): boolean => {
-      if (ref.entityType === source.entityType && ref.entityId === source.entityId) return true
-      const key = `${ref.entityType}:${ref.entityId}`
+    const belongs = (ref: EntityLifetimeReference): boolean => {
+      if (ref.entityType === source.entityType && ref.entityId === source.entityId) return sameLifetime(ref.lifetime, source.lifetime ?? [])
+      const key = `${ref.entityType}:${ref.entityId}:${JSON.stringify(ref.lifetime)}`
       if (visited.has(key)) return false
       visited.add(key)
-      const history = revisions.filter(revision => revision.entityType === ref.entityType && revision.entityId === ref.entityId && JSON.stringify(revision.lifetime ?? []) === JSON.stringify(cause.deletedLifetime) && revision.action !== 'delete')
-      const heads = new Set(revisionHeads(history))
-      return history.filter(revision => heads.has(revision.opId)).some(revision => relatedEntities(ref.entityType, revision.payload).filter(parent => ['deck', 'note', 'card'].includes(parent.entityType)).some(belongs))
+      const history = revisions.filter(revision => revision.entityType === ref.entityType && revision.entityId === ref.entityId && sameLifetime(revision.lifetime ?? [], ref.lifetime) && revision.action !== 'delete')
+      // A retained stale move must not erase the membership that explains an
+      // original cascade. Historical links still name each ancestor's exact
+      // lifetime, so a later deletion of the same identity is not interchangeable.
+      return history.some(revision => relatedEntities(ref.entityType, revision.payload).filter(parent => ['deck', 'note', 'card'].includes(parent.entityType)).some(parent => belongs({ ...parent, lifetime: revision.relatedLifetimes?.find(reference => sameEntity(reference, parent))?.lifetime ?? [] })))
     }
-    if (!belongs(target)) throw new Error('Deletion provenance names an unrelated record. Nothing was restored.')
+    if (!belongs({ ...target, lifetime: cause.deletedLifetime })) throw new Error('Deletion provenance names an unrelated record or lifetime. Nothing was restored.')
   }
 }
 

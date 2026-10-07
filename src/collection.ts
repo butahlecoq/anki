@@ -2288,7 +2288,7 @@ class DexieCollection extends Dexie {
     if (!operation.parents && this.mergeSyncRevisions(operation.entityType, history).conflicts.length) throw new Error('Resolve the retained sync conflict before editing this record.')
     const payload = operation.action === 'delete' ? this.mergeSyncRevisions(operation.entityType, history).value : operation.payload
     const relatedLifetimes = operation.relatedLifetimes ?? await Promise.all(relatedEntities(operation.entityType, payload).map(async (ref) => ({ ...ref, lifetime: await this.entityLifetime(ref) })))
-    const revision = { ...operation, lifetime: operation.lifetime ?? await this.entityLifetime(operation), relatedLifetimes, parents: operation.parents ?? revisionHeads(history) }
+    const revision = { ...operation, lifetime: operation.lifetime ?? currentLifetime(history), relatedLifetimes, parents: operation.parents ?? revisionHeads(history) }
     if (operation.action === 'delete') await this.deletedEntities.put(await this.deletionBarrier(operation, revision))
     await this.syncRevisions.add({ ...revision, key })
     return this.outbox.add(revision)

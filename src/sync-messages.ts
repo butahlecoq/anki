@@ -10,7 +10,7 @@
 /** The sync result shapes the client can report. */
 export type SyncOutcome =
   | { state: 'complete'; accepted: number; media?: { uploaded: number; downloaded: number; pending: number; uploadError?: string; downloadError?: string }; conflicts?: number }
-  | { state: 'incomplete'; accepted: number; pendingOperations: number; remoteChangesPending: boolean }
+  | { state: 'incomplete'; accepted: number; pendingOperations: number; remoteChangesPending: boolean; pendingIncomingOperations?: number }
   | { state: 'authentication-required' }
   | { state: 'upgrade-required'; target: 'this-device' | 'pc-service' }
   | { state: 'collection-generation-required'; message: string }
@@ -25,6 +25,13 @@ export const SYNC_LOCAL_ONLY = 'This collection stays on this device until you c
 
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? '' : 's'}`
 
+export function incomingDependencyMessage(count: number, moreRemoteChanges?: boolean): string {
+  const next = moreRemoteChanges === true ? 'More changes are waiting from the PC; tap Sync now to continue.'
+    : moreRemoteChanges === false ? 'Sync the sending device, then tap Sync now to continue. Your local work and received changes remain on this device.'
+    : 'Tap Sync now to continue. Your local work and received changes remain on this device.'
+  return `${plural(count, 'received change')} waiting for related records from the PC. ${next}`
+}
+
 export function syncOutcomeMessage(result: SyncOutcome): string {
   if (result.state === 'complete') {
     const media = result.media
@@ -35,6 +42,7 @@ export function syncOutcomeMessage(result: SyncOutcome): string {
     return `Sync complete. ${plural(result.accepted, 'local change')} sent; ${media?.uploaded ?? 0} uploaded and ${media?.downloaded ?? 0} downloaded.${conflicts}`
   }
   if (result.state === 'incomplete') {
+    if (result.pendingIncomingOperations) return `Sync saved progress after sending ${plural(result.accepted, 'local change')}. ${plural(result.pendingOperations, 'local change')} remain. ${incomingDependencyMessage(result.pendingIncomingOperations, result.remoteChangesPending)}`
     const remote = result.remoteChangesPending ? ' More changes are waiting from the PC.' : ''
     return `Sync saved progress after sending ${plural(result.accepted, 'local change')}. ${plural(result.pendingOperations, 'local change')} remain; tap Sync now to continue.${remote}`
   }

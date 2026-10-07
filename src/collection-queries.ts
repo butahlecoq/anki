@@ -310,8 +310,8 @@ export function readSyncMediaReferences(collection: Collection) {
 
 /** Reads pending-operation and conflict counts for sync progress reporting. */
 export function readSyncProgressCounts(collection: Collection) {
-  return readLiveSnapshot(collection, [storage(collection).outbox, storage(collection).syncConflicts], async () => ({
-    pending: await storage(collection).outbox.count(), conflicts: await storage(collection).syncConflicts.count(),
+  return readLiveSnapshot(collection, [storage(collection).outbox, storage(collection).syncConflicts, storage(collection).pendingRemoteOperations], async () => ({
+    pending: await storage(collection).outbox.count(), conflicts: await storage(collection).syncConflicts.count(), incomingPending: await storage(collection).pendingRemoteOperations.count(),
   }))
 }
 

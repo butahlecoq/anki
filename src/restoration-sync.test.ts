@@ -9,11 +9,11 @@ import { unzipSync, zipSync } from 'fflate'
 import initSqlJs, { type SqlJsStatic } from 'sql.js'
 import { createSyncService } from '../server/sync-service'
 import { createSyncHttpHandler } from '../server/sync-http'
-import { pairCollection, syncCollection } from './sync-client'
+import { foregroundSync, pairCollection, syncCollection } from './sync-client'
 import { createCollection, Rating, type Collection, type SyncOperation } from './collection'
 import { exportAnkiPackage } from './anki-export'
 import { prepareAnkiImport } from './anki-import'
-import { readAnkiExportSnapshot, readAnkiImportSnapshot, readCardsForNote, readSyncConflicts } from './collection-queries'
+import { readAnkiExportSnapshot, readAnkiImportSnapshot, readCardsForNote, readSyncConflicts, readSyncProgressCounts } from './collection-queries'
 
 let SQL: SqlJsStatic
 beforeAll(async () => { SQL = await initSqlJs({ locateFile: () => './node_modules/sql.js/dist/sql-wasm.wasm' }) })
@@ -183,6 +183,69 @@ test.each([false, true])('a new card can synchronize and restore after its note 
       expect(restored.cards.filter(card => card.noteId === note.id).map(card => card.id)).toEqual(before.cards.filter(card => card.noteId === note.id).map(card => card.id))
     })
   } finally { uuid.mockRestore() }
+})
+
+test('a stale note move received before restoration cannot invalidate its original deletion evidence', async () => {
+  await withPairedCollections(3, async ([owner, observer, stale]) => {
+    const file = await restorationPackage(true)
+    await (await prepareAnkiImport(file, owner, { SQL })).commit()
+    await syncComplete(owner)
+    await syncComplete(observer)
+    await syncComplete(stale)
+    const original = await readAnkiExportSnapshot(owner)
+    const root = original.decks.find(deck => deck.name === 'Restoration root')!
+    const other = original.decks.find(deck => deck.name === 'Other root')!
+    const note = original.notes.find(row => Object.values(row.fields).includes('a small feline'))!
+    await stale.moveNote(note.id, other.id)
+    await owner.deleteDeck(root.id, { mode: 'delete-subtree' })
+    await syncComplete(owner)
+    await syncComplete(stale)
+    await syncComplete(owner)
+    expect((await readAnkiImportSnapshot(owner)).deletionBarriers.find(barrier => barrier.entityType === 'note' && barrier.entityId === note.id)).toMatchObject({ causes: [{ source: { entityType: 'deck', entityId: note.deckId }, deletedLifetime: [] }] })
+    const restoration = await prepareAnkiImport(file, owner, { SQL })
+    expect(restoration.issues.filter(issue => issue.severity === 'error')).toEqual([])
+    await restoration.commit()
+    await syncComplete(owner)
+    await syncComplete(observer)
+    await syncComplete(stale)
+    const restored = await readAnkiExportSnapshot(owner)
+    for (const device of [observer, stale]) for (const key of ['decks', 'notes', 'cards', 'reviews'] as const) expect((await readAnkiExportSnapshot(device))[key]).toEqual(restored[key])
+    expect(restored.notes.find(row => row.id === note.id)?.deckId).toBe(note.deckId)
+    expect(restored.cards.map(card => card.id)).toEqual(original.cards.map(card => card.id))
+  })
+})
+
+test('a withheld parent restoration stays durable across reopening without claiming sync is complete', async () => {
+  await withPairedCollections(2, async ([owner, receiver]) => {
+    const file = await restorationPackage()
+    await (await prepareAnkiImport(file, owner, { SQL })).commit()
+    await syncComplete(owner)
+    await syncComplete(receiver)
+    const root = (await readAnkiExportSnapshot(owner)).decks.find(deck => deck.parentId === null)!
+    await owner.deleteDeck(root.id, { mode: 'delete-subtree' })
+    await syncComplete(owner)
+    await syncComplete(receiver)
+    await (await prepareAnkiImport(file, owner, { SQL })).commit()
+    const noteRestore = (await owner.pendingOperations()).find(operation => operation.entityType === 'note' && operation.action === 'restore')!
+    expect(await foregroundSync((await owner.syncSettings())!, [noteRestore])).toMatchObject({ state: 'complete', accepted: 1 })
+    await owner.acknowledgeOperations([noteRestore.opId])
+    const waiting = await syncCollection(receiver)
+    expect(waiting).toMatchObject({ state: 'incomplete', pendingOperations: 0, pendingIncomingOperations: 1, remoteChangesPending: false })
+    expect((await readAnkiExportSnapshot(receiver)).notes).toHaveLength(0)
+    const cursor = (await receiver.syncSettings())!.cursor
+    const databaseName = receiver.databaseName
+    receiver.closeLocalCollection()
+    const reopened = createCollection(databaseName)
+    try {
+      expect(await readSyncProgressCounts(reopened)).toMatchObject({ incomingPending: 1 })
+      expect(await syncCollection(reopened)).toMatchObject({ state: 'incomplete', cursor, pendingIncomingOperations: 1 })
+      await syncComplete(owner)
+      await syncComplete(reopened)
+      expect(await readSyncProgressCounts(reopened)).toMatchObject({ incomingPending: 0 })
+      const restored = await readAnkiExportSnapshot(owner)
+      for (const key of ['decks', 'notes', 'cards', 'reviews'] as const) expect((await readAnkiExportSnapshot(reopened))[key]).toEqual(restored[key])
+    } finally { reopened.closeLocalCollection() }
+  })
 })
 
 test('a later-dated prior-lifetime schedule command cannot change a current review', async () => {
