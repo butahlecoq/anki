@@ -42,3 +42,30 @@ This is a draft checkpoint. Integrate the minimum-width/date-scroll region from
 #239 before asserting 44 × 44 targets or absence of page overflow. Add checks for
 nonzero activity, both-theme text contrast, and reliable before/after screenshots.
 The full gate, independent review and acceptance evidence remain outstanding.
+
+## Populated activity and reliable viewport captures
+
+The regression now records one answer through the visible sample-deck review
+journey before opening Statistics. It checks October 7's nonzero activity colour
+against an empty date and measures date-text contrast of at least 4.5:1 in both
+themes at measured widths 320 and 390. Native deck filtering and daily selection
+remain covered. Ordinary viewport screenshots replace the incorrect WebKit
+locator crops. The new WebKit 320px light October 1 and dark active-date captures
+were inspected and show legible dates with navigation visible.
+
+The strengthened width assertion exposed a separate populated Statistics filter
+overflow: Chromium reported an inner width of 331px at a requested 320px width.
+The deck select's intrinsic grid column was 313px inside a 284px label. The
+dedicated red run is `populated-statistics-width-red.log` with artifacts in
+`runtime/240-populated-width-red`. Constraining the label's grid track and giving
+native inputs/selects a shrinkable full width resolves it. This shared control
+fix belongs to #235's page-overflow criterion and is also being verified there;
+the identical changes will be reconciled when this branch integrates that fix.
+
+The populated-date run passes in both engines: **2 passed, 32.0 seconds**.
+Log: `populated-date-labels-green.log`; artifacts:
+`runtime/240-populated-dates-green`. It verifies actual viewport width, no page
+overflow, filtering, active/empty dates, contrast and selection. The earlier
+pending activity/contrast and reliable after-capture checks are now evidenced.
+Minimum 44px date widths still depend on #239; complete before/after evidence,
+the final full gate and independent review remain required before acceptance.
