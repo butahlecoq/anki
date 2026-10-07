@@ -10,7 +10,7 @@ function prepared(commit: () => Promise<void> = async () => {}) {
   const duplicates = { create: 2, update: 0, keepLocal: 0, unchanged: 0 }
   return {
     filename: 'sample.apkg', summary, duplicates, issues: [], skipped: [],
-    plan: { summary, duplicates, issues: [], blocksImport: false, canImportRepresentable: false, requiresPartialChoice: false, skipped: [], savedPartialChoice: false, decisions: [], writes: {} }, commit,
+    plan: { summary, duplicates, issues: [], blocksImport: false, canImportRepresentable: false, requiresPartialChoice: false, skipped: [], savedPartialChoice: false, decisions: [], restorations: [], writes: {} }, commit,
   }
 }
 

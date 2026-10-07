@@ -214,6 +214,115 @@ async function executableTemplatePackage() {
 }
 
 describe('Anki package import', () => {
+  test('restores a deleted package deck locally after reopening and re-imports it idempotently', async () => {
+    const name = `kiroku-local-restoration-${crypto.randomUUID()}`
+    collection = createCollection(name)
+    const file = await japanesePackage()
+    await (await prepareAnkiImport(file, collection, { SQL })).commit()
+    const before = await readAnkiExportSnapshot(collection)
+    const deck = before.decks.find(candidate => before.notes.some(note => note.deckId === candidate.id))!
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+    const deletion = (await collection.pendingOperations()).find(operation => operation.entityId === deck.id && operation.action === 'delete')!
+    collection.closeLocalCollection()
+    collection = createCollection(name)
+    const prepared = await prepareAnkiImport(file, collection, { SQL })
+    expect(prepared.plan).toHaveProperty('restorations', expect.arrayContaining([
+      expect.objectContaining({ entityType: 'note', entityId: before.notes[0].id, causes: [{ source: { entityType: 'deck', entityId: deck.id }, opId: deletion.opId, deletedLifetime: [] }] }),
+    ]))
+    await prepared.commit()
+    const restored = await readAnkiExportSnapshot(collection)
+    for (const key of ['notes', 'cards', 'references'] as const) expect(restored[key].map(row => row.id).sort()).toEqual(before[key].map(row => row.id).sort())
+    const operations = await collection.pendingOperations()
+    for (const note of before.notes.filter(note => note.deckId === deck.id)) expect(operations).toContainEqual(expect.objectContaining({ entityType: 'note', entityId: note.id, action: 'restore', lifetime: [deletion.opId] }))
+    await (await prepareAnkiImport(file, collection, { SQL })).commit()
+    expect((await readAnkiExportSnapshot(collection)).notes).toHaveLength(before.notes.length)
+  })
+
+  test('a stale restoration preview is refused atomically', async () => {
+    collection = createCollection(`kiroku-stale-restoration-${crypto.randomUUID()}`)
+    const file = await japanesePackage()
+    await (await prepareAnkiImport(file, collection, { SQL })).commit()
+    const imported = await readAnkiExportSnapshot(collection)
+    const deck = imported.decks.find(candidate => imported.notes.some(note => note.deckId === candidate.id))!
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+    await collection.createDeck('Unrelated work retained during restoration')
+    const prepared = await prepareAnkiImport(file, collection, { SQL })
+    expect(prepared.plan).toHaveProperty('restorations', expect.any(Array))
+    const affected = imported.notes.find(note => note.deckId === deck.id)!
+    await collection.applyRemoteChanges([{ opId: crypto.randomUUID(), entityType: 'note', entityId: affected.id, action: 'delete', occurredAt: '2026-10-07T00:00:00.000Z', payload: { id: affected.id }, lifetime: [], relatedLifetimes: [] }], 1)
+    const before = await readAnkiExportSnapshot(collection)
+    const pending = await collection.pendingOperations()
+    await expect(prepared.commit()).rejects.toThrow(/changed after this preview/i)
+    expect(await readAnkiExportSnapshot(collection)).toEqual(before)
+    expect(await collection.pendingOperations()).toEqual(pending)
+  })
+
+  test('restoration dependencies survive a receive-page interruption', async () => {
+    collection = createCollection(`kiroku-restoration-source-${crypto.randomUUID()}`)
+    const receiverName = `kiroku-restoration-pages-${crypto.randomUUID()}`
+    syncReplica = createCollection(receiverName)
+    const file = await japanesePackage()
+    await (await prepareAnkiImport(file, collection, { SQL })).commit()
+    const before = await readAnkiExportSnapshot(collection)
+    const created = await collection.pendingOperations()
+    await syncReplica.applyRemoteChanges(created, created.length)
+    await collection.acknowledgeOperations(created.map(operation => operation.opId))
+    const deck = before.decks.find(candidate => before.notes.some(note => note.deckId === candidate.id))!
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+    const deleted = await collection.pendingOperations()
+    await syncReplica.applyRemoteChanges(deleted, created.length + deleted.length)
+    await collection.acknowledgeOperations(deleted.map(operation => operation.opId))
+    await (await prepareAnkiImport(file, collection, { SQL })).commit()
+    const restoration = await collection.pendingOperations()
+    const children = restoration.filter(operation => operation.entityType !== 'deck')
+    const parents = restoration.filter(operation => operation.entityType === 'deck')
+    const cursor = created.length + deleted.length + children.length
+    await syncReplica.applyRemoteChanges(children, cursor)
+    syncReplica.closeLocalCollection()
+    syncReplica = createCollection(receiverName)
+    await syncReplica.applyRemoteChanges(parents, cursor + parents.length)
+    const received = await readAnkiExportSnapshot(syncReplica)
+    for (const key of ['notes', 'cards', 'references'] as const) expect(received[key].map(row => row.id).sort()).toEqual(before[key].map(row => row.id).sort())
+    await syncReplica.applyRemoteChanges(children, cursor + parents.length)
+    await syncReplica.applyRemoteChanges(parents, cursor + parents.length)
+    expect(await readAnkiExportSnapshot(syncReplica)).toEqual(received)
+  })
+
+  test('restores a deleted package deck to a replica after reopening and re-imports it idempotently', async () => {
+    const name = `kiroku-delete-reimport-${crypto.randomUUID()}`
+    collection = createCollection(name)
+    const file = await japanesePackage()
+    await (await prepareAnkiImport(file, collection, { SQL })).commit()
+    const before = await readAnkiExportSnapshot(collection)
+    const deck = before.decks.find((candidate) => before.notes.some((note) => note.deckId === candidate.id))!
+    syncReplica = createCollection(`kiroku-delete-reimport-replica-${crypto.randomUUID()}`)
+    const created = await collection.pendingOperations()
+    await syncReplica.applyRemoteChanges(created, created.length)
+    await collection.acknowledgeOperations(created.map((operation) => operation.opId))
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+    const deleted = await collection.pendingOperations()
+    await syncReplica.applyRemoteChanges(deleted, created.length + deleted.length)
+    await collection.acknowledgeOperations(deleted.map((operation) => operation.opId))
+    expect((await readAnkiExportSnapshot(syncReplica)).notes.filter((note) => note.deckId === deck.id)).toEqual([])
+    collection.closeLocalCollection()
+    collection = createCollection(name)
+    await (await prepareAnkiImport(file, collection, { SQL })).commit()
+    const restored = await readAnkiExportSnapshot(collection)
+    expect(restored.notes.map((note) => note.id).sort()).toEqual(before.notes.map((note) => note.id).sort())
+    expect(restored.cards.map((card) => card.id).sort()).toEqual(before.cards.map((card) => card.id).sort())
+    expect(restored.references.map((reference) => reference.id).sort()).toEqual(before.references.map((reference) => reference.id).sort())
+    const restoration = await collection.pendingOperations()
+    const cursor = created.length + deleted.length + restoration.length
+    await syncReplica.applyRemoteChanges(restoration, cursor)
+    await syncReplica.applyRemoteChanges(restoration, cursor)
+    const received = await readAnkiExportSnapshot(syncReplica)
+    expect(received.notes.map((note) => note.id).sort()).toEqual(before.notes.map((note) => note.id).sort())
+    expect(received.cards.map((card) => card.id).sort()).toEqual(before.cards.map((card) => card.id).sort())
+    expect(received.references.map((reference) => reference.id).sort()).toEqual(before.references.map((reference) => reference.id).sort())
+    await (await prepareAnkiImport(file, collection, { SQL })).commit()
+    expect((await readAnkiExportSnapshot(collection)).notes).toHaveLength(before.notes.length)
+  })
+
   test('takes the redistributable synthetic compatibility corpus through import, render/study, export, and clean re-import', async () => {
     collection = createCollection(`kiroku-compatibility-corpus-${crypto.randomUUID()}`)
     for (const file of [await japanesePackage(), await imageOcclusionPackage()]) {

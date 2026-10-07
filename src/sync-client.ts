@@ -7,13 +7,13 @@ type Fetcher = typeof fetch
 type Change = { cursor: number; opId: string; entityType: string; entityId: string; action: string; occurredAt: string; payload: unknown }
 export type MediaSyncProgress = { uploaded: number; downloaded: number; pending: number; uploadError?: 'authentication-required' | 'unreachable'; downloadError?: 'authentication-required' | 'unreachable' }
 export type SyncProgress =
-  | { phase: 'records'; completed: number; pending: number; cursor: number; remoteChangesPending: boolean }
+  | { phase: 'records'; completed: number; pending: number; cursor: number; remoteChangesPending: boolean; pendingIncomingOperations?: number }
   | { phase: 'upload' | 'download'; completed: number; pending: number; cursor?: number }
   | { phase: 'retry'; task: 'records' | 'upload' | 'download'; completed: number; pending: number; cursor?: number }
   | { phase: 'complete'; accepted: number; cursor: number; conflicts: number; media: MediaSyncProgress }
 type Complete = { state: 'complete'; accepted: number; cursor: number; changes: Change[]; hasMore?: boolean; media?: MediaSyncProgress }
 type UpgradeRequired = { state: 'upgrade-required'; target: 'this-device' | 'pc-service'; message: string; requiredSchemaVersion?: number }
-type SyncResult = Complete | UpgradeRequired | BackupFailed | { state: 'collection-generation-required'; message: string } | { state: 'authentication-required' } | { state: 'unreachable' } | { state: 'incomplete'; accepted: number; cursor: number; pendingOperations: number; remoteChangesPending: boolean }
+type SyncResult = Complete | UpgradeRequired | BackupFailed | { state: 'collection-generation-required'; message: string } | { state: 'authentication-required' } | { state: 'unreachable' } | { state: 'incomplete'; accepted: number; cursor: number; pendingOperations: number; remoteChangesPending: boolean; pendingIncomingOperations?: number }
 type PreflightResult = { state: 'ready' } | Exclude<SyncResult, Complete>
 export type PairingResult = { state: 'paired' } | { state: 'pairing-error' } | { state: 'unreachable' } | { state: 'collection-generation-required' }
 export type PcBackup = { format: string; formatVersion: number; id: string; createdAt: string; reason: 'manual' | 'before-sync' | 'before-restore'; collectionGeneration?: string; collectionSchemaVersion: number; changeCount: number; latestCursor: number; databaseBytes: number; databaseSha256: string; media: Array<{ digest: string; byteLength: number; mimeType: string }>; archiveSha256: string; archiveBytes: number }
@@ -245,15 +245,15 @@ export async function syncCollection(collection: Collection, fetcher: Fetcher = 
     remoteChangesPending = page.hasMore === true
     result = page
     rounds += 1
-    const pending = (await readSyncProgressCounts(collection)).pending
-    onProgress?.({ phase: 'records', completed: accepted, pending, cursor, remoteChangesPending })
+    const { pending, incomingPending } = await readSyncProgressCounts(collection)
+    onProgress?.({ phase: 'records', completed: accepted, pending, cursor, remoteChangesPending, ...(incomingPending ? { pendingIncomingOperations: incomingPending } : {}) })
     if (!remoteChangesPending && pending === 0) break
   }
 
-  const pendingOperations = (await readSyncProgressCounts(collection)).pending
-  if (pendingOperations > 0 || remoteChangesPending) {
-    onProgress?.({ phase: 'retry', task: 'records', completed: accepted, pending: pendingOperations, cursor })
-    return { state: 'incomplete', accepted, cursor, pendingOperations, remoteChangesPending }
+  const { pending: pendingOperations, incomingPending } = await readSyncProgressCounts(collection)
+  if (pendingOperations > 0 || remoteChangesPending || incomingPending > 0) {
+    onProgress?.({ phase: 'retry', task: 'records', completed: accepted, pending: pendingOperations + incomingPending, cursor })
+    return { state: 'incomplete', accepted, cursor, pendingOperations, remoteChangesPending, ...(incomingPending ? { pendingIncomingOperations: incomingPending } : {}) }
   }
 
   if (result) {

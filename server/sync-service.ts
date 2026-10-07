@@ -5,13 +5,14 @@ import { dirname, join } from 'node:path'
 import { createBackupStore } from './backups.js'
 import { readBuildIdentity } from './build-identity.js'
 import { SERVER_MAX_COLLECTION_SCHEMA_VERSION, SYNC_CHANGE_PAGE_SIZE, SYNC_PROTOCOL_VERSION, type IncompatibleSync, type SyncCapabilities, type SyncHealth } from '../sync-capabilities.js'
-import { schemaRequiredByPayload } from '../schema-ladder.js'
+import { restoredLifetime, validateRestorationEvidence, validateLifetimeMetadata, type EntityLifetimeMetadata, type EntityLifetimeOperation } from '../entity-lifetimes.js'
+import { schemaRequiredByOperation } from '../schema-ladder.js'
 import { isSupportedMediaType } from '../anki-interchange.js'
 import { collectionGeneration as getCollectionGeneration, requiresCollectionGeneration } from './collection-generation.js'
 
 type ServiceOptions = { databasePath: string; mediaDirectory?: string }
 type PairRequest = { code: string; deviceId: string }
-type SyncOperation = {
+type SyncOperation = EntityLifetimeMetadata & {
   opId: string
   entityType: string
   entityId: string
@@ -23,22 +24,8 @@ type SyncOperation = {
 }
 type SyncRequest = SyncCapabilities & { collectionGeneration?: string; cursor: number; operations: SyncOperation[] }
 
-type PersistedChange = { entity_type: string; action: string; payload: string; parents: string | null; review_id: string | null }
+type PersistedChange = { entity_type: string; action: string; payload: string; parents: string | null; review_id: string | null; lifetime: string | null; related_lifetimes: string | null; restore_of: string | null }
 
-
-/**
- * Historical protocol-v1 rows have no declared schema. Infer the minimum
- * collection format needed to preserve their payload so a service upgrade
- * cannot reopen a mixed-version sync hole.
- *
- * The per-entity rules come from the shared ladder, so a schema step cannot be
- * added to the migrations and forgotten here.
- */
-function schemaRequiredByOperation(operation: Pick<SyncOperation, 'entityType' | 'action' | 'payload' | 'parents' | 'reviewId'>): number {
-  // A causal link names a card's prior schedule, which only step 15 can hold.
-  const causal = operation.parents !== undefined || operation.reviewId !== undefined ? 15 : 1
-  return Math.max(causal, schemaRequiredByPayload(operation.entityType, operation.payload))
-}
 
 export class SyncCompatibilityError extends Error {
   constructor(readonly incompatibility: IncompatibleSync) {
@@ -114,14 +101,20 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
     const changeColumns = database.prepare('PRAGMA table_info(changes)').all() as Array<{ name: string }>
     if (!changeColumns.some((column) => column.name === 'parents')) database.exec('ALTER TABLE changes ADD COLUMN parents TEXT')
     if (!changeColumns.some((column) => column.name === 'review_id')) database.exec('ALTER TABLE changes ADD COLUMN review_id TEXT')
+    for (const column of ['lifetime', 'related_lifetimes', 'restore_of']) {
+      if (!changeColumns.some((existing) => existing.name === column)) database.exec(`ALTER TABLE changes ADD COLUMN ${column} TEXT`)
+    }
     const storedWatermark = database.prepare("SELECT value FROM collection_metadata WHERE key = 'collection_schema_version'").get() as { value: string } | undefined
     const persistedWatermark = storedWatermark && Number.parseInt(storedWatermark.value, 10)
-    const inferredWatermark = (database.prepare('SELECT entity_type, action, payload, parents, review_id FROM changes').all() as PersistedChange[]).reduce((maximum, change) => {
+    const inferredWatermark = (database.prepare('SELECT entity_type, action, payload, parents, review_id, lifetime, related_lifetimes, restore_of FROM changes').all() as PersistedChange[]).reduce((maximum, change) => {
       try {
         return Math.max(maximum, schemaRequiredByOperation({
           entityType: change.entity_type, action: change.action, payload: JSON.parse(change.payload),
           ...(change.parents !== null ? { parents: JSON.parse(change.parents) as string[] } : {}),
           ...(change.review_id !== null ? { reviewId: change.review_id } : {}),
+          ...(change.lifetime !== null ? { lifetime: JSON.parse(change.lifetime) } : {}),
+          ...(change.related_lifetimes !== null ? { relatedLifetimes: JSON.parse(change.related_lifetimes) } : {}),
+          ...(change.restore_of !== null ? { restoreOf: JSON.parse(change.restore_of) } : {}),
         }))
       } catch {
         // Corrupt historic payloads still require the newest service/client pair.
@@ -312,11 +305,21 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
         const currentWatermark = persistedCollectionSchemaVersion()
         const nextWatermark = assertCapabilities(request, currentWatermark)
         validateRevisionParents(request.operations, database)
-        const insert = database.prepare('INSERT OR IGNORE INTO changes (op_id, device_id, entity_type, entity_id, action, occurred_at, payload, parents, review_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        for (const operation of request.operations) validateLifetimeMetadata(operation as EntityLifetimeOperation)
+        if (request.operations.some(operation => operation.action === 'restore')) {
+          const retained = database.prepare('SELECT op_id, entity_type, entity_id, action, payload, parents, lifetime, related_lifetimes, restore_of FROM changes').all() as Array<PersistedChange & { op_id: string; entity_id: string }>
+          const evidence = [...retained.map(row => ({ opId: row.op_id, entityType: row.entity_type, entityId: row.entity_id, action: row.action, payload: JSON.parse(row.payload), parents: row.parents !== null ? JSON.parse(row.parents) : undefined, lifetime: row.lifetime !== null ? JSON.parse(row.lifetime) : undefined, relatedLifetimes: row.related_lifetimes !== null ? JSON.parse(row.related_lifetimes) : undefined, restoreOf: row.restore_of !== null ? JSON.parse(row.restore_of) : undefined })), ...request.operations] as EntityLifetimeOperation[]
+          for (const operation of request.operations.filter(operation => operation.action === 'restore')) {
+            if (!Array.isArray(operation.restoreOf) || !operation.restoreOf.length || !Array.isArray(operation.lifetime) || !Array.isArray(operation.relatedLifetimes)) throw new Error('Restoration requires deletion provenance and original lifetime references.')
+            if (JSON.stringify(operation.lifetime) !== JSON.stringify(restoredLifetime(operation.restoreOf))) throw new Error('Restoration lifetime does not match its deletion provenance.')
+            validateRestorationEvidence(operation as EntityLifetimeOperation, operation.restoreOf, evidence)
+          }
+        }
+        const insert = database.prepare('INSERT OR IGNORE INTO changes (op_id, device_id, entity_type, entity_id, action, occurred_at, payload, parents, review_id, lifetime, related_lifetimes, restore_of) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
         for (const operation of request.operations) {
-          const previous = database.prepare('SELECT entity_type, entity_id, action, occurred_at, payload, parents, review_id FROM changes WHERE op_id = ?').get(operation.opId) as { entity_type: string; entity_id: string; action: string; occurred_at: string; payload: string; parents: string | null; review_id: string | null } | undefined
-          if (previous && (previous.entity_type !== operation.entityType || previous.entity_id !== operation.entityId || previous.action !== operation.action || previous.occurred_at !== operation.occurredAt || previous.payload !== JSON.stringify(operation.payload) || previous.parents !== (operation.parents ? JSON.stringify(operation.parents) : null) || previous.review_id !== (operation.reviewId ?? null))) throw new Error('Sync operation identity was reused with different content')
-          const result = insert.run(operation.opId, device.id, operation.entityType, operation.entityId, operation.action, operation.occurredAt, JSON.stringify(operation.payload), operation.parents ? JSON.stringify(operation.parents) : null, operation.reviewId ?? null)
+          const previous = database.prepare('SELECT entity_type, entity_id, action, occurred_at, payload, parents, review_id, lifetime, related_lifetimes, restore_of FROM changes WHERE op_id = ?').get(operation.opId) as { entity_type: string; entity_id: string; action: string; occurred_at: string; payload: string; parents: string | null; review_id: string | null; lifetime: string | null; related_lifetimes: string | null; restore_of: string | null } | undefined
+          if (previous && (previous.entity_type !== operation.entityType || previous.entity_id !== operation.entityId || previous.action !== operation.action || previous.occurred_at !== operation.occurredAt || previous.payload !== JSON.stringify(operation.payload) || previous.parents !== (operation.parents ? JSON.stringify(operation.parents) : null) || previous.review_id !== (operation.reviewId ?? null) || previous.lifetime !== (operation.lifetime !== undefined ? JSON.stringify(operation.lifetime) : null) || previous.related_lifetimes !== (operation.relatedLifetimes !== undefined ? JSON.stringify(operation.relatedLifetimes) : null) || previous.restore_of !== (operation.restoreOf !== undefined ? JSON.stringify(operation.restoreOf) : null))) throw new Error('Sync operation identity was reused with different content')
+          const result = insert.run(operation.opId, device.id, operation.entityType, operation.entityId, operation.action, operation.occurredAt, JSON.stringify(operation.payload), operation.parents ? JSON.stringify(operation.parents) : null, operation.reviewId ?? null, operation.lifetime !== undefined ? JSON.stringify(operation.lifetime) : null, operation.relatedLifetimes !== undefined ? JSON.stringify(operation.relatedLifetimes) : null, operation.restoreOf !== undefined ? JSON.stringify(operation.restoreOf) : null)
           accepted += Number(result.changes)
         }
         if (nextWatermark > currentWatermark) {
@@ -328,7 +331,7 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
         database.exec('ROLLBACK')
         throw error
       }
-      const rows = database.prepare('SELECT cursor, op_id, device_id, entity_type, entity_id, action, occurred_at, payload, parents, review_id FROM changes WHERE cursor > ? ORDER BY cursor LIMIT ?').all(request.cursor, SYNC_CHANGE_PAGE_SIZE + 1) as Array<{ cursor: number; op_id: string; device_id: string; entity_type: string; entity_id: string; action: string; occurred_at: string; payload: string; parents: string | null; review_id: string | null }>
+      const rows = database.prepare('SELECT cursor, op_id, device_id, entity_type, entity_id, action, occurred_at, payload, parents, review_id, lifetime, related_lifetimes, restore_of FROM changes WHERE cursor > ? ORDER BY cursor LIMIT ?').all(request.cursor, SYNC_CHANGE_PAGE_SIZE + 1) as Array<{ cursor: number; op_id: string; device_id: string; entity_type: string; entity_id: string; action: string; occurred_at: string; payload: string; parents: string | null; review_id: string | null; lifetime: string | null; related_lifetimes: string | null; restore_of: string | null }>
       const hasMore = rows.length > SYNC_CHANGE_PAGE_SIZE
       const changes = hasMore ? rows.slice(0, SYNC_CHANGE_PAGE_SIZE) : rows
       const cursor = changes.at(-1)?.cursor ?? request.cursor
@@ -350,6 +353,9 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
           payload: JSON.parse(change.payload) as unknown,
           ...(change.parents !== null ? { parents: JSON.parse(change.parents) as string[] } : {}),
           ...(change.review_id !== null ? { reviewId: change.review_id } : {}),
+          ...(change.lifetime !== null ? { lifetime: JSON.parse(change.lifetime) } : {}),
+          ...(change.related_lifetimes !== null ? { relatedLifetimes: JSON.parse(change.related_lifetimes) } : {}),
+          ...(change.restore_of !== null ? { restoreOf: JSON.parse(change.restore_of) } : {}),
         })),
       }
     },

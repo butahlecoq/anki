@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto'
 import Dexie from 'dexie'
 import { afterEach, describe, expect, test } from 'vitest'
 import { BASIC_NOTE_TYPE_ID, createCollection, Rating, State, type CardRecord, type Collection, type DeckOptionSettings, type SyncOperation } from './collection'
-import { readAnkiExportSnapshot, readCard, readCardReviewHistory, readCardsForNote, readDeck, readDeckOptionGroup, readDeletedEntity, readNote, readNoteMediaReference, readNoteType, readReceivedOperationCount, readReviewEntry } from './collection-queries'
+import { readAnkiExportSnapshot, readCard, readCardReviewHistory, readCardsForNote, readDeck, readDeckOptionGroup, readDeletedEntity, readNote, readNoteMediaReference, readNoteType, readReceivedOperationCount, readReviewEntry, readSyncProgressCounts } from './collection-queries'
 import { intervalLabel } from './scheduler'
 import { createCustomStudy } from './custom-study'
 import { deleteIndexedDbFixtureRow, insertIndexedDbLegacyMediaBlob, overwriteIndexedDbBackupReceipt, overwriteIndexedDbLegacyCard } from '../tests/helpers/damage-indexeddb-media'
@@ -38,6 +38,69 @@ afterEach(async () => {
 })
 
 describe('local collection', () => {
+  test.each(['direct', 'cascade', 'missing', 'ambiguous'] as const)('version 21 migration preserves %s deletion provenance', async (scenario) => {
+    const databaseName = `kiroku-test-${crypto.randomUUID()}`
+    const old = new Dexie(databaseName)
+    old.version(21).stores({ decks: 'id, parentId, optionGroupId, name, createdAt', notes: 'id, deckId, typeId, updatedAt', cards: 'id, deckId, noteId, templateId, due, state, newPosition', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId', deletedEntities: 'key, entityType, entityId, occurredAt', noteMedia: 'id, noteId, digest, side, kind, updatedAt', mediaBlobs: 'digest, verifiedAt', noteTypes: 'id, name, updatedAt', deckOptionGroups: 'id, name, protected', syncRevisions: 'opId, key', syncConflicts: 'key, entityType, entityId' })
+    const note = directNote('legacy-deleted-note', 'legacy-deleted-deck')
+    const created: SyncOperation = { opId: 'legacy-note-created', entityType: 'note', entityId: note.id, action: 'create', occurredAt: note.createdAt, payload: note, parents: [] }
+    const sourceType = scenario === 'cascade' ? 'deck' : 'note'
+    const sourceId = sourceType === 'deck' ? note.deckId : note.id
+    const deleted: SyncOperation = { opId: 'legacy-actual-deletion', entityType: sourceType, entityId: sourceId, action: 'delete', occurredAt: '2026-10-01T01:00:00.000Z', payload: { id: sourceId }, parents: sourceType === 'note' ? [created.opId] : [] }
+    await old.table('syncRevisions').add({ ...created, key: `note:${note.id}` })
+    if (scenario !== 'missing') {
+      await old.table('syncRevisions').add({ ...deleted, key: `${sourceType}:${sourceId}` })
+      await old.table('outbox').add(deleted)
+    }
+    if (scenario === 'ambiguous') await old.table('syncRevisions').add({ ...deleted, opId: 'legacy-other-deletion', key: `${sourceType}:${sourceId}` })
+    await old.table('deletedEntities').add({ key: `note:${note.id}`, entityType: 'note', entityId: note.id, occurredAt: '2099-01-01T00:00:00.000Z' })
+    old.close()
+    collection = createCollection(databaseName)
+    const tombstone = await readDeletedEntity(collection, `note:${note.id}`)
+    if (scenario === 'missing' || scenario === 'ambiguous') {
+      expect(tombstone).toMatchObject({ entityId: note.id, causes: [], provenanceError: expect.stringMatching(/deletion.*provenance/i) })
+    } else {
+      expect(tombstone).toMatchObject({ causes: [{ source: { entityType: sourceType, entityId: sourceId }, opId: deleted.opId, deletedLifetime: [] }] })
+      expect((await collection.pendingOperations())[0]).toMatchObject({ opId: deleted.opId, lifetime: [] })
+    }
+  })
+
+  test.each(['note', 'deck'] as const)('deletion provenance survives reopen for %s deletion and its descendants', async (sourceType) => {
+    const databaseName = `kiroku-test-${crypto.randomUUID()}`
+    collection = createCollection(databaseName)
+    const remote = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    try {
+      const parent = await collection.createDeck('Restoration parent')
+      const deck = await collection.createDeck('Restoration child', { parentId: parent.id })
+      const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
+      const cards = await readCardsForNote(collection, note.id)
+      const media = await collection.attachMedia(note.id, { file: new File(['sound'], 'sound.mp3', { type: 'audio/mpeg' }), side: 'front' })
+      const created = await collection.pendingOperations()
+      await remote.applyRemoteChanges(created, created.length)
+      if (sourceType === 'note') await collection.deleteNote(note.id)
+      else await collection.deleteDeck(parent.id, { mode: 'delete-subtree' })
+      const deletions = (await collection.pendingOperations()).filter((operation) => operation.action === 'delete')
+      const sourceId = sourceType === 'note' ? note.id : deck.id
+      const source = deletions.find((operation) => operation.entityType === sourceType && operation.entityId === sourceId)!
+      expect(source).toBeDefined()
+      collection.closeLocalCollection()
+      collection = createCollection(databaseName)
+      expect((await collection.pendingOperations()).find((operation) => operation.opId === source.opId)).toMatchObject({
+        opId: source.opId, lifetime: [],
+        relatedLifetimes: expect.arrayContaining([{ entityType: 'deck', entityId: sourceType === 'note' ? deck.id : parent.id, lifetime: [] }]),
+      })
+      await remote.applyRemoteChanges(deletions, created.length + deletions.length)
+      const expectedCause = { source: { entityType: sourceType, entityId: sourceId }, opId: source.opId, deletedLifetime: [] }
+      for (const target of [collection, remote]) {
+        for (const key of [`note:${note.id}`, ...cards.map((card) => `card:${card.id}`), `noteMedia:${media.id}`]) {
+          expect(await readDeletedEntity(target, key)).toMatchObject({ causes: [expectedCause] })
+        }
+      }
+    } finally {
+      await remote.removeLocalCollection()
+    }
+  })
+
   test('upgrades v6 note types to standard without changing card scheduling data', async () => {
     const databaseName = `kiroku-test-${crypto.randomUUID()}`
     const old = new Dexie(databaseName)
@@ -1839,4 +1902,82 @@ describe('local collection', () => {
     expect(media?.blob.type).toBe('image/png')
     expect(media?.blob.size).toBe(4)
   })
+})
+
+
+describe('received operation identity', () => {
+  test('rejects conflicting envelopes before deduplicating one receive batch', async () => {
+    collection = createCollection(`kiroku-batch-envelope-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Local work remains')
+    await collection.configureSync({ endpoint: 'http://127.0.0.1:1', token: 'synthetic-local-fixture', cursor: 0 })
+    const before = await readAnkiExportSnapshot(collection)
+    const operation: SyncOperation = { opId: 'same-batch-id', entityType: 'deck', entityId: deck.id, action: 'update', occurredAt: deck.createdAt, payload: { ...deck, name: 'First version' } }
+    await expect(collection.applyRemoteChanges([operation, { ...operation, payload: { ...deck, name: 'Conflicting version' } }], 2)).rejects.toThrow('identity was reused')
+    expect(await readAnkiExportSnapshot(collection)).toEqual(before)
+    expect(await readReceivedOperationCount(collection)).toBe(0)
+  })
+
+  test.each(['entityType', 'entityId', 'reviewId'] as const)('rejects a received replay changing only %s', async field => {
+    collection = createCollection(`kiroku-replay-envelope-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Retained deck')
+    await collection.configureSync({ endpoint: 'http://127.0.0.1:1', token: 'synthetic-local-fixture', cursor: 0 })
+    const operation: SyncOperation = { opId: 'replayed-envelope-id', entityType: 'deck', entityId: deck.id, action: 'update', occurredAt: deck.createdAt, payload: deck }
+    await collection.applyRemoteChanges([operation], 1)
+    const before = await readAnkiExportSnapshot(collection)
+    const changed: SyncOperation = { ...operation, [field]: field === 'entityType' ? 'note' : 'different-identity' }
+    await expect(collection.applyRemoteChanges([changed], 2)).rejects.toThrow('identity was reused')
+    expect(await readAnkiExportSnapshot(collection)).toEqual(before)
+    expect(await readReceivedOperationCount(collection)).toBe(1)
+    expect((await collection.syncSettings())?.cursor).toBe(1)
+  })
+
+  test('retains a pending envelope when a replay changes its entity identity', async () => {
+    collection = createCollection(`kiroku-pending-envelope-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Local deck remains')
+    await collection.configureSync({ endpoint: 'http://127.0.0.1:1', token: 'synthetic-local-fixture', cursor: 0 })
+    const operation: SyncOperation = { opId: 'pending-envelope-id', entityType: 'deck', entityId: 'future-deck', action: 'update', occurredAt: deck.createdAt, payload: { ...deck, id: 'future-deck' }, lifetime: ['future-deletion'], relatedLifetimes: [{ entityType: 'deckOptionGroup', entityId: deck.optionGroupId, lifetime: [] }] }
+    await collection.applyRemoteChanges([operation], 1)
+    const before = await readAnkiExportSnapshot(collection)
+    await expect(collection.applyRemoteChanges([{ ...operation, entityId: 'different-deck' }], 2)).rejects.toThrow('identity was reused')
+    expect(await readAnkiExportSnapshot(collection)).toEqual(before)
+    expect(await readReceivedOperationCount(collection)).toBe(0)
+    expect((await collection.syncSettings())?.cursor).toBe(1)
+    await collection.applyRemoteChanges([operation], 2)
+    expect(await readSyncProgressCounts(collection)).toMatchObject({ incomingPending: 1 })
+  })
+})
+
+
+test('a deferred card whose successor is still missing a lifetime commits bounded receive progress', async () => {
+  const databaseName = `kiroku-deferred-card-${crypto.randomUUID()}`
+  collection = createCollection(databaseName)
+  const original = await collection.createDeck('Original card deck')
+  const destination = await collection.createDeck('Current note deck')
+  const note = await collection.createBasicNote(original.id, { front: 'retained question', back: 'retained answer' })
+  await collection.moveNote(note.id, destination.id)
+  const card = (await readCardsForNote(collection, note.id))[0]
+  const parent = (await collection.pendingOperations()).filter(operation => operation.entityType === 'card' && operation.entityId === card.id).at(-1)!
+  await collection.configureSync({ endpoint: 'http://127.0.0.1:1', token: 'synthetic-local-fixture', cursor: 0 })
+  const intermediate: SyncOperation = { opId: 'deferred-intermediate-card', entityType: 'card', entityId: card.id, action: 'update', occurredAt: note.updatedAt, payload: { ...card, deckId: original.id }, parents: [parent.opId], lifetime: [], relatedLifetimes: [{ entityType: 'deck', entityId: original.id, lifetime: [] }, { entityType: 'note', entityId: note.id, lifetime: [] }] }
+  const successor: SyncOperation = { ...intermediate, opId: 'deferred-successor-card', payload: card, parents: [intermediate.opId], relatedLifetimes: [{ entityType: 'deck', entityId: destination.id, lifetime: [] }, { entityType: 'note', entityId: note.id, lifetime: ['future-note-deletion'] }] }
+  const before = await readAnkiExportSnapshot(collection)
+  let watchdog: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      collection.applyRemoteChanges([intermediate, successor], 2),
+      new Promise<never>((_, reject) => { watchdog = setTimeout(() => reject(new Error('receive made no bounded durable progress')), 2000) }),
+    ])
+  } catch (error) {
+    collection.closeLocalCollection()
+    throw error
+  } finally { clearTimeout(watchdog) }
+  expect(await readAnkiExportSnapshot(collection)).toEqual(before)
+  expect(await readSyncProgressCounts(collection)).toMatchObject({ incomingPending: 2 })
+  expect((await collection.syncSettings())?.cursor).toBe(2)
+  collection.closeLocalCollection()
+  collection = createCollection(databaseName)
+  expect(await readSyncProgressCounts(collection)).toMatchObject({ incomingPending: 2 })
+  await collection.applyRemoteChanges([], 2)
+  expect(await readAnkiExportSnapshot(collection)).toEqual(before)
+  expect(await readReceivedOperationCount(collection)).toBe(0)
 })

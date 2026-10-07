@@ -34,6 +34,21 @@ describe('a completed sync', () => {
       .toBe('Sync saved progress after sending 100 local changes. 25 local changes remain; tap Sync now to continue. More changes are waiting from the PC.')
   })
 
+  test('retained incoming changes never read as a completed sync', () => {
+    const message = syncOutcomeMessage({ state: 'incomplete', accepted: 0, pendingOperations: 0, pendingIncomingOperations: 1, remoteChangesPending: false })
+    expect(message).toContain('1 received change')
+    expect(message).toContain('related records')
+    expect(message).toContain('Sync the sending device')
+    expect(message).not.toContain('Sync complete')
+  })
+
+  test('dependencies on later pages report saved progress without claiming records are missing', () => {
+    const message = syncOutcomeMessage({ state: 'incomplete', accepted: 2, pendingOperations: 1, pendingIncomingOperations: 3, remoteChangesPending: true })
+    expect(message).toContain('3 received changes')
+    expect(message).toContain('More changes are waiting from the PC')
+    expect(message).not.toContain('Sync the sending device')
+  })
+
   test('media awaiting pairing is distinguished from media that will retry', () => {
     const needsPairing = syncOutcomeMessage(complete({ pending: 2, uploadError: 'authentication-required' }))
     expect(needsPairing).toContain('still need pairing')

@@ -10,6 +10,7 @@
  * The Collection now owns the multi-table write. This module describes what it
  * is given, so `anki-import` depends on the contract rather than on the store.
  */
+import type { DeletionCause, EntityRef } from '../entity-lifetimes'
 import type { CardRecord, Note, NoteMediaReference, NoteType, Deck, ReviewEntry } from './collection'
 
 export interface ImportedWrite<T> {
@@ -25,8 +26,11 @@ export interface ImportedBlob {
   verifiedAt: string
 }
 
+export interface ImportedRestoration extends EntityRef { causes: readonly DeletionCause[] }
+
 /** Everything one import would write, checked and ready. */
 export interface ImportedPackageWrites {
+  restorations?: readonly ImportedRestoration[]
   decks: ImportedWrite<Deck>[]
   deletedDecks: Deck[]
   noteTypes: ImportedWrite<NoteType>[]
@@ -42,6 +46,19 @@ export interface ImportedPackageWrites {
 }
 
 export interface ImportedPartialChoice { key: string; value: unknown }
+
+/** Stable identities covered by both the restoration preview and atomic commit. */
+export function importedEntityRefs(writes: ImportedPackageWrites): EntityRef[] {
+  return [
+    ...writes.decks.map(({ value }) => ({ entityType: 'deck' as const, entityId: value.id })),
+    ...writes.noteTypes.map(({ value }) => ({ entityType: 'noteType' as const, entityId: value.id })),
+    ...writes.notes.map(({ value }) => ({ entityType: 'note' as const, entityId: value.id })),
+    ...writes.cards.map(({ value }) => ({ entityType: 'card' as const, entityId: value.id })),
+    ...writes.reviews.map(value => ({ entityType: 'review' as const, entityId: value.id })),
+    ...writes.updatedReviews.map(value => ({ entityType: 'review' as const, entityId: value.id })),
+    ...writes.references.map(({ value }) => ({ entityType: 'noteMedia' as const, entityId: value.id })),
+  ]
+}
 
 /**
  * How a row is compared for the stale-preview check. Media is fingerprinted by

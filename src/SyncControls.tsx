@@ -6,7 +6,7 @@ import { createAndDownloadPcBackup, listPcBackups, pairCollection, previewPcBack
 import { supportsServiceWorkers } from './browser-capabilities'
 import { useDialogKeyboard } from './use-dialog-keyboard'
 import { AnkiWebAccountDialog } from './AnkiWebAccountDialog'
-import { pairOutcomeMessage, pairingClosesOn, SYNC_LOCAL_ONLY, syncOutcomeMessage } from './sync-messages'
+import { incomingDependencyMessage, pairOutcomeMessage, pairingClosesOn, SYNC_LOCAL_ONLY, syncOutcomeMessage } from './sync-messages'
 import { readSyncProgressCounts, readSyncStatusSnapshot } from './collection-queries'
 export function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: boolean }) {
   const settings = useLiveQuery(() => collection.syncSettings(), [], undefined)
@@ -14,7 +14,7 @@ export function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: b
     const [status, missing, pending, backup] = await Promise.all([
       readSyncStatusSnapshot(collection),
       collection.missingReferencedMedia(),
-      collection.pendingOperations(),
+      readSyncProgressCounts(collection),
       collection.lastVerifiedPcBackup(),
     ])
     return {
@@ -23,7 +23,8 @@ export function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: b
       mediaFiles: status.media.length,
       mediaBytes: status.media.reduce((total, item) => total + item.byteLength, 0),
       missingMedia: missing.length,
-      pending: pending.length,
+      pending: pending.pending,
+      incomingPending: pending.incomingPending,
       backup,
     }
   }, [], undefined)
@@ -91,7 +92,7 @@ export function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: b
     try {
       const result = await syncCollection(collection, fetch.bind(window), (progress) => {
         switch (progress.phase) {
-          case 'records': setMessage(`Syncing records · ${progress.completed} accepted · ${progress.pending} local changes remain · cursor ${progress.cursor}.${progress.remoteChangesPending ? ' More PC records are queued.' : ''}`); break
+          case 'records': setMessage(`Syncing records · ${progress.completed} accepted · ${progress.pending} local changes remain · cursor ${progress.cursor}.${progress.pendingIncomingOperations ? ` ${progress.pendingIncomingOperations} received changes waiting for related records.` : ''}${progress.remoteChangesPending ? ' More PC records are queued.' : ''}`); break
           case 'upload': setMessage(`Uploading media · ${progress.completed} sent · ${progress.pending} waiting.`); break
           case 'download': setMessage(`Downloading media · ${progress.completed} saved · ${progress.pending} waiting.`); break
           case 'retry': {
@@ -191,7 +192,7 @@ export function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: b
 
   return (
     <section className="sync-controls" aria-label="PC sync">
-      <div><span className="section-code">SYNC // {settings ? 'PAIRED' : 'LOCAL ONLY'}</span><p aria-live="polite">{settings && !offlineSyncAvailable ? 'Sync is paused until Kiroku confirms its offline app shell is ready.' : message}</p></div>
+      <div><span className="section-code">SYNC // {settings ? 'PAIRED' : 'LOCAL ONLY'}</span><p aria-live="polite">{settings && !offlineSyncAvailable ? 'Sync is paused until Kiroku confirms its offline app shell is ready.' : message === SYNC_LOCAL_ONLY && offlineInventory?.incomingPending ? incomingDependencyMessage(offlineInventory.incomingPending) : message}</p></div>
       <details className="offline-storage-status">
         <summary data-testid="offline-storage-summary">Offline storage and local collection</summary>
         <p>{persistence === 'granted' ? 'Persistent storage is enabled for this app.' : persistence === 'denied' ? 'The browser may clear this app’s local data to free space. Keep a verified backup.' : 'This browser cannot protect local storage from automatic cleanup.'}</p>

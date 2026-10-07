@@ -42,6 +42,17 @@ async function importInto(writes: ImportedPackageWrites) {
 }
 
 describe('an imported package passes the same invariants as a hand-written write', () => {
+  test('ordinary imported writes cannot bypass a deletion barrier', async () => {
+    collection = createCollection(`import-deletion-barrier-${crypto.randomUUID()}`)
+    const target = await collection.createDeck('Keep identities')
+    const original = await collection.createBasicNote(target.id, { front: 'question', back: 'answer' })
+    await collection.deleteNote(original.id)
+    const pending = await collection.pendingOperations()
+    await importInto({ ...empty(), notes: [{ value: original, action: 'create' }] })
+    expect(await readNote(collection, original.id)).toBeUndefined()
+    expect(await collection.pendingOperations()).toEqual(pending)
+  })
+
   test('a deck naming a parent that does not exist is refused', async () => {
     collection = createCollection(`import-invariants-${crypto.randomUUID()}`)
     await importInto({ ...empty(), decks: [deck('orphan', 'Orphan', 'no-such-parent')] })

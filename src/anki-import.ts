@@ -1,9 +1,11 @@
+import { validateRestorationEvidence } from '../entity-lifetimes'
+import type { ImportedRestoration } from './import-contract'
 import { blobBytes, mediaTypeForFilename } from '../anki-interchange'
 import type { SqlJsStatic } from 'sql.js'
 import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url'
 import type { CardRow, CollectionData, RevlogRow } from 'ankipack'
 import { DEFAULT_DECK_OPTION_GROUP_ID, State, type CardRecord, type Collection, type Deck, type Note, type NoteMediaReference, type NoteType, type ReviewEntry } from './collection'
-import { rowFingerprint as fingerprint } from './import-contract'
+import { importedEntityRefs, rowFingerprint as fingerprint } from './import-contract'
 import { parseAnkiImageOcclusion, type AnkiImageOcclusionFields } from './image-occlusion-interchange'
 import { digestMedia, validateMedia, type MediaKind, type MediaSide } from './media'
 import { validateTemplate } from './template-renderer'
@@ -88,6 +90,7 @@ export interface AnkiImportProjection {
 
 interface StoredMedia { digest: string; blob: ArrayBuffer; byteLength: number; mimeType: string; verifiedAt: string }
 interface ImportWrites {
+  restorations?: readonly ImportedRestoration[]
   decks: Array<{ value: Deck; action: 'create' | 'update' }>
   noteTypes: Array<{ value: NoteType; action: 'create' | 'update' }>
   notes: Array<{ value: Note; action: 'create' | 'update' }>
@@ -104,6 +107,7 @@ interface ImportWrites {
 }
 
 export interface AnkiImportPlan {
+  restorations: readonly ImportedRestoration[]
   summary: AnkiImportSummary
   duplicates: AnkiDuplicateSummary
   issues: AnkiImportIssue[]
@@ -131,7 +135,7 @@ export interface AnkiImportPlan {
 
 export interface AnkiImportCommitOptions { importRepresentableOnly?: boolean }
 
-type Snapshot = { table: 'decks' | 'noteTypes' | 'notes' | 'cards' | 'reviewEntries' | 'noteMedia' | 'mediaBlobs' | '$tableCounts'; id: string; value: string }
+type Snapshot = { table: 'decks' | 'noteTypes' | 'notes' | 'cards' | 'reviewEntries' | 'noteMedia' | 'mediaBlobs' | 'deletedEntities' | '$tableCounts'; id: string; value: string }
 
 export interface PrepareAnkiImportOptions { SQL?: SqlJsStatic; now?: Date; sourceIdentity?: string; sourceFingerprint?: string }
 
@@ -627,6 +631,7 @@ export class PreparedAnkiImport {
       sourceIdentity,
       sourceFingerprint,
       decisions,
+      restorations: writes.restorations ?? [],
       writes: {
         decks: writes.decks,
         noteTypes: writes.noteTypes,
@@ -1376,6 +1381,18 @@ const decisions: AnkiImportDecision[] = []
     snapshots.push({ table: 'mediaBlobs', id: value.digest, value: fingerprint(existing) })
     if (!existing) writes.blobs.push(value)
   }
+
+  const barriers = new Map(local.deletionBarriers.map(barrier => [barrier.key, barrier]))
+  const candidates = importedEntityRefs(writes)
+  writes.restorations = candidates.flatMap(target => {
+    const key = `${target.entityType}:${target.entityId}`
+    const barrier = barriers.get(key)
+    snapshots.push({ table: 'deletedEntities', id: key, value: fingerprint(barrier) })
+    if (!barrier) return []
+    if (barrier.provenanceError) throw new Error(barrier.provenanceError)
+    validateRestorationEvidence(target, barrier.causes ?? [], local.retainedRevisions)
+    return [{ ...target, causes: barrier.causes! }]
+  })
 
   for (const item of skipped) {
     decisions.push({ entity: 'note', id: item.noteId, action: 'skip' })

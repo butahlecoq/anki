@@ -30,6 +30,8 @@ export function readAnkiImportSnapshot(collection: Collection, partialChoiceKey?
     references: await storage(collection).noteMedia.toArray(),
     partialChoice: partialChoiceKey ? await storage(collection).settings.get(partialChoiceKey) : undefined,
     noteDeletionUndo: await storage(collection).settings.get('noteDeletionUndo'),
+    deletionBarriers: await storage(collection).deletedEntities.toArray(),
+    retainedRevisions: await storage(collection).syncRevisions.toArray(),
     tableCounts: await Promise.all(tables.map((table) => table.count())),
   }))
 }
@@ -308,8 +310,8 @@ export function readSyncMediaReferences(collection: Collection) {
 
 /** Reads pending-operation and conflict counts for sync progress reporting. */
 export function readSyncProgressCounts(collection: Collection) {
-  return readLiveSnapshot(collection, [storage(collection).outbox, storage(collection).syncConflicts], async () => ({
-    pending: await storage(collection).outbox.count(), conflicts: await storage(collection).syncConflicts.count(),
+  return readLiveSnapshot(collection, [storage(collection).outbox, storage(collection).syncConflicts, storage(collection).pendingRemoteOperations], async () => ({
+    pending: await storage(collection).outbox.count(), conflicts: await storage(collection).syncConflicts.count(), incomingPending: await storage(collection).pendingRemoteOperations.count(),
   }))
 }
 
