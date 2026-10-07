@@ -48,6 +48,12 @@ test('Browse and Study put their first task above mobile navigation', async ({ p
       await testInfo.attach(`${destination.toLowerCase()}-${width}-geometry`, { contentType: 'application/json', path: geometryPath })
       expect(taskBox!.y).toBeGreaterThanOrEqual(0)
       expect(taskBox!.y + taskBox!.height).toBeLessThanOrEqual(navigationBox!.y)
+      if (destination === 'Browse') {
+        const searchBox = await page.getByRole('button', { name: 'Search', exact: true }).boundingBox()
+        expect(searchBox).not.toBeNull()
+        expect(searchBox!.height).toBeGreaterThanOrEqual(43.99)
+        expect(searchBox!.y + searchBox!.height, 'the complete search action stays above navigation').toBeLessThanOrEqual(navigationBox!.y)
+      }
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= Math.ceil(document.documentElement.getBoundingClientRect().width))).toBe(true)
       if (destination === 'Study') {
         const scheduling = page.getByRole('combobox', { name: 'Review scheduling', exact: true })

@@ -790,6 +790,8 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   .compact-hero { min-height: 0; padding: 20px 0; gap: 16px; }
   .compact-hero h1 { font-size: 28px; line-height: 1.15; }
   .compact-hero p { margin-top: 10px; line-height: 1.5; }
+  .browser-search { margin-top: 16px; gap: 8px; }
+  .browser-search .primary-action { margin-top: 0; }
   .custom-study-create { margin-top: 20px; }
   .custom-study-create h2 { margin: 0 0 12px; font-size: 20px; line-height: 1.25; }
 }

@@ -11,7 +11,8 @@ content. The offline status uses a separate header row.
 
 `tests/e2e/mobile-page-tasks.spec.ts` measures actual canvases 390 × 844 and
 320 × 568, navigates to Browse and Study, and checks the first textbox ends above
-mobile navigation while the page is at scroll position zero. It checks horizontal
+mobile navigation while the page is at scroll position zero. Browse's complete
+Search button must also stay above navigation with a 44px minimum target. It checks horizontal
 page overflow separately. A second journey uses Enter to open the disclosure,
 opens pairing/export/text dialogs, closes them with Escape, checks focus return
 and 44px control dimensions, and closes the disclosure with Escape.
@@ -26,10 +27,17 @@ WebKit's remaining overflow probe at actual width 390 showed a 440px document
 scroll width and 421px content inside a 354px form/label, despite every visible
 element rectangle fitting. An explicit `minmax(0, 1fr)` label grid and overflow
 constraints on the select did not change that measurement. Containing the native
-select's paint overflow resolved it. The final focused run was **4 passed in
+select's paint overflow resolved it. That focused run was **4 passed in
 17.6 seconds** (`page-tasks-green.log`, `runtime/238-select-containment`). Both
 scheduling choices still update their explanatory text and preserve page width
 at both phone sizes; the native option wording and values are unchanged.
+
+Screenshot review then found the Search button partially behind navigation at
+width 320. The new complete-action assertion failed in both engines before the
+spacing change (`search-action-red.log`). Reducing the mobile search form's top
+margin and gap and removing its primary-button top margin brought the whole
+action above navigation. The expanded focused run passed **4 tests in 18.5
+seconds** (`page-tasks-green.log`, `runtime/238-search-action-green`).
 
 ```powershell
 $env:KIROKU_WEB_PORT = '4184'
