@@ -14,6 +14,19 @@ async function expectSameButtonSize(first: Locator, second: Locator) {
   expect(Math.abs(firstBox!.height - secondBox!.height)).toBeLessThanOrEqual(1)
 }
 
+test('workspace utility and deck actions meet the minimum touch size', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Load sample deck' }).click()
+  for (const name of ['Connect a PC', 'Export Anki package', 'Import / export text', 'Open Sample — Japanese Starter']) {
+    const action = page.getByRole('button', { name, exact: true })
+    await expect(action).toBeVisible()
+    const box = await action.boundingBox()
+    expect(box).not.toBeNull()
+    expect(box!.height, name).toBeGreaterThanOrEqual(43.99)
+    expect(box!.width, name).toBeGreaterThanOrEqual(43.99)
+  }
+})
+
 test('paired note-type and dialog actions use matching button dimensions', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('link', { name: 'Note types' }).click()

@@ -250,7 +250,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .empty-card p { max-width: 490px; margin: 0; color: var(--text-muted); font-family: var(--font-jp); font-size: 11px; line-height: 1.7; }
 .empty-card small { grid-column: 2 / 4; color: var(--text-faint); font-size: 8px; }
 .empty-actions, .collection-actions { display: flex; flex-wrap: wrap; gap: 9px; }
-.primary-action { height: 42px; padding: 0 15px; display: flex; align-items: center; gap: 13px; border: 1px solid var(--accent-border); background: var(--accent-wash); color: var(--accent-ink); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
+.primary-action { height: 44px; min-height: 44px; padding: 0 15px; display: flex; align-items: center; gap: 13px; border: 1px solid var(--accent-border); background: var(--accent-wash); color: var(--accent-ink); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
 .primary-action:disabled { cursor: not-allowed; opacity: .55; }
 .primary-action .icon { width: 15px; }
 
@@ -313,7 +313,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .deck-detail-header .section-code { margin-top: 34px; }
 .deck-detail-header .count-strip { margin-top: 22px; }
 .deck-actions { margin-top: 30px; display: flex; flex-wrap: wrap; gap: 9px; }
-.text-button { min-height: 38px; padding: 0 13px; border: 1px solid var(--border-default); background: transparent; color: var(--text-muted); cursor: pointer; font-size: 9px; letter-spacing: .06em; text-transform: uppercase; }
+.text-button { min-width: 44px; min-height: 44px; padding: 0 13px; border: 1px solid var(--border-default); background: transparent; color: var(--text-muted); cursor: pointer; font-size: 9px; letter-spacing: .06em; text-transform: uppercase; }
 .text-button:hover { color: var(--text-primary); border-color: var(--border-strong); }
 .text-button.danger:hover { color: var(--status-danger); border-color: var(--status-danger-edge); }
 .back-button { padding-left: 0; border: 0; }

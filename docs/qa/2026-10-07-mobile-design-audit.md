@@ -179,3 +179,24 @@ the page fits the screen, the native choice remains selectable, and the full
 explanatory text below it remains readable. A fresh whole gate and independent
 final-head review are still required; the earlier full gate does not cover
 these changes.
+
+The shared action styles also retained 42px primary buttons and 38px text
+buttons outside the explicit hero/dialog rule. A public workspace regression
+failed at desktop `Connect a PC` height 42px (`shared-actions-red.log`). Shared
+primary/text actions now have a 44px minimum, including collection utilities
+and deck-opening controls. The action and review-layout suites then passed in
+both engines: **16 passed in 44.6 seconds**, command `npx playwright test
+tests/e2e/button-alignment.spec.ts tests/e2e/review-layout.spec.ts
+--output=runtime/235-shared-actions-green`; log `shared-actions-green.log`.
+
+An official Anki 26.09.3 synthetic package was generated with this repository's
+`scripts/generate-anki-compatibility-package.py` and the persistent pinned
+interpreter from #234. The generated package is 57,517 bytes, SHA-256
+`189826b24067c219eed8a75b88ff6528e73869be14e9c00a8e1cf9582cb78cc0`, retained
+locally in `runtime/anki-26.09.3.colpkg`. With `KIROKU_ANKI_COMPAT_PACKAGE`
+pointing to it, `npx vitest run src/anki-import.test.ts` passed all **25 tests**,
+including the previously skipped official-package compatibility journey
+(`official-package-import.log`). This synthetic fixture contains no owner
+account material. The next whole gate enables this package and the pinned
+account-fixture interpreter; current whole-gate/final-review status is tracked
+on #235.
