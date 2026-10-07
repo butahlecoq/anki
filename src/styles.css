@@ -635,7 +635,8 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .statistics-panel h2 { font-size: 18px; margin: 0 0 14px; }
 .statistics-panel p, .statistics-panel small { color: var(--text-muted); font-size: 11px; line-height: 1.8; }
 .statistics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
-.review-heatmap { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 6px; margin: 22px 0 14px; }
+.heatmap-scroll { max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; padding: 3px; margin: 19px -3px 11px; }
+.review-heatmap { display: grid; grid-template-columns: repeat(12, minmax(44px, 1fr)); gap: 6px; }
 .review-heatmap button { min-width: 0; height: 32px; border: 1px solid var(--border-subtle); background: color-mix(in srgb, var(--accent) calc(var(--activity) * 100%), var(--surface-panel)); cursor: pointer; }
 .review-heatmap button[aria-pressed="true"] { outline: 2px solid var(--text-primary); outline-offset: 2px; }
 .heatmap-legend { color: var(--accent); }
@@ -660,7 +661,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   .statistics-grid { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .statistics-metrics strong { font-size: 24px; }
   .statistics-metrics article { padding: 18px 12px; }
-  .review-heatmap { grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+  .review-heatmap { grid-template-columns: repeat(7, minmax(44px, 1fr)); gap: 4px; }
   .review-heatmap button { height: 44px; }
 }
 .browser-search { display: flex; align-items: end; gap: 12px; margin: 24px 0 14px; }
