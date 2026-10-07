@@ -577,7 +577,7 @@ test('a shortcut cannot reach through a dialog that kept focus on its trigger', 
     // Exercise the shortcut guard even if focus escapes an external dialog.
     const trigger = screen.getByText('More actions', { exact: true })
     fireEvent.click(trigger)
-    fireEvent.click(await screen.findByRole('button', { name: 'Export Anki package' }))
+    fireEvent.click(await within(trigger.parentElement!).findByRole('button', { name: 'Export Anki package' }))
     await screen.findByRole('dialog', { name: 'Export Anki package' })
     trigger.focus()
     expect(trigger).toHaveFocus()

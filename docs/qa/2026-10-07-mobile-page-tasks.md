@@ -54,3 +54,7 @@ independent review.
 The Windows fixture measures host WebKit display scaling and asserts actual
 `innerWidth`/`innerHeight`. It keeps Safari user agent and touch with desktop
 viewport interpretation. This is layout evidence, without a physical iOS claim.
+
+## Integration with merged mobile design changes
+
+Rebased onto e272c96d5e59915e9d9d51fe15e516e1f7c0dbbd, preserving the review More actions menu and the Statistics date scroller. Typecheck and full lint pass. The first unit run exposed an ambiguous global Export query in the review-dialog shortcut test: both collection utilities and review actions legitimately provide export. Scoping that test to the opened review menu passes all 44 App tests (`mobile-pages-shortcut-scope-green.log`); no shortcut behavior was weakened. The complete gate at the resulting head remains required.
