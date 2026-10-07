@@ -116,6 +116,17 @@ subsequent tests replace `test-results`.
 
 ## Platform limits
 
+The committed-head gate at `8b35939` again finished with 135 browser passes,
+14 skips, and one CSV timeout. All five review-layout journeys passed in both
+engines. Unlike the earlier CSV trace, this trace records 95 completed browser
+calls, none longer than approximately 5.2 seconds. The whole 240-second deadline
+expired while checking the final export-options section, before its remaining
+assertions. The `browserContext.close` error is subsequent cleanup, not proof
+that the journey had finished. This long multi-client CSV journey now has a
+360-second total budget; assertions and individual expectation timeouts are
+unchanged. This change requires focused verification and another full gate.
+Artifacts are retained in `runtime/235-committed-head-artifacts`.
+
 This is layout and browser interaction evidence. It does not establish physical
 iOS installation, cold offline launch, or audible playback. Existing unsupported
 WebKit service worker journeys retain their documented skips. The account dialog

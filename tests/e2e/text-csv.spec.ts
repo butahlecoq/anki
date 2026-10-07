@@ -26,7 +26,10 @@ async function downloadNotes(page: Page, expectedCount = 2) {
 }
 
 test('Japanese CSV preview, explicit partial import, offline export and clean-client semantic re-import', async ({ page, context, browser }) => {
-  test.setTimeout(240_000)
+  // This multi-client journey also verifies update/ignore/duplicate policies and
+  // export options. Windows WebKit can take several seconds per public UI call
+  // in the full suite; keep its whole-journey budget separate from assertions.
+  test.setTimeout(360_000)
   await page.goto('/')
   const dialog = await paste(page, input)
   await expect(dialog.getByRole('status')).toHaveText('2 to add · 0 to update · 0 to ignore · 1 invalid')
