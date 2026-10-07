@@ -79,13 +79,13 @@ Modify `schema-ladder.ts`, `src/collection.ts`, `src/sync-revisions.ts`, `src/im
 
 **Interfaces:** Add `restorations: Array<EntityRef & { causes: DeletionCause[] }>` to the import write contract and a corresponding read-only list/counts to `AnkiImportPlan`. Keep `prepareAnkiImport(...).commit()` and `applyImportedPackage(...)` as the write boundary; the prepared contract carries explicit restoration authorization.
 
-- [ ] Split the existing red `restores a deleted package deck after reopening and re-imports it idempotently` into a local tracer and a replica tracer. The local tracer keeps exact original note/card/reference identity arrays and the idempotent repeat assertions. Leave the replica tracer red until Task 3.
-- [ ] Add `a stale restoration preview is refused atomically`: change a relevant deletion/lifetime after preview; commit fails and the original barriers, unrelated rows, media, and pending local operations remain intact.
-- [ ] Add `ordinary imported writes cannot bypass a deletion barrier`: retain the existing raw import-invariant rejection when the caller has not supplied valid restoration authorization.
-- [ ] Run `npx vitest run src/anki-import.test.ts -t 'restores a deleted package deck locally'` and the focused new invariant tests; observe red.
-- [ ] Build the restoration list from package identities and validated deletion causes. Fingerprint those causes/lifetimes in the stale-preview check. Show restore counts in the existing preview; committing is the only confirmation.
-- [ ] In one Collection transaction, validate all writes and restore dependencies before materializing decks/types/notes/cards/reviews/media references. Remove only the active tombstones explicitly acknowledged; keep retained causal history. Emit `restore` operations with canonical lifetimes and current related references in that same transaction. Live identities continue to use the existing duplicate policy.
-- [ ] Run focused tests to green and preserve the unrelated-row assertions. Commit `feat: restore deleted package identities atomically`.
+- [x] Split the existing red `restores a deleted package deck after reopening and re-imports it idempotently` into a local tracer and a replica tracer. The local tracer keeps exact original note/card/reference identity arrays and the idempotent repeat assertions. Leave the replica tracer red until Task 3.
+- [x] Add `a stale restoration preview is refused atomically`: change a relevant deletion/lifetime after preview; commit fails and the original barriers, unrelated rows, media, and pending local operations remain intact.
+- [x] Add `ordinary imported writes cannot bypass a deletion barrier`: retain the existing raw import-invariant rejection when the caller has not supplied valid restoration authorization.
+- [x] Run `npx vitest run src/anki-import.test.ts -t 'restores a deleted package deck locally'` and the focused new invariant tests; observe red.
+- [x] Build the restoration list from package identities and validated deletion causes. Fingerprint those causes/lifetimes in the stale-preview check. Show restore counts in the existing preview; committing is the only confirmation.
+- [x] In one Collection transaction, validate all writes and restore dependencies before materializing decks/types/notes/cards/reviews/media references. Remove only the active tombstones explicitly acknowledged; keep retained causal history. Emit `restore` operations with canonical lifetimes and current related references in that same transaction. Live identities continue to use the existing duplicate policy.
+- [x] Run focused tests to green and preserve the unrelated-row assertions. Commit `feat: restore deleted package identities atomically`.
 
 ### Task 3: Apply restoration and dependencies through real synchronization
 

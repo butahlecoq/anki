@@ -72,6 +72,10 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
             <li>{count(prepared.summary.media, 'media file')}</li>
           </ul>
         </section>
+        {prepared.plan.restorations.length > 0 && <section className="import-policy" aria-label="Restore deleted content">
+          <h3>Restore deleted content</h3>
+          <p>Importing this package restores {count(prepared.plan.restorations.filter(item => item.entityType === 'deck').length, 'deck')}, {count(prepared.plan.restorations.filter(item => item.entityType === 'note').length, 'note')} and {count(prepared.plan.restorations.filter(item => item.entityType === 'card').length, 'card')} with their original identities.</p>
+        </section>}
         <section className="import-policy" aria-label="Duplicate policy">
           <h3>Duplicate policy</h3>
           <p>Stable Anki note identities are created once. A newer package updates its note; a newer local edit is kept. Review entries are added once.</p>

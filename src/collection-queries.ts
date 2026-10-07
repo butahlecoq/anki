@@ -30,6 +30,8 @@ export function readAnkiImportSnapshot(collection: Collection, partialChoiceKey?
     references: await storage(collection).noteMedia.toArray(),
     partialChoice: partialChoiceKey ? await storage(collection).settings.get(partialChoiceKey) : undefined,
     noteDeletionUndo: await storage(collection).settings.get('noteDeletionUndo'),
+    deletionBarriers: await storage(collection).deletedEntities.toArray(),
+    retainedRevisions: await storage(collection).syncRevisions.toArray(),
     tableCounts: await Promise.all(tables.map((table) => table.count())),
   }))
 }

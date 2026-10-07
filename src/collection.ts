@@ -1,5 +1,5 @@
 import Dexie, { type EntityTable } from 'dexie'
-import { relatedEntities, recoverDeletionProvenance, type EntityType, type EntityLifetimeMetadata, type DeletionCause } from '../entity-lifetimes'
+import { relatedEntities, recoverDeletionProvenance, restoredLifetime, validateRestorationEvidence, type EntityType, type EntityLifetimeMetadata, type DeletionCause } from '../entity-lifetimes'
 import { customStudyKey, customStudyMembership, customStudySessions, type CustomStudySession } from './custom-study-state'
 import { createEmptyCard } from 'ts-fsrs'
 import { answerWithSchedule, deserializeCard, eligibleForQueue, eligibleForStudy, isBuried, isInterdayLearning, isLearningCard, nextStudyBoundary, Rating, reviewChoices as previewReviewChoices, selectDueCards, serializeCard, State, templateSuspended, validateSteps, type Grade } from './scheduler'
@@ -1195,9 +1195,35 @@ class DexieCollection extends Dexie {
           : await (this as unknown as Record<string, { get(id: string): Promise<unknown> }>)[snapshot.table].get(snapshot.id)
         if (rowFingerprint(current) !== snapshot.value) throw new Error('The collection changed after this preview. Please preview again before importing.')
       }
-      await this.assertImportedPackageValid(writes)
-      const operation = (entityType: SyncOperation['entityType'], entityId: string, action: 'create' | 'update', payload: unknown) =>
-        ({ opId: id(), entityType, entityId, action, occurredAt: importedAt, payload })
+      const restorationByKey = new Map((writes.restorations ?? []).map(restoration => [tombstoneKey(restoration.entityType, restoration.entityId), restoration]))
+      if (restorationByKey.size !== (writes.restorations?.length ?? 0)) throw new Error('Duplicate restoration authorization. Nothing was imported.')
+      const targets = [
+        ...writes.decks.map(({ value }) => ({ entityType: 'deck' as const, entityId: value.id })),
+        ...writes.noteTypes.map(({ value }) => ({ entityType: 'noteType' as const, entityId: value.id })),
+        ...writes.notes.map(({ value }) => ({ entityType: 'note' as const, entityId: value.id })),
+        ...writes.cards.map(({ value }) => ({ entityType: 'card' as const, entityId: value.id })),
+        ...writes.reviews.map(value => ({ entityType: 'review' as const, entityId: value.id })),
+        ...writes.updatedReviews.map(value => ({ entityType: 'review' as const, entityId: value.id })),
+        ...writes.references.map(({ value }) => ({ entityType: 'noteMedia' as const, entityId: value.id })),
+      ]
+      const targetKeys = new Set(targets.map(target => tombstoneKey(target.entityType, target.entityId)))
+      if ([...restorationByKey.keys()].some(key => !targetKeys.has(key))) throw new Error('Restoration authorization names content outside this import.')
+      const retained = await this.syncRevisions.toArray()
+      for (const target of targets) {
+        const key = tombstoneKey(target.entityType, target.entityId)
+        const barrier = await this.deletedEntities.get(key)
+        const restoration = restorationByKey.get(key)
+        if (!barrier && restoration) throw new Error('The collection changed after this preview. Please preview again before importing.')
+        if (!barrier) continue
+        if (!restoration) throw new ImportedPackageRejected(`${target.entityType} ${target.entityId}`, 'has the identity of a deleted record')
+        if (barrier.provenanceError || JSON.stringify(barrier.causes) !== JSON.stringify(restoration.causes)) throw new Error('Deletion provenance changed after this preview. Preview again before restoring.')
+        validateRestorationEvidence(target, restoration.causes, retained)
+      }
+      await this.assertImportedPackageValid(writes, new Set(restorationByKey.keys()))
+      const operation = (entityType: SyncOperation['entityType'], entityId: string, action: 'create' | 'update', payload: unknown): SyncOperation => {
+        const restoration = restorationByKey.get(tombstoneKey(entityType, entityId))
+        return { opId: id(), entityType, entityId, action: restoration ? 'restore' : action, occurredAt: importedAt, payload, ...(restoration ? { lifetime: restoredLifetime(restoration.causes), restoreOf: restoration.causes } : {}) }
+      }
       const deletion = (entityType: SyncOperation['entityType'], entityId: string) =>
         ({ opId: id(), entityType, entityId, action: 'delete' as const, occurredAt: importedAt, payload: { id: entityId } })
 
@@ -1225,6 +1251,7 @@ class DexieCollection extends Dexie {
         ...writes.references.map(({ value, action }) => operation('noteMedia', value.id, action, value)),
         ...writes.deletedReferences.map((value) => deletion('noteMedia', value.id)),
       ]
+      await this.deletedEntities.bulkDelete([...restorationByKey.keys()])
       if (operations.length) await this.enqueueOperations(operations)
     })
   }
@@ -1236,7 +1263,7 @@ class DexieCollection extends Dexie {
    *
    * The whole batch is checked before any write, so a refusal is total.
    */
-  private async assertImportedPackageValid(writes: ImportedPackageWrites): Promise<void> {
+  private async assertImportedPackageValid(writes: ImportedPackageWrites, restoredKeys = new Set<string>()): Promise<void> {
     const groupIds = new Set((await this.deckOptionGroups.toArray()).map(({ id }) => id))
 
     // Decks: identity, required fields, a resolvable option group, no duplicate
@@ -1307,7 +1334,7 @@ class DexieCollection extends Dexie {
       if (!note.id.length || note.id.length > 512 || [...note.id].some((character) => character.charCodeAt(0) < 32)) throw new ImportedPackageRejected(`Note ${note.id}`, 'has an invalid identity')
       // A tombstoned identity must stay dead: inbound sync suppresses every
       // operation for it, so recreating the row would make it un-syncable.
-      if (await this.deletedEntities.get(tombstoneKey('note', note.id))) throw new ImportedPackageRejected(`Note ${note.id}`, 'has the identity of a deleted note')
+      if (!restoredKeys.has(tombstoneKey('note', note.id)) && await this.deletedEntities.get(tombstoneKey('note', note.id))) throw new ImportedPackageRejected(`Note ${note.id}`, 'has the identity of a deleted note')
       if (!deckIds.has(note.deckId)) throw new ImportedPackageRejected(`Note ${note.id}`, 'names a deck that does not exist')
       if (!typeIds.has(note.typeId)) throw new ImportedPackageRejected(`Note ${note.id}`, 'names a note type that does not exist')
       if (!Array.isArray(note.tags)) throw new ImportedPackageRejected(`Note ${note.id}`, 'has no tag list')

@@ -70,3 +70,23 @@ export function recoverDeletionProvenance(target: EntityRef, revisions: readonly
   }
   return { causes: [], provenanceError: 'Deletion provenance is missing or ambiguous. Keep this collection and its backup; restoration requires recovery of the original deletion history.' }
 }
+
+/** Check the original source and retained structural membership before authorizing an import. */
+export function validateRestorationEvidence(target: EntityRef, causes: readonly DeletionCause[], revisions: readonly EntityLifetimeOperation[]): void {
+  if (!causes.length) throw new Error('Deletion provenance is missing. Keep the collection and recover its original deletion history before restoring.')
+  for (const cause of causes) {
+    const source = revisions.find(revision => revision.opId === cause.opId)
+    if (!source || source.action !== 'delete' || source.entityType !== cause.source.entityType || source.entityId !== cause.source.entityId) throw new Error('Deletion provenance does not match retained deletion history.')
+    const visited = new Set<string>()
+    const belongs = (ref: EntityRef): boolean => {
+      if (ref.entityType === source.entityType && ref.entityId === source.entityId) return true
+      const key = `${ref.entityType}:${ref.entityId}`
+      if (visited.has(key)) return false
+      visited.add(key)
+      const history = revisions.filter(revision => revision.entityType === ref.entityType && revision.entityId === ref.entityId && JSON.stringify(revision.lifetime ?? []) === JSON.stringify(cause.deletedLifetime) && revision.action !== 'delete')
+      const heads = new Set(revisionHeads(history))
+      return history.filter(revision => heads.has(revision.opId)).some(revision => relatedEntities(ref.entityType, revision.payload).filter(parent => ['deck', 'note', 'card'].includes(parent.entityType)).some(belongs))
+    }
+    if (!belongs(target)) throw new Error('Deletion provenance names an unrelated record. Nothing was restored.')
+  }
+}
