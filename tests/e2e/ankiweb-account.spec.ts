@@ -213,7 +213,12 @@ collection.close()
       await dialog.getByLabel('AnkiWeb username').fill(username)
       await dialog.getByLabel('AnkiWeb password').fill(password)
       await dialog.getByRole('button', { name: 'Connect account' }).click()
-      await expect(dialog.getByRole('region', { name: 'AnkiWeb account decks' })).toContainText('語彙::JLPT N5', { timeout: 30_000 })
+      try {
+        await expect(dialog.getByRole('region', { name: 'AnkiWeb account decks' })).toContainText('語彙::JLPT N5', { timeout: 30_000 })
+      } catch (error) {
+        console.error('Synthetic account connection status:', await dialog.getByRole('status').allTextContents())
+        throw error
+      }
       await expect(inventory).toHaveText(pendingLocalWork)
       await expect(dialog.getByText('No notes, cards, or study history were uploaded.')).toBeVisible()
       await dialog.getByRole('button', { name: 'Download and verify account media' }).click()

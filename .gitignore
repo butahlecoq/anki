@@ -16,6 +16,7 @@ test-results/
 *.log
 
 # Runtime data and private learning material
+/.packages/
 data/
 backups/
 certificates/

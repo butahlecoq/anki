@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Complete software gate
+    # Standard hosted runners are free for this public repository.
+    # No cache or artifact uploads: storage has a separate billing allowance.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CI: 'true'
+      KIROKU_WEB_PORT: '4583'
+      KIROKU_SYNC_PORT: '4584'
+      KIROKU_RUNTIME_DIRECTORY: ${{ github.workspace }}/.runtime/ci-sync
+      KIROKU_ANKI_COMPAT_PACKAGE: ${{ github.workspace }}/.runtime/compatibility/anki-26.09.3.colpkg
+      ANKI_TEST_PYTHON: ${{ github.workspace }}/.anki-oracle-venv/bin/python
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          # Tracker regressions inspect merge bases and origin/main.
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: false
+      - name: Install pinned toolchain and dependencies
+        run: |
+          npm install --global npm@11.16.0
+          npm ci
+          npx playwright install --with-deps chromium webkit
+      - name: Generate synthetic official Anki fixtures
+        run: |
+          uv venv .anki-oracle-venv --python 3.13
+          uv pip install --python "$ANKI_TEST_PYTHON" anki==26.9.3
+          "$ANKI_TEST_PYTHON" scripts/generate-anki-compatibility-package.py --output "$KIROKU_ANKI_COMPAT_PACKAGE"
+      - name: Run the complete software gate
+        run: |
+          npm run check:push
+          npm run build
+          npm run test:e2e -- --workers=1

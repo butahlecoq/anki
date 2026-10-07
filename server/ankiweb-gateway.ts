@@ -109,8 +109,14 @@ async function forwardAnkiWebRequest(
   const deadline = Date.now() + timeoutMs
   const timer = setTimeout(() => abort.abort(), timeoutMs)
   try {
+    const incoming = boundedBody(request.body, abort, deadline)
+    // Download endpoints may answer before reading their small protocol form.
+    // Fetch cancels an unused streaming upload, which would also abort the
+    // collection response through the shared controller. Finish this bounded
+    // request first; binary collection uploads and downloads still stream.
+    const upstreamBody = route === 'sync/download' ? await new Response(incoming).arrayBuffer() : incoming
     const response = await upstream(`https://${host}/${route}`, {
-      method: 'POST', headers, body: boundedBody(request.body, abort, deadline),
+      method: 'POST', headers, body: upstreamBody,
       signal: abort.signal, redirect: 'manual', duplex: 'half',
     } as RequestInit & { duplex: 'half' })
     if (response.status >= 300 && response.status < 400) { await response.body?.cancel(); return reply('Upstream redirect rejected', 502) }

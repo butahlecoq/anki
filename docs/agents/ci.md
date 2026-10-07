@@ -1,70 +1,61 @@
 # Continuous integration
 
-The GitHub Actions workflow has been removed. Both of its jobs — *Fast checks*
-and *Browser tests* — were failing to start on this account with:
+The owner made `butahlecoq/anki` public on 8 October 2026 and authorized restoring
+GitHub Actions. This supersedes the old private-source requirement in parent #1.
+Learner collections, credentials and deployment runtime remain private and local;
+public source does not publish a learner's running PC service.
 
-> The job was not started because recent account payments have failed or your
-> spending limit needs to be increased.
+## Hosted software gate
 
-Nothing in the workflow was at fault; the runners never executed, so the checks
-carried no information about any change. Continuing to present them as required
-status made every pull request permanently unmergeable while providing no
-verification at all.
+`.github/workflows/ci.yml` runs **Complete software gate** on pull requests,
+pushes to `main`, and manual dispatch. It installs Node 22, npm 11.16.0, Python
+3.13 and the pinned Chromium/WebKit engines. The official Anki 26.9.3 wheel
+generates a synthetic collection package and supplies the native sync oracle.
+No owner account, private package, deployment credential or service is used.
 
-## The local gate
+The steps run `npm run check:push` (typecheck, lint, unit, tracker and server
+tests), `npm run build`, then `npm run test:e2e -- --workers=1` against isolated
+production app/service ports and runtime. These are the same checks as the local
+`npm run check`, with one browser worker chosen explicitly for the hosted runner.
+The job has a 45-minute timeout and cancels superseded runs on the same PR/ref.
+Actions are pinned to verified commit hashes and the job has read-only contents
+permission; checkout does not retain credentials and fetches full history for
+the tracker tests that inspect `origin/main` and merge bases.
 
-`npm run check` is now the only gate, and it is the complete one:
+Standard GitHub-hosted runners in public repositories are free according to
+[GitHub's billing documentation](https://docs.github.com/en/billing/concepts/product-billing/github-actions).
+Private repositories also receive an allowance; the earlier account billing
+failure was not evidence that all private Actions require payment. This workflow
+uses the standard `ubuntu-24.04` runner and disables uv caching. It neither
+uploads artifacts nor configures an Actions cache because storage is billed
+separately. Failure diagnostics remain in job logs; Playwright reports and traces
+are available during the job and can be reproduced locally. Do not switch to a
+larger runner or enable paid storage as a routine fix.
 
-```sh
-npm run check   # typecheck, lint, unit, server, build, browser
-```
+`main` requires pull requests, resolved conversations and the successful
+**Complete software gate** check, including for administrators. Force pushes
+and branch deletion are disabled. Zero mandatory GitHub approval counts allow
+the owner's autonomous workflow; the independent Standards/Spec review and the
+acceptance-evidence gate still apply before merging. No `master` branch currently
+exists. Protect any future default branch equivalently before using it.
 
-It runs in about two minutes on a healthy machine, against the same scripts the
-removed workflow invoked. `docs/agents/ci.md` previously documented the two jobs;
-this file records why they are gone and what replaced them.
+The existing scheduled latest-Anki-wheel monitor is separate and non-blocking.
+It reports upstream regressions as issues; it is not the pinned release gate.
 
-## What this costs
+## Local verification and acceptance
 
-There is no automated verification of anything, on any branch, until the
-workflow comes back. Nothing catches a regression before it reaches a user.
-`npm run check` has to be run deliberately, and its result has to be recorded on
-the pull request, because nothing else will.
+Run `npm run check` locally for the complete software gate. Record the exact
+commit, Node/npm/Playwright versions, ports, runtime, pass/fail/skip counts and
+first actionable failure on each PR. `npm run premerge -- <PR-number>` remains
+the separate local acceptance-evidence gate. Hosted CI does not prove issue
+criteria by itself and GitHub does not run that local tracker guard.
 
-Restoring the workflow is a matter of reinstating `.github/workflows/ci.yml`
-once billing allows runners to start. The two jobs are unchanged in intent:
-fast checks without browser engines, and a separate browser job for the
-cross-browser journeys.
+Use unused ports and a fresh synthetic runtime. Never reuse or stop the owner's
+service to test a change. Distinguish process-launch failures, port collisions,
+application assertions and automation limitations. Compare any unexplained
+browser failure with the same current `origin/main` baseline.
 
-## Local verification guidance
-
-Record the exact commit, Node/npm/Playwright versions, ports, runtime directory,
-pass/fail/skip counts, and first actionable assertion on every pull request.
-Compare browser failures with a fresh `origin/main` baseline before attributing
-them to a change.
-
-Separate these cases:
-
-- **Process launch:** the browser process fails before the application starts,
-  such as a reproducible `spawn UNKNOWN`. Record the command and environment;
-  the historical cause is unconfirmed unless evidence proves it.
-- **Port or server reuse:** the configured web or sync port is occupied, or a
-  prior server is silently reused. Use isolated unused ports and a unique runtime
-  directory; never kill another agent's server.
-- **Application failure:** the browser launches and an application assertion,
-  request, or sync operation fails. Preserve that failure and diagnose its first
-  actionable symptom.
-- **Automation limitation:** WebKit emulation is not installed Safari. Service
-  workers and audible playback have known limitations, and physical installed-
-  Safari checks remain separate evidence.
-
-Outside CI, the browser suite may reuse existing servers
-(`reuseExistingServer: !process.env.CI`). Isolate each run instead of relying on
-fixed ports, and treat a changed failure count on identical code as
-inconclusive until the run is repeated without competing jobs.
-
-The repository's local Playwright default is one worker. On this Windows host,
-parallel WebKit workers intermittently starve one another during application
-startup and IndexedDB/service-worker readiness, producing rotating timeouts
-without application errors. This keeps every test enabled while making the
-local gate deterministic. CI retains its own worker policy; capable local
-hosts may opt into a measured parallel run with `--workers=2`.
+WebKit emulation is not installed iOS Safari. Declared cold service-worker and
+audio limits and physical iPhone installation, audible playback and storage
+retention remain separate evidence. A passing hosted job cannot establish those
+physical observations. Keep skips visible in reports.
