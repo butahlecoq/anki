@@ -1,5 +1,5 @@
 import Dexie, { type EntityTable } from 'dexie'
-import { relatedEntities, recoverDeletionProvenance, restoredLifetime, validateRestorationEvidence, type EntityType, type EntityLifetimeMetadata, type DeletionCause } from '../entity-lifetimes'
+import { relatedEntities, recoverDeletionProvenance, currentLifetime, decideOperationLifetime, restoredLifetime, validateRestorationEvidence, type EntityType, type EntityLifetimeMetadata, type DeletionCause } from '../entity-lifetimes'
 import { customStudyKey, customStudyMembership, customStudySessions, type CustomStudySession } from './custom-study-state'
 import { createEmptyCard } from 'ts-fsrs'
 import { answerWithSchedule, deserializeCard, eligibleForQueue, eligibleForStudy, isBuried, isInterdayLearning, isLearningCard, nextStudyBoundary, Rating, reviewChoices as previewReviewChoices, selectDueCards, serializeCard, State, templateSuspended, validateSteps, type Grade } from './scheduler'
@@ -2256,8 +2256,7 @@ class DexieCollection extends Dexie {
 
   private async entityLifetime(ref: { entityType: EntityType; entityId: string }) {
     const history = await this.syncRevisions.where('key').equals(tombstoneKey(ref.entityType, ref.entityId)).toArray()
-    const heads = new Set(revisionHeads(history))
-    return [...new Set(history.filter(revision => heads.has(revision.opId)).flatMap(revision => revision.lifetime ?? []))].sort()
+    return currentLifetime(history)
   }
 
   private async deletionBarrier(target: { entityType: EntityType; entityId: string }, source: SyncOperation, occurredAt = source.occurredAt): Promise<DeletionTombstone> {
@@ -2281,7 +2280,8 @@ class DexieCollection extends Dexie {
   }
 
   private mergeSyncRevisions(entityType: SyncOperation['entityType'], revisions: SyncOperation[]) {
-    if (entityType !== 'card') return mergeRevisions(revisions)
+    const lifetime = currentLifetime(revisions)
+    if (entityType !== 'card') return mergeRevisions(revisions, lifetime)
     const scheduling = ['due', 'stability', 'difficulty', 'elapsedDays', 'scheduledDays', 'reps', 'lapses', 'state', 'lastReview', 'learningSteps']
     const projected = new Map<string, SyncOperation>()
     const project = (revision: SyncOperation): SyncOperation => {
@@ -2303,7 +2303,7 @@ class DexieCollection extends Dexie {
     }
     revisionHeads(revisions) // Reject cycles before recursively projecting parents.
     const stripped = revisions.map(project)
-    const merged = mergeRevisions(stripped)
+    const merged = mergeRevisions(stripped, lifetime)
     const value = { ...merged.value as Record<string, unknown> }
     Object.assign(value, value.$schedule)
     delete value.$schedule
@@ -2443,7 +2443,7 @@ class DexieCollection extends Dexie {
   }
 
   async applyRemoteChanges(changes: SyncOperation[], cursor: number) {
-    await this.transaction('rw', [this.decks, this.deckOptionGroups, this.noteTypes, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.receivedOperations, this.settings, this.deletedEntities, this.syncRevisions, this.syncConflicts], async () => {
+    await this.transaction('rw', [this.decks, this.deckOptionGroups, this.noteTypes, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.receivedOperations, this.settings, this.deletedEntities, this.syncRevisions, this.syncConflicts, this.pendingRemoteOperations], async () => {
       const affectedNoteIds = new Set<string>()
       const affectedTypeIds = new Set<string>()
       const reviewedCardIds = new Set<string>()
@@ -2451,17 +2451,49 @@ class DexieCollection extends Dexie {
       const suppressedNoteIds = new Set<string>()
       const suppressedCardIds = new Set<string>()
       // Resolve type and note changes before their cards, even when equal timestamps arrive in index order.
-      for (const source of orderInboundChanges(changes)) {
+      let incoming = [...new Map([...(await this.pendingRemoteOperations.toArray()), ...changes].map(operation => [operation.opId, operation])).values()]
+      while (incoming.length) {
+        let progress = false
+        for (const source of orderInboundChanges(incoming)) {
         const change = { ...source }
-        if (await this.receivedOperations.get(change.opId)) continue
         const key = tombstoneKey(change.entityType, change.entityId)
         const previousRevision = await this.syncRevisions.get(change.opId)
+        const pending = await this.pendingRemoteOperations.get(change.opId)
+        const previous = previousRevision ?? pending
+        if (previous && (JSON.stringify(previous.payload) !== JSON.stringify(change.payload) || previous.action !== change.action || previous.occurredAt !== change.occurredAt || JSON.stringify(previous.lifetime ?? []) !== JSON.stringify(change.lifetime ?? []) || JSON.stringify(previous.relatedLifetimes ?? []) !== JSON.stringify(change.relatedLifetimes ?? []) || JSON.stringify(previous.restoreOf ?? []) !== JSON.stringify(change.restoreOf ?? []) || (change.parents !== undefined && JSON.stringify(previous.parents ?? []) !== JSON.stringify(change.parents)))) throw new Error('Sync operation identity was reused with different content')
+        if (await this.receivedOperations.get(change.opId)) { await this.pendingRemoteOperations.delete(change.opId); continue }
+        const retained = await this.syncRevisions.toArray()
+        const refs = change.relatedLifetimes ?? relatedEntities(change.entityType, change.payload).map(ref => ({ ...ref, lifetime: [] }))
+        const identities = [change, ...refs]
+        const histories = identities.map(ref => ({ ref, history: retained.filter(revision => revision.entityType === ref.entityType && revision.entityId === ref.entityId) }))
+        const barriers = await this.deletedEntities.bulkGet(identities.map(ref => tombstoneKey(ref.entityType, ref.entityId)))
+        const previousLifetimes = histories.flatMap(({ ref, history }) => history.flatMap(revision => (revision.restoreOf ?? []).map(cause => ({ entityType: ref.entityType, entityId: ref.entityId, lifetime: cause.deletedLifetime }))))
+        const tables = { deck: this.decks, deckOptionGroup: this.deckOptionGroups, note: this.notes, card: this.cards, review: this.reviewEntries, noteMedia: this.noteMedia, noteType: this.noteTypes }
+        const unavailable = (await Promise.all(refs.map(async ref => await tables[ref.entityType].get(ref.entityId) ? [] : [ref]))).flat()
+        const decision = decideOperationLifetime(change, {
+          current: currentLifetime(histories[0].history),
+          related: histories.slice(1).map(({ ref, history }) => ({ entityType: ref.entityType, entityId: ref.entityId, lifetime: currentLifetime(history) })),
+          causes: barriers[0]?.causes ?? [],
+          previous: previousLifetimes,
+          knownDeletions: new Map(retained.filter(revision => revision.action === 'delete').map(revision => [revision.opId, revision])),
+          blocked: barriers.flatMap(barrier => barrier ? [barrier] : []),
+          unavailable,
+        })
+        if (decision.state === 'pending') { await this.pendingRemoteOperations.put(change); continue }
+        if (change.action === 'restore' && decision.state === 'apply') validateRestorationEvidence(change, change.restoreOf!, retained)
         if (!previousRevision) {
-          const history = await this.syncRevisions.where('key').equals(key).toArray()
+          const history = histories[0].history
           await this.syncRevisions.add({ ...change, parents: change.parents ?? revisionHeads(history), key })
-        } else if (JSON.stringify(previousRevision.payload) !== JSON.stringify(change.payload) || previousRevision.action !== change.action) {
-          throw new Error('Sync operation identity was reused with different content')
         }
+        progress = true
+        await this.pendingRemoteOperations.delete(change.opId)
+        if (decision.state === 'stale') {
+          if (change.entityType === 'note') suppressedNoteIds.add(change.entityId)
+          if (change.entityType === 'card') suppressedCardIds.add(change.entityId)
+          await this.receivedOperations.add({ opId: change.opId })
+          continue
+        }
+        if (change.action === 'restore') await this.deletedEntities.delete(key)
         const history = await this.syncRevisions.where('key').equals(key).toArray()
         const merged = this.mergeSyncRevisions(change.entityType, history)
         if (merged.conflicts.length) await this.syncConflicts.put({ ...merged, key, entityType: change.entityType, entityId: change.entityId })
@@ -2691,6 +2723,9 @@ class DexieCollection extends Dexie {
           if (noteId) affectedNoteIds.add(noteId)
         }
         if (change.entityType === 'noteType') affectedTypeIds.add(change.entityId)
+      }
+        if (!progress) break
+        incoming = await this.pendingRemoteOperations.toArray()
       }
       for (const cardId of reviewedCardIds) {
         const conflict = await this.syncConflicts.get(tombstoneKey('card', cardId))

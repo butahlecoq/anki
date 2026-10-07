@@ -2,6 +2,7 @@
 export interface Revision {
   opId: string
   parents?: string[]
+  lifetime?: readonly string[]
   action: 'create' | 'update' | 'delete' | 'restore'
   payload: unknown
 }
@@ -70,14 +71,17 @@ function valueAtPath(value: unknown, path: string): unknown {
   }, value)
 }
 
-export function mergeRevisions(revisions: Revision[]): RevisionMerge {
+export function mergeRevisions(revisions: Revision[], activeLifetime: readonly string[] = []): RevisionMerge {
   const byId = new Map<string, Revision>()
   for (const revision of revisions) {
     const existing = byId.get(revision.opId)
     if (existing && !equal(existing, revision)) throw new Error('Sync operation identity was reused with different content')
     byId.set(revision.opId, revision)
   }
-  const heads = revisionHeads([...byId.values()])
+  revisions = [...byId.values()].filter(revision => JSON.stringify(revision.lifetime ?? []) === JSON.stringify(activeLifetime))
+  byId.clear()
+  for (const revision of revisions) byId.set(revision.opId, revision)
+  const heads = revisionHeads(revisions)
   const tips = heads.map((head) => byId.get(head)!)
   if (!tips.length) return { heads, value: undefined, deleted: false, conflicts: [], versions: [] }
   // A deletion remains authoritative even when a stale update is delivered later.
@@ -87,7 +91,7 @@ export function mergeRevisions(revisions: Revision[]): RevisionMerge {
   const histories = tips.map((tip) => ancestors(tip, byId))
   const common = [...histories[0]].filter((key) => histories.every((history) => history.has(key)) && byId.has(key))
   const bases = revisionHeads(common.map((key) => byId.get(key)!))
-  const baseMerge = bases.length ? mergeRevisions(common.map((key) => byId.get(key)!)) : undefined
+  const baseMerge = bases.length ? mergeRevisions(common.map((key) => byId.get(key)!), activeLifetime) : undefined
   const base = baseMerge?.value
   const conflicts: string[] = []
   const value = mergeValue(base, tips.map((tip) => tip.payload), '', conflicts)

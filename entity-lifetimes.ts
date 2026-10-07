@@ -21,6 +21,9 @@ export type LifetimeContext = {
   causes: readonly DeletionCause[]
   related: readonly EntityLifetimeReference[]
   knownDeletions: ReadonlyMap<string, EntityLifetimeOperation>
+  previous?: readonly EntityLifetimeReference[]
+  unavailable?: readonly EntityRef[]
+  blocked?: readonly EntityRef[]
 }
 export type LifetimeDecision = { state: 'apply' | 'stale' | 'pending'; missing: string[] }
 
@@ -89,4 +92,64 @@ export function validateRestorationEvidence(target: EntityRef, causes: readonly 
     }
     if (!belongs(target)) throw new Error('Deletion provenance names an unrelated record. Nothing was restored.')
   }
+}
+
+const sameLifetime = (left: EntityLifetime, right: EntityLifetime) => JSON.stringify(left) === JSON.stringify(right)
+const sameEntity = (left: EntityRef, right: EntityRef) => left.entityType === right.entityType && left.entityId === right.entityId
+
+function assertLifetime(value: EntityLifetime): void {
+  if (!Array.isArray(value) || value.some(id => typeof id !== 'string' || !id) || !sameLifetime(value, [...new Set(value)].sort())) throw new Error('Invalid entity lifetime; retain local work and recover the original sync history.')
+}
+
+/** Ordinary heads do not choose an epoch; only validated explicit restores advance it. */
+export function currentLifetime(revisions: readonly EntityLifetimeOperation[]): EntityLifetime {
+  let current: EntityLifetime = []
+  const visited = new Set<string>()
+  while (true) {
+    const candidates = revisions.filter(revision => revision.action === 'restore' && revision.restoreOf?.length && revision.restoreOf.every(cause => sameLifetime(cause.deletedLifetime, current)))
+    if (!candidates.length) return current
+    const lifetimes = [...new Map(candidates.map(revision => [JSON.stringify(revision.lifetime), revision.lifetime!])).values()]
+    if (lifetimes.length !== 1) throw new Error('Restoration history has incompatible deletion barriers. Retain the collection and recover its causal history.')
+    const next = lifetimes[0]
+    assertLifetime(next)
+    if (sameLifetime(next, current) || visited.has(JSON.stringify(next))) throw new Error('Cyclic restoration lifetime history.')
+    visited.add(JSON.stringify(current))
+    current = next
+  }
+}
+
+/** Classify prior epochs explicitly; future dependencies are held rather than lost. */
+export function decideOperationLifetime(operation: EntityLifetimeOperation, context: LifetimeContext): LifetimeDecision {
+  const lifetime = operation.lifetime ?? []
+  assertLifetime(lifetime)
+  const missing: string[] = []
+  if (operation.action === 'restore') {
+    if (!operation.restoreOf?.length || !operation.relatedLifetimes || !operation.lifetime) throw new Error('Restoration requires original deletion provenance and lifetime references.')
+    for (const cause of operation.restoreOf) {
+      assertLifetime(cause.deletedLifetime)
+      const deletion = context.knownDeletions.get(cause.opId)
+      if (!deletion) { missing.push(cause.opId); continue }
+      if (deletion.action !== 'delete' || !sameEntity(deletion, cause.source)) throw new Error('Restoration provenance does not name its original deletion.')
+    }
+    if (!sameLifetime(lifetime, restoredLifetime(operation.restoreOf))) throw new Error('Restoration lifetime differs from its deletion provenance.')
+    if (missing.length) return { state: 'pending', missing }
+    if (!sameLifetime(context.current, lifetime) && !operation.restoreOf.every(cause => sameLifetime(cause.deletedLifetime, context.current))) return { state: 'stale', missing: [] }
+  } else if (!sameLifetime(lifetime, context.current)) {
+    if ((context.previous ?? []).some(ref => sameEntity(ref, operation) && sameLifetime(ref.lifetime, lifetime))) return { state: 'stale', missing: [] }
+    missing.push(`${operation.entityType}:${operation.entityId}`)
+  } else if (operation.action !== 'delete' && context.blocked?.some(ref => sameEntity(ref, operation))) return { state: 'stale', missing: [] }
+  const references = operation.relatedLifetimes ?? relatedEntities(operation.entityType, operation.payload).map(ref => ({ ...ref, lifetime: [] }))
+  for (const reference of references) {
+    assertLifetime(reference.lifetime)
+    const current = context.related.find(ref => sameEntity(ref, reference))?.lifetime ?? []
+    if (!sameLifetime(reference.lifetime, current)) {
+      if ((context.previous ?? []).some(ref => sameEntity(ref, reference) && sameLifetime(ref.lifetime, reference.lifetime))) return { state: 'stale', missing: [] }
+      missing.push(`${reference.entityType}:${reference.entityId}`)
+    } else if (operation.action === 'delete') continue
+    else if (context.blocked?.some(ref => sameEntity(ref, reference))) {
+      if (operation.action !== 'restore') return { state: 'stale', missing: [] }
+      missing.push(`${reference.entityType}:${reference.entityId}`)
+    } else if ((operation.action === 'restore' || lifetime.length > 0) && context.unavailable?.some(ref => sameEntity(ref, reference))) missing.push(`${reference.entityType}:${reference.entityId}`)
+  }
+  return { state: missing.length ? 'pending' : 'apply', missing: [...new Set(missing)] }
 }

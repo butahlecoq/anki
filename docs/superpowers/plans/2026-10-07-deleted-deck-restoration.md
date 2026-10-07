@@ -93,12 +93,12 @@ Modify `schema-ladder.ts`, `src/collection.ts`, `src/sync-revisions.ts`, `src/im
 
 **Interfaces:** Produces `decideOperationLifetime`; Collection's public receive API remains `applyRemoteChanges(changes: SyncOperation[], cursor: number)`. Extend the existing merge signature to `mergeRevisions(revisions: Revision[], activeLifetime: EntityLifetime = []): RevisionMerge`; existing legacy callers retain their initial-lifetime behavior. The HTTP operation representation preserves all lifecycle fields.
 
-- [ ] Run the replica tracer from Task 2; observe restoration still fails to converge before this task.
-- [ ] Write `restoration dependencies survive a receive-page interruption`: deliver a dependent child before its parent restore, close/reopen, deliver the parent, and retry both pages. Pending content must become available exactly once. A cursor may advance only after every operation is applied, explicitly classified as stale retained history, or durably stored as pending.
-- [ ] Write `a changed operation under a reused identity is rejected`: change only lifecycle metadata under the same `opId`; the server rejects it, and the client keeps unsent work.
-- [ ] Implement shared lifecycle decisions at receive and merge. A prior-lifetime delete must not permanently poison a valid current restore. Malformed references/cycles/unrelated deletion causes fail actionably; valid missing dependencies remain pending and are re-evaluated on incoming progress.
-- [ ] Validate restoration evidence on the PC against stored or same-request delete operations and retained relationship history; do not substitute cross-entity revision parents. Validate before acknowledgment and before updating the schema watermark.
-- [ ] Run `npx vitest run src/anki-import.test.ts src/sync-client.test.ts` and `npm run test:server` to green. Commit `feat: synchronize causal restoration without losing pending work`.
+- [x] Run the replica tracer from Task 2; observe restoration still fails to converge before this task.
+- [x] Write `restoration dependencies survive a receive-page interruption`: deliver a dependent child before its parent restore, close/reopen, deliver the parent, and retry both pages. Pending content must become available exactly once. A cursor may advance only after every operation is applied, explicitly classified as stale retained history, or durably stored as pending.
+- [x] Write `a changed operation under a reused identity is rejected`: change only lifecycle metadata under the same `opId`; the server rejects it, and the client keeps unsent work.
+- [x] Implement shared lifecycle decisions at receive and merge. A prior-lifetime delete must not permanently poison a valid current restore. Malformed references/cycles/unrelated deletion causes fail actionably; valid missing dependencies remain pending and are re-evaluated on incoming progress.
+- [x] Validate restoration evidence on the PC against stored or same-request delete operations and retained relationship history; do not substitute cross-entity revision parents. Validate before acknowledgment and before updating the schema watermark.
+- [x] Run `npx vitest run src/anki-import.test.ts src/sync-client.test.ts` and `npm run test:server` to green. Commit `feat: synchronize causal restoration without losing pending work`.
 
 ### Task 4: Fence stale devices and prove repeated/concurrent restoration
 
