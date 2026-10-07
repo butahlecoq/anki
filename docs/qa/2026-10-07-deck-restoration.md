@@ -111,3 +111,58 @@ sorting and visits same-entity causal parents before descendants. The new
 `restoration-card-move-descending-green.log` records **10 passed** in 4.10 seconds.
 Temporary `[DEBUG-card-move]` instrumentation is removed. Final full verification
 and independent review remain pending.
+
+
+## Ancestor lifetimes, stale moves and honest retained progress
+
+The `74bb522` full check passed its non-browser stages but hit the WebKit large
+Browse journey's 30-second test budget. It was intentionally stopped after that
+failure and discovery of a separate restoration-evidence defect. This is not a
+passing full gate. Completed artifacts and its original log are retained in
+`runtime/236-interrupted-check-74bb522`.
+
+A minimized real HTTP regression in `server/restoration-safety.test.ts` shows
+an old media record incorrectly accepted with a deletion from a later lifetime
+of its note: `restoration-ancestor-http-red.log` reports HTTP 200 instead of the
+required atomic HTTP 400. The valid new-media counterpart passes. Evidence
+validation now follows each historical related reference's own lifetime and
+checks it against the actual source deletion's lifetime. Server evidence loading
+also decodes retained related-lifetime and restoration metadata. The entire
+safety file passes: 16 tests in `restoration-ancestor-http-green.log`.
+
+A second real three-device regression uploads an offline note move after deck
+deletion but before re-import. `restoration-stale-move-provenance-red.log` rejects
+the valid import as unrelated because the latest retained head points elsewhere.
+The original deletion barrier is explicitly checked in the fixture. Historical
+membership in the deleted lifetime is now retained as evidence; a stale move
+cannot erase it. Each ancestor lifetime remains exact, so the wrong-note-lifetime
+HTTP refusal still passes. All 11 restoration tests passed at this stage in
+`restoration-stale-move-provenance-green.log`.
+
+The withheld-parent HTTP fixture then exposed a reporting defect:
+`restoration-pending-progress-red.log` reports complete while one restored note
+is durably queued. Sync progress/results now include retained incoming counts.
+Completion requires those counts to reach zero. End-of-history waiting directs
+the learner to sync the sending device, while more server pages give normal
+continue guidance. Reopening preserves the queued change and cursor; retry after
+the missing parent restoration converges. Initial UI status reads the retained
+count after reopening. Message rules remain in `sync-messages.ts`.
+`restoration-pending-progress-green.log`: 61 tests pass across the real HTTP,
+sync-client and message files. Ordinary initial dependencies remain #233.
+
+The failed Browse trace shows 24.6 seconds waiting for its 72-note import dialog
+to close. Enqueueing now reuses the already-read own history when deriving its
+lifetime, avoiding one IndexedDB read per write. The subsequent focused production
+browser command runs the large Browse and complete restoration journeys in both
+engines: `restoration-ancestor-browser-focus.log`, **4 passed in 1.7 minutes**;
+WebKit Browse 28.4s and restoration 51.8s. To leave budget for the editing assertions
+in the final suite, that heavy WebKit test now has 90 seconds and explicitly waits
+for the import dialog to close within 45 seconds. Its assertions are unchanged.
+The updated test budget awaits execution in the final full gate.
+
+`restoration-ancestor-progress-check-push.log`: typecheck/lint pass, **719 unit
+passes/3 skips, 22 tracker passes, 64 server passes** with both official fixtures.
+The same complete prepush gate passes at `8a713c5` in
+`restoration-ancestor-progress-push.log`. The final full gate, independent
+whole-branch review and acceptance completion remain pending. Owner data and
+deployment remain unchanged.
