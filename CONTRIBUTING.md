@@ -39,11 +39,13 @@ git worktree add ..\anki-3 -b feat/3-first-offline-review origin/main
 
 Never run two implementation agents in the same worktree; see [one agent, one worktree](#one-agent-one-worktree) below for why that is not negotiable.
 
-There is no blocking GitHub Actions gate, so `npm run check` — typecheck, lint, unit, server, build, and browser — remains the full software gate, and its result must be recorded on the pull request. `npm run premerge` is the separate acceptance-evidence gate. A non-blocking scheduled workflow monitors the latest Anki sync wheel for #150. See [the CI guide](docs/agents/ci.md) for the billing limitation and workflow scope.
+The public repository runs the **Complete software gate** in GitHub Actions on pull requests and main pushes using free standard runners. It covers typecheck, lint, unit, tracker, server, production build and both browser projects with official synthetic Anki fixtures. `npm run check` remains the equivalent local gate; record its result on the PR. `npm run premerge` is the separate acceptance-evidence gate. A non-blocking scheduled workflow monitors the latest Anki sync wheel for #150. See [the CI guide](docs/agents/ci.md) for the zero-cost configuration and workflow scope.
 
-GitHub does not enforce `premerge` because this repository has no required hosted
-checks or branch protection. The repository merge procedure must run the local
-pre-merge check; GitHub's merge button and a direct `gh pr merge` can bypass it.
+Protected `main` requires pull requests and the successful hosted software gate,
+including for administrators; direct commits, force pushes and deletion are
+blocked. Independent Standards/Spec review is required by the merge procedure.
+GitHub does not enforce `premerge`: run the local acceptance check immediately
+before merging because the hosted gate cannot prove tracker criteria.
 
 ### Attributing an observed build
 
@@ -91,7 +93,10 @@ machine-produced by `npm run status`, linked below, and must not be edited by ha
 
 **The failure it prevents.** On 2026-10-02, `docs/development-handoff.md` received 24 commits directly on `main` in a single evening. Every one rewrote prose describing worktrees at `C:/work/anki*` — paths that do not exist on this machine, whose real root is `D:/work` — and asserted that the `gh` CLI was not installed when it is. The agent producing those commits never queried the tracker. Writing narrative status into `main` gave it somewhere to record guesses that no check ever challenged, and an audit found every verifiable claim in the file wrong.
 
-Branch protection is not available on this repository's plan, so nothing stops a push mechanically and this rule is held by convention. `npm run drift` reports commits on `main` that are not on `origin/main` for exactly this reason; treat that finding as the error it is.
+The owner authorized public visibility and branch protection on 8 October 2026.
+GitHub now enforces pull requests on `main`, including for administrators.
+`npm run drift` also reports local commits on `main` that are not on
+`origin/main`; treat that finding as an error and move the work to an issue branch.
 
 ### A merged pull request and a removed worktree are one action
 
