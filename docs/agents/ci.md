@@ -19,7 +19,8 @@ production app/service ports and runtime. These are the same checks as the local
 `npm run check`, with one browser worker chosen explicitly for the hosted runner.
 The job has a 45-minute timeout and cancels superseded runs on the same PR/ref.
 Actions are pinned to verified commit hashes and the job has read-only contents
-permission; checkout does not retain credentials.
+permission; checkout does not retain credentials and fetches full history for
+the tracker tests that inspect `origin/main` and merge bases.
 
 Standard GitHub-hosted runners in public repositories are free according to
 [GitHub's billing documentation](https://docs.github.com/en/billing/concepts/product-billing/github-actions).
