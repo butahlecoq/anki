@@ -106,11 +106,11 @@ Modify `schema-ladder.ts`, `src/collection.ts`, `src/sync-revisions.ts`, `src/im
 
 **Interfaces:** All Collection write routes emit their creation-time own and related lifetimes through the existing `enqueueOperation`/`enqueueOperations` boundary. Snapshot current related lifetimes from retained revisions inside the write transaction.
 
-- [ ] Write `offline work cannot change a restored lifetime` using three real collections and the HTTP service: keep one client offline before deletion; queue field edits, a newly created child, a review, and a delete; restore elsewhere; reconnect the stale client. Exact restored identity/value/history/media snapshots remain unchanged after delivery and replay.
-- [ ] Write `current-lifetime work and a second delete restore cycle still succeed`: edit/review after restore, synchronize, delete again, and re-import. The new lifetime is causally different from the previous one and all supported content converges.
-- [ ] Write `same-barrier concurrent restores retain different field versions`: two collections acknowledge the same deletion causes and commit packages with different field values. Their restoration lifetime arrays must be equal; IDs remain unique; both conflicting values remain available for explicit resolution after reopen and retry.
-- [ ] Run focused tests to red, then implement any remaining write-route stamping and stale related-entity checks. Include deck ancestry, option groups, note types, cards, reviews, and media references. A new child ID is not a way around a stale parent lifetime.
-- [ ] Run focused tests to green. Commit `fix: keep stale offline operations out of restored lifetimes`.
+- [x] Write `offline work cannot change a restored lifetime` using three real collections and the HTTP service: keep one client offline before deletion; queue field edits, a newly created child, a review, and a delete; restore elsewhere; reconnect the stale client. Exact restored identity/value/history/media snapshots remain unchanged after delivery and replay.
+- [x] Write `current-lifetime work and a second delete restore cycle still succeed`: edit/review after restore, synchronize, delete again, and re-import. The new lifetime is causally different from the previous one and all supported content converges.
+- [x] Write `same-barrier concurrent restores retain different field versions`: two collections acknowledge the same deletion causes and commit packages with different field values. Their restoration lifetime arrays must be equal; IDs remain unique; both conflicting values remain available for explicit resolution after reopen and retry.
+- [x] Run focused tests to red, then implement any remaining write-route stamping and stale related-entity checks. Include deck ancestry, option groups, note types, cards, reviews, and media references. A new child ID is not a way around a stale parent lifetime.
+- [x] Run focused tests to green. Commit `fix: keep stale offline operations out of restored lifetimes`.
 
 ### Task 5: Protect compatibility, backups, and recovery
 

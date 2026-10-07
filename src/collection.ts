@@ -2333,11 +2333,11 @@ class DexieCollection extends Dexie {
       target[path.at(-1)!] = structuredClone(source[path.at(-1)!])
     }
     const operation: SyncOperation = { opId: id(), entityType: conflict.entityType, entityId: conflict.entityId, action: conflict.deleted ? 'delete' : 'update', occurredAt: now.toISOString(), payload: conflict.deleted ? { id: conflict.entityId } : resolved, parents: expectedHeads }
-    await this.transaction('rw', [this.decks, this.deckOptionGroups, this.noteTypes, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.receivedOperations, this.settings, this.deletedEntities, this.syncRevisions, this.syncConflicts, this.outbox], async () => {
+    await this.transaction('rw', [this.decks, this.deckOptionGroups, this.noteTypes, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.receivedOperations, this.settings, this.deletedEntities, this.syncRevisions, this.syncConflicts, this.outbox, this.pendingRemoteOperations], async () => {
       const current = await this.syncConflicts.get(key)
       if (!current || JSON.stringify(current.heads) !== JSON.stringify(expectedHeads)) throw new Error('This conflict changed. Review its current versions before choosing.')
       await this.enqueueOperation(operation)
-      await this.applyRemoteChanges([operation], (await this.syncSettings())?.cursor ?? 0)
+      await this.applyRemoteChanges([(await this.outbox.get(operation.opId))!], (await this.syncSettings())?.cursor ?? 0)
     })
   }
 

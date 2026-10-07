@@ -27,12 +27,12 @@ export function SyncConflicts() {
   const openerRef = useRef<HTMLElement | null>(null)
   useEffect(() => {
     if (!selected) {
-      if (openerRef.current?.isConnected) openerRef.current.focus()
+      if (!savedChoice && openerRef.current?.isConnected) openerRef.current.focus()
       else panelRef.current?.focus()
       return
     }
     dialogRef.current?.querySelector<HTMLElement>('input:not([disabled]), button:not([disabled])')?.focus()
-  }, [selected])
+  }, [selected, savedChoice])
   const context = useLiveQuery(async () => {
     if (!selected) return undefined
     const version = selected.versions.map((version) => recordValue(version.value)).find(Boolean)
