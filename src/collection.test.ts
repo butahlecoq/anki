@@ -38,6 +38,68 @@ afterEach(async () => {
 })
 
 describe('local collection', () => {
+  test.each(['direct', 'cascade', 'missing'] as const)('version 21 migration preserves %s deletion provenance', async (scenario) => {
+    const databaseName = `kiroku-test-${crypto.randomUUID()}`
+    const old = new Dexie(databaseName)
+    old.version(21).stores({ decks: 'id, parentId, optionGroupId, name, createdAt', notes: 'id, deckId, typeId, updatedAt', cards: 'id, deckId, noteId, templateId, due, state, newPosition', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId', deletedEntities: 'key, entityType, entityId, occurredAt', noteMedia: 'id, noteId, digest, side, kind, updatedAt', mediaBlobs: 'digest, verifiedAt', noteTypes: 'id, name, updatedAt', deckOptionGroups: 'id, name, protected', syncRevisions: 'opId, key', syncConflicts: 'key, entityType, entityId' })
+    const note = directNote('legacy-deleted-note', 'legacy-deleted-deck')
+    const created: SyncOperation = { opId: 'legacy-note-created', entityType: 'note', entityId: note.id, action: 'create', occurredAt: note.createdAt, payload: note, parents: [] }
+    const sourceType = scenario === 'cascade' ? 'deck' : 'note'
+    const sourceId = sourceType === 'deck' ? note.deckId : note.id
+    const deleted: SyncOperation = { opId: 'legacy-actual-deletion', entityType: sourceType, entityId: sourceId, action: 'delete', occurredAt: '2026-10-01T01:00:00.000Z', payload: { id: sourceId }, parents: sourceType === 'note' ? [created.opId] : [] }
+    await old.table('syncRevisions').add({ ...created, key: `note:${note.id}` })
+    if (scenario !== 'missing') {
+      await old.table('syncRevisions').add({ ...deleted, key: `${sourceType}:${sourceId}` })
+      await old.table('outbox').add(deleted)
+    }
+    await old.table('deletedEntities').add({ key: `note:${note.id}`, entityType: 'note', entityId: note.id, occurredAt: '2099-01-01T00:00:00.000Z' })
+    old.close()
+    collection = createCollection(databaseName)
+    const tombstone = await readDeletedEntity(collection, `note:${note.id}`)
+    if (scenario === 'missing') {
+      expect(tombstone).toMatchObject({ entityId: note.id, causes: [], provenanceError: expect.stringMatching(/deletion.*provenance/i) })
+    } else {
+      expect(tombstone).toMatchObject({ causes: [{ source: { entityType: sourceType, entityId: sourceId }, opId: deleted.opId, deletedLifetime: [] }] })
+      expect((await collection.pendingOperations())[0]).toMatchObject({ opId: deleted.opId, lifetime: [] })
+    }
+  })
+
+  test.each(['note', 'deck'] as const)('deletion provenance survives reopen for %s deletion and its descendants', async (sourceType) => {
+    const databaseName = `kiroku-test-${crypto.randomUUID()}`
+    collection = createCollection(databaseName)
+    const remote = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    try {
+      const parent = await collection.createDeck('Restoration parent')
+      const deck = await collection.createDeck('Restoration child', { parentId: parent.id })
+      const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
+      const cards = await readCardsForNote(collection, note.id)
+      const media = await collection.attachMedia(note.id, { file: new File(['sound'], 'sound.mp3', { type: 'audio/mpeg' }), side: 'front' })
+      const created = await collection.pendingOperations()
+      await remote.applyRemoteChanges(created, created.length)
+      if (sourceType === 'note') await collection.deleteNote(note.id)
+      else await collection.deleteDeck(parent.id, { mode: 'delete-subtree' })
+      const deletions = (await collection.pendingOperations()).filter((operation) => operation.action === 'delete')
+      const sourceId = sourceType === 'note' ? note.id : deck.id
+      const source = deletions.find((operation) => operation.entityType === sourceType && operation.entityId === sourceId)!
+      expect(source).toBeDefined()
+      collection.closeLocalCollection()
+      collection = createCollection(databaseName)
+      expect((await collection.pendingOperations()).find((operation) => operation.opId === source.opId)).toMatchObject({
+        opId: source.opId, lifetime: [],
+        relatedLifetimes: expect.arrayContaining([{ entityType: 'deck', entityId: sourceType === 'note' ? deck.id : parent.id, lifetime: [] }]),
+      })
+      await remote.applyRemoteChanges(deletions, created.length + deletions.length)
+      const expectedCause = { source: { entityType: sourceType, entityId: sourceId }, opId: source.opId, deletedLifetime: [] }
+      for (const target of [collection, remote]) {
+        for (const key of [`note:${note.id}`, ...cards.map((card) => `card:${card.id}`), `noteMedia:${media.id}`]) {
+          expect(await readDeletedEntity(target, key)).toMatchObject({ causes: [expectedCause] })
+        }
+      }
+    } finally {
+      await remote.removeLocalCollection()
+    }
+  })
+
   test('upgrades v6 note types to standard without changing card scheduling data', async () => {
     const databaseName = `kiroku-test-${crypto.randomUUID()}`
     const old = new Dexie(databaseName)
