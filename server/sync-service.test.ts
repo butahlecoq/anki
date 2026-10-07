@@ -14,6 +14,26 @@ import { SERVER_MAX_COLLECTION_SCHEMA_VERSION, SYNC_CHANGE_PAGE_SIZE } from '../
 
 let runtimeDirectory: string | undefined
 
+test('schema 22 operation lifetime metadata survives service reopen and replay', async () => {
+  runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-sync-'))
+  const databasePath = join(runtimeDirectory, 'collection.sqlite')
+  const service = createSyncService({ databasePath })
+  const { token } = service.pair({ code: service.createPairingCode(), deviceId: 'restoration-phone' })
+  const operation = { opId: 'lifetime-deck-created', entityType: 'deck', entityId: 'lifetime-deck', action: 'create', occurredAt: '2026-10-07T00:00:00.000Z', payload: { id: 'lifetime-deck', name: 'Restoration fixture' }, lifetime: [], relatedLifetimes: [] }
+  try {
+    const response = service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 22, cursor: 0, operations: [operation] })
+    assert.equal(response.accepted, 1)
+    assert.deepEqual(response.changes[0], operation)
+  } finally { service.close() }
+  const reopened = createSyncService({ databasePath })
+  try {
+    const response = reopened.sync(token, { protocolVersion: 2, collectionSchemaVersion: 22, cursor: 0, operations: [operation] })
+    assert.equal(response.accepted, 0)
+    assert.deepEqual(response.changes[0], operation)
+    assert.equal(reopened.health().collectionSchemaVersion, 22)
+  } finally { reopened.close() }
+})
+
 afterEach(async () => {
   if (runtimeDirectory) await rm(runtimeDirectory, { recursive: true, force: true })
   runtimeDirectory = undefined

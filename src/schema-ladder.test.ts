@@ -4,6 +4,11 @@ import { createCollection } from './collection'
 import { CLIENT_COLLECTION_SCHEMA_VERSION, SERVER_MAX_COLLECTION_SCHEMA_VERSION } from '../sync-capabilities'
 import { SCHEMA_LADDER, schemaIntroducedFields, schemaRequiredByPayload } from '../schema-ladder'
 
+test('causal restoration has a distinct schema 22 capability', () => {
+  expect(CLIENT_COLLECTION_SCHEMA_VERSION).toBe(22)
+  expect(SERVER_MAX_COLLECTION_SCHEMA_VERSION).toBe(22)
+})
+
 test('the collection store version is the advertised schema version', async () => {
   // The ladder is the single definition; a client must never advertise a store
   // version its own migrations do not reach.
