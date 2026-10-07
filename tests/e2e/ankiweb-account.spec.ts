@@ -41,6 +41,7 @@ async function localPcService(syncURL: string) {
   const changes = [...media].map(([name, bytes], index) => [name, index + 1, createHash('sha1').update(bytes).digest('hex')])
   let mediaChangesRead = false
   let downloadIndex = 0
+  let metadataFailurePending = true
   const http = createHttpServer(createSyncHttpHandler(service, {
     allowedOrigin: webURL,
     ankiWebUpstream: async (url, init) => {
@@ -59,6 +60,19 @@ async function localPcService(syncURL: string) {
       }
       if (route === 'msync/mediaSanity') return Response.json({ data: 'OK' })
       if (route === 'msync/uploadChanges') return Response.json({ data: [0, changes.length] })
+      if (route === 'sync/meta') {
+        const request = new Request(`${syncURL}${route}`, init)
+        const form = await request.clone().formData()
+        const payload = JSON.parse(String(form.get('data'))) as { cv: string }
+        // Production rejects an unrecognized client family; the official
+        // self-hosted fixture alone does not enforce that requirement.
+        if (payload.cv.split(',')[0] !== 'anki') return new Response('400', { status: 400 })
+        if (metadataFailurePending) {
+          metadataFailurePending = false
+          return new Response('metadata temporarily unavailable', { status: 400 })
+        }
+        return fetch(request)
+      }
       return fetch(`${syncURL}${route}`, init)
     },
   }))
@@ -147,9 +161,42 @@ collection.close()
     execFileSync(python!, [seed, join(fixture, 'seed.anki2'), syncURL, username, password], { windowsHide: true, stdio: 'pipe' })
     pc = await localPcService(syncURL)
     await page.goto(webURL)
+    await page.getByRole('button', { name: 'New deck', exact: true }).click()
+    await page.getByLabel('Deck name', { exact: true }).fill('Local work')
+    await page.getByRole('button', { name: 'Create deck', exact: true }).click()
+    await page.getByRole('button', { name: 'Open Local work', exact: true }).click()
+    await page.getByRole('button', { name: 'Add note', exact: true }).click()
+    const localNote = page.getByRole('dialog', { name: 'Add a Basic note', exact: true })
+    await localNote.getByLabel('Front', { exact: true }).fill('Retain me')
+    await localNote.getByLabel('Back', { exact: true }).fill('Non-sensitive local work')
+    await localNote.getByRole('button', { name: 'Save note', exact: true }).click()
+    await expect(localNote).not.toBeVisible()
+    await page.getByRole('link', { name: 'Browse', exact: true }).click()
+    await expect(page.getByRole('button', { name: 'Retain me', exact: true })).toBeVisible()
+    const localCardIdentity = await page.getByRole('checkbox', { name: /^Select card / }).getAttribute('aria-label')
     await pair(page, pc.url, pc.runtime)
+    await page.getByTestId('offline-storage-summary').click()
+    const inventory = page.getByText(/notes · .* cards · .* media files.*changes waiting to sync/)
+    await expect(inventory).toBeVisible()
+    const pendingLocalWork = await inventory.innerText()
     await page.getByRole('button', { name: 'Connect AnkiWeb account', exact: true }).click()
     const dialog = page.getByRole('dialog', { name: 'Connect AnkiWeb' })
+    await dialog.getByLabel('AnkiWeb username').fill(username)
+    await dialog.getByLabel('AnkiWeb password').fill(password)
+    await dialog.getByRole('button', { name: 'Connect account' }).click()
+    await expect(dialog.getByRole('status')).toContainText('collection check')
+    await expect(dialog.getByRole('status')).toContainText('HTTP 400; sync/meta')
+    await expect(dialog.getByRole('status')).not.toContainText(password)
+    await expect(dialog.getByLabel('AnkiWeb password')).toHaveValue('')
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await expect(dialog).not.toBeVisible()
+    await expect(inventory).toHaveText(pendingLocalWork)
+    await page.reload()
+    await expect(page.getByRole('button', { name: 'Retain me', exact: true })).toBeVisible()
+    await expect(page.getByRole('checkbox', { name: localCardIdentity!, exact: true })).toBeVisible()
+    await page.getByTestId('offline-storage-summary').click()
+    await expect(inventory).toHaveText(pendingLocalWork)
+    await page.getByRole('button', { name: 'Connect AnkiWeb account', exact: true }).click()
     await dialog.getByLabel('AnkiWeb username').fill(username)
     await dialog.getByLabel('AnkiWeb password').fill(password)
     await dialog.getByRole('button', { name: 'Connect account' }).click()
@@ -228,6 +275,10 @@ collection.close()
     const retainedStores = await page.evaluate(async () => (await indexedDB.databases?.() ?? []).map((database) => database.name ?? ''))
     expect(retainedStores).toEqual(persisted.names)
     await dialog.getByRole('button', { name: 'Cancel' }).click()
+    await expect(dialog).not.toBeVisible()
+    await expect(page.getByRole('button', { name: 'Retain me', exact: true })).toBeVisible()
+    await expect(page.getByRole('checkbox', { name: localCardIdentity!, exact: true })).toBeVisible()
+    await page.getByRole('link', { name: 'Decks', exact: true }).click()
     await page.getByRole('button', { name: /Open .*JLPT N5/ }).click()
     await expect(page.getByRole('button', { name: 'Study now' })).toBeEnabled()
     await expect(page.getByRole('group', { name: 'Deck counts' })).toContainText('REVIEW 1')

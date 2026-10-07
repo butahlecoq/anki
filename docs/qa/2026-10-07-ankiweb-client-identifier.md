@@ -53,10 +53,49 @@ endpoint using the cached authentication: HTTP 200, valid metadata, and
 this does **not** verify password sign-in. No collection upload/download,
 account media transfer, or remote sync transaction was performed.
 
+A final comparison through the same public compiled NativeAnkiClient changed
+only the first client-family token, retaining protocol 10, version, Kiroku
+marker, platform, multipart body, and authentication. `kiroku` returned HTTP
+400 at `sync/meta`, source `upstream`, phase `collection check`; `anki` returned
+HTTP 200 with continuation allowed. The patched client also received valid
+HTTP 200 media initialization metadata from real `msync/begin`, with zero
+files transferred. This still does not verify password sign-in or account copy
+against production.
+
+## Visible failure, reload, and retry
+
+The existing official-account browser journey now creates a non-sensitive
+local note, records its visible stable card identity and pending-change
+inventory, and pairs through the real temporary PC service. The fixture rejects
+unknown metadata client families and fails the first accepted metadata request
+once with HTTP 400, then forwards subsequent requests to official Anki 26.9.3's
+isolated self-hosted server. Existing media responses remain synthetic.
+
+The journey checks the actionable route/phase, cleared password input, unchanged
+local identity and pending work across failure and reload, successful retry,
+Import Plan, representable-only collection copy, credential persistence audit,
+unchanged local note after the copy, and offline study of the imported material.
+With a persistent isolated `anki==26.9.3` interpreter, it passed in desktop
+Chromium: **1 passed in 15.8 seconds**. Command:
+
+```powershell
+$env:ANKI_TEST_PYTHON = (Resolve-Path runtime/anki-26.9.3-tools/Scripts/python.exe).Path
+$env:KIROKU_WEB_PORT = '4180'
+$env:KIROKU_SYNC_PORT = '4181'
+npx playwright test tests/e2e/ankiweb-account.spec.ts --project=desktop-chromium --output=runtime/234-account-metadata-retry-complete
+```
+
+Log: `account-metadata-retry-complete.log`. An earlier attempt reached the copy
+successfully, then failed because the expanded test was on Browse while looking
+for a deck-opening button. The test now explicitly visits Decks after verifying
+that the original note remains. Its retained failure artifacts are in
+`runtime/234-account-metadata-retry`. This fixture evidence is distinct from
+the real-production cached-auth metadata checks above.
+
 ## Remaining verification
 
-Run the full software gate, the visible generated-account copy journey, and
-independent standards/spec review on the final commit. The owner's original
+Run the full software gate and independent standards/spec review on the final
+commit. The owner's original
 message lacked phase/source details; this reproduces and corrects the real
 metadata HTTP 400, but does not retrospectively prove that every original
 account attempt failed at this phase. The owner should retry account connection
