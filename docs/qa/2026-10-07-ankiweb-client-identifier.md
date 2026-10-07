@@ -92,6 +92,47 @@ that the original note remains. Its retained failure artifacts are in
 `runtime/234-account-metadata-retry`. This fixture evidence is distinct from
 the real-production cached-auth metadata checks above.
 
+## Current-session WebKit coverage and UI integration
+
+PR #242 merged the #235 UI and test corrections into `0f3e181`. This branch is
+rebased onto that commit. The older shared sample-card/button commit is dropped
+because both changes are already present on main; the shared files match main.
+The deployed app manifest and service health still report `496a4c3c2355` on
+2026-10-07. Repository integration has not updated the running deployment.
+
+The account journey now runs current-session coverage in both browser projects
+and keeps the cold-reload variant separate. WebKit therefore verifies failure,
+local note identity/pending work after reload, retry, account media verification,
+Import Plan, representable-only copy, credential persistence audit, and warm
+offline study. Only its cold-reload variant retains the explicit platform skip.
+
+A controlled one-token rollback changes the accepted metadata family back to
+`kiroku`, retaining protocol/version/marker/platform. The first run stopped at a
+test wording mismatch: the UI identifies the upstream as "AnkiWeb", rather than
+the literal "upstream". That run is not the retry regression proof. After the
+assertion matches the public UI, WebKit reproduces the intended persistent HTTP
+400 at `sync/meta`: local work survives the initial failure and reload, but
+retry cannot display the account decks. Evidence: `warm-account-family-retry-red.log`
+and `runtime/234-warm-account-family-retry-red`.
+
+Restoring the accepted family produces **3 passes and 1 explicit WebKit
+cold-reload skip in 45.6 seconds**. Command: `npx playwright test
+tests/e2e/ankiweb-account.spec.ts --output=runtime/234-warm-account-green`, with
+the pinned interpreter and isolated ports 4180/4181. Log:
+`warm-account-green.log`. Both WebKit viewport screenshots were inspected: the
+metadata error includes phase, route, source-identifying service name and build;
+the successful representable copy message is readable in the scrollable dialog.
+These images contain only generated fixture data. Media source preservation
+does not establish audible playback.
+
+The viewport attachment records Chromium configured/actual 1280 × 720, DPR 1.
+Windows WebKit's standard iPhone project is configured 390 × 664 but measures
+312 × 531, DPR 3.75. This is the normal phone project, not the calibrated all-page
+design audit. Viewport records and the focused HTML report are preserved locally.
+Focused diagnostic/message suites pass **8 tests**; focused ESLint and diff
+checks pass. A final complete gate and independent review on the new commit
+remain required before acceptance or merge.
+
 ## Remaining verification
 
 Run the full software gate and independent standards/spec review on the final

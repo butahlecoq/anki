@@ -95,17 +95,18 @@ async function pair(page: Page, url: string, runtime: string) {
   await expect(page.getByText('PC connected. Your collections are ready to sync.', { exact: true })).toBeVisible()
 }
 
-test('downloads an official account snapshot, reviews its Import Plan, and studies the copied collection offline', async ({ page, context }) => {
-  test.skip(test.info().project.name === 'iphone-webkit', 'AnkiWeb cold-offline media persistence is currently verified in desktop Chromium; WebKit is recorded as a skip, not a pass')
-  test.skip(!python, 'Set ANKI_TEST_PYTHON to an isolated Python environment with pinned anki==26.9.3')
-  test.setTimeout(120_000)
-  const fixture = mkdtempSync(join(tmpdir(), 'ankiweb-official-fixture-'))
-  const syncPort = await port()
-  const syncURL = `http://127.0.0.1:${syncPort}/`
-  const username = `kiroku-${process.pid}-${Date.now()}`
-  const password = 'generated-local-only'
-  const seed = join(fixture, 'seed.py')
-  writeFileSync(seed, `from anki.collection import Collection
+for (const launch of ['current session', 'fresh document']) {
+  test(`downloads an official account snapshot, reviews its Import Plan, and studies the copied collection offline in the ${launch}`, async ({ page, context }, testInfo) => {
+    test.skip(launch === 'fresh document' && test.info().project.name === 'iphone-webkit', 'AnkiWeb cold-offline media persistence is currently verified in desktop Chromium; WebKit is recorded as a skip, not a pass')
+    test.skip(!python, 'Set ANKI_TEST_PYTHON to an isolated Python environment with pinned anki==26.9.3')
+    test.setTimeout(120_000)
+    const fixture = mkdtempSync(join(tmpdir(), 'ankiweb-official-fixture-'))
+    const syncPort = await port()
+    const syncURL = `http://127.0.0.1:${syncPort}/`
+    const username = `kiroku-${process.pid}-${Date.now()}`
+    const password = 'generated-local-only'
+    const seed = join(fixture, 'seed.py')
+    writeFileSync(seed, `from anki.collection import Collection
 from anki.scheduler_pb2 import CardAnswer
 from datetime import datetime, timezone, timedelta
 import sys
@@ -151,169 +152,183 @@ collection.full_upload_or_download(auth=auth, server_usn=None, upload=True)
 collection.sync_media(auth)
 collection.close()
 `)
-  const anki = spawn(python!, ['-m', 'anki.syncserver'], {
-    env: { ...process.env, SYNC_USER1: `${username}:${password}`, SYNC_HOST: '127.0.0.1', SYNC_PORT: String(syncPort), SYNC_BASE: join(fixture, 'server') },
-    stdio: 'ignore', windowsHide: true,
-  })
-  let pc: Awaited<ReturnType<typeof localPcService>> | undefined
-  try {
-    await ready(syncURL, anki)
-    execFileSync(python!, [seed, join(fixture, 'seed.anki2'), syncURL, username, password], { windowsHide: true, stdio: 'pipe' })
-    pc = await localPcService(syncURL)
-    await page.goto(webURL)
-    await page.getByRole('button', { name: 'New deck', exact: true }).click()
-    await page.getByLabel('Deck name', { exact: true }).fill('Local work')
-    await page.getByRole('button', { name: 'Create deck', exact: true }).click()
-    await page.getByRole('button', { name: 'Open Local work', exact: true }).click()
-    await page.getByRole('button', { name: 'Add note', exact: true }).click()
-    const localNote = page.getByRole('dialog', { name: 'Add a Basic note', exact: true })
-    await localNote.getByLabel('Front', { exact: true }).fill('Retain me')
-    await localNote.getByLabel('Back', { exact: true }).fill('Non-sensitive local work')
-    await localNote.getByRole('button', { name: 'Save note', exact: true }).click()
-    await expect(localNote).not.toBeVisible()
-    await page.getByRole('link', { name: 'Browse', exact: true }).click()
-    await expect(page.getByRole('button', { name: 'Retain me', exact: true })).toBeVisible()
-    const localCardIdentity = await page.getByRole('checkbox', { name: /^Select card / }).getAttribute('aria-label')
-    await pair(page, pc.url, pc.runtime)
-    await page.getByTestId('offline-storage-summary').click()
-    const inventory = page.getByText(/notes · .* cards · .* media files.*changes waiting to sync/)
-    await expect(inventory).toBeVisible()
-    const pendingLocalWork = await inventory.innerText()
-    await page.getByRole('button', { name: 'Connect AnkiWeb account', exact: true }).click()
-    const dialog = page.getByRole('dialog', { name: 'Connect AnkiWeb' })
-    await dialog.getByLabel('AnkiWeb username').fill(username)
-    await dialog.getByLabel('AnkiWeb password').fill(password)
-    await dialog.getByRole('button', { name: 'Connect account' }).click()
-    await expect(dialog.getByRole('status')).toContainText('collection check')
-    await expect(dialog.getByRole('status')).toContainText('HTTP 400; sync/meta')
-    await expect(dialog.getByRole('status')).not.toContainText(password)
-    await expect(dialog.getByLabel('AnkiWeb password')).toHaveValue('')
-    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
-    await expect(dialog).not.toBeVisible()
-    await expect(inventory).toHaveText(pendingLocalWork)
-    await page.reload()
-    await expect(page.getByRole('button', { name: 'Retain me', exact: true })).toBeVisible()
-    await expect(page.getByRole('checkbox', { name: localCardIdentity!, exact: true })).toBeVisible()
-    await page.getByTestId('offline-storage-summary').click()
-    await expect(inventory).toHaveText(pendingLocalWork)
-    await page.getByRole('button', { name: 'Connect AnkiWeb account', exact: true }).click()
-    await dialog.getByLabel('AnkiWeb username').fill(username)
-    await dialog.getByLabel('AnkiWeb password').fill(password)
-    await dialog.getByRole('button', { name: 'Connect account' }).click()
-    await expect(dialog.getByRole('region', { name: 'AnkiWeb account decks' })).toContainText('語彙::JLPT N5', { timeout: 30_000 })
-    await expect(dialog.getByText('No notes, cards, or study history were uploaded.')).toBeVisible()
-    await dialog.getByRole('button', { name: 'Download and verify account media' }).click()
-    await expect(dialog.getByRole('region', { name: 'Account media' })).toContainText('5 verified files stored on this device')
-    await dialog.getByRole('button', { name: 'Preview account collection' }).click()
-    const plan = dialog.getByRole('region', { name: 'Account Import Plan' })
-    await expect(plan).toContainText('Account Import Plan · revision 1')
-    await expect(plan).toContainText('2 Decks')
-    await expect(plan).toContainText('1 note types')
-    await expect(plan).toContainText('1 notes')
-    await expect(plan).toContainText('1 cards')
-    await expect(plan).toContainText('1 review entries')
-    await expect(plan).toContainText('3 media files')
-    await expect(plan).toContainText('Unsupported custom filters')
-    await expect(plan.getByRole('button', { name: 'Import reviewed collection to this device' })).toBeDisabled()
-    await expect(plan.getByRole('region', { name: 'Skipped import rows' })).toContainText('Executable or embedded template markup is unsupported')
-    await plan.getByText(/Review all \d+ planned row changes/).click()
-    await expect(plan).toContainText('note · create · anki-note:')
-    await expect(plan).toContainText('card · create · anki-note:')
-    await expect(plan).toContainText('review · create · anki-review:')
-    await plan.getByText(/Import 1 representable notes and skip 1 unsupported notes/).click()
-    await expect(plan.getByRole('button', { name: 'Import representable notes to this device' })).toBeEnabled()
-    await plan.getByRole('button', { name: 'Import representable notes to this device' }).click()
-    await expect(dialog.getByText(/The representable portion is available in this device’s offline collection/i)).toBeVisible()
-    await expect(plan.getByText(/no changes were uploaded/i)).toBeVisible()
-    await expect(dialog.getByRole('region', { name: 'Skipped import rows' })).toContainText('Executable or embedded template markup is unsupported')
-    await dialog.getByRole('button', { name: 'Preview account collection' }).click()
-    const refreshedPlan = dialog.getByRole('region', { name: 'Account Import Plan' })
-    await expect(refreshedPlan).toContainText('saved representable-only choice')
-    await expect(refreshedPlan.getByRole('region', { name: 'Skipped import rows' })).toContainText('Executable or embedded template markup is unsupported')
-    const persisted = await page.evaluate(async () => {
-      const databases = await indexedDB.databases?.() ?? []
-      const local = `${JSON.stringify(localStorage)}${JSON.stringify(sessionStorage)}`
-      const records: string[] = []
-      let recordCount = 0
-      const collect = (value: unknown) => {
-        if (typeof value === 'string') records.push(value)
-        else if (value instanceof ArrayBuffer) records.push(new TextDecoder().decode(value))
-        else if (ArrayBuffer.isView(value)) records.push(new TextDecoder().decode(value as ArrayBufferView))
-        else if (Array.isArray(value)) value.forEach(collect)
-        else if (value && typeof value === 'object') Object.values(value).forEach(collect)
-      }
-      for (const { name } of databases) {
-        if (!name) continue
-        const database = await new Promise<IDBDatabase>((resolve, reject) => {
-          const request = indexedDB.open(name)
-          request.onsuccess = () => resolve(request.result)
-          request.onerror = () => reject(request.error)
-        })
-        for (const storeName of Array.from(database.objectStoreNames)) {
-          const values = await new Promise<unknown[]>((resolve, reject) => {
-            const request = database.transaction(storeName).objectStore(storeName).getAll()
+    const anki = spawn(python!, ['-m', 'anki.syncserver'], {
+      env: { ...process.env, SYNC_USER1: `${username}:${password}`, SYNC_HOST: '127.0.0.1', SYNC_PORT: String(syncPort), SYNC_BASE: join(fixture, 'server') },
+      stdio: 'ignore', windowsHide: true,
+    })
+    let pc: Awaited<ReturnType<typeof localPcService>> | undefined
+    try {
+      await ready(syncURL, anki)
+      execFileSync(python!, [seed, join(fixture, 'seed.anki2'), syncURL, username, password], { windowsHide: true, stdio: 'pipe' })
+      pc = await localPcService(syncURL)
+      await page.goto(webURL)
+      await page.getByRole('button', { name: 'New deck', exact: true }).click()
+      await page.getByLabel('Deck name', { exact: true }).fill('Local work')
+      await page.getByRole('button', { name: 'Create deck', exact: true }).click()
+      await page.getByRole('button', { name: 'Open Local work', exact: true }).click()
+      await page.getByRole('button', { name: 'Add note', exact: true }).click()
+      const localNote = page.getByRole('dialog', { name: 'Add a Basic note', exact: true })
+      await localNote.getByLabel('Front', { exact: true }).fill('Retain me')
+      await localNote.getByLabel('Back', { exact: true }).fill('Non-sensitive local work')
+      await localNote.getByRole('button', { name: 'Save note', exact: true }).click()
+      await expect(localNote).not.toBeVisible()
+      await page.getByRole('link', { name: 'Browse', exact: true }).click()
+      await expect(page.getByRole('button', { name: 'Retain me', exact: true })).toBeVisible()
+      const localCardIdentity = await page.getByRole('checkbox', { name: /^Select card / }).getAttribute('aria-label')
+      await pair(page, pc.url, pc.runtime)
+      await page.getByTestId('offline-storage-summary').click()
+      const inventory = page.getByText(/notes · .* cards · .* media files.*changes waiting to sync/)
+      await expect(inventory).toBeVisible()
+      const pendingLocalWork = await inventory.innerText()
+      await page.getByRole('button', { name: 'Connect AnkiWeb account', exact: true }).click()
+      const dialog = page.getByRole('dialog', { name: 'Connect AnkiWeb' })
+      await dialog.getByLabel('AnkiWeb username').fill(username)
+      await dialog.getByLabel('AnkiWeb password').fill(password)
+      await dialog.getByRole('button', { name: 'Connect account' }).click()
+      await expect(dialog.getByRole('status')).toContainText('collection check')
+      await expect(dialog.getByRole('status')).toContainText('HTTP 400; sync/meta')
+      await expect(dialog.getByRole('status')).toContainText('AnkiWeb rejected collection check')
+      await expect(dialog.getByRole('status')).toContainText('App build:')
+      await expect(dialog.getByRole('status')).not.toContainText(password)
+      await expect(dialog.getByLabel('AnkiWeb password')).toHaveValue('')
+      await dialog.getByRole('status').scrollIntoViewIfNeeded()
+      await expect(dialog.getByRole('status')).toBeInViewport()
+      await page.screenshot({ path: testInfo.outputPath('account-metadata-failure.png') })
+      await testInfo.attach('account-ui-viewport', {
+        contentType: 'application/json',
+        body: JSON.stringify({ configured: page.viewportSize(), ...await page.evaluate(() => ({ width: innerWidth, height: innerHeight, devicePixelRatio })) }),
+      })
+      await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+      await expect(dialog).not.toBeVisible()
+      await expect(inventory).toHaveText(pendingLocalWork)
+      await page.reload()
+      await expect(page.getByRole('button', { name: 'Retain me', exact: true })).toBeVisible()
+      await expect(page.getByRole('checkbox', { name: localCardIdentity!, exact: true })).toBeVisible()
+      await page.getByTestId('offline-storage-summary').click()
+      await expect(inventory).toHaveText(pendingLocalWork)
+      await page.getByRole('button', { name: 'Connect AnkiWeb account', exact: true }).click()
+      await dialog.getByLabel('AnkiWeb username').fill(username)
+      await dialog.getByLabel('AnkiWeb password').fill(password)
+      await dialog.getByRole('button', { name: 'Connect account' }).click()
+      await expect(dialog.getByRole('region', { name: 'AnkiWeb account decks' })).toContainText('語彙::JLPT N5', { timeout: 30_000 })
+      await expect(dialog.getByText('No notes, cards, or study history were uploaded.')).toBeVisible()
+      await dialog.getByRole('button', { name: 'Download and verify account media' }).click()
+      await expect(dialog.getByRole('region', { name: 'Account media' })).toContainText('5 verified files stored on this device')
+      await dialog.getByRole('button', { name: 'Preview account collection' }).click()
+      const plan = dialog.getByRole('region', { name: 'Account Import Plan' })
+      await expect(plan).toContainText('Account Import Plan · revision 1')
+      await expect(plan).toContainText('2 Decks')
+      await expect(plan).toContainText('1 note types')
+      await expect(plan).toContainText('1 notes')
+      await expect(plan).toContainText('1 cards')
+      await expect(plan).toContainText('1 review entries')
+      await expect(plan).toContainText('3 media files')
+      await expect(plan).toContainText('Unsupported custom filters')
+      await expect(plan.getByRole('button', { name: 'Import reviewed collection to this device' })).toBeDisabled()
+      await expect(plan.getByRole('region', { name: 'Skipped import rows' })).toContainText('Executable or embedded template markup is unsupported')
+      await plan.getByText(/Review all \d+ planned row changes/).click()
+      await expect(plan).toContainText('note · create · anki-note:')
+      await expect(plan).toContainText('card · create · anki-note:')
+      await expect(plan).toContainText('review · create · anki-review:')
+      await plan.getByText(/Import 1 representable notes and skip 1 unsupported notes/).click()
+      await expect(plan.getByRole('button', { name: 'Import representable notes to this device' })).toBeEnabled()
+      await plan.getByRole('button', { name: 'Import representable notes to this device' }).click()
+      await expect(dialog.getByText(/The representable portion is available in this device’s offline collection/i)).toBeVisible()
+      await dialog.getByText(/The representable portion is available in this device’s offline collection/i).scrollIntoViewIfNeeded()
+      await page.screenshot({ path: testInfo.outputPath('account-copy-retained-local-work.png') })
+      await expect(plan.getByText(/no changes were uploaded/i)).toBeVisible()
+      await expect(dialog.getByRole('region', { name: 'Skipped import rows' })).toContainText('Executable or embedded template markup is unsupported')
+      await dialog.getByRole('button', { name: 'Preview account collection' }).click()
+      const refreshedPlan = dialog.getByRole('region', { name: 'Account Import Plan' })
+      await expect(refreshedPlan).toContainText('saved representable-only choice')
+      await expect(refreshedPlan.getByRole('region', { name: 'Skipped import rows' })).toContainText('Executable or embedded template markup is unsupported')
+      const persisted = await page.evaluate(async () => {
+        const databases = await indexedDB.databases?.() ?? []
+        const local = `${JSON.stringify(localStorage)}${JSON.stringify(sessionStorage)}`
+        const records: string[] = []
+        let recordCount = 0
+        const collect = (value: unknown) => {
+          if (typeof value === 'string') records.push(value)
+          else if (value instanceof ArrayBuffer) records.push(new TextDecoder().decode(value))
+          else if (ArrayBuffer.isView(value)) records.push(new TextDecoder().decode(value as ArrayBufferView))
+          else if (Array.isArray(value)) value.forEach(collect)
+          else if (value && typeof value === 'object') Object.values(value).forEach(collect)
+        }
+        for (const { name } of databases) {
+          if (!name) continue
+          const database = await new Promise<IDBDatabase>((resolve, reject) => {
+            const request = indexedDB.open(name)
             request.onsuccess = () => resolve(request.result)
             request.onerror = () => reject(request.error)
           })
-          recordCount += values.length
-          values.forEach(collect)
+          for (const storeName of Array.from(database.objectStoreNames)) {
+            const values = await new Promise<unknown[]>((resolve, reject) => {
+              const request = database.transaction(storeName).objectStore(storeName).getAll()
+              request.onsuccess = () => resolve(request.result)
+              request.onerror = () => reject(request.error)
+            })
+            recordCount += values.length
+            values.forEach(collect)
+          }
+          database.close()
         }
-        database.close()
+        const scripts = await Promise.all(Array.from(document.scripts).filter((script) => script.src).map(async (script) => {
+          try { return await (await fetch(script.src)).text() } catch { return '' }
+        }))
+        return { names: databases.map((database) => database.name ?? ''), recordCount, local, records: records.join('\n'), scripts: scripts.join('\n') }
+      })
+      expect(`${persisted.names.join('\n')}\n${persisted.local}\n${persisted.records}`).not.toContain(password)
+      expect(`${persisted.names.join('\n')}\n${persisted.local}\n${persisted.records}`).not.toContain(username)
+      expect(persisted.scripts).not.toContain(password)
+      expect(persisted.scripts).not.toContain(username)
+      expect(persisted.recordCount).toBeGreaterThan(0)
+      await dialog.getByRole('button', { name: 'Disconnect' }).click()
+      await expect(dialog.getByRole('status')).toContainText('downloaded account collection remains')
+      const retainedStores = await page.evaluate(async () => (await indexedDB.databases?.() ?? []).map((database) => database.name ?? ''))
+      expect(retainedStores).toEqual(persisted.names)
+      await dialog.getByRole('button', { name: 'Cancel' }).click()
+      await expect(dialog).not.toBeVisible()
+      await expect(page.getByRole('button', { name: 'Retain me', exact: true })).toBeVisible()
+      await expect(page.getByRole('checkbox', { name: localCardIdentity!, exact: true })).toBeVisible()
+      await page.getByRole('link', { name: 'Decks', exact: true }).click()
+      await page.getByRole('button', { name: /Open .*JLPT N5/ }).click()
+      await expect(page.getByRole('button', { name: 'Study now' })).toBeEnabled()
+      await expect(page.getByRole('group', { name: 'Deck counts' })).toContainText('REVIEW 1')
+      await expect(page.getByRole('group', { name: 'Deck counts' })).toContainText('REVIEWS 1')
+      await pc.close()
+      pc = undefined
+      await context.setOffline(true)
+      await page.getByRole('button', { name: 'Study now' }).click()
+      await expect(page.getByRole('button', { name: 'Show answer' })).toBeVisible()
+      const card = page.frameLocator('iframe[title="Review card"]')
+      await expect(card.locator('body')).toContainText('猫')
+      await expect(card.locator('img').first()).toHaveAttribute('src', /^data:image\/png;base64,/)
+      await page.getByRole('button', { name: 'Show answer' }).click()
+      await expect(card.locator('audio').first()).toHaveAttribute('src', /^data:audio\/wav;base64,/)
+      if (launch === 'fresh document') {
+        await page.reload()
+        await expect(page.getByRole('button', { name: 'Show answer' })).toBeVisible()
+        const restartedCard = page.frameLocator('iframe[title="Review card"]')
+        await expect(restartedCard.locator('img').first()).toHaveAttribute('src', /^data:image\/png;base64,/)
+        await page.getByRole('button', { name: 'Show answer' }).click()
+        await expect(restartedCard.locator('audio').first()).toHaveAttribute('src', /^data:audio\/wav;base64,/)
       }
-      const scripts = await Promise.all(Array.from(document.scripts).filter((script) => script.src).map(async (script) => {
-        try { return await (await fetch(script.src)).text() } catch { return '' }
-      }))
-      return { names: databases.map((database) => database.name ?? ''), recordCount, local, records: records.join('\n'), scripts: scripts.join('\n') }
-    })
-    expect(`${persisted.names.join('\n')}\n${persisted.local}\n${persisted.records}`).not.toContain(password)
-    expect(`${persisted.names.join('\n')}\n${persisted.local}\n${persisted.records}`).not.toContain(username)
-    expect(persisted.scripts).not.toContain(password)
-    expect(persisted.scripts).not.toContain(username)
-    expect(persisted.recordCount).toBeGreaterThan(0)
-    await dialog.getByRole('button', { name: 'Disconnect' }).click()
-    await expect(dialog.getByRole('status')).toContainText('downloaded account collection remains')
-    const retainedStores = await page.evaluate(async () => (await indexedDB.databases?.() ?? []).map((database) => database.name ?? ''))
-    expect(retainedStores).toEqual(persisted.names)
-    await dialog.getByRole('button', { name: 'Cancel' }).click()
-    await expect(dialog).not.toBeVisible()
-    await expect(page.getByRole('button', { name: 'Retain me', exact: true })).toBeVisible()
-    await expect(page.getByRole('checkbox', { name: localCardIdentity!, exact: true })).toBeVisible()
-    await page.getByRole('link', { name: 'Decks', exact: true }).click()
-    await page.getByRole('button', { name: /Open .*JLPT N5/ }).click()
-    await expect(page.getByRole('button', { name: 'Study now' })).toBeEnabled()
-    await expect(page.getByRole('group', { name: 'Deck counts' })).toContainText('REVIEW 1')
-    await expect(page.getByRole('group', { name: 'Deck counts' })).toContainText('REVIEWS 1')
-    await pc.close()
-    pc = undefined
-    await context.setOffline(true)
-    await page.getByRole('button', { name: 'Study now' }).click()
-    await expect(page.getByRole('button', { name: 'Show answer' })).toBeVisible()
-    const card = page.frameLocator('iframe[title="Review card"]')
-    await expect(card.locator('body')).toContainText('猫')
-    await expect(card.locator('img').first()).toHaveAttribute('src', /^data:image\/png;base64,/)
-    await page.getByRole('button', { name: 'Show answer' }).click()
-    await expect(card.locator('audio').first()).toHaveAttribute('src', /^data:audio\/wav;base64,/)
-    await page.reload()
-    await expect(page.getByRole('button', { name: 'Show answer' })).toBeVisible()
-    const restartedCard = page.frameLocator('iframe[title="Review card"]')
-    await expect(restartedCard.locator('img').first()).toHaveAttribute('src', /^data:image\/png;base64,/)
-    await page.getByRole('button', { name: 'Show answer' }).click()
-    await expect(restartedCard.locator('audio').first()).toHaveAttribute('src', /^data:audio\/wav;base64,/)
-    await page.getByRole('link', { name: 'Statistics', exact: true }).click()
-    await expect(page.getByRole('heading', { name: 'Every answer adds up' })).toBeVisible()
-    await page.getByLabel('Period', { exact: true }).selectOption('all')
-    await expect(page.getByText('ANSWERS', { exact: true }).locator('..').locator('strong')).toHaveText('1')
-    await page.getByRole('link', { name: 'Browse', exact: true }).click()
-    await page.getByLabel('Collection search', { exact: true }).fill('猫')
-    await page.getByRole('button', { name: 'Search', exact: true }).click()
-    await expect(page.getByRole('button', { name: /猫/ }).first()).toBeVisible()
-  } finally {
-    await pc?.close()
-    if (anki.exitCode === null) {
-      const exited = new Promise<void>((resolve) => anki.once('exit', () => resolve()))
-      anki.kill()
-      await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 2000))])
+      await page.getByRole('link', { name: 'Statistics', exact: true }).click()
+      await expect(page.getByRole('heading', { name: 'Every answer adds up' })).toBeVisible()
+      await page.getByLabel('Period', { exact: true }).selectOption('all')
+      await expect(page.getByText('ANSWERS', { exact: true }).locator('..').locator('strong')).toHaveText('1')
+      await page.getByRole('link', { name: 'Browse', exact: true }).click()
+      await page.getByLabel('Collection search', { exact: true }).fill('猫')
+      await page.getByRole('button', { name: 'Search', exact: true }).click()
+      await expect(page.getByRole('button', { name: /猫/ }).first()).toBeVisible()
+    } finally {
+      await pc?.close()
+      if (anki.exitCode === null) {
+        const exited = new Promise<void>((resolve) => anki.once('exit', () => resolve()))
+        anki.kill()
+        await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 2000))])
+      }
+      rmSync(fixture, { recursive: true, force: true })
     }
-    rmSync(fixture, { recursive: true, force: true })
-  }
-})
+  })
+}
