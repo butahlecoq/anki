@@ -4,7 +4,7 @@ The owner authorized mobile layout improvements using Playwright/WebKit.
 Collection utilities now live inside a native `Collection tools` disclosure on
 small screens. Desktop keeps them open. Sync status and actionable messages
 remain visible outside the disclosure; pairing/account dialogs remain mounted
-outside it. Browse search and the Custom Study Session form have shorter lead-in
+outside it. Retained incoming dependency warnings remain visible above the disclosure. Browse search and the Custom Study Session form have shorter lead-in
 content. The offline status uses a separate header row.
 
 ## Public regression
@@ -47,9 +47,9 @@ npx playwright test tests/e2e/mobile-page-tasks.spec.ts --output=runtime/238-pag
 
 Existing pairing, sync, export, text, and storage browser journeys open the
 visible disclosure through `tests/e2e/collection-tools.ts`. This does not expose
-hidden controls through application internals. Integration with #235's review
-layout and all-page audit remains required before the full software gate and
-independent review.
+hidden controls through application internals. Integration now includes #235,
+#239, #240 and #236 (base `be834dc`). The final complete gate and independent
+review remain pending; the focused results below do not replace them.
 
 The Windows fixture measures host WebKit display scaling and asserts actual
 `innerWidth`/`innerHeight`. It keeps Safari user agent and touch with desktop
@@ -58,3 +58,31 @@ viewport interpretation. This is layout evidence, without a physical iOS claim.
 ## Integration with merged mobile design changes
 
 Rebased onto e272c96d5e59915e9d9d51fe15e516e1f7c0dbbd, preserving the review More actions menu and the Statistics date scroller. Typecheck and full lint pass. The first unit run exposed an ambiguous global Export query in the review-dialog shortcut test: both collection utilities and review actions legitimately provide export. Scoping that test to the opened review menu passes all 44 App tests (`mobile-pages-shortcut-scope-green.log`); no shortcut behavior was weakened. The complete gate at the resulting head remains required.
+
+## Integration with explicit deck restoration
+
+The public restoration journey now opens Collection tools before pairing, Sync
+now and package export. A fresh receiver exposed a helper race: `isVisible()`
+ran before the workspace mounted and returned false, leaving the pairing button
+in a closed disclosure. The retained trace records that sequence in both engines.
+The initial integration run failed both restoration cases and passed the other
+eight cases in4.9m (`page-tasks-restoration-red.log`,
+`runtime/238-restoration-focused`).
+
+The helper now waits for the disclosure to be attached before deciding whether
+the mobile trigger is visible. It uses the visible menu normally; no hidden
+application or database setup is introduced. The unchanged complete integration
+set then passed **10/10 in1.7m**, including restoration, keyboard dialogs and
+mobile page tasks, in both Chromium and WebKit. WebKit restoration took58.1s.
+Evidence: `page-tasks-restoration-green.log`,
+`runtime/238-restoration-green`; command:
+
+```powershell
+npx playwright test tests/e2e/mobile-page-tasks.spec.ts tests/e2e/deck-restoration.spec.ts tests/e2e/dialog-keyboard.spec.ts --output=runtime/238-restoration-green
+```
+
+Ports4184/4185, one worker, no retries or concurrent browser suite; both official
+Anki fixtures configured. Phone task geometry checks actual390x844 and320x568.
+Both320-pixel Study screenshots were visually inspected; the session-name input
+fits above navigation and offline-shell status remains readable. The rebased
+keyboard export/import retains the explicit clean-context cleanup from #236.
