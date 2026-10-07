@@ -275,7 +275,8 @@ for (const reopen of [false, true]) {
     await expectAudioReady(offlineAudio, browserName)
     await page.getByText('More actions', { exact: true }).click()
     await page.getByRole('button', { name: 'Replay audio' }).click()
-    await expect(page.getByText(browserName === 'webkit' ? 'Audio could not play on this device.' : 'Audio replayed.', { exact: true })).toBeVisible()
+    const lacksAudioBackend = browserName === 'webkit' && process.platform === 'win32'
+    await expect(page.getByText(lacksAudioBackend ? 'Audio could not play on this device.' : 'Audio replayed.', { exact: true })).toBeVisible()
     await expect(page.getByText('Offline shell active')).toBeVisible()
   })
 }

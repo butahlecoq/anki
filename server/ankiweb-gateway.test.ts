@@ -78,6 +78,37 @@ test('upstream redirects and failures return bounded generic errors without disc
   assert.equal(encoded.status, 502)
 })
 
+test('collection download survives an upstream response that does not consume its request body', async () => {
+  const expected = Uint8Array.of(83, 81, 76, 0, 255)
+  const response = await handleAnkiWebGateway(request('/ankiweb/sync/download'), env, async (_url, init) => {
+    // An upstream download endpoint can answer immediately, without consuming
+    // the upload stream. Fetch then cancels the unused request body.
+    if (init?.body instanceof ReadableStream) await init.body.cancel()
+    return new Response(new ReadableStream({
+      start(controller) {
+        if (init?.signal?.aborted) controller.error(new Error('Download was aborted with the unused request body'))
+        else { controller.enqueue(expected); controller.close() }
+      },
+    }), { headers: { 'content-type': 'application/octet-stream' } })
+  })
+  assert.equal(response.status, 200)
+  assert.deepEqual(new Uint8Array(await response.arrayBuffer()), expected)
+})
+
+test('oversized collection download requests stop before contacting upstream', async () => {
+  let chunks = 0
+  let contacted = false
+  const input = request('/ankiweb/sync/download', {
+    body: new ReadableStream({
+      pull(controller) { if (chunks++ < 65) controller.enqueue(new Uint8Array(1024 * 1024)); else controller.close() },
+    }),
+    duplex: 'half',
+  } as RequestInit)
+  const response = await handleAnkiWebGateway(input, env, async () => { contacted = true; return new Response('unexpected') })
+  assert.equal(response.status, 502)
+  assert.equal(contacted, false)
+})
+
 test('declared and actual oversized upstream bodies fail without a successful partial transfer', async () => {
   const declared = await handleAnkiWebGateway(request(), env, async () => new Response('x', { headers: { 'content-length': String(64 * 1024 * 1024 + 1) } }))
   assert.equal(declared.status, 413)

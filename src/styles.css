@@ -645,6 +645,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .heatmap-date span:first-child { font-size: 10px; }
 .heatmap-date span:last-child { font-size: 15px; font-weight: 600; }
 .review-heatmap button[aria-pressed="true"] { outline: 2px solid var(--text-primary); outline-offset: 2px; }
+.review-heatmap button { scroll-margin-block: 92px; }
 .heatmap-legend { color: var(--accent); }
 .stat-bars { list-style: none; padding: 0; margin: 22px 0 0; display: grid; gap: 14px; }
 .stat-bars li { display: grid; grid-template-columns: 95px minmax(0, 1fr) 32px; align-items: center; gap: 12px; font-size: 11px; }
