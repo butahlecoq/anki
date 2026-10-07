@@ -106,3 +106,49 @@ focused verification passed **4/4 in24.4s**
 (`page-tasks-storage-native-marker.log`, `runtime/238-storage-native-marker`).
 The final gate also captures the expanded Collection tools at both widths.
 Full final-head gate and independent reviews still remain before acceptance.
+
+## Final integration diagnostics and calibrated canvas
+
+The complete `b361553` run finished with728 unit passes/3 skips,22 tracker
+passes,64 server passes, typecheck/lint/build passes, and157 browser passes,
+12 declared skips and3 browser failures in18.6m. The failures were the safe-area
+case in both engines and WebKit's export case. Full artifacts are retained under
+`runtime/238-failed-full-b361553`; this is not a passing final gate.
+
+A focused unchanged reproduction of the two cases confirmed3 failures/1 pass
+in1.8m (`page-tasks-safearea-export-red.log`,
+`runtime/238-safearea-export-red`). The safe-area test clicked Connect a PC
+without opening the new visible menu. The WebKit trace recorded configured
+390x664 but actual312x531 and a checkbox outside the viewport.
+
+`tests/e2e/phone-canvas.ts` now shares the existing host-scale calibration
+between mobile page tasks, export and review layout. Export retains its intended
+390x664 size and verifies actual dimensions in both the exporting profile and
+the clean receiving profile. The checkbox must be in the viewport; dialog
+horizontal bounds and existing offline package/media re-import assertions stay
+checked. The safe-area case opens Collection tools normally and checks actual
+390x844 and390x400 canvases, including bounds against the real viewport. Safari
+user agent and touch remain enabled; Windows WebKit uses desktop viewport
+interpretation to avoid its known native visual-viewport scaling bug. This is
+automated layout evidence, not a physical-iPhone result.
+
+The complete focused export/review-layout/mobile-tasks set passed16/16 in1.1m
+(`page-tasks-safearea-export-green.log`, `runtime/238-safearea-export-green`).
+Windows WebKit full-page export images still appeared cropped despite passing
+geometry, so export evidence now captures the visible viewport. Additional
+explicit horizontal dialog assertions passed in both engines:2/2 in29.4s
+(`page-tasks-export-viewport.log`, `runtime/238-export-viewport`). The resulting
+WebKit export-options viewport screenshot was visually inspected and fits.
+
+## Paired menu acceptance journey
+
+`node runtime/238-paired-utilities-journey.mjs` passed4/4 on production UI build
+`b361553cbf04` before the next final gate. It uses isolated real temporary PC
+services and public sample-deck, pairing, sync and backup flows. In Chromium
+and WebKit at actual390x844 and320x568 it checks all paired utility button
+targets, keyboard Sync now, verified backup download and preview, account and
+pairing Escape/focus return, Collection tools Escape, no page overflow and no
+page errors. No AnkiWeb credentials or private collection data are used.
+Evidence: `page-tasks-paired-utilities.log`,
+`runtime/238-paired-utilities/evidence.json` and paired-menu screenshots.
+The new final-head complete gate and independent reviews remain required.

@@ -1,20 +1,8 @@
-import { expect, test as base } from '@playwright/test'
+import { expect } from '@playwright/test'
 import { writeFile } from 'node:fs/promises'
+import { phoneCanvasTest } from './phone-canvas'
 
-const test = base.extend<{ hostScale: number }>({
-  hasTouch: true,
-  hostScale: async ({ browser, browserName }, provide) => {
-    if (browserName !== 'webkit' || process.platform !== 'win32') return provide(1)
-    const probe = await browser.newContext({ viewport: { width: 1000, height: 1000 }, isMobile: false, deviceScaleFactor: 1 })
-    let scale = 1
-    try { scale = await (await probe.newPage()).evaluate(() => 1000 / innerWidth) }
-    finally { await probe.close() }
-    await provide(scale)
-  },
-  viewport: async ({ hostScale }, provide) => provide({ width: Math.round(390 * hostScale), height: Math.round(844 * hostScale) }),
-  isMobile: async ({ browserName }, provide) => provide(!(browserName === 'webkit' && process.platform === 'win32')),
-  deviceScaleFactor: async ({ hostScale }, provide) => provide(3 / hostScale),
-})
+const test = phoneCanvasTest({ width: 390, height: 844 })
 
 test('Browse and Study put their first task above mobile navigation', async ({ page, hostScale }, testInfo) => {
   await page.goto('/')
