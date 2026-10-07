@@ -46,6 +46,12 @@ test('zero-answer dates are visible before touch selection across a month transi
         grid: getComputedStyle(element).gridTemplateColumns,
       })),
     }))
+    for (const button of await heatmap.getByRole('button').all()) {
+      const box = await button.boundingBox()
+      expect(box!.width).toBeGreaterThanOrEqual(43.99)
+      expect(box!.height).toBeGreaterThanOrEqual(43.99)
+    }
+    await expect(heatmap.getByRole('region', { name: 'Study dates', exact: true })).toHaveCSS('overflow-x', 'auto')
     expect(viewport.width, JSON.stringify(viewport)).toBe(width)
     expect(viewport.scrollWidth, JSON.stringify(viewport)).toBeLessThanOrEqual(Math.ceil(viewport.rootWidth))
     const deckChoice = page.getByRole('combobox', { name: 'Statistics deck', exact: true })
@@ -60,7 +66,7 @@ test('zero-answer dates are visible before touch selection across a month transi
         await button.scrollIntoViewIfNeeded()
         await expect(button.getByText(month, { exact: true })).toBeVisible()
         await expect(button.getByText(day, { exact: true })).toBeVisible()
-        await button.evaluate(element => element.scrollIntoView({ block: 'center', inline: 'nearest' }))
+        await button.evaluate(element => element.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'nearest' }))
         await expect(button).toBeInViewport()
         await page.screenshot({ path: testInfo.outputPath(`date-${date}-${width}-${theme}.png`) })
         await button.click()
@@ -93,7 +99,7 @@ test('zero-answer dates are visible before touch selection across a month transi
         })
         expect(contrast, `${theme} date contrast at ${width}px`).toBeGreaterThanOrEqual(4.5)
       }
-      await active.evaluate(element => element.scrollIntoView({ block: 'center', inline: 'nearest' }))
+      await active.evaluate(element => element.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'nearest' }))
       await page.screenshot({ path: testInfo.outputPath(`active-date-${width}-${theme}.png`) })
     }
   }
