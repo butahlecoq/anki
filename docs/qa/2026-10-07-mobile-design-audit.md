@@ -127,6 +127,18 @@ that the journey had finished. This long multi-client CSV journey now has a
 unchanged. This change requires focused verification and another full gate.
 Artifacts are retained in `runtime/235-committed-head-artifacts`.
 
+The next full gate, at `a6d3f41`, passed CSV and all review-layout tests, but
+finished with 135 browser passes, 14 skips, and one Chromium Browse failure.
+After clicking the asynchronous delete confirmation, the test immediately
+cleared the background search input. The trace records the fill at 19391ms
+and the old `tag:jlpt::*` value still present at 19396ms; the applied-delete
+status appears at 19400ms. The final filtered view therefore hides the remaining
+note. The public journey now waits for the deletion dialog to close and its
+completion status before editing the search, and explicitly asserts the empty
+input value. No product behavior or assertion timeout changed. This completion
+barrier requires focused verification and a fresh full gate. Failure artifacts
+are retained in `runtime/235-csv-budget-full-artifacts`.
+
 This is layout and browser interaction evidence. It does not establish physical
 iOS installation, cold offline launch, or audible playback. Existing unsupported
 WebKit service worker journeys retain their documented skips. The account dialog

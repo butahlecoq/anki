@@ -86,7 +86,10 @@ test('browser maintains stable Japanese selections and previews field changes of
     await expect(deletion.getByRole('button', { name: 'Delete notes and cards' })).toBeDisabled()
     await deletion.getByRole('checkbox', { name: 'I reviewed the affected counts and want to delete these notes.' }).check()
     await deletion.getByRole('button', { name: 'Delete notes and cards' }).click()
+    await expect(deletion).not.toBeVisible()
+    await expect(page.getByRole('status').filter({ hasText: 'Applied delete to 1 notes.' })).toBeVisible()
     await search(page, '')
+    await expect(page.getByLabel('Collection search', { exact: true })).toHaveValue('')
     await expect(page.getByRole('button', { name: '猫ちゃん', exact: true })).toHaveCount(0)
     await expect(page.getByRole('button', { name: '犬', exact: true })).toBeVisible({ timeout: 15_000 })
   } finally { await context.setOffline(false) }
