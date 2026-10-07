@@ -293,8 +293,8 @@ export function readReceivedOperationCount(collection: Collection) {
 
 /** Reads all rows used by the statistics screen's dashboard aggregates. */
 export function readStatisticsSnapshot(collection: Collection) {
-  return readLiveSnapshot(collection, [storage(collection).decks, storage(collection).cards, storage(collection).notes, storage(collection).reviewEntries], async () => ({
-    decks: await storage(collection).decks.toArray(), cards: await storage(collection).cards.toArray(), notes: await storage(collection).notes.toArray(), reviews: await storage(collection).reviewEntries.toArray(),
+  return readLiveSnapshot(collection, [storage(collection).decks, storage(collection).cards, storage(collection).notes, storage(collection).noteTypes, storage(collection).reviewEntries], async () => ({
+    decks: await storage(collection).decks.toArray(), cards: await storage(collection).cards.toArray(), notes: await storage(collection).notes.toArray(), noteTypes: await storage(collection).noteTypes.toArray(), reviews: await storage(collection).reviewEntries.toArray(),
   }))
 }
 

@@ -79,6 +79,7 @@ export function Statistics() {
   const { start, end } = periodWindow(period, anchor)
   const card = data.cards.find((item) => item.id === selectedCard)
   const notes = new Map(data.notes.map((note) => [note.id, note]))
+  const noteTypes = new Map(data.noteTypes.map((type) => [type.id, type]))
   const cardsById = new Map(data.cards.map((item) => [item.id, item]))
   const reviewedCards = [...new Set(stats.reviews.map((entry) => entry.cardId))]
   return <div className="statistics-workspace">
@@ -96,7 +97,12 @@ export function Statistics() {
     <section className="statistics-panel" aria-label="Study heatmap"><h2>84 days of practice</h2><p>Select a day to see its answers and cards.</p><div className="heatmap-scroll" role="region" aria-label="Study dates" tabIndex={0}><div className="review-heatmap">{heatmap.map((day) => <button type="button" key={day.key} aria-label={`${day.key}: ${day.count} answers`} aria-pressed={period === 'day' && localDayKey(anchor) === day.key} title={`${day.key}: ${day.count} answers`} style={{ '--activity': day.count ? Math.min(1, .25 + day.count / 20) : 0 } as CSSProperties} onClick={() => { setPeriod('day'); setAnchorKey(day.key) }} ><time className="heatmap-date" dateTime={day.key}><span>{heatmapMonth.format(new Date(`${day.key}T12:00:00`))}</span><span>{Number(day.key.slice(-2))}</span></time></button>)}</div></div><small>Less <span className="heatmap-legend">░ ▒ ▓ █</span> More · last 84 local calendar days</small></section>
     <div className="statistics-grid"><section className="statistics-panel"><h2>Answer distribution</h2><Bars values={stats.ratings.map((item) => ({ label: Rating[item.rating], count: item.count }))} /></section><section className="statistics-panel"><h2>Current intervals</h2><Bars values={scheduling.intervals} /><p>Active scheduled cards; new and suspended cards are excluded.</p></section></div>
     <section className="statistics-panel"><h2>30-day forecast</h2><p>Current due dates, including overdue cards today. Daily limits, new introductions, and future answers can change the workload.</p><div className="forecast-scroll"><Bars values={scheduling.forecast.map((day) => ({ label: day.key, count: day.count }))} /></div></section>
-    <section className="statistics-panel"><h2>Cards studied in this period</h2>{reviewedCards.length ? <ul className="studied-cards">{reviewedCards.map((id) => { const current = cardsById.get(id); const note = current && notes.get(current.noteId); return <li key={id}>{current ? <button className="text-button" type="button" onClick={() => setSelectedCard(id)}>{Object.values(note?.fields ?? {}).find(Boolean)?.replace(/<[^>]*>/g, '').slice(0, 100) || 'Card'} · {current.templateId}</button> : <span>Removed card</span>}</li> })}</ul> : <p>Your reviewed cards will appear here.</p>}</section>
+    <section className="statistics-panel"><h2>Cards studied in this period</h2>{reviewedCards.length ? <ul className="studied-cards">{reviewedCards.map((id) => {
+      const current = cardsById.get(id)
+      const note = current && notes.get(current.noteId)
+      const templateName = note && noteTypes.get(note.typeId)?.templates.find(template => template.id === current?.templateId)?.name
+      return <li key={id}>{current ? <button className="text-button" type="button" onClick={() => setSelectedCard(id)}>{Object.values(note?.fields ?? {}).find(Boolean)?.replace(/<[^>]*>/g, '').slice(0, 100) || 'Card'} · {templateName?.trim() || 'Card'}</button> : <span>Removed card</span>}</li>
+    })}</ul> : <p>Your reviewed cards will appear here.</p>}</section>
     {card && <div className="dialog-backdrop"><section {...cardDialogKeyboard} className="dialog" role="dialog" aria-modal="true" aria-labelledby="statistics-card-title"><h2 id="statistics-card-title">Card progress</h2><p>Due {new Date(card.due).toLocaleString()} · {card.reps} answers · {card.lapses} lapses{card.manualSuspended || card.suspended || card.templateSuspended ? ' · Suspended' : ''}</p><CardHistory card={card} /><button className="primary-action" type="button" onClick={() => setSelectedCard(null)}>Close</button></section></div>}
   </div>
 }
