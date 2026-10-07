@@ -86,3 +86,23 @@ Anki fixtures configured. Phone task geometry checks actual390x844 and320x568.
 Both320-pixel Study screenshots were visually inspected; the session-name input
 fits above navigation and offline-shell status remains readable. The rebased
 keyboard export/import retains the explicit clean-context cleanup from #236.
+
+## Offline-storage touch target
+
+Before final review, acceptance inspection found that the offline-storage help
+disclosure had no minimum touch size. A public measurement reproduced42px in
+Chromium and43.2px in WebKit, below the44px requirement. Both engines failed
+the exact target assertion (`page-tasks-storage-target-red.log`,
+`runtime/238-storage-target-red`). The complete `db6b112` gate was deliberately
+interrupted after44 Chromium browser passes to correct this gap; it is not
+reported as a complete passing gate. Its artifacts are retained under
+`runtime/238-interrupted-db6b112`.
+
+Mobile offline-storage help now has a44px minimum and block padding, preserving
+the native disclosure marker. The keyboard journey measures both actual390x844
+and320x568, opens/closes storage help with Enter, verifies inventory is visible,
+checks dialog focus return and closes Collection tools with Escape. Native-marker
+focused verification passed **4/4 in24.4s**
+(`page-tasks-storage-native-marker.log`, `runtime/238-storage-native-marker`).
+The final gate also captures the expanded Collection tools at both widths.
+Full final-head gate and independent reviews still remain before acceptance.

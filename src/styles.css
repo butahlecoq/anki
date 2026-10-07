@@ -787,6 +787,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   .collection-tools-body { display: grid; min-width: 0; gap: 12px; padding: 12px 0; }
   .collection-tools-body .sync-actions, .collection-export-actions { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .collection-tools-body button { width: 100%; min-height: 44px; margin: 0; }
+  .collection-tools-body .offline-storage-status > summary { min-height: 44px; padding-block: 8px; cursor: pointer; }
   .compact-hero { min-height: 0; padding: 20px 0; gap: 16px; }
   .compact-hero h1 { font-size: 28px; line-height: 1.15; }
   .compact-hero p { margin-top: 10px; line-height: 1.5; }
