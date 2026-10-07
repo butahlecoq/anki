@@ -56,6 +56,31 @@ async function syncComplete(device: Collection) {
   expect(result).toMatchObject({ state: 'complete', media: { pending: 0 } })
 }
 
+test('a later-dated prior-lifetime schedule command cannot change a current review', async () => {
+  await withPairedCollections(3, async ([owner, observer, stale]) => {
+    const file = await restorationPackage()
+    await (await prepareAnkiImport(file, owner, { SQL })).commit()
+    await syncComplete(owner)
+    await syncComplete(observer)
+    await syncComplete(stale)
+    const before = await readAnkiExportSnapshot(owner)
+    const root = before.decks.find(deck => deck.parentId === null)!
+    const cardId = before.cards[0].id
+    await stale.rescheduleCard(cardId, new Date('2045-01-01T00:00:00Z'), new Date('2031-01-01T00:00:00Z'))
+    await owner.deleteDeck(root.id, { mode: 'delete-subtree' })
+    await syncComplete(owner)
+    await (await prepareAnkiImport(file, owner, { SQL })).commit()
+    await syncComplete(owner)
+    await syncComplete(stale)
+    await syncComplete(owner)
+    await owner.answer(cardId, Rating.Good, new Date('2030-01-01T12:00:00Z'), 100, { allowEarly: true, reschedule: true })
+    const expected = (await readAnkiExportSnapshot(owner)).cards.find(card => card.id === cardId)!
+    await syncComplete(owner)
+    await syncComplete(observer)
+    for (const device of [owner, observer]) expect((await readAnkiExportSnapshot(device)).cards.find(card => card.id === cardId)).toEqual(expected)
+  })
+})
+
 for (const relatedLifetimes of [[null], []]) test(`malformed receiver parent references roll back the entire batch (${relatedLifetimes.length ? 'null' : 'missing'})`, async () => {
   const device = createCollection(`kiroku-malformed-receive-${crypto.randomUUID()}`)
   try {

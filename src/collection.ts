@@ -2743,7 +2743,9 @@ class DexieCollection extends Dexie {
         if (!reviews.length) continue
         let schedule = deserializeCard(reviews[0].scheduling!.before)
         const history = await this.syncRevisions.where('key').equals(tombstoneKey('card', cardId)).toArray()
+        const activeLifetime = currentLifetime(history)
         const commands = history.filter((revision) => {
+          if (JSON.stringify(revision.lifetime ?? []) !== JSON.stringify(activeLifetime)) return false
           if (revision.action !== 'update' || revision.reviewId || revision.occurredAt < reviews[0].reviewedAt) return false
           const parent = history.find((candidate) => revision.parents?.includes(candidate.opId))
           const before = parent?.payload as CardRecord | undefined
