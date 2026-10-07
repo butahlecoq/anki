@@ -152,3 +152,26 @@ page errors. No AnkiWeb credentials or private collection data are used.
 Evidence: `page-tasks-paired-utilities.log`,
 `runtime/238-paired-utilities/evidence.json` and paired-menu screenshots.
 The new final-head complete gate and independent reviews remain required.
+
+## Review transition canvas regression
+
+The complete gate at `420afcc` passed 728 unit tests (3 skipped), 22 tracker
+checks and 64 server tests, but finished with 159 browser passes, 12 declared
+skips and one WebKit failure in 17.6m. The maintenance journey never entered
+review after its Study click. Archived trace input logs show scrolling and
+pointer interception by unrelated deck controls and mobile navigation.
+Five unchanged focused repeats passed, so those repeats alone did not establish
+resolution. A configured-versus-measured canvas assertion then failed reliably:
+configured 390x664 rendered as 312x531 on this Windows host.
+
+The shared native canvas fixture now retains each project's configured viewport
+and corrects Windows WebKit host scaling. The maintenance journey uses that
+fixture and asserts measured dimensions before exercising its original public
+edit/flag/mark/suspend/review/delete/undo steps. Desktop Chromium retains its
+desktop viewport; no forced clicks, retries or enlarged timeouts were added.
+Focused maintenance/export/mobile-task/safe-area coverage passed 8/8 in 1.0m;
+the calibrated WebKit maintenance journey then passed 5/5 in 1.9m.
+Evidence: `page-tasks-maintenance-canvas-red.log`,
+`page-tasks-maintenance-canvas-green.log`,
+`page-tasks-maintenance-calibrated-repeat.log` and corresponding runtime folders.
+The complete gate and independent reviews are still pending at the next head.

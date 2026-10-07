@@ -1,5 +1,6 @@
 import { openCollectionTools } from './collection-tools'
 import { expect, test } from '@playwright/test'
+import { nativeCanvasTest } from './phone-canvas'
 import { expectFixedReview, reviewGeometry } from './review-geometry'
 import { navigateOfflineDocument, openOfflineProfileDocument, WEBKIT_COLD_OFFLINE_LIMITATION } from './offline-navigation'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -496,7 +497,9 @@ test('learner saves scheduling policies and manages a card lifecycle', async ({ 
   await expect(cards).toBeHidden()
 })
 
-test('learner maintains and undoes the current card without leaving review', async ({ page }) => {
+nativeCanvasTest()('learner maintains and undoes the current card without leaving review', async ({ page }, testInfo) => {
+  const configuredViewport = testInfo.project.use.viewport!
+  await expect.poll(() => page.evaluate(() => ({ width: innerWidth, height: innerHeight }))).toEqual(configuredViewport)
   await createDeck(page, 'Reviewer maintenance')
   await page.getByRole('button', { name: 'Open Reviewer maintenance' }).click()
   await page.getByRole('button', { name: 'Add note' }).click()
