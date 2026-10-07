@@ -5,7 +5,7 @@ import type { SqlJsStatic } from 'sql.js'
 import sqlWasmUrl from 'sql.js/dist/sql-wasm.wasm?url'
 import type { CardRow, CollectionData, RevlogRow } from 'ankipack'
 import { DEFAULT_DECK_OPTION_GROUP_ID, State, type CardRecord, type Collection, type Deck, type Note, type NoteMediaReference, type NoteType, type ReviewEntry } from './collection'
-import { rowFingerprint as fingerprint } from './import-contract'
+import { importedEntityRefs, rowFingerprint as fingerprint } from './import-contract'
 import { parseAnkiImageOcclusion, type AnkiImageOcclusionFields } from './image-occlusion-interchange'
 import { digestMedia, validateMedia, type MediaKind, type MediaSide } from './media'
 import { validateTemplate } from './template-renderer'
@@ -1383,15 +1383,7 @@ const decisions: AnkiImportDecision[] = []
   }
 
   const barriers = new Map(local.deletionBarriers.map(barrier => [barrier.key, barrier]))
-  const candidates = [
-    ...writes.decks.map(({ value }) => ({ entityType: 'deck' as const, entityId: value.id })),
-    ...writes.noteTypes.map(({ value }) => ({ entityType: 'noteType' as const, entityId: value.id })),
-    ...writes.notes.map(({ value }) => ({ entityType: 'note' as const, entityId: value.id })),
-    ...writes.cards.map(({ value }) => ({ entityType: 'card' as const, entityId: value.id })),
-    ...writes.reviews.map(value => ({ entityType: 'review' as const, entityId: value.id })),
-    ...writes.updatedReviews.map(value => ({ entityType: 'review' as const, entityId: value.id })),
-    ...writes.references.map(({ value }) => ({ entityType: 'noteMedia' as const, entityId: value.id })),
-  ]
+  const candidates = importedEntityRefs(writes)
   writes.restorations = candidates.flatMap(target => {
     const key = `${target.entityType}:${target.entityId}`
     const barrier = barriers.get(key)

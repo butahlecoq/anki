@@ -1,3 +1,4 @@
+import { assertOperationIdentity, findCardMoveSuccessor, orderCausalOperations, uniqueSyncOperations } from './sync-operation-rules'
 import Dexie, { type EntityTable } from 'dexie'
 import { relatedEntities, recoverDeletionProvenance, currentLifetime, decideOperationLifetime, restoredLifetime, validateRestorationEvidence, validateLifetimeMetadata, type EntityType, type EntityLifetimeMetadata, type DeletionCause } from '../entity-lifetimes'
 import { customStudyKey, customStudyMembership, customStudySessions, type CustomStudySession } from './custom-study-state'
@@ -9,7 +10,7 @@ import { clozeOrdinals, tryRenderTemplate, validateTemplate } from './template-r
 import { fieldsByName, isRenderedCardDisplayable, renderNoteCard } from './card-rendering'
 import { mergeRevisions, revisionHeads, type RevisionMerge } from './sync-revisions'
 import { isVerifiedPcBackupReceipt, type VerifiedPcBackupReceipt } from './pc-backup-receipt'
-import { ImportedPackageRejected, rowFingerprint, type ImportedPackageWrites, type ImportedPartialChoice } from './import-contract'
+import { importedEntityRefs, ImportedPackageRejected, rowFingerprint, type ImportedPackageWrites, type ImportedPartialChoice } from './import-contract'
 import { undoBlocker, undoEpochMatches, undoOperationIds, undoOperationsPending, undoRowUnchanged, undoSubject, type CardMaintenanceUndo, type NoteDeletionUndo, type ReviewUndo, type UndoBlocker, type UndoRecord, type UndoRowBlocker } from './undo'
 
 export { Rating, State }
@@ -395,25 +396,7 @@ function orderInboundChanges(changes: SyncOperation[]) {
     }
     return left.index - right.index
   }).map(({ change }) => change)
-  // Durable pending rows are read by operation identity. Restore their causal
-  // order before materializing later revisions of the same entity.
-  const byOperation = new Map(structurallyOrdered.map(operation => [operation.opId, operation]))
-  const completed = new Set<string>()
-  const ancestors = new Set<string>()
-  const causal: SyncOperation[] = []
-  const visitRevision = (operation: SyncOperation) => {
-    if (completed.has(operation.opId) || ancestors.has(operation.opId)) return
-    ancestors.add(operation.opId)
-    for (const parentId of operation.parents ?? []) {
-      const parent = byOperation.get(parentId)
-      if (parent?.entityType === operation.entityType && parent.entityId === operation.entityId) visitRevision(parent)
-    }
-    ancestors.delete(operation.opId)
-    completed.add(operation.opId)
-    causal.push(operation)
-  }
-  for (const operation of structurallyOrdered) visitRevision(operation)
-  return causal
+  return orderCausalOperations(structurallyOrdered)
 }
 
 function relatedEntityIds(change: SyncOperation) {
@@ -1216,15 +1199,7 @@ class DexieCollection extends Dexie {
       }
       const restorationByKey = new Map((writes.restorations ?? []).map(restoration => [tombstoneKey(restoration.entityType, restoration.entityId), restoration]))
       if (restorationByKey.size !== (writes.restorations?.length ?? 0)) throw new Error('Duplicate restoration authorization. Nothing was imported.')
-      const targets = [
-        ...writes.decks.map(({ value }) => ({ entityType: 'deck' as const, entityId: value.id })),
-        ...writes.noteTypes.map(({ value }) => ({ entityType: 'noteType' as const, entityId: value.id })),
-        ...writes.notes.map(({ value }) => ({ entityType: 'note' as const, entityId: value.id })),
-        ...writes.cards.map(({ value }) => ({ entityType: 'card' as const, entityId: value.id })),
-        ...writes.reviews.map(value => ({ entityType: 'review' as const, entityId: value.id })),
-        ...writes.updatedReviews.map(value => ({ entityType: 'review' as const, entityId: value.id })),
-        ...writes.references.map(({ value }) => ({ entityType: 'noteMedia' as const, entityId: value.id })),
-      ]
+      const targets = importedEntityRefs(writes)
       const targetKeys = new Set(targets.map(target => tombstoneKey(target.entityType, target.entityId)))
       if ([...restorationByKey.keys()].some(key => !targetKeys.has(key))) throw new Error('Restoration authorization names content outside this import.')
       const retained = await this.syncRevisions.toArray()
@@ -2470,7 +2445,8 @@ class DexieCollection extends Dexie {
       const suppressedNoteIds = new Set<string>()
       const suppressedCardIds = new Set<string>()
       // Resolve type and note changes before their cards, even when equal timestamps arrive in index order.
-      let pendingBatch = [...new Map([...(await this.pendingRemoteOperations.toArray()), ...changes].map(operation => [operation.opId, operation])).values()]
+      for (const change of changes) validateLifetimeMetadata(change)
+      let pendingBatch = uniqueSyncOperations([...(await this.pendingRemoteOperations.toArray()), ...changes])
       while (pendingBatch.length) {
         let progress = false
         for (const source of orderInboundChanges(pendingBatch)) {
@@ -2480,7 +2456,7 @@ class DexieCollection extends Dexie {
         const previousRevision = await this.syncRevisions.get(change.opId)
         const pending = await this.pendingRemoteOperations.get(change.opId)
         const previous = previousRevision ?? pending
-        if (previous && (JSON.stringify(previous.payload) !== JSON.stringify(change.payload) || previous.action !== change.action || previous.occurredAt !== change.occurredAt || JSON.stringify(previous.lifetime ?? []) !== JSON.stringify(change.lifetime ?? []) || JSON.stringify(previous.relatedLifetimes ?? []) !== JSON.stringify(change.relatedLifetimes ?? []) || JSON.stringify(previous.restoreOf ?? []) !== JSON.stringify(change.restoreOf ?? []) || (change.parents !== undefined && JSON.stringify(previous.parents ?? []) !== JSON.stringify(change.parents)))) throw new Error('Sync operation identity was reused with different content')
+        if (previous) assertOperationIdentity(previous, change)
         if (await this.receivedOperations.get(change.opId)) { await this.pendingRemoteOperations.delete(change.opId); continue }
         const retained = await this.syncRevisions.toArray()
         const refs = change.relatedLifetimes ?? relatedEntities(change.entityType, change.payload).map(ref => ({ ...ref, lifetime: [] }))
@@ -2493,7 +2469,6 @@ class DexieCollection extends Dexie {
         const decision = decideOperationLifetime(change, {
           current: currentLifetime(histories[0].history),
           related: histories.slice(1).map(({ ref, history }) => ({ entityType: ref.entityType, entityId: ref.entityId, lifetime: currentLifetime(history) })),
-          causes: barriers[0]?.causes ?? [],
           previous: previousLifetimes,
           knownDeletions: new Map(retained.filter(revision => revision.action === 'delete').map(revision => [revision.opId, revision])),
           blocked: barriers.flatMap(barrier => barrier ? [barrier] : []),
@@ -2505,11 +2480,12 @@ class DexieCollection extends Dexie {
           const history = histories[0].history
           await this.syncRevisions.add({ ...change, parents: change.parents ?? revisionHeads(history), key })
         }
-        progress = true
+        progress ||= !previousRevision
         await this.pendingRemoteOperations.delete(change.opId)
         if (decision.state === 'stale') {
           if (change.entityType === 'note' && !(await this.notes.get(change.entityId))) suppressedNoteIds.add(change.entityId)
           if (change.entityType === 'card' && !(await this.cards.get(change.entityId))) suppressedCardIds.add(change.entityId)
+          progress = true
           await this.receivedOperations.add({ opId: change.opId })
           continue
         }
@@ -2523,10 +2499,12 @@ class DexieCollection extends Dexie {
         if (merged.conflicts.length) await this.syncConflicts.put({ ...merged, key, entityType: change.entityType, entityId: change.entityId })
         else await this.syncConflicts.delete(key)
         if (merged.conflicts.length && change.action !== 'delete' && !merged.deleted) {
+          progress = true
           await this.receivedOperations.add({ opId: change.opId })
           continue
         }
         if (merged.deleted && change.action !== 'delete') {
+          progress = true
           await this.receivedOperations.add({ opId: change.opId })
           continue
         }
@@ -2536,10 +2514,12 @@ class DexieCollection extends Dexie {
           if (previous) affectedNoteIds.add(previous.noteId)
         }
         if (change.entityType === 'noteType' && [BASIC_NOTE_TYPE_ID, IMAGE_OCCLUSION_NOTE_TYPE_ID].includes(change.entityId)) {
+          progress = true
           await this.receivedOperations.add({ opId: change.opId })
           continue
         }
         if (change.entityType === 'deckOptionGroup' && change.entityId === DEFAULT_DECK_OPTION_GROUP_ID && change.action === 'delete') {
+          progress = true
           await this.receivedOperations.add({ opId: change.opId })
           continue
         }
@@ -2556,6 +2536,7 @@ class DexieCollection extends Dexie {
           if (deleted.some(Boolean)) {
             if (change.entityType === 'note') suppressedNoteIds.add(change.entityId)
             if (change.entityType === 'card') suppressedCardIds.add(change.entityId)
+            progress = true
             await this.receivedOperations.add({ opId: change.opId })
             continue
           }
@@ -2591,6 +2572,7 @@ class DexieCollection extends Dexie {
               }
             }
             if (await this.deletedEntities.get(tombstoneKey('noteType', incoming.typeId))) {
+              progress = true
               await this.receivedOperations.add({ opId: change.opId })
               continue
             }
@@ -2599,6 +2581,7 @@ class DexieCollection extends Dexie {
             const incoming = canonicalCard(change.payload as LegacyCard)
             if (suppressedNoteIds.has(incoming.noteId)) {
               suppressedCardIds.add(change.entityId)
+              progress = true
               await this.receivedOperations.add({ opId: change.opId })
               continue
             }
@@ -2608,30 +2591,9 @@ class DexieCollection extends Dexie {
               // Notes are materialized before cards. A card created before a
               // move can therefore temporarily reference the preceding deck;
               // retain it until its causal move revision in this batch applies.
-              const batch = new Map(pendingBatch.map(operation => [operation.opId, operation]))
-              const follows = (operation: SyncOperation): boolean => {
-                const parents = [...(operation.parents ?? [])]
-                const visited = new Set<string>()
-                while (parents.length) {
-                  const parentId = parents.pop()!
-                  if (parentId === change.opId) return true
-                  if (visited.has(parentId)) continue
-                  visited.add(parentId)
-                  const parent = batch.get(parentId)
-                  if (parent?.entityType === 'card' && parent.entityId === change.entityId) parents.push(...(parent.parents ?? []))
-                }
-                return false
-              }
-              const successor = [...batch.values()].find(operation => operation.entityType === 'card'
-                && operation.entityId === change.entityId
-                && operation.action !== 'delete'
-                && JSON.stringify(operation.lifetime ?? []) === JSON.stringify(change.lifetime ?? [])
-                && (operation.payload as Partial<CardRecord>)?.noteId === incoming.noteId
-                && (operation.payload as Partial<CardRecord>)?.deckId === note.deckId
-                && follows(operation))
+              const successor = findCardMoveSuccessor(change, note, pendingBatch)
               if (!successor) throw new Error('Synced card deck does not match its note deck')
               await this.pendingRemoteOperations.put(source)
-              progress ||= !previousRevision
               continue
             }
             const noteType = note && await this.noteTypes.get(note.typeId)
@@ -2641,11 +2603,13 @@ class DexieCollection extends Dexie {
               const mask = note.imageOcclusion?.masks.find((item) => item.id === incoming.occlusionId)
               const expectedOrdinal = existing?.occlusionOrdinal ?? mask?.ordinal
               if (!incoming.occlusionId || incoming.id !== `${note.id}:${IMAGE_OCCLUSION_TEMPLATE_ID}:m${incoming.occlusionId}` || incoming.templateId !== IMAGE_OCCLUSION_TEMPLATE_ID || expectedOrdinal !== incoming.occlusionOrdinal) {
+                progress = true
                 await this.receivedOperations.add({ opId: change.opId })
                 continue
               }
             }
             if (note && (deletedType || (noteType && !this.cardIsEligible(noteType, note, incoming))) && !templateSuspended(incoming)) {
+              progress = true
               await this.receivedOperations.add({ opId: change.opId })
               continue
             }
@@ -2653,6 +2617,7 @@ class DexieCollection extends Dexie {
           if (change.entityType === 'review') {
             const review = change.payload as ReviewEntry
             if (suppressedCardIds.has(review.cardId)) {
+              progress = true
               await this.receivedOperations.add({ opId: change.opId })
               continue
             }
@@ -2661,6 +2626,7 @@ class DexieCollection extends Dexie {
             const note = card && await this.notes.get(card.noteId)
             const noteType = note && await this.noteTypes.get(note.typeId)
             if (card && note && (!noteType || !this.cardIsEligible(noteType, note, card))) {
+              progress = true
               await this.receivedOperations.add({ opId: change.opId })
               continue
             }
@@ -2668,6 +2634,7 @@ class DexieCollection extends Dexie {
           if (change.entityType === 'noteMedia') {
             const reference = change.payload as NoteMediaReference
             if (suppressedNoteIds.has(reference.noteId)) {
+              progress = true
               await this.receivedOperations.add({ opId: change.opId })
               continue
             }
@@ -2689,6 +2656,7 @@ class DexieCollection extends Dexie {
             existingCard.id === `${note.id}:${IMAGE_OCCLUSION_TEMPLATE_ID}:m${existingCard.occlusionId}` &&
             Number.isSafeInteger(existingCard.occlusionOrdinal) && (existingCard.occlusionOrdinal ?? 0) > 0
           if (existingCard && note && (retainedOcclusion || deletedType || (noteType && (this.cardIsEligible(noteType, note, existingCard) || !noteType.templates.some((template) => template.id === existingCard.templateId))))) {
+            progress = true
             await this.receivedOperations.add({ opId: change.opId })
             continue
           }

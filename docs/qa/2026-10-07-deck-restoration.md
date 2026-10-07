@@ -197,3 +197,51 @@ browser versions/configured/measured viewports are recorded in
 `runtime/236-cancelled-restoration/evidence.json`; command output is
 `restoration-cancelled-browser.log`. This command does not claim physical iOS
 behavior or owner deployment.
+
+
+## Whole-branch review corrections
+
+The full `npm run check` at `7f7797d2b4845f39a099030ea0feb720cca23ce0`
+exited 0: 719 unit passes/3 skips, 22 tracker passes, 64 server passes and
+156 browser passes/12 skips in 16.2 minutes. Node22.18.0/npm11.16.0/
+Playwright1.63.0; both official fixtures enabled, isolated4196/4197, one worker,
+no retries or concurrent suites. `test-results/.last-run.json` reports passed;
+the manifest identifies `7f7797d2b484`. Log: `restoration-full-check-7f7797d.log`.
+
+Independent whole-branch Matt reviews against `94bf378` found:
+
+- Standards: one documented module-ownership breach and two heuristic findings.
+  Causal ordering/successor rules belonged outside the persistent adapter;
+  preview/commit repeated the import-identity projection; lifetime context carried
+  an unused causes field.
+- Spec: two receive-boundary defects. Deduplication could hide changed envelopes,
+  and retained replay checks omitted entityType/entityId/reviewId. Deferred card
+  processing also counted each retry as progress, even when its successor was
+  still causally unavailable. No additional scope or evidence gap was reported.
+
+Five public Collection identity regressions fail before correction in
+`restoration-receive-envelope-red.log`. They cover same-batch conflicting content,
+received replay changing only entityType/entityId/reviewId, and pending replay
+changing identity. Complete metadata is checked before deduplication; envelope
+comparison now includes these identity fields before the received shortcut.
+The five regressions then pass in `restoration-receive-envelope-green.log`.
+Legacy omitted parents still support previously inferred retained history, while
+conflicting wire parents cannot disappear through deduplication.
+
+The public deferred-card tracer records `receive made no bounded durable progress`
+after two seconds in `restoration-deferred-card-progress-red.log`. Its matching
+same-lifetime successor references a not-yet-received note lifetime. Progress now
+requires newly retained history or completed classification/materialization.
+The tracer passes in 74ms, retains both pending operations and cursor through
+reopening, and keeps existing export inventory unchanged:
+`restoration-deferred-card-progress-green.log`.
+
+Pure causal rules now live in `src/sync-operation-rules.ts`; the persistent adapter
+owns transactions and queue replay. Import preview/commit use `importedEntityRefs`
+from their shared contract; each commit still independently checks barriers and
+authorization. The unused context field is removed. Three pure rule tests cover
+ordering, successor ancestry/identity/lifetime, and inferred-versus-wire parents.
+The expanded focused run passes 9 tests in `restoration-review-rules-green.log`.
+The broader Collection/import/HTTP-sync/client/revision run passes 177 tests,
+1 skip (`restoration-review-focused-green.log`). These corrections require a
+new committed-head complete gate and independent reviews before acceptance/merge.

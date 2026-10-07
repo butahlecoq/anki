@@ -47,6 +47,19 @@ export interface ImportedPackageWrites {
 
 export interface ImportedPartialChoice { key: string; value: unknown }
 
+/** Stable identities covered by both the restoration preview and atomic commit. */
+export function importedEntityRefs(writes: ImportedPackageWrites): EntityRef[] {
+  return [
+    ...writes.decks.map(({ value }) => ({ entityType: 'deck' as const, entityId: value.id })),
+    ...writes.noteTypes.map(({ value }) => ({ entityType: 'noteType' as const, entityId: value.id })),
+    ...writes.notes.map(({ value }) => ({ entityType: 'note' as const, entityId: value.id })),
+    ...writes.cards.map(({ value }) => ({ entityType: 'card' as const, entityId: value.id })),
+    ...writes.reviews.map(value => ({ entityType: 'review' as const, entityId: value.id })),
+    ...writes.updatedReviews.map(value => ({ entityType: 'review' as const, entityId: value.id })),
+    ...writes.references.map(({ value }) => ({ entityType: 'noteMedia' as const, entityId: value.id })),
+  ]
+}
+
 /**
  * How a row is compared for the stale-preview check. Media is fingerprinted by
  * its stored identity rather than its bytes, so re-encoding a blob does not read

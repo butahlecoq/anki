@@ -18,7 +18,6 @@ export interface EntityLifetimeOperation extends EntityRef, EntityLifetimeMetada
 }
 export type LifetimeContext = {
   current: EntityLifetime
-  causes: readonly DeletionCause[]
   related: readonly EntityLifetimeReference[]
   knownDeletions: ReadonlyMap<string, EntityLifetimeOperation>
   previous?: readonly EntityLifetimeReference[]
