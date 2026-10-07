@@ -1,6 +1,7 @@
 import { expect, test as base } from '@playwright/test'
 import { writeFile } from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
+import { openCollectionTools } from './collection-tools'
 
 // The Windows WebKit embedder applies host display scaling to its viewport.
 // This audit uses touch and the Safari UA, with desktop viewport interpretation
@@ -167,12 +168,18 @@ test('audit every route and its main dialogs on an iPhone sized screen', async (
     }
   }
   async function dialog(button: string, name: string) {
+    const utility = ['Connect a PC', 'Export Anki package', 'Import / export text'].includes(button)
+    if (utility) await openCollectionTools(page)
     await page.getByRole('button', { name: button, exact: true }).click()
     await expect(page.getByRole('dialog')).toBeVisible()
     if (button === 'Add note') await expect(page.getByRole('dialog').getByRole('textbox', { name: 'Front', exact: true })).toBeVisible()
     await capture(name)
     await page.keyboard.press('Escape')
     await expect(page.getByRole('dialog')).toBeHidden()
+    if (utility) {
+      const summary = page.locator('summary').filter({ hasText: /^Collection tools$/ })
+      if (await summary.isVisible()) await summary.click()
+    }
   }
   async function destination(name: string) {
     await page.getByRole('navigation', { name: 'Mobile navigation' }).getByRole('link', { name, exact: true }).click()
@@ -270,6 +277,7 @@ test('audit every route and its main dialogs on an iPhone sized screen', async (
   const runtime = testInfo.config.metadata.syncRuntimeDirectory
   if (typeof runtime !== 'string') throw new Error('Missing isolated PC runtime')
   const code = execFileSync(process.execPath, ['dist-server/server/index.js', '--pairing-code'], { env: { ...process.env, KIROKU_RUNTIME_DIRECTORY: runtime }, windowsHide: true, stdio: 'pipe' }).toString().trim()
+  await openCollectionTools(page)
   await page.getByRole('button', { name: 'Connect a PC', exact: true }).click()
   await page.getByLabel('PC service address').fill(`http://127.0.0.1:${process.env.KIROKU_SYNC_PORT ?? '4174'}`)
   await page.getByLabel('One-time pairing code').fill(code)
