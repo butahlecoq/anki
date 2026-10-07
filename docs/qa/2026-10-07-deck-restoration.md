@@ -166,3 +166,34 @@ The same complete prepush gate passes at `8a713c5` in
 `restoration-ancestor-progress-push.log`. The final full gate, independent
 whole-branch review and acceptance completion remain pending. Owner data and
 deployment remain unchanged.
+
+
+## Cancellation safety and browser context isolation
+
+The full gate at `1005eb9` exited 1: 719 unit passes/3 skips, 22 tracker
+passes, 64 server passes, 155 browser passes/12 skips/1 failure (16.8 minutes).
+The failure was the WebKit completion-actions test waiting for the sample deck.
+Both production restoration journeys passed. This is a failed full gate.
+Artifacts are retained in `runtime/236-failed-full-1005eb9`.
+
+Its trace records a completed sample-deck click but no attachment fetch, and its
+failure screenshots include the earlier Keyboard export page. The keyboard
+export/import test omitted closing its explicitly created second browser context.
+A new retained-context assertion reproduces that leak in Chromium:
+`restoration-context-leak-red.log`. The context now closes in `finally`, and the
+assertion protects isolation. The keyboard export/import and completion-actions
+tests pass in both engines: **4 passed in 31.8 seconds**,
+`restoration-context-leak-green.log`. This is focused evidence; a new full gate
+and independent review are still required.
+
+The separate production-browser cancellation command
+`node runtime/236-cancelled-restoration-journey.mjs` passes in both engines.
+At measured 390 × 844, it creates unrelated local work, imports/deletes a nested
+generated package, previews restoration of 2 decks/1 note/1 card, cancels, and
+reloads. Visible inventory and pending-change counts remain identical; a second
+preview still requests the same restoration, and the unrelated front/back fields
+remain studyable. No application API or database is mocked. Screenshots and
+browser versions/configured/measured viewports are recorded in
+`runtime/236-cancelled-restoration/evidence.json`; command output is
+`restoration-cancelled-browser.log`. This command does not claim physical iOS
+behavior or owner deployment.
