@@ -135,6 +135,23 @@ remain required before acceptance or merge.
 
 ## Remaining verification
 
+The independent spec review of `16af303` found one evidence gap: the test did
+not recheck pending local work immediately after successful retry, before
+importing new content. The inventory assertion now compares that stage with
+the original local-work inventory. All account journeys pass again: **3 passed,
+1 explicit WebKit cold-reload skip, 45.0 seconds**,
+`pending-after-retry-green.log`, `runtime/234-pending-after-retry-green`.
+
+The full check on `16af303` had stopped in the unit phase: its copied official
+package lacked the required `runtime/anki-26.09.3.json` sidecar. It reports
+692 unit passes, 3 skips and one missing-file failure; browsers did not start.
+The matching sidecar was restored from the verified #235 archive (SHA256
+`8658476ff4b7150e8e7f2997192a0e54adc925e3a0a570d4435e2f6fcabc56dd`). With the
+package environment variable enabled, the focused official import regression
+passes (1 selected test; 24 filtered out). This corrects fixture setup; it is
+not a product change or a passing full gate. A fresh complete run on the new
+commit is still required.
+
 Run the full software gate and independent standards/spec review on the final
 commit. The owner's original
 message lacked phase/source details; this reproduces and corrects the real
