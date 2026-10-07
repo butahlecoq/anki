@@ -67,3 +67,28 @@ establish serial full-gate validation. A subsequent final-head complete check
 must run with the Windows browser slot exclusively available. Independent review
 and acceptance completion remain pending. Explicit geometry attachments were
 added for the next run; their execution is not claimed from the earlier green.
+
+## Integration after compact mobile headers
+
+Rebased onto merged main `f22588493a171d01aa9902b37a15abe64f2a46dd`.
+The browser regression now reuses the shared phone-canvas calibration rather
+than adding another Windows WebKit probe. It asserts actual height844 as well
+as actual widths320/390. Public native-package import, two visibly rated cards,
+long Japanese/template labels, both themes and each card's distinct history
+remain covered; no application API is mocked or database state injected.
+
+Serial focused browser command:
+`npx playwright test tests/e2e/statistics-template-names.spec.ts --workers=1 --output=runtime/246-integrated-focused`
+passed2/2 in32.3s. Ports4226/4227 were checked unused before launch; isolated
+service directory `runtime/246-integrated-service`. Explicit geometry
+attachments executed in both engines. Fresh320light screenshots were inspected:
+readable Recognition/Recall names wrap within the canvas and retained targets
+meet44px; the two links open their correct separate Good/Easy histories.
+Log: `statistics-template-integrated-focused.log`.
+
+`npx vitest run src/Statistics.test.tsx` passed5/5 in4.10s, including rendered
+public collection queries, metadata rename and readable fallback checks.
+Log: `statistics-template-integrated-unit.log`.
+These focused results do not replace the next complete gate or independent
+whole-branch Standards/Spec review; all four criteria remain unchecked until
+those final checks finish. No owner deployment or physical-iOS result is claimed.

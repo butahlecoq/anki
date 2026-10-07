@@ -1,21 +1,9 @@
-import { expect, test as base } from '@playwright/test'
+import { expect } from '@playwright/test'
+import { phoneCanvasTest } from './phone-canvas'
 import initSqlJs from 'sql.js'
 import { Deck, Note, Notetype, Package } from 'ankipack'
 
-const test = base.extend<{ hostScale: number }>({
-  hasTouch: true,
-  hostScale: async ({ browser, browserName }, provide) => {
-    if (browserName !== 'webkit' || process.platform !== 'win32') return provide(1)
-    const probe = await browser.newContext({ viewport: { width: 1000, height: 1000 }, isMobile: false, deviceScaleFactor: 1 })
-    let scale = 1
-    try { scale = await (await probe.newPage()).evaluate(() => 1000 / innerWidth) }
-    finally { await probe.close() }
-    await provide(scale)
-  },
-  viewport: async ({ hostScale }, provide) => provide({ width: Math.round(390 * hostScale), height: Math.round(844 * hostScale) }),
-  isMobile: async ({ browserName }, provide) => provide(!(browserName === 'webkit' && process.platform === 'win32')),
-  deviceScaleFactor: async ({ hostScale }, provide) => provide(3 / hostScale),
-})
+const test = phoneCanvasTest({ width: 390, height: 844 })
 
 const expression = '猫の鳴き声を聞きながら日本語の語彙を練習する'.repeat(3)
 const recognition = 'Recognition — 日本語の意味を思い出す練習'.repeat(3)
@@ -62,6 +50,7 @@ test('studied-card links name both templates and retain the correct histories on
   for (const width of [320, 390]) {
     await page.setViewportSize({ width: Math.round(width * hostScale), height: Math.round(844 * hostScale) })
     expect(await page.evaluate(() => innerWidth)).toBe(width)
+    expect(await page.evaluate(() => innerHeight)).toBe(844)
     for (const appearance of ['light', 'dark']) {
       await page.getByRole('combobox', { name: 'Appearance', exact: true }).selectOption(appearance)
       await studied.evaluate(element => element.scrollIntoView({ behavior: 'instant', block: 'center' }))
