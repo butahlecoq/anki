@@ -34,7 +34,7 @@ larger runner or enable paid storage as a routine fix.
 `main` requires pull requests, resolved conversations and the successful
 **Complete software gate** check, including for administrators. Force pushes
 and branch deletion are disabled. Zero mandatory GitHub approval counts allow
- the owner's autonomous workflow; the independent Standards/Spec review and the
+the owner's autonomous workflow; the independent Standards/Spec review and the
 acceptance-evidence gate still apply before merging. No `master` branch currently
 exists. Protect any future default branch equivalently before using it.
 
