@@ -23,13 +23,19 @@ test('schema 22 operation lifetime metadata survives service reopen and replay',
   try {
     const response = service.sync(token, { protocolVersion: 2, collectionSchemaVersion: 22, cursor: 0, operations: [operation] })
     assert.equal(response.accepted, 1)
-    assert.deepEqual(response.changes[0], operation)
+    const { cursor, deviceId, ...received } = response.changes[0]
+    assert.equal(cursor, 1)
+    assert.equal(deviceId, 'restoration-phone')
+    assert.deepEqual(received, operation)
   } finally { service.close() }
   const reopened = createSyncService({ databasePath })
   try {
     const response = reopened.sync(token, { protocolVersion: 2, collectionSchemaVersion: 22, cursor: 0, operations: [operation] })
     assert.equal(response.accepted, 0)
-    assert.deepEqual(response.changes[0], operation)
+    const { cursor, deviceId, ...received } = response.changes[0]
+    assert.equal(cursor, 1)
+    assert.equal(deviceId, 'restoration-phone')
+    assert.deepEqual(received, operation)
     assert.equal(reopened.health().collectionSchemaVersion, 22)
   } finally { reopened.close() }
 })
