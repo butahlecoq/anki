@@ -2,16 +2,17 @@ import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react
 import { useTemplateNavigation } from './use-template-navigation'
 import { renderedNavigationActions } from './template-navigation'
 import { isRenderedCardDisplayable, type RenderedCard } from './card-rendering'
-import { applyThemeAttribute, resolveAppearance, readAppearance, watchResolvedTheme } from './appearance'
+import { applyThemeAttribute, applyCardColors, resolveAppearance, readAppearance, readCardColors, watchCardColors, watchResolvedTheme } from './appearance'
 
 interface TemplatePreviewProps {
   rendering: RenderedCard
   side: 'front' | 'back'
   title?: string
   templateOrdinal?: number
+  reviewColors?: boolean
 }
 
-export function TemplatePreview({ rendering, side, title = 'Card preview', templateOrdinal = 1 }: TemplatePreviewProps) {
+export function TemplatePreview({ rendering, side, title = 'Card preview', templateOrdinal = 1, reviewColors = false }: TemplatePreviewProps) {
   const frame = useRef<HTMLIFrameElement | null>(null)
   const frameRef = useRef<HTMLIFrameElement>(null)
   const { frameRef: navigationFrameRef, dialog: navigationDialog, choose: chooseNavigation } = useTemplateNavigation(`${side}:${title}:${rendering.front?.html}:${rendering.back?.html}:${templateOrdinal}`)
@@ -20,9 +21,6 @@ export function TemplatePreview({ rendering, side, title = 'Card preview', templ
     frameRef.current = element
     navigationFrameRef(element)
   }, [navigationFrameRef])
-  useEffect(() => {
-    if (title === 'Review card') frame.current?.scrollIntoView?.({ block: 'center' })
-  }, [title, side])
   // A front failure suppresses the card; a back failure does not, because the
   // question is still worth showing. The answer side reports its own failure.
   const sideError = (side === 'front' ? rendering.error : rendering.backError) ?? ''
@@ -51,7 +49,9 @@ export function TemplatePreview({ rendering, side, title = 'Card preview', templ
   // attribute repaints without rebuilding srcDoc, which would otherwise reload
   // the card document and re-fetch its blob media mid-review.
   const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>(() => resolveAppearance(readAppearance(), window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? true))
+  const [cardColors, setCardColors] = useState(readCardColors)
   useEffect(() => watchResolvedTheme(setResolvedTheme), [])
+  useEffect(() => watchCardColors(setCardColors), [])
   useLayoutEffect(() => {
     const frame = frameRef.current
     if (!frame) return
@@ -116,6 +116,7 @@ export function TemplatePreview({ rendering, side, title = 'Card preview', templ
       // data-theme, so the host document and the frame cannot disagree about
       // which block of the frame's custom properties applies.
       applyThemeAttribute(resolvedTheme, document.documentElement)
+      if (reviewColors) applyCardColors(cardColors, document.body)
       document.addEventListener('load', schedule, true)
       if (typeof ResizeObserver !== 'undefined') {
         observer = new ResizeObserver(schedule)
@@ -137,7 +138,7 @@ export function TemplatePreview({ rendering, side, title = 'Card preview', templ
       observer?.disconnect()
       cancelAnimationFrame(scheduled)
     }
-  }, [srcDoc, error, resolvedTheme])
+  }, [srcDoc, error, resolvedTheme, cardColors, reviewColors])
 
   return (
     <div className="template-preview">

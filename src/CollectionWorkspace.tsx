@@ -144,7 +144,8 @@ function DeckList({ decks, onNewDeck, onImport, onOpen }: { decks: DeckSummary[]
           <article className="deck-tile" role="treeitem" aria-level={depth} style={{ '--deck-depth': depth - 1 } as CSSProperties} key={deck.id}>
             <span className="deck-index">{deck.name === SAMPLE_DECK_NAME ? 'SAMPLE DECK' : 'DECK'} // {String(deck.noteCount).padStart(2, '0')} NOTES</span>
             <h2>{deck.name}</h2>
-            <CountStrip counts={deck.counts} reviews={deck.reviewCount} />{deck.sessionCount > 0 && <p className="temporary-membership">{deck.sessionCount} home cards temporarily reserved for custom study</p>}
+            {deck.sessionCount > 0 && <p className="temporary-membership">{deck.sessionCount} home cards temporarily reserved for custom study</p>}
+            <CountStrip counts={deck.counts} reviews={deck.reviewCount} />
             <button className="tile-action" type="button" aria-label={`Open ${deck.name}`} onClick={() => onOpen(deck.id)}>Open deck <span>→</span></button>
           </article>
         ))}
@@ -480,6 +481,7 @@ export function CollectionWorkspace({ offlineSyncAvailable = true }: { offlineSy
   const [importing, setImporting] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [textTransfer, setTextTransfer] = useState(false)
+  const reviewing = route.view === 'review' || route.view === 'custom-review'
 
   // The deck panel advertises N beside its heading, so the key has to work.
   useEffect(() => {
@@ -500,14 +502,14 @@ export function CollectionWorkspace({ offlineSyncAvailable = true }: { offlineSy
         ? { view: 'review', deckId: route.target.deckId, activityId }
         : { view: 'custom-review', sessionId: route.target.sessionId, activityId })}
     />
-    if (route.view === 'review') return <ReviewSession activityId={route.activityId} deckId={route.deckId} onBack={() => navigate({ view: 'deck', deckId: route.deckId })} />
+    if (route.view === 'review') return <ReviewSession activityId={route.activityId} deckId={route.deckId} onBack={() => navigate({ view: 'deck', deckId: route.deckId })} onExport={() => setExporting(true)} onTextTransfer={() => setTextTransfer(true)} />
     if (route.view === 'deck') return <DeckDetail
       deckId={route.deckId}
       onBack={() => navigate({ view: 'decks' })}
       onStudy={() => navigate({ view: 'review', deckId: route.deckId, activityId: DEFAULT_LEARNING_ACTIVITY_ID })}
       onChooseActivity={() => navigate({ view: 'activity-selection', target: { kind: 'deck', deckId: route.deckId } })}
     />
-    if (route.view === 'custom-review') return <ReviewSession activityId={route.activityId} sessionId={route.sessionId} onBack={() => navigate({ view: 'study' })} />
+    if (route.view === 'custom-review') return <ReviewSession activityId={route.activityId} sessionId={route.sessionId} onBack={() => navigate({ view: 'study' })} onExport={() => setExporting(true)} onTextTransfer={() => setTextTransfer(true)} />
     if (route.view === 'study') return <CustomStudy
       onStudy={(sessionId) => navigate({ view: 'custom-review', sessionId, activityId: DEFAULT_LEARNING_ACTIVITY_ID })}
       onChooseActivity={(sessionId) => navigate({ view: 'activity-selection', target: { kind: 'session', sessionId } })}
@@ -523,8 +525,10 @@ export function CollectionWorkspace({ offlineSyncAvailable = true }: { offlineSy
     <>
       <SyncControls offlineSyncAvailable={offlineSyncAvailable} />
       <SyncConflicts />
-      <button className="text-button" onClick={() => setExporting(true)}>Export Anki package</button>
-      <button className="text-button" onClick={() => setTextTransfer(true)}>Import / export text</button>
+      {!reviewing && <>
+        <button className="text-button" onClick={() => setExporting(true)}>Export Anki package</button>
+        <button className="text-button" onClick={() => setTextTransfer(true)}>Import / export text</button>
+      </>}
       {content}
       {newDeck && <DeckDialog onClose={() => setNewDeck(false)} />}
       {importing && <ImportDialog onClose={() => setImporting(false)} />}

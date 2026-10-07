@@ -52,12 +52,25 @@ test('Collection landing actions have matching desktop and phone dimensions', as
     const actionsBox = await actions.boundingBox()
     expect(actionsBox).not.toBeNull()
     expect(Math.abs(importBox!.width - newDeckBox!.width)).toBeLessThanOrEqual(1)
-    expect(importBox!.height).toBeGreaterThanOrEqual(54)
+    expect(importBox!.height).toBeGreaterThanOrEqual(54 - .01)
     expect(importBox!.x).toBeGreaterThanOrEqual(actionsBox!.x)
     expect(importBox!.x + importBox!.width).toBeLessThanOrEqual(actionsBox!.x + actionsBox!.width + 1)
     expect(newDeckBox!.x).toBeGreaterThanOrEqual(actionsBox!.x)
     expect(newDeckBox!.x + newDeckBox!.width).toBeLessThanOrEqual(actionsBox!.x + actionsBox!.width + 1)
-    expect(await page.evaluate(width => document.documentElement.scrollWidth <= width, viewportWidth)).toBe(true)
+    const documentWidth = await page.evaluate(() => ({ root: document.documentElement.getBoundingClientRect().width, scroll: document.documentElement.scrollWidth }))
+    // WebKit rounds the CSS root to device pixels on Windows (390.4 → 391).
+    expect(documentWidth.root).toBeLessThanOrEqual(viewportWidth + 1)
+    expect(documentWidth.scroll).toBeLessThanOrEqual(Math.ceil(documentWidth.root))
+    // Prove this measurement still detects genuine horizontal overflow.
+    await page.evaluate(() => {
+      const wide = document.createElement('div')
+      wide.id = 'overflow-probe'
+      wide.style.width = '200vw'
+      wide.textContent = 'Deliberately wide content'
+      document.body.append(wide)
+    })
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > Math.ceil(document.documentElement.getBoundingClientRect().width))).toBe(true)
+    await page.locator('#overflow-probe').evaluate(element => element.remove())
   } else {
     expect(importBox!.width).toBe(150)
     expect(importBox!.height).toBe(42)

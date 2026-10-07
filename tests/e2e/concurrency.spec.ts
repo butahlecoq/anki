@@ -181,6 +181,7 @@ test('independent offline clients merge fields, retain conflicts through reload,
       await page.getByRole('button', { name: 'Show answer', exact: true }).click()
       await page.getByRole('button', { name: new RegExp(`^${rating} ·`) }).click()
       await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
+      await page.getByRole('button', { name: 'Back to deck', exact: true }).click()
     }
     await context.setOffline(false); await phoneContext.setOffline(false)
     await sync(phone); await sync(pc); await sync(phone); await sync(pc)

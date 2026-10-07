@@ -82,7 +82,7 @@ export function MatchingActivity({ session }: StudyActivityViewProps) {
       <section aria-labelledby="matching-prompts-title">
         <h2 id="matching-prompts-title">Prompts</h2>
         {remaining.slice(0, 1).map((candidate, index) => <article className="matching-option" key={candidate.prompt.card.id}>
-          <TemplatePreview title={`Matching prompt ${index + 1}`} rendering={candidate.prompt.rendering} side="front" />
+          <TemplatePreview title={`Matching prompt ${index + 1}`} reviewColors rendering={candidate.prompt.rendering} side="front" />
           <button type="button" className="text-button" disabled={Boolean(matchedCardId) || busy} aria-pressed={selectedPromptId === candidate.prompt.card.id} onClick={() => { setSelectedPromptId(candidate.prompt.card.id); setFeedback(`Prompt ${index + 1} selected. Choose its answer.`) }}>Choose prompt {index + 1}</button>
         </article>)}
       </section>
@@ -91,7 +91,7 @@ export function MatchingActivity({ session }: StudyActivityViewProps) {
         {answerOrder.map((candidate) => {
           const index = remaining.findIndex((item) => item.prompt.card.id === candidate.prompt.card.id)
           return <article className="matching-option" key={candidate.prompt.card.id}>
-            <TemplatePreview title={`Matching answer ${index + 1}`} rendering={candidate.prompt.rendering} side="back" />
+            <TemplatePreview title={`Matching answer ${index + 1}`} reviewColors rendering={candidate.prompt.rendering} side="back" />
             <button type="button" className="text-button" disabled={!selectedPromptId || Boolean(matchedCardId) || busy} onClick={() => void chooseAnswer(candidate.prompt.card.id)}>Choose answer {index + 1}</button>
           </article>
         })}

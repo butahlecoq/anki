@@ -27,6 +27,7 @@ test('Anki 26.09.3 package renders reversed cards and plays generated audio thro
     if (await audio.count()) {
       await expect(audio).toHaveAttribute('src', /^data:audio\/wav;base64,/)
       await expect.poll(() => audio.evaluate((element: HTMLAudioElement) => element.readyState >= HTMLMediaElement.HAVE_METADATA)).toBe(true)
+      await page.getByText('More actions', { exact: true }).click()
       await page.getByRole('button', { name: 'Replay audio' }).click()
       await expect(page.getByText('Audio replayed.', { exact: true })).toBeVisible()
     }

@@ -18,6 +18,7 @@ import { userFacingStorageError } from './offline-storage'
 import { readCard, readCardReviewHistory, readDeckList, readNote, readNoteType, readNoteTypeList, readStudyActivityRows } from './collection-queries'
 import { DEFAULT_LEARNING_ACTIVITY_ID, learningActivity, type StudyActivityCandidate, type StudyActivityPrompt } from './learning-activities'
 import { useStudyLifecycle } from './study-lifecycle'
+import { chooseCardColors, readCardColors, watchCardColors } from './appearance'
 type PendingAttachment = { file: File; side: 'front' | 'back'; playback: 'automatic' | 'manual' }
 
 export function NoteDialog({ deckId, note, onClose }: { deckId: string; note?: Note; onClose: () => void }) {
@@ -178,7 +179,7 @@ export function NoteTagsDialog({ note, onClose }: { note: Note; onClose: () => v
   </section></div>
 }
 
-export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEARNING_ACTIVITY_ID, onBack }: { deckId?: string; sessionId?: string; activityId?: string; onBack: () => void }) {
+export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEARNING_ACTIVITY_ID, onBack, onExport, onTextTransfer }: { deckId?: string; sessionId?: string; activityId?: string; onBack: () => void; onExport?: () => void; onTextTransfer?: () => void }) {
   const activity = learningActivity(activityId)
   const [activityInteractionRevision, setActivityInteractionRevision] = useState(0)
   const [lastActivityPrompt, setLastActivityPrompt] = useState<StudyActivityPrompt | undefined>()
@@ -192,6 +193,21 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
   const [editingTags, setEditingTags] = useState(false)
   const [deletingNote, setDeletingNote] = useState(false)
   const [showCardInfo, setShowCardInfo] = useState(false)
+  const [cardColors, setCardColors] = useState(readCardColors)
+  useEffect(() => watchCardColors(setCardColors), [])
+  const actionMenu = useRef<HTMLDetailsElement>(null)
+  const closeActionMenu = () => {
+    if (!actionMenu.current) return
+    actionMenu.current.open = false
+    actionMenu.current.querySelector('summary')?.focus({ preventScroll: true })
+  }
+  useEffect(() => {
+    const dismiss = (event: PointerEvent) => {
+      if (event.target instanceof Node && actionMenu.current && !actionMenu.current.contains(event.target)) actionMenu.current.open = false
+    }
+    document.addEventListener('pointerdown', dismiss)
+    return () => document.removeEventListener('pointerdown', dismiss)
+  }, [])
   const deleteDialogKeyboard = useDialogKeyboard(() => setDeletingNote(false), deletingNote)
   const cardInfoDialogKeyboard = useDialogKeyboard(() => setShowCardInfo(false), showCardInfo)
   const [audioMessage, setAudioMessage] = useState('')
@@ -444,12 +460,20 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
     )
   }
 
-  const reviewActions = <div className="review-session-actions">
+  const reviewActions = <div className="review-primary-actions">
+    <details ref={actionMenu} className="review-action-menu" onKeyDown={(event) => {
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeActionMenu() }
+    }}>
+    <summary>More actions</summary>
+    <div className="review-session-actions" onClick={(event) => {
+      if (event.target instanceof Element && event.target.closest('button')) closeActionMenu()
+    }}>
     <button className="text-button" type="button" disabled={isAnswering} onClick={() => setEditingNote(true)}>Edit note</button>
     <button className="text-button" type="button" disabled={isAnswering} onClick={() => setMovingNote(true)}>Move note</button>
     <button className="text-button" type="button" disabled={isAnswering} onClick={() => setEditingTags(true)}>Edit tags</button>
     <button className="text-button" type="button" disabled={isAnswering} onClick={() => void updateCurrentCard(async () => collection.updateNoteTags(note.id, note.tags?.includes('marked') ? (note.tags ?? []).filter((tag) => tag !== 'marked') : [...(note.tags ?? []), 'marked']), note.tags?.includes('marked') ? 'Mark removed.' : 'Marked.')}>{note.tags?.includes('marked') ? 'Unmark note' : 'Mark note'}</button>
     <button className="text-button" type="button" onClick={() => setShowCardInfo(true)}>Card info</button>
+    <label className="review-flag-control">Card colors <select aria-label="Card colors" value={cardColors} onChange={event => chooseCardColors(event.target.value === 'deck' ? 'deck' : 'app')}><option value="app">App theme</option><option value="deck">Original deck</option></select></label>
     {pendingUndo && <button className="text-button" type="button" disabled={isAnswering} onClick={() => void undoLastAction()}>{undoLabel(pendingUndo)}</button>}
     <label className="review-flag-control">Flag <select aria-label="Card flag" value={card.flag ?? 0} disabled={isAnswering} onChange={(event) => void updateCurrentCard((id) => collection.setCardFlag(id, Number(event.target.value)), `Flag set to ${event.target.value}.`)}>
       <option value={0}>None</option><option value={1}>Red</option><option value={2}>Orange</option><option value={3}>Green</option><option value={4}>Blue</option><option value={5}>Pink</option><option value={6}>Turquoise</option><option value={7}>Purple</option>
@@ -458,6 +482,10 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
     <button className="text-button" type="button" disabled={isAnswering} onClick={() => void updateCurrentCard((id) => collection.suspendCard(id), 'Card suspended.')}>Suspend card</button>
     <button className="text-button" type="button" disabled={isAnswering} onClick={() => void updateCurrentCard((id) => collection.buryCard(id), 'Card buried.')}>Bury card</button>
     <button className="text-button" type="button" disabled={isAnswering} onClick={() => setDeletingNote(true)}>Delete note</button>
+    {onExport && <button className="text-button" type="button" onClick={onExport}>Export Anki package</button>}
+    {onTextTransfer && <button className="text-button" type="button" onClick={onTextTransfer}>Import / export text</button>}
+    </div>
+    </details>
     <button className="text-button" type="button" onClick={onBack}>End session</button>
   </div>
   const reviewerDialogs = <>

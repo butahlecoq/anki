@@ -44,9 +44,10 @@ export function ReviewActivity({ session }: StudyActivityViewProps) {
   return <>
     <article className="review-card" ref={cardSurface}>
       <span className="card-side">{answerShown ? 'ANSWER' : 'QUESTION'}</span>
+      <div className="review-card-content">
       {mediaBlocked ? <p role="status">Preparing card media…</p> : noteType.kind === 'image-occlusion'
         ? <ImageOcclusionReview note={note} card={card} showAnswer={answerShown} imageUrl={imageOcclusionImage} />
-        : <TemplatePreview title="Review card" key={card.id} rendering={rendering} templateOrdinal={Math.max(1, noteType.templates.findIndex((candidate) => candidate.id === template.id) + 1)} side={answerShown ? 'back' : 'front'} />}
+        : <TemplatePreview title="Review card" reviewColors key={card.id} rendering={rendering} templateOrdinal={Math.max(1, noteType.templates.findIndex((candidate) => candidate.id === template.id) + 1)} side={answerShown ? 'back' : 'front'} />}
       {mediaError && <p className="form-error" role="alert">Some attachments could not be shown: {mediaError}</p>}
       {!mediaBlocked && noteType.kind !== 'image-occlusion' && attachments.filter((description) => description.side === 'front').map((description) => <MediaRenderer key={description.id} description={description} />)}
       {!mediaBlocked && noteType.kind !== 'image-occlusion' && answerShown && attachments.filter((description) => description.side === 'back').map((description) => <MediaRenderer key={description.id} description={description} />)}
@@ -58,7 +59,9 @@ export function ReviewActivity({ session }: StudyActivityViewProps) {
         <div className="answer-diff">{answerDiff.map((part, index) => <span key={index} className={`answer-${part.kind}`} aria-label={`${part.kind === 'good' ? 'Correct' : part.kind === 'bad' ? 'Incorrect' : 'Missing'}: ${part.text}`}>{part.text}</span>)}</div>
         <p>Expected: <strong>{typedAnswer}</strong></p>
       </div>}
+      </div>
     </article>
+    <div className="review-answer-controls">
     {!answerShown ? (
       <button className="primary-action reveal-action" type="button" disabled={busy || mediaBlocked} onClick={() => { announceAnswer(); setShownAnswerCardId(card.id) }}>Show answer</button>
     ) : (
@@ -70,5 +73,6 @@ export function ReviewActivity({ session }: StudyActivityViewProps) {
         ))}
       </div>
     )}
+    </div>
   </>
 }

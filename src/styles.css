@@ -3,8 +3,8 @@
  *
  * Application chrome is themed. Card content renders inside a sandboxed iframe
  * that carries its own stylesheet, so these tokens cannot reach it; the frame
- * supplies the card's default surface and ink from the resolved theme instead,
- * which an imported deck's CSS still overrides. See src/TemplatePreview.tsx.
+ * supplies the card's surface and ink from the resolved theme. Reviews can
+ * explicitly restore the original deck colors. See src/TemplatePreview.tsx.
  *
  * Every text token is verified against every surface token it can land on by
  * src/design-tokens.test.ts, which fails if a pairing drops below WCAG AA.
@@ -85,6 +85,8 @@
   --shadow-dialog: 0 28px 90px rgba(0, 0, 0, .6);
 
   --sidebar: 248px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
   --mobile-nav-height: 66px;
 }
 
@@ -297,7 +299,9 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .deck-tile { min-height: 220px; padding: 25px; display: flex; flex-direction: column; border: 1px solid var(--border-subtle); background: linear-gradient(145deg, var(--surface-tile-from), var(--surface-tile-to)); }
 .deck-tree .deck-tile { margin-left: calc(var(--deck-depth) * 22px); }
 .deck-index { color: var(--accent-strong); font-size: 8px; letter-spacing: .15em; }
-.deck-tile h2 { margin: 21px 0 26px; font-family: var(--font-jp); font-size: 23px; font-weight: 500; }
+.deck-tile h2 { margin: 21px 0 26px; font-family: var(--font-jp); font-size: 23px; font-weight: 500; letter-spacing: normal; line-height: 1.35; overflow-wrap: anywhere; }
+.deck-tile .count-strip { margin-top: auto; padding-bottom: 20px; }
+.deck-tile .tile-action { margin-top: 0; }
 .tile-action { margin: auto -25px -25px; min-height: 47px; padding: 0 24px; display: flex; align-items: center; justify-content: space-between; border: 0; border-top: 1px solid var(--border-subtle); background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 9px; letter-spacing: .1em; text-transform: uppercase; }
 .tile-action:hover { color: var(--accent); background: var(--accent-wash-faint); }
 
@@ -424,6 +428,9 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .template-preview iframe { width: 100%; min-height: 190px; border: 1px solid var(--border-default); background: var(--surface-panel); }
 .form-warning { margin: 0; color: var(--status-warn); font-size: 10px; line-height: 1.5; }
 .dialog.import-dialog { width: min(760px, 100%); }
+.package-file-picker { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 12px; }
+.package-file-picker .text-button { min-height: 44px; }
+.package-file-picker span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; letter-spacing: 0; color: var(--text-secondary); }
 .dialog.export-dialog { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; min-width: 0; }
 .export-dialog > * { grid-column: 1 / -1; min-width: 0; }
 .export-dialog h2 { margin-bottom: 0; }
@@ -458,6 +465,16 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .review-session { min-height: calc(100vh - 95px); padding: 28px 0 45px; display: flex; flex-direction: column; }
 .review-progress { display: flex; justify-content: space-between; align-items: center; color: var(--text-faint); font-size: 8px; letter-spacing: .13em; }
 .review-session-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+.review-primary-actions { display: flex; align-items: center; gap: 8px; }
+.review-progress { position: relative; min-height: 44px; }
+.review-action-menu summary { min-height: 44px; display: flex; align-items: center; padding: 0 12px; border: 1px solid var(--border-default); cursor: pointer; color: var(--text-primary); font-size: 10px; letter-spacing: 0; list-style: none; }
+.review-action-menu summary::-webkit-details-marker { display: none; }
+.review-action-menu .review-session-actions { position: absolute; z-index: 20; top: calc(100% + 8px); right: 0; width: min(280px, 100%); max-height: calc(100dvh - 180px); overflow: auto; padding: 12px; display: grid; grid-template-columns: minmax(0, 1fr); justify-content: stretch; gap: 8px; background: var(--surface-panel); border: 1px solid var(--border-default); box-shadow: var(--shadow-dialog); }
+.review-action-menu:not([open]) .review-session-actions { display: none; }
+.review-action-menu .text-button { min-height: 44px; justify-content: flex-start; }
+.review-action-menu .review-flag-control { justify-content: space-between; }
+.review-action-menu .review-flag-control select { min-height: 44px; max-width: 65%; font-size: 16px; }
+.review-primary-actions > .text-button { min-height: 44px; }
 .review-flag-control { display: inline-flex; align-items: center; gap: 5px; color: var(--text-faint); font-size: 10px; }
 .review-flag-control select { max-width: 95px; padding: 4px 5px; border: 1px solid var(--border-subtle); border-radius: 3px; background: var(--surface-panel); color: var(--text-primary); font: inherit; }
 .review-shortcuts { margin: 14px 0 0; color: var(--text-faint); font-size: 10px; line-height: 1.6; text-align: right; }
@@ -492,6 +509,23 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .session-complete .section-code { margin-bottom: 16px; }
 .session-complete p { color: var(--text-muted); font-size: 10px; }
 .session-complete .primary-action { margin-top: 18px; }
+
+/* Review owns the available viewport; content scrolls within its card. */
+.is-reviewing .main { height: 100dvh; min-height: 0; display: flex; flex-direction: column; padding-bottom: 16px; overflow: hidden; }
+.is-reviewing .topbar { flex: 0 0 auto; }
+.is-reviewing .sync-controls, .is-reviewing .main > .text-button, .is-reviewing .footer-line { display: none; }
+.is-reviewing .review-session { flex: 1; min-height: 0; padding: 16px 0 0; overflow-y: auto; }
+.is-reviewing .review-session:has(.review-card) { overflow: hidden; }
+.is-reviewing .review-progress, .is-reviewing .review-shortcuts { flex: 0 0 auto; }
+.is-reviewing .review-card { flex: 1; min-height: 0; width: min(800px, 100%); margin: 12px auto; padding: 18px; display: flex; flex-direction: column; overflow: hidden; }
+.is-reviewing .card-side { flex: 0 0 auto; margin-bottom: 12px; }
+.review-card-content { flex: 1; min-height: 0; width: 100%; overflow: auto; overscroll-behavior: contain; overflow-anchor: none; }
+.review-answer-controls { flex: 0 0 54px; height: 54px; width: min(800px, 100%); margin: 0 auto; display: grid; place-items: center; }
+.review-answer-controls .reveal-action { height: 54px; margin: 0; }
+.review-answer-controls .rating-grid { width: 100%; height: 54px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.review-answer-controls .rating { height: 54px; min-height: 54px; padding: 6px; flex-direction: column; align-items: center; gap: 3px; }
+.review-answer-controls .rating span { display: none; }
+.is-reviewing .session-complete { flex: 1; min-height: 0; overflow: auto; }
 .loading-state { min-height: 55vh; display: grid; place-items: center; align-content: center; gap: 20px; color: var(--text-muted); font-size: 10px; }
 
 @media (max-width: 940px) {
@@ -502,10 +536,10 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 }
 
 @media (max-width: 680px) {
-  :root { --mobile-nav-height: calc(66px + env(safe-area-inset-bottom)); }
+  :root { --mobile-nav-height: calc(66px + var(--safe-bottom)); }
   .sidebar { display: none; }
   .main { margin-left: 0; padding: 0 18px calc(148px + var(--mobile-nav-height)); }
-  .topbar { height: 60px; padding-top: env(safe-area-inset-top); }
+  .topbar { height: calc(60px + var(--safe-top)); padding-top: var(--safe-top); }
   .appearance-control select, .build-identity summary { min-height: 44px; font-size: 11px; }
   .eyebrow span:nth-child(n+2) { display: none; }
   .connection { max-width: 190px; font-size: 8px; }
@@ -520,12 +554,12 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   .empty-card > div { align-self: center; }
   .empty-actions { grid-column: 1 / 3; }
   .empty-actions button { flex: 1; }
-  .primary-action { grid-column: 1 / 3; justify-content: center; margin-top: 10px; }
+  .primary-action { justify-content: center; }
   .empty-card small { grid-column: 1 / 3; text-align: center; }
   .status-list { padding-inline: 18px; }
   .system-note { margin-inline: 18px; }
   .footer-line { display: none; }
-  .mobile-nav { position: fixed; z-index: 12; left: 0; right: 0; bottom: 0; min-height: var(--mobile-nav-height); padding: 8px 12px env(safe-area-inset-bottom); display: grid; grid-template-columns: repeat(5, 1fr); grid-template-rows: 44px; align-content: end; border-top: 1px solid var(--border-subtle); background: var(--surface-nav); backdrop-filter: blur(16px); pointer-events: none; }
+  .mobile-nav { position: fixed; z-index: 12; left: 0; right: 0; bottom: 0; min-height: var(--mobile-nav-height); padding: 8px 12px var(--safe-bottom); display: grid; grid-template-columns: repeat(5, 1fr); grid-template-rows: 44px; align-content: end; border-top: 1px solid var(--border-subtle); background: var(--surface-nav); backdrop-filter: blur(16px); pointer-events: none; }
   .mobile-nav a { min-width: 0; width: 100%; height: 44px; min-height: 44px; align-self: end; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: var(--text-primary); font-size: 8px; pointer-events: auto; }
   .mobile-nav a span { color: var(--text-primary); }
   .mobile-nav a.active { color: var(--text-primary); background: var(--accent-wash); }
@@ -552,9 +586,8 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   .note-row { grid-template-columns: 1fr; gap: 14px; }
   .note-row .text-button { justify-self: start; scroll-margin-bottom: 92px; }
   .note-row-actions { justify-content: flex-start; }
-  .dialog-backdrop { padding: 12px; align-items: end; }
-  .dialog { max-height: 92vh; overflow-y: auto; padding: 23px 19px calc(23px + env(safe-area-inset-bottom)); }
-  .dialog.type-dialog { max-height: 92vh; }
+  .dialog-backdrop { padding: calc(12px + var(--safe-top)) 12px calc(12px + var(--safe-bottom)); align-items: end; }
+  .dialog, .dialog.type-dialog { max-height: calc(100dvh - var(--safe-top) - var(--safe-bottom) - 24px); overflow-y: auto; padding: 23px 19px; }
   .dialog.occlusion-dialog { width: 100%; }
   .options-fields { grid-template-columns: 1fr; }
   .options-fields label { grid-column: auto !important; }
@@ -572,6 +605,13 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   .review-progress { align-items: flex-start; gap: 12px; }
   .review-shortcuts { text-align: left; }
   .rating-grid { grid-template-columns: 1fr 1fr; }
+  .is-reviewing .main { padding-bottom: calc(var(--mobile-nav-height) + 12px); }
+  .is-reviewing .topbar { position: relative; }
+  .is-reviewing .eyebrow { align-self: flex-start; margin-top: 16px; }
+  .is-reviewing .topbar .connection { position: absolute; left: 0; bottom: 5px; max-width: calc(100% - 170px); font-size: 9px; letter-spacing: normal; text-transform: none; }
+  .is-reviewing .review-card { min-height: 0; margin: 12px auto; padding: 16px; }
+  .is-reviewing .review-shortcuts { display: none; }
+  .review-action-menu .review-session-actions { max-height: calc(100dvh - var(--safe-top) - var(--mobile-nav-height) - 140px); }
   .rating { min-height: 54px; }
 }
 

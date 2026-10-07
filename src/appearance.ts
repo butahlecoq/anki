@@ -1,18 +1,57 @@
 /*
- * Appearance preference for issue #23.
+ * Application appearance and the reversible review-card color preference.
  *
- * Card content renders inside a sandboxed iframe with its own stylesheet, so
- * this preference cannot reach an imported deck's rules. It supplies the card's
- * *default* surface and ink for a deck that names neither; a note type that sets
- * its own background still wins, because the themed values are declared on
- * `:root` as custom properties and the deck's CSS is appended after them. See
- * src/TemplatePreview.tsx.
+ * Template previews keep the imported stylesheet. During review the learner
+ * can use the app surface and ink or restore the deck's original colors.
+ * This changes only the rendered body, without rewriting templates or media.
+ * See src/TemplatePreview.tsx.
  *
  * The default stays dark so the installed PWA matches the manifest colors
  * asserted by tests/e2e/shell.spec.ts.
  */
 
 export const APPEARANCE_STORAGE_KEY = 'kiroku:appearance'
+export const CARD_COLORS_STORAGE_KEY = 'kiroku:card-colors'
+export type CardColors = 'app' | 'deck'
+
+export function readCardColors(): CardColors {
+  try { return safeStorage()?.getItem(CARD_COLORS_STORAGE_KEY) === 'deck' ? 'deck' : 'app' }
+  catch { return 'app' }
+}
+
+export function chooseCardColors(colors: CardColors): void {
+  try { safeStorage()?.setItem(CARD_COLORS_STORAGE_KEY, colors) } catch { /* Keep the current session usable. */ }
+  window.dispatchEvent(new Event(CARD_COLORS_STORAGE_KEY))
+}
+
+export function watchCardColors(listener: (colors: CardColors) => void): () => void {
+  const notify = () => listener(readCardColors())
+  const onStorage = (event: StorageEvent) => { if (event.key === CARD_COLORS_STORAGE_KEY) notify() }
+  window.addEventListener(CARD_COLORS_STORAGE_KEY, notify)
+  window.addEventListener('storage', onStorage)
+  notify()
+  return () => {
+    window.removeEventListener(CARD_COLORS_STORAGE_KEY, notify)
+    window.removeEventListener('storage', onStorage)
+  }
+}
+
+const originalCardColors = new WeakMap<HTMLElement, Array<{ property: string; value: string; priority: string }>>()
+
+/** A reversible display preference; the imported template and media stay intact. */
+export function applyCardColors(colors: CardColors, body: HTMLElement): void {
+  const properties = ['background-color', 'color']
+  if (!originalCardColors.has(body)) originalCardColors.set(body, properties.map(property => ({ property, value: body.style.getPropertyValue(property), priority: body.style.getPropertyPriority(property) })))
+  if (colors === 'app') {
+    body.style.setProperty('background-color', 'var(--kiroku-card-surface)', 'important')
+    body.style.setProperty('color', 'var(--kiroku-card-ink)', 'important')
+  } else {
+    for (const { property, value, priority } of originalCardColors.get(body)!) {
+      if (value) body.style.setProperty(property, value, priority)
+      else body.style.removeProperty(property)
+    }
+  }
+}
 
 /*
  * Fallback page colours, used only when the stylesheet has not resolved
