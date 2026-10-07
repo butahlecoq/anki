@@ -200,3 +200,39 @@ including the previously skipped official-package compatibility journey
 account material. The next whole gate enables this package and the pinned
 account-fixture interpreter; current whole-gate/final-review status is tracked
 on #235.
+
+## Whole gate with official fixtures and native media diagnosis
+
+At `9cbaedf`, the official-fixture gate passed type/lint/build, **687 unit
+tests** (3 skipped), 22 tracker/status tests, and 45 server tests. Browser result:
+**142 passed, 11 skipped, 1 failed**, 20.9 minutes. All action, review-geometry,
+safe-area, all-page overflow, and CSV journeys passed. The newly enabled
+official-package WebKit journey failed waiting for WAV media metadata. Artifacts
+and the log are retained in `runtime/235-official-fixtures-full-9cbaedf`.
+
+The independent plain-document probe `node runtime/235-native-wav-probe.mjs`
+isolates this runner's native URL handling. Python's WAV reader validates the
+files. Six variants cover PCM8/PCM16, optional RIFF JUNK chunk presence, and
+0.1-second/1-second duration. Each is tested through data, blob, and HTTP URLs.
+Chromium 153.0.8010.12 loads metadata for all 18 combinations. Windows WebKit
+26.6 loads all six HTTP sources but rejects all 12 data/blob sources with
+`MEDIA_ERR_SRC_NOT_SUPPORTED` (code 4), even without application code, CSP, or
+the card sandbox. Observations: `runtime/235-wav-probe/native-media-observations.json`.
+Changing the bytes' format or duration does not resolve this native memory-URL
+limitation on this host. This evidence does not establish iOS playback.
+
+The official-package browser coverage now separates import/render/review from
+native replay. Both engines still import the real exported package, render all
+four reversed-card questions, retain both audio elements, and record four
+reviews. Chromium additionally checks media metadata and actual replay through
+the visible action. The replay-only WebKit test probes a valid WAV through both
+native memory URL types before any app playback. It skips only when both emit
+code 4; timeouts and other failures are not accepted as unsupported capability.
+The capability result is retained as a test annotation. This skip is explicitly
+not playback evidence. No product media handling was changed.
+
+Focused verification: **3 passed, 1 explicit native-media skip in 25.2 seconds**,
+`npx playwright test tests/e2e/anki-release-compatibility.spec.ts
+--output=runtime/235-official-package-portable`, with the generated package
+enabled on ports 4182/4183. Log: `official-package-portable.log`. A fresh whole
+gate and final-head independent review remain next; latest results are on #235.
