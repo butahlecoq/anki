@@ -1,20 +1,7 @@
-import { expect, test as base } from '@playwright/test'
+import { expect } from '@playwright/test'
+import { phoneCanvasTest } from './phone-canvas'
 
-// Calibrate Windows WebKit's host display scale; assertions use actual CSS widths.
-const test = base.extend<{ hostScale: number }>({
-  hasTouch: true,
-  hostScale: async ({ browser, browserName }, provide) => {
-    if (browserName !== 'webkit' || process.platform !== 'win32') return provide(1)
-    const probe = await browser.newContext({ viewport: { width: 1000, height: 1000 }, isMobile: false, deviceScaleFactor: 1 })
-    try {
-      const page = await probe.newPage()
-      await provide(await page.evaluate(() => 1000 / innerWidth))
-    } finally { await probe.close() }
-  },
-  viewport: async ({ hostScale }, provide) => provide({ width: Math.round(390 * hostScale), height: Math.round(844 * hostScale) }),
-  isMobile: async ({ browserName }, provide) => provide(!(browserName === 'webkit' && process.platform === 'win32')),
-  deviceScaleFactor: async ({ hostScale }, provide) => provide(3 / hostScale),
-})
+const test = phoneCanvasTest({ width: 390, height: 844 })
 
 test('mobile Browse exposes card and note results without sideways scrolling', async ({ page, hostScale }, testInfo) => {
   test.setTimeout(90_000)
@@ -29,7 +16,7 @@ test('mobile Browse exposes card and note results without sideways scrolling', a
   // The existing document-width checks miss an overflowing nested result region.
   for (const width of [320, 390]) {
     await page.setViewportSize({ width: Math.round(width * hostScale), height: Math.round(844 * hostScale) })
-    expect(await page.evaluate(() => innerWidth)).toBe(width)
+    expect(await page.evaluate(() => ({ width: innerWidth, height: innerHeight }))).toEqual({ width, height: 844 })
     const geometry = await results.evaluate(element => ({ visible: element.clientWidth, content: element.scrollWidth }))
     expect(geometry.content, `Browse results at ${width}px`).toBeLessThanOrEqual(geometry.visible + 1)
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1)
@@ -61,13 +48,16 @@ test('mobile Browse exposes card and note results without sideways scrolling', a
   await page.getByRole('button', { name: 'Move selection', exact: true }).click()
   await page.getByLabel('Destination deck', { exact: true }).selectOption({ label: longDeck })
   await page.getByRole('button', { name: 'Apply to selection', exact: true }).click()
-  await page.getByLabel('Collection search', { exact: true }).fill('日本語の長い表現')
+  const search = page.getByLabel('Collection search', { exact: true })
+  await search.fill('日本語の長い表現')
+  await expect(search).toHaveValue('日本語の長い表現')
   await page.getByRole('button', { name: 'Search', exact: true }).click()
 
   for (const view of ['cards', 'notes']) {
     await page.getByLabel('Result view', { exact: true }).selectOption(view)
     for (const width of [320, 390]) {
       await page.setViewportSize({ width: Math.round(width * hostScale), height: Math.round(844 * hostScale) })
+      expect(await page.evaluate(() => ({ width: innerWidth, height: innerHeight }))).toEqual({ width, height: 844 })
       const row = page.locator('tbody tr').first()
       await expect(row).toContainText(longExpression.slice(0, 100))
       await expect(row).toContainText(longDeck)
@@ -81,7 +71,11 @@ test('mobile Browse exposes card and note results without sideways scrolling', a
       expect(await results.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1)
       await row.scrollIntoViewIfNeeded()
-      await page.screenshot({ path: testInfo.outputPath(`browse-${view}-${width}.png`), fullPage: true })
+      await testInfo.attach(`browse-${view}-${width}-geometry`, {
+        body: JSON.stringify(await results.evaluate(element => ({ viewport: { width: innerWidth, height: innerHeight }, visible: element.clientWidth, content: element.scrollWidth, document: document.documentElement.scrollWidth }))),
+        contentType: 'application/json',
+      })
+      await page.screenshot({ path: testInfo.outputPath(`browse-${view}-${width}.png`) })
     }
     const clearSelection = page.getByRole('button', { name: 'Clear selection', exact: true })
     if (await clearSelection.isEnabled()) await clearSelection.click()
@@ -95,5 +89,6 @@ test('mobile Browse exposes card and note results without sideways scrolling', a
     await page.keyboard.press('Enter')
     await expect(editor).toBeVisible()
     await page.keyboard.press('Escape')
+    await expect(editor).not.toBeVisible()
   }
 })

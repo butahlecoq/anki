@@ -56,3 +56,25 @@ captures were visually inspected. Artifacts remain local and ignored.
 
 This verifies browser layout and interaction, not installed physical Safari.
 Deployment is separate from source integration.
+
+## Integration verification on current main
+
+The completed PR handoff was integrated onto main `80c485c` after the hostname
+fix. Historical before/after evidence and the original tracker state were saved
+in the primary checkout at `runtime/247-pre-integration-652de65` before rebasing.
+The browser regression now reuses the shared `phoneCanvasTest` introduced by
+#238. It asserts both actual width and height (320/390 by 844), waits for the
+requested search value and editor closure, attaches JSON geometry, and takes
+viewport captures to avoid Windows WebKit's known full-page capture cropping.
+
+Fresh focused verification, isolated ports 4222/4223, one worker, zero retries:
+`npx playwright test tests/e2e/mobile-browse-results.spec.ts --workers=1 --retries=0 --output=runtime/247-integration-focused`
+passed both projects in 34.9s. `npx vitest run src/CollectionBrowser.test.tsx`
+passed all five tests; focused ESLint and `git diff --check` passed. New WebKit
+card320 and note390 captures were visually inspected; metadata and long deck/tag
+content wrap inside the result region. Geometry is attached to the HTML report.
+Logs: `mobile-browse-integration-focused.log`, `mobile-browse-integration-unit.log`.
+
+Complete gate and fresh independent whole-branch reviews will be recorded on
+#247 and PR #248 at the final committed head; this focused checkpoint does not
+claim those steps have finished or that the owner deployment was changed.
