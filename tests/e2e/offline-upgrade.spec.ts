@@ -1,3 +1,4 @@
+import { openCollectionTools } from './collection-tools'
 import { expect, test } from '@playwright/test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -58,6 +59,7 @@ test('a populated prior-schema collection migrates before offline use and cold-o
 
     await expect(first.getByRole('heading', { name: 'Upgraded offline' })).toBeVisible()
     await expect(first.getByText('REVIEWS 1')).toBeVisible()
+    await openCollectionTools(first)
     await first.getByTestId('offline-storage-summary').click()
     await expect(first.getByText('1 changes waiting to sync.')).toBeVisible()
     await first.getByRole('button', { name: 'Study now' }).click()
@@ -86,6 +88,7 @@ test('a populated prior-schema collection migrates before offline use and cold-o
 
     await expect(reopened.getByRole('heading', { name: 'Upgraded offline' })).toBeVisible()
     await expect(reopened.getByText('REVIEWS 1')).toBeVisible()
+    await openCollectionTools(reopened)
     await reopened.getByTestId('offline-storage-summary').click()
     await expect(reopened.getByText('1 changes waiting to sync.')).toBeVisible()
     await reopened.getByRole('button', { name: 'Study now' }).click()

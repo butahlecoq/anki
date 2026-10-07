@@ -1,3 +1,4 @@
+import { openCollectionTools } from './collection-tools'
 import { expect, test, type Page } from '@playwright/test'
 import { execFile as execFileCallback, spawn } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -54,6 +55,7 @@ async function isolatedSyncService() {
 
 async function pair(page: Page, syncURL: string, runtime: string) {
   const { stdout } = await execFile(process.execPath, ['dist-server/server/index.js', '--pairing-code'], { env: { ...process.env, KIROKU_RUNTIME_DIRECTORY: runtime } })
+  await openCollectionTools(page)
   await page.getByRole('button', { name: 'Connect a PC', exact: true }).click()
   await page.getByLabel('PC service address').fill(syncURL)
   await page.getByLabel('One-time pairing code').fill(stdout.trim())
@@ -63,6 +65,7 @@ async function pair(page: Page, syncURL: string, runtime: string) {
 
 async function sync(page: Page) {
   const region = page.getByRole('region', { name: 'PC sync', exact: true })
+  await openCollectionTools(page)
   await region.getByRole('button', { name: 'Sync now', exact: true }).click()
   await expect(region).toContainText('Sync complete.', { timeout: 20_000 })
 }
@@ -240,6 +243,7 @@ test('queued offline writes converge after a network interruption', async ({ pag
     await addNote(phone, '魚', 'fish')
     for (const page of [pc, phone]) {
       const region = page.getByRole('region', { name: 'PC sync', exact: true })
+      await openCollectionTools(page)
       await region.getByRole('button', { name: 'Sync now', exact: true }).click()
       await expect(region).toContainText(/could not be reached|retry/i)
     }
@@ -305,6 +309,7 @@ test('learner downloads and previews a verified PC backup that remains known aft
     await page.getByRole('button', { name: 'Restore this PC collection', exact: true }).click()
     await expect(page.getByText(/PC collection restored from verified backup/)).toBeVisible()
     const region = page.getByRole('region', { name: 'PC sync', exact: true })
+    await openCollectionTools(page)
     await region.getByRole('button', { name: 'Sync now', exact: true }).click()
     await expect(region).toContainText(/replaced from a backup/)
     await expect(page.getByText('犬', { exact: true })).toBeVisible()

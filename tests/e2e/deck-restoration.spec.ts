@@ -8,6 +8,7 @@ import { Collection as AnkiCollection, Deck, Note, Notetype, Package } from 'ank
 import { createHash } from 'node:crypto'
 import { createSyncService } from '../../server/sync-service'
 import { createSyncHttpHandler } from '../../server/sync-http'
+import { openCollectionTools } from './collection-tools'
 
 const test = base.extend<{ hostScale: number }>({
   hostScale: async ({ browser, browserName }, provide) => {
@@ -47,11 +48,13 @@ async function plan(page: Page, buffer: Buffer) {
 }
 
 async function sync(page: Page) {
+  await openCollectionTools(page)
   await page.getByRole('button', { name: 'Sync now', exact: true }).click()
   await expect(page.getByRole('region', { name: 'PC sync' }).getByText(/complete\./i)).toBeVisible({ timeout: 15000 })
 }
 
 async function exportPackage(page: Page) {
+  await openCollectionTools(page)
   await page.getByRole('button', { name: 'Export Anki package', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Export Anki package' })
   const download = page.waitForEvent('download')
@@ -101,6 +104,7 @@ test('a deleted nested deck can be imported again and studied on a second device
   const receiverContext = await browser.newContext(contextOptions)
   const roundtripContext = await browser.newContext(contextOptions)
   const pair = async (target: Page) => {
+    await openCollectionTools(target)
     await target.getByRole('button', { name: 'Connect a PC' }).click()
     await target.getByLabel('PC service address').fill(origin)
     await target.getByLabel('One-time pairing code').fill(service.createPairingCode())

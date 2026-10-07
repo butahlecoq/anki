@@ -1,4 +1,6 @@
+import { openCollectionTools } from './collection-tools'
 import { expect, test } from '@playwright/test'
+import { nativeCanvasTest } from './phone-canvas'
 import { expectFixedReview, reviewGeometry } from './review-geometry'
 import { navigateOfflineDocument, openOfflineProfileDocument, WEBKIT_COLD_OFFLINE_LIMITATION } from './offline-navigation'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -180,6 +182,7 @@ test.afterEach(async () => {
 
 async function pair(page: import('@playwright/test').Page) {
   const syncService = await serviceForCurrentTest()
+  await openCollectionTools(page)
   await page.getByRole('button', { name: 'Connect a PC' }).click()
   await page.getByLabel('PC service address').fill(syncService.url)
   await page.getByLabel('One-time pairing code').fill(await pairingCode(syncService.runtime))
@@ -292,8 +295,10 @@ for (const reopen of [false, true]) {
       await pc.getByRole('button', { name: 'Import package' }).click()
       await pair(pc)
       await pair(phone)
+      await openCollectionTools(pc)
       await pc.getByRole('button', { name: 'Sync now' }).click()
       await expect(pc.getByText(/2 uploaded and \d+ downloaded/)).toBeVisible()
+      await openCollectionTools(phone)
       await phone.getByRole('button', { name: 'Sync now' }).click()
       await phone.getByRole('button', { name: 'Open Japanese' }).click()
       await phone.getByRole('button', { name: 'Study now' }).click()
@@ -492,7 +497,9 @@ test('learner saves scheduling policies and manages a card lifecycle', async ({ 
   await expect(cards).toBeHidden()
 })
 
-test('learner maintains and undoes the current card without leaving review', async ({ page }) => {
+nativeCanvasTest()('learner maintains and undoes the current card without leaving review', async ({ page }, testInfo) => {
+  const configuredViewport = testInfo.project.use.viewport!
+  await expect.poll(() => page.evaluate(() => ({ width: innerWidth, height: innerHeight }))).toEqual(configuredViewport)
   await createDeck(page, 'Reviewer maintenance')
   await page.getByRole('button', { name: 'Open Reviewer maintenance' }).click()
   await page.getByRole('button', { name: 'Add note' }).click()
@@ -854,8 +861,10 @@ test('PC and phone contexts exchange a collection and an FSRS review through the
 
     await pair(pc)
     await pair(phone)
+    await openCollectionTools(pc)
     await pc.getByRole('button', { name: 'Sync now' }).click()
     await expect(pc.getByRole('region', { name: 'PC sync' }).getByText(/complete\./i)).toBeVisible({ timeout: 15_000 })
+    await openCollectionTools(phone)
     await phone.getByRole('button', { name: 'Sync now' }).click()
     await expect(phone.getByRole('button', { name: `Open ${deckName}` })).toBeVisible({ timeout: 15_000 })
 
@@ -865,9 +874,11 @@ test('PC and phone contexts exchange a collection and an FSRS review through the
     await phone.getByRole('button', { name: /^Good · / }).click()
     await expect(phone.getByRole('heading', { name: 'Session complete' })).toBeVisible()
     await phone.getByRole('button', { name: 'Back to deck', exact: true }).click()
+    await openCollectionTools(phone)
     await phone.getByRole('button', { name: 'Sync now' }).click()
     await expect(phone.getByRole('region', { name: 'PC sync' }).getByText(/complete\./i)).toBeVisible({ timeout: 15_000 })
 
+    await openCollectionTools(pc)
     await pc.getByRole('button', { name: 'Sync now' }).click()
     await expect(pc.getByText('LEARNING 1')).toBeVisible()
     await expect(pc.getByText('REVIEWS 1')).toBeVisible()
@@ -903,8 +914,10 @@ test('a phone keeps verified synced media after a cold offline profile restart',
 
     await pair(pc)
     await pair(phone)
+    await openCollectionTools(pc)
     await pc.getByRole('button', { name: 'Sync now' }).click()
     await expect(pc.getByText(/2 uploaded and \d+ downloaded/)).toBeVisible()
+    await openCollectionTools(phone)
     await phone.getByRole('button', { name: 'Sync now' }).click()
     await phone.getByRole('button', { name: `Open ${deckName}` }).click()
     await phone.getByRole('button', { name: 'Study now' }).click()
@@ -966,8 +979,10 @@ test('a phone reopens a synced image occlusion source offline', async ({ browser
 
     await pair(pc)
     await pair(phone)
+    await openCollectionTools(pc)
     await pc.getByRole('button', { name: 'Sync now' }).click()
     await expect(pc.getByRole('region', { name: 'PC sync' }).getByText(/Sync complete\./)).toBeVisible()
+    await openCollectionTools(phone)
     await phone.getByRole('button', { name: 'Sync now' }).click()
     await phone.getByRole('button', { name: `Open ${deckName}` }).click()
     await phone.getByRole('button', { name: 'Study now' }).click()
@@ -1139,7 +1154,9 @@ test('two clients sync cloze ordinals and review history', async ({ browser, pag
     await pc.getByRole('button', { name: 'Save note' }).click()
     await pair(pc)
     await pair(phone)
+    await openCollectionTools(pc)
     await pc.getByRole('button', { name: 'Sync now' }).click()
+    await openCollectionTools(phone)
     await phone.getByRole('button', { name: 'Sync now' }).click()
     await phone.getByRole('button', { name: `Open ${deckName}` }).click()
     await expect(phone.getByRole('button', { name: 'Study now' })).toBeEnabled()
@@ -1148,7 +1165,9 @@ test('two clients sync cloze ordinals and review history', async ({ browser, pag
     await phone.getByRole('button', { name: 'Show answer' }).click()
     await phone.getByRole('button', { name: /^Good · / }).click()
     await phone.getByRole('button', { name: 'End session', exact: true }).click()
+    await openCollectionTools(phone)
     await phone.getByRole('button', { name: 'Sync now' }).click()
+    await openCollectionTools(pc)
     await pc.getByRole('button', { name: 'Sync now' }).click()
     await expect(pc.getByText('NEW 1')).toBeVisible()
     await expect(pc.getByText('LEARNING 1')).toBeVisible()

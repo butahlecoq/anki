@@ -1,7 +1,9 @@
-import { expect, test } from '@playwright/test'
+import { expect } from '@playwright/test'
+import { phoneCanvasTest } from './phone-canvas'
+import { openCollectionTools } from './collection-tools'
 import { expectFixedReview, reviewGeometry } from './review-geometry'
 
-test.use({ viewport: { width: 390, height: 844 }, hasTouch: true })
+const test = phoneCanvasTest({ width: 390, height: 844 })
 
 test('card and answer area stay fixed through reveal and the next sample card', async ({ page }) => {
   test.setTimeout(60_000)
@@ -101,27 +103,31 @@ test('deck counts keep the same separator spacing for short and wrapped titles',
   expect(gaps[0]).toBeGreaterThanOrEqual(16)
 })
 
-test('top controls and dialogs respect simulated iPhone safe areas and a short viewport', async ({ page }) => {
+test('top controls and dialogs respect simulated iPhone safe areas and a short viewport', async ({ page, hostScale }, testInfo) => {
   await page.goto('/')
   // Injectable inset tokens simulate standalone iPhone chrome without changing
   // application data or replacing any browser APIs.
   await page.addStyleTag({ content: ':root { --safe-top: 47px; --safe-bottom: 34px; }' })
   const appearance = await page.getByRole('combobox', { name: 'Appearance', exact: true }).boundingBox()
   expect(appearance!.y).toBeGreaterThanOrEqual(47)
+  expect(await page.evaluate(() => ({ width: innerWidth, height: innerHeight }))).toEqual({ width: 390, height: 844 })
+  await openCollectionTools(page)
   await page.getByRole('button', { name: 'Connect a PC', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Connect to your PC' })
   let bounds = await dialog.boundingBox()
-  const rootHeight = await page.evaluate(() => document.documentElement.getBoundingClientRect().height)
+  const rootHeight = await page.evaluate(() => innerHeight)
   expect(bounds!.y).toBeGreaterThanOrEqual(47)
   expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(rootHeight - 34)
-  await page.setViewportSize({ width: 390, height: 400 })
+  await page.setViewportSize({ width: Math.round(390 * hostScale), height: Math.round(400 * hostScale) })
+  expect(await page.evaluate(() => ({ width: innerWidth, height: innerHeight }))).toEqual({ width: 390, height: 400 })
   await dialog.getByRole('button', { name: 'Cancel', exact: true }).scrollIntoViewIfNeeded()
   bounds = await dialog.boundingBox()
   const viewportHeight = await page.evaluate(() => window.innerHeight)
-  // Windows WebKit scales the real canvas; use the layout viewport height.
+  // Check the actual calibrated canvas and the overlay, including safe insets.
   const layoutHeight = await page.evaluate(() => document.querySelector('.dialog-backdrop')!.getBoundingClientRect().height)
   expect(viewportHeight).toBeGreaterThan(0)
   expect(bounds!.y).toBeGreaterThanOrEqual(47)
   expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(layoutHeight - 34)
   await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toBeInViewport()
+  await testInfo.attach('safe-area-short-canvas', { body: JSON.stringify({ configured: page.viewportSize(), width: await page.evaluate(() => innerWidth), height: viewportHeight, overlayHeight: layoutHeight, dialog: bounds }), contentType: 'application/json' })
 })

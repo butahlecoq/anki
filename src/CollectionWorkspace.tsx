@@ -481,7 +481,6 @@ export function CollectionWorkspace({ offlineSyncAvailable = true }: { offlineSy
   const [importing, setImporting] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [textTransfer, setTextTransfer] = useState(false)
-  const reviewing = route.view === 'review' || route.view === 'custom-review'
 
   // The deck panel advertises N beside its heading, so the key has to work.
   useEffect(() => {
@@ -523,12 +522,11 @@ export function CollectionWorkspace({ offlineSyncAvailable = true }: { offlineSy
 
   return (
     <>
-      <SyncControls offlineSyncAvailable={offlineSyncAvailable} />
-      <SyncConflicts />
-      {!reviewing && <>
+      <SyncControls offlineSyncAvailable={offlineSyncAvailable} collectionActions={<>
         <button className="text-button" onClick={() => setExporting(true)}>Export Anki package</button>
         <button className="text-button" onClick={() => setTextTransfer(true)}>Import / export text</button>
-      </>}
+      </>} />
+      <SyncConflicts />
       {content}
       {newDeck && <DeckDialog onClose={() => setNewDeck(false)} />}
       {importing && <ImportDialog onClose={() => setImporting(false)} />}
