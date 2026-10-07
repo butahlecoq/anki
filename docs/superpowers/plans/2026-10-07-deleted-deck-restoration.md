@@ -131,7 +131,7 @@ Modify `schema-ladder.ts`, `src/collection.ts`, `src/sync-revisions.ts`, `src/im
 **Interfaces:** Visible package import, deletion, reopen, PC pairing/sync, import preview, study, and export. No hidden database setup or mocked application APIs after fixture creation.
 
 - [ ] Write `a deleted deck can be imported again and studied on a second device`: import a generated non-sensitive nested package with image/audio, delete, reload, preview explicit restore counts, commit, sync a clean paired collection, study, export/re-import, and compare supported identities/content. Check both browsers; retain documented WebKit offline/audio limits separately.
-- [ ] Run with isolated ports, for example `$env:KIROKU_WEB_PORT='4190'; $env:KIROKU_SYNC_PORT='4191'; npx playwright test tests/e2e/deck-restoration.spec.ts`; observe red before completing missing UI integration.
+- [ ] Run with isolated ports, for example `$env:KIROKU_WEB_PORT='4196'; $env:KIROKU_SYNC_PORT='4197'; npx playwright test tests/e2e/deck-restoration.spec.ts`; observe red before completing missing UI integration.
 - [ ] Complete the journey to green, then run `npm run check` from the #236 worktree. Record exact head, commands/results, schema versions, screenshot paths, and any actual migration limitations. No known-owner migration refusal may be hidden behind a passing synthetic fixture.
 - [ ] Commit the journey/evidence, run the Matt Pocock standards/spec review against the fixed branch base, fix findings, and rerun affected/full verification. Push a PR with `Closes #236` only when all criteria are evidenced.
 - [ ] Run `npm run premerge -- <PR>` immediately before the authorized merge; remove the disposable worktree/branch in the same step and regenerate repository status.

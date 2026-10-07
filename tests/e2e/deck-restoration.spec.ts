@@ -163,6 +163,7 @@ test('a deleted nested deck can be imported again and studied on a second device
     const reviewedInventory = await inventory(exported)
     expect(reviewedInventory.reviews).toHaveLength(1)
     const roundtrip = await roundtripContext.newPage()
+    roundtrip.on('pageerror', error => errors.push(error.message))
     await roundtrip.goto('/')
     await plan(roundtrip, exported)
     await roundtrip.getByRole('button', { name: 'Import package', exact: true }).click()
