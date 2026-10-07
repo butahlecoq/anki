@@ -5,6 +5,8 @@ import { join } from 'node:path'
 const syncRuntimeDirectory = process.env.KIROKU_RUNTIME_DIRECTORY ?? join(tmpdir(), `kiroku-e2e-sync-${process.pid}`)
 const webPort = process.env.KIROKU_WEB_PORT ?? '4173'
 const webURL = `http://127.0.0.1:${webPort}`
+const previewAllowedHost = process.env.KIROKU_PREVIEW_ALLOWED_HOST ?? 'kiroku-test.tailnet.ts.net'
+process.env.KIROKU_PREVIEW_ALLOWED_HOST = previewAllowedHost
 const syncPort = process.env.KIROKU_SYNC_PORT ?? '4174'
 const syncURL = `http://127.0.0.1:${syncPort}`
 
@@ -44,6 +46,7 @@ export default defineConfig({
     {
       command: `npm run build && npm run preview -- --host 127.0.0.1 --port ${webPort}`,
       url: webURL,
+      env: { ...process.env, KIROKU_PREVIEW_ALLOWED_HOST: previewAllowedHost },
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
     },
