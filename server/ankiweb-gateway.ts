@@ -74,7 +74,8 @@ async function forwardAnkiWebRequest(
     'access-control-allow-origin': pwaOrigin,
     'vary': 'Origin',
     'cache-control': 'no-store',
-    'access-control-expose-headers': 'Content-Type, Content-Length, Retry-After, X-Kiroku-Relay-Error',
+    'access-control-expose-headers': 'Content-Type, Content-Length, Retry-After, X-Kiroku-Relay-Error, X-Kiroku-Response-Source',
+    'x-kiroku-response-source': 'relay',
   })
   const reply = (message: string, status: number) => new Response(message, { status, headers: cors })
   if (request.headers.get('origin') !== pwaOrigin) return reply('Origin not allowed', 403)
@@ -121,6 +122,7 @@ async function forwardAnkiWebRequest(
       const value = response.headers.get(name)
       if (value !== null) cors.set(name, value)
     }
+    cors.set('x-kiroku-response-source', 'upstream')
     return new Response(boundedBody(response.body, abort, deadline), { status: response.status, headers: cors })
   } catch { return reply('Account service unavailable or transfer interrupted', 502) }
   finally { clearTimeout(timer) }

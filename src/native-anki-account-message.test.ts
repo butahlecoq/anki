@@ -1,6 +1,16 @@
 import { expect, test } from 'vitest'
 import { NativeSyncError } from './native-anki-sync'
 import { nativeAnkiAccountErrorMessage } from './native-anki-account-message'
+import { buildIdentity } from './build-identity'
+
+test('includes the installed build with phase-specific HTTP failure guidance', () => {
+  const message = nativeAnkiAccountErrorMessage(new NativeSyncError('transfer',
+    'AnkiWeb rejected collection download (HTTP 400; sync/download). Your local work is preserved.',
+    { route: 'sync/download', status: 400, source: 'upstream' },
+  ))
+  expect(message).toContain('sync/download')
+  expect(message).toContain(`App build: ${buildIdentity.commit}`)
+})
 
 test('shows the supported AnkiWeb update state without exposing the protocol error', () => {
   const message = nativeAnkiAccountErrorMessage(new NativeSyncError('upgrade', 'private protocol boundary details'))
@@ -12,4 +22,15 @@ test('shows the supported AnkiWeb update state without exposing the protocol err
 test('keeps actionable account authentication guidance', () => {
   expect(nativeAnkiAccountErrorMessage(new NativeSyncError('authentication', 'private auth response')))
     .toBe('AnkiWeb rejected the username or password. Check them and try again.')
+})
+
+test('retains safe request details and build for a confirmed upstream authentication rejection', () => {
+  const message = nativeAnkiAccountErrorMessage(new NativeSyncError('authentication', 'private auth response',
+    { route: 'sync/hostKey', status: 403, source: 'upstream' },
+  ))
+  expect(message).toContain('AnkiWeb rejected the username or password')
+  expect(message).toContain('sync/hostKey')
+  expect(message).toContain('HTTP 403; upstream')
+  expect(message).toContain(`App build: ${buildIdentity.commit}`)
+  expect(message).not.toContain('private auth response')
 })
