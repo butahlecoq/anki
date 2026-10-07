@@ -258,7 +258,9 @@ export class NativeAnkiClient {
     try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) } catch { throw protocolError() }
   }
   async metadata(options: NativeRequestOptions = {}): Promise<NativeSyncMeta> {
-    const value = await this.json('sync/meta', { v: 10, cv: 'kiroku,0.1,web' }, undefined, options)
+    // AnkiWeb accepts the Anki protocol family here. Keep the actual app
+    // version and Kiroku marker instead of claiming an official Anki build.
+    const value = await this.json('sync/meta', { v: 10, cv: 'anki,0.1.0 (kiroku),web' }, undefined, options)
     if (!isObject(value) || typeof value.cont !== 'boolean' || typeof value.empty !== 'boolean') throw protocolError()
     const meta = { mod: integer(value.mod), scm: integer(value.scm), usn: integer(value.usn), ts: integer(value.ts), cont: value.cont, empty: value.empty, hostNum: integer(value.hostNum ?? 0), msg: typeof value.msg === 'string' ? value.msg.slice(0, 1000) : '' }
     if (meta.usn < 0 || meta.hostNum < 0 || meta.mod < 0 || meta.scm < 0 || meta.ts < 0) throw protocolError()
@@ -368,4 +370,3 @@ export class NativeAnkiClient {
     }
   }
 }
-
