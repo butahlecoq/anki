@@ -1,6 +1,19 @@
 import { expect, test } from '@playwright/test'
 import { navigateOfflineDocument, WEBKIT_COLD_OFFLINE_LIMITATION } from './offline-navigation'
 
+test('production preview accepts its configured Tailscale hostname only', async ({ request }) => {
+  const allowedHost = process.env.KIROKU_PREVIEW_ALLOWED_HOST ?? 'kiroku-test.tailnet.ts.net'
+  const allowedResponse = await request.get('/', { headers: { Host: allowedHost } })
+  expect(allowedResponse.status()).toBe(200)
+  expect(await allowedResponse.text()).toContain('<div id="root"></div>')
+
+  for (const rejectedHost of ['another-device.tailnet.ts.net', 'attacker.invalid']) {
+    const rejectedResponse = await request.get('/', { headers: { Host: rejectedHost } })
+    expect(rejectedResponse.status()).toBe(403)
+    expect(await rejectedResponse.text()).toContain('not allowed')
+  }
+})
+
 test('learner can open the production study workspace', async ({ page }, testInfo) => {
   const pageErrors: Error[] = []
   const assetFailures: string[] = []

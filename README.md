@@ -35,6 +35,16 @@ npm start
 
 `npm start` type-checks and builds the application before serving it at `http://localhost:4173`. Localhost is suitable for desktop verification. Installing the PWA on an iPhone will require trusted HTTPS; that production deployment is tracked by [Issue #24](https://github.com/butahlecoq/anki/issues/24).
 
+For private iPhone access through Tailscale Serve, set `KIROKU_PREVIEW_ALLOWED_HOST` to the exact tailnet hostname (without `https://` or a path) in the same PowerShell session that starts the production preview:
+
+```powershell
+$env:KIROKU_PREVIEW_ALLOWED_HOST = 'desktop-name.tailnet-name.ts.net'
+npm run build
+npm run preview -- --host 127.0.0.1 --port 4173
+```
+
+Set `KIROKU_ALLOWED_ORIGIN` to `https://desktop-name.tailnet-name.ts.net` in the separate sync-service session. Vite otherwise rejects the `Host` header forwarded by Tailscale Serve. Only the configured hostname is allowed; leave `KIROKU_PREVIEW_ALLOWED_HOST` unset for localhost-only access. See [the private deployment checklist](https://github.com/butahlecoq/anki/issues/24) for the `/api` and `/` Serve routes.
+
 The measured learner path from source checkout through private iPhone setup and offline study is recorded in [the setup measurement](docs/learner-setup-path.md), including required accounts, manual decisions, and items not independently verified.
 
 ## Run the sync service

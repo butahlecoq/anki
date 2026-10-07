@@ -5,6 +5,7 @@ import { defineConfig, type UserConfig } from 'vite'
 import { VitePWA, type ManifestOptions } from 'vite-plugin-pwa'
 
 const version = (JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string }).version
+const previewAllowedHost = process.env.KIROKU_PREVIEW_ALLOWED_HOST
 let commit = 'unknown'
 try { commit = execFileSync('git', ['rev-parse', '--short=12', 'HEAD'], { encoding: 'utf8' }).trim() } catch { /* source archives may not include .git */ }
 
@@ -14,6 +15,7 @@ export default defineConfig(({ command }) => ({
     'import.meta.env.VITE_KIROKU_BUILD_COMMIT': JSON.stringify(commit),
     'import.meta.env.PROD': JSON.stringify(command === 'build'),
   },
+  ...(previewAllowedHost ? { preview: { allowedHosts: [previewAllowedHost] } } : {}),
   plugins: [
     react(),
     VitePWA({
