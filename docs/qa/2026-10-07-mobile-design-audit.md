@@ -236,3 +236,28 @@ Focused verification: **3 passed, 1 explicit native-media skip in 25.2 seconds**
 --output=runtime/235-official-package-portable`, with the generated package
 enabled on ports 4182/4183. Log: `official-package-portable.log`. A fresh whole
 gate and final-head independent review remain next; latest results are on #235.
+
+## Completion action follow-up
+
+The independent review of `071534c` reports zero standards findings and one spec
+finding: completion's Undo and Back actions have different dimensions. Retained
+actual-width-390 WebKit evidence measures Undo at 122.38 × 44px and Back at
+112.93 × 54px. Source inspection confirms independently sized grid children and
+different shared coarse-pointer minima.
+
+The whole gate on that head was intentionally interrupted after this finding;
+it is not a passing or completed gate. Type/lint/build, 687 unit tests (3 skips),
+22 tracker tests and 45 server tests had passed. Its partial browser log/artifacts
+are preserved in `runtime/235-interrupted-071534c`. The audit test interrupted by
+process termination is not attributed to application behaviour.
+
+A new visible completion journey finishes both sample reviews, then compares
+Undo/Back geometry and viewport reachability at measured widths 320 and 390.
+Before the fix it fails in both engines on the 10px height difference
+(`completion-actions-red.log`, `runtime/235-completion-actions-red`). Completion
+buttons now share a 240px maximum width and 54px minimum height. Focused completion,
+workspace/dialog action, fixed-review geometry, picker, deck-spacing and safe-area
+checks pass in both engines: **18 passed, 53.5 seconds**
+(`completion-actions-green.log`, `runtime/235-completion-actions-green`). The 320px
+WebKit viewport screenshot was inspected: both actions share dimensions and stay
+above navigation. A new whole gate and review of this follow-up remain required.

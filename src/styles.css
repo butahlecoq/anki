@@ -505,6 +505,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .rating-hard:hover { border-color: var(--status-warn-edge); color: var(--status-warn); }
 .rating-good:hover, .rating-easy:hover { border-color: var(--accent-strong); color: var(--accent); }
 .session-complete { min-height: calc(100vh - 100px); display: grid; place-items: center; align-content: center; text-align: center; }
+.session-complete > button { width: min(100%, 240px); min-height: 54px; justify-content: center; }
 .completion-mark { width: 58px; height: 58px; margin-bottom: 25px; display: grid; place-items: center; border: 1px solid var(--accent-strong); color: var(--accent); font-size: 23px; }
 .session-complete .section-code { margin-bottom: 16px; }
 .session-complete p { color: var(--text-muted); font-size: 10px; }
