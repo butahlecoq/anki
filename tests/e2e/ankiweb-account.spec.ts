@@ -332,7 +332,8 @@ collection.close()
         anki.kill()
         await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 2000))])
       }
-      rmSync(fixture, { recursive: true, force: true })
+      // Windows may release the terminated official server's SQLite handles late.
+      rmSync(fixture, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     }
   })
 }
