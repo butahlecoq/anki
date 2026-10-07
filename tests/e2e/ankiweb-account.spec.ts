@@ -1,3 +1,4 @@
+import { openCollectionTools } from './collection-tools'
 import { expect, test, type Page } from '@playwright/test'
 import { spawn, execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -88,6 +89,7 @@ async function localPcService(syncURL: string) {
 
 async function pair(page: Page, url: string, runtime: string) {
   const code = execFileSync(process.execPath, ['dist-server/server/index.js', '--pairing-code'], { env: { ...process.env, KIROKU_RUNTIME_DIRECTORY: runtime }, windowsHide: true, stdio: 'pipe' }).toString().trim()
+  await openCollectionTools(page)
   await page.getByRole('button', { name: 'Connect a PC', exact: true }).click()
   await page.getByLabel('PC service address').fill(url)
   await page.getByLabel('One-time pairing code').fill(code)

@@ -1,3 +1,4 @@
+import { openCollectionTools } from './collection-tools'
 import { expect, test } from '@playwright/test'
 
 async function activate(locator: import('@playwright/test').Locator) {
@@ -69,6 +70,7 @@ test('keyboard completes review, exports a package, and imports it into a clean 
   await activate(page.getByRole('button', { name: 'Back to deck', exact: true }))
 
   await expect(page.getByText('Offline shell ready', { exact: true })).toBeVisible()
+  await openCollectionTools(page)
   await activate(page.getByRole('button', { name: 'Export Anki package', exact: true }))
   const exportDialog = page.getByRole('dialog', { name: 'Export Anki package' })
   await expect(exportDialog.getByRole('button', { name: 'Close export' })).toBeFocused()

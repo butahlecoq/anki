@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { collection } from './collection'
 import { formatStorageBytes, requestPersistentStorage, type PersistenceResult } from './offline-storage'
@@ -8,7 +8,16 @@ import { useDialogKeyboard } from './use-dialog-keyboard'
 import { AnkiWebAccountDialog } from './AnkiWebAccountDialog'
 import { incomingDependencyMessage, pairOutcomeMessage, pairingClosesOn, SYNC_LOCAL_ONLY, syncOutcomeMessage } from './sync-messages'
 import { readSyncProgressCounts, readSyncStatusSnapshot } from './collection-queries'
-export function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: boolean }) {
+export function SyncControls({ offlineSyncAvailable, collectionActions }: { offlineSyncAvailable: boolean; collectionActions?: ReactNode }) {
+  const tools = useRef<HTMLDetailsElement>(null)
+  const [toolsOpen, setToolsOpen] = useState(() => window.matchMedia?.('(min-width: 681px)').matches ?? true)
+  useEffect(() => {
+    const desktop = window.matchMedia?.('(min-width: 681px)')
+    if (!desktop) return
+    const resize = () => setToolsOpen(desktop.matches)
+    desktop.addEventListener('change', resize)
+    return () => desktop.removeEventListener('change', resize)
+  }, [])
   const settings = useLiveQuery(() => collection.syncSettings(), [], undefined)
   const offlineInventory = useLiveQuery(async () => {
     const [status, missing, pending, backup] = await Promise.all([
@@ -192,7 +201,17 @@ export function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: b
 
   return (
     <section className="sync-controls" aria-label="PC sync">
-      <div><span className="section-code">SYNC // {settings ? 'PAIRED' : 'LOCAL ONLY'}</span><p aria-live="polite">{settings && !offlineSyncAvailable ? 'Sync is paused until Kiroku confirms its offline app shell is ready.' : message === SYNC_LOCAL_ONLY && offlineInventory?.incomingPending ? incomingDependencyMessage(offlineInventory.incomingPending) : message}</p></div>
+      <div><span className="section-code">SYNC // {settings ? 'PAIRED' : 'LOCAL ONLY'}</span><p className={message === SYNC_LOCAL_ONLY && !offlineInventory?.incomingPending && (!settings || offlineSyncAvailable) ? 'sync-idle-message' : undefined} aria-live="polite">{settings && !offlineSyncAvailable ? 'Sync is paused until Kiroku confirms its offline app shell is ready.' : message === SYNC_LOCAL_ONLY && offlineInventory?.incomingPending ? incomingDependencyMessage(offlineInventory.incomingPending) : message}</p></div>
+      <details ref={tools} className="collection-tools" open={toolsOpen} onToggle={event => setToolsOpen(event.currentTarget.open)} onKeyDown={event => {
+        if (event.key === 'Escape' && window.matchMedia?.('(max-width: 680px)').matches) {
+          event.preventDefault()
+          event.stopPropagation()
+          setToolsOpen(false)
+          tools.current?.querySelector('summary')?.focus()
+        }
+      }}>
+      <summary>Collection tools</summary>
+      <div className="collection-tools-body">
       <details className="offline-storage-status">
         <summary data-testid="offline-storage-summary">Offline storage and local collection</summary>
         <p>{persistence === 'granted' ? 'Persistent storage is enabled for this app.' : persistence === 'denied' ? 'The browser may clear this app’s local data to free space. Keep a verified backup.' : 'This browser cannot protect local storage from automatic cleanup.'}</p>
@@ -210,6 +229,9 @@ export function SyncControls({ offlineSyncAvailable }: { offlineSyncAvailable: b
       </div>
       {settings && backups[0] && <p className="sync-help">Latest backup currently listed by the PC: {new Date(backups[0].createdAt).toLocaleString()} · {backups[0].changeCount} sync changes · {backups[0].media.length} media files · {backups[0].reason === 'manual' ? 'manual' : 'before sync'}.</p>}
       {settings && backups[0] && <div className="sync-help"><button className="text-button" type="button" disabled={busy} onClick={() => void previewPcRestore(backups[0])}>Preview latest backup</button>{restorePreview && <><p role="status">{restorePreview.summary}</p>{restorePreview.available && <><label>Type RESTORE to replace the active PC collection<input value={restoreConfirmation} onChange={(event) => setRestoreConfirmation(event.target.value)} autoComplete="off" /></label><button className="text-button" type="button" disabled={busy || restoreConfirmation !== 'RESTORE'} onClick={() => void restorePcCollection()}>Restore this PC collection</button></>}</>}</div>}
+      {collectionActions && <div className="collection-export-actions">{collectionActions}</div>}
+      </div>
+      </details>
       {ankiWebOpen && settings && <AnkiWebAccountDialog settings={settings} onClose={() => setAnkiWebOpen(false)} />}
       {pairing && (
         <div className="dialog-backdrop">

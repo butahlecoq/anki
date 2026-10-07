@@ -1,3 +1,4 @@
+import { openCollectionTools } from './collection-tools'
 import { expect, test } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
 
@@ -15,6 +16,7 @@ test('save a user-owned Japanese package offline and import it into an independe
   // Warm the export WASM before taking connectivity away, as an installed PWA
   // gets this asset from its precache on subsequent starts.
   await expect(page.getByText('Offline shell ready', { exact: true })).toBeVisible()
+  await openCollectionTools(page)
   await page.getByRole('button', { name: 'Export Anki package', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Export Anki package' })
   await dialog.getByLabel('Export scope').selectOption({ label: '日本語 backup' })

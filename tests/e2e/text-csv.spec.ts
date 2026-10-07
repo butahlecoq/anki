@@ -1,3 +1,4 @@
+import { openCollectionTools } from './collection-tools'
 import { expect, test, type Page } from '@playwright/test'
 import { readFile } from 'node:fs/promises'
 import { parseDelimited } from '../../src/text-csv'
@@ -5,6 +6,7 @@ import { parseDelimited } from '../../src/text-csv'
 const input = '_note_id,_deck,_note_type,_tags,Field: front,Field: back\r\ncat,日本語::語彙,Basic,"[""日本語"",""common""]",<b>猫</b>,"cat, feline\nねこ"\r\ndog,日本語::語彙,Basic,[],犬,dog\r\nbad,日本語::語彙,Basic,[],,missing\r\n'
 
 async function paste(page: Page, text: string) {
+  await openCollectionTools(page)
   await page.getByRole('button', { name: 'Import / export text', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Import and export text' })
   await dialog.getByRole('combobox', { name: 'Text source', exact: true }).selectOption('paste')
@@ -61,6 +63,7 @@ test('Japanese CSV preview, explicit partial import, offline export and clean-cl
   try {
     target = await clean.newPage()
     await target.goto(test.info().project.use.baseURL ?? page.url().split('#')[0])
+    await openCollectionTools(target)
     await target.getByRole('button', { name: 'Import / export text', exact: true }).click()
     let imported = target.getByRole('dialog', { name: 'Import and export text' })
     await imported.getByLabel('Text or CSV file').setInputFiles({ name: 'actual-export.csv', mimeType: 'text/csv', buffer: exported! })
@@ -93,6 +96,7 @@ test('Japanese CSV preview, explicit partial import, offline export and clean-cl
     const noteIdColumnBeforeUpdate = exportedRowsBeforeUpdate[0].indexOf('_note_id')
     const catNoteId = exportedRowsBeforeUpdate.find((row) => row[noteIdColumnBeforeUpdate] === 'csv-note:Y2F0')?.[noteIdColumnBeforeUpdate]
     expect(catNoteId).toBe('csv-note:Y2F0')
+    await openCollectionTools(target)
     await target.getByRole('button', { name: 'Import / export text', exact: true }).click()
     imported = target.getByRole('dialog', { name: 'Import and export text' })
     await imported.getByLabel('Text or CSV file').setInputFiles({ name: 'ignore-existing.csv', mimeType: 'text/csv', buffer: exported! })
@@ -118,6 +122,7 @@ test('Japanese CSV preview, explicit partial import, offline export and clean-cl
     expect(exportedRows.find((row) => row[0] === 'csv-note:Y2F0')?.[tagColumn]).toBe('["更新","common"]')
     await imported.getByLabel('Close text import/export').click()
     await expect(target.getByText('REVIEWS 1')).toBeVisible()
+    await openCollectionTools(target)
     await target.getByRole('button', { name: 'Import / export text', exact: true }).click()
     imported = target.getByRole('dialog', { name: 'Import and export text' })
     await imported.getByLabel('Text or CSV file').setInputFiles({ name: 'intentional-duplicate.csv', mimeType: 'text/csv', buffer: exported! })
@@ -134,6 +139,7 @@ test('Japanese CSV preview, explicit partial import, offline export and clean-cl
     await expect(imported.getByText('Import complete: 2 added, 0 updated, 0 ignored, 0 invalid rows skipped.', { exact: true })).toBeVisible()
     await imported.getByLabel('Close text import/export').click()
     await expect(target.getByText('REVIEWS 1')).toBeVisible()
+    await openCollectionTools(target)
     await target.getByRole('button', { name: 'Import / export text', exact: true }).click()
     imported = target.getByRole('dialog', { name: 'Import and export text' })
     await imported.getByRole('button', { name: 'Export text', exact: true }).click()
