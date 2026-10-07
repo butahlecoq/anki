@@ -99,3 +99,15 @@ metadata; it was replaced by normal `updateNote` conditional-card generation.
 No restoration ancestry-validation defect was established by that probe, and
 that validator was not changed. These targeted results do not replace the
 pending final whole software gate or independent review.
+
+
+The first post-commit push hook caught a second ordering case and refused the
+push. The retained queue's identifier order can put a note move ahead of its
+restoration, leaving the card validated against the preceding note deck. The
+fixture now pins descending UUIDs to reproduce this deterministically, rather
+than relying on random operation identities. The receive order keeps structural
+sorting and visits same-entity causal parents before descendants. The new
+`restoration-card-move-descending-red.log` records the failure and
+`restoration-card-move-descending-green.log` records **10 passed** in 4.10 seconds.
+Temporary `[DEBUG-card-move]` instrumentation is removed. Final full verification
+and independent review remain pending.

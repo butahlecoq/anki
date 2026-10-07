@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { beforeAll, expect, test } from 'vitest'
+import { beforeAll, expect, test, vi } from 'vitest'
 import { decompress } from 'fzstd'
 import { unzipSync, zipSync } from 'fflate'
 import initSqlJs, { type SqlJsStatic } from 'sql.js'
@@ -133,52 +133,56 @@ test('new content in a restored child can be restored after moving the child to 
 })
 
 test.each([false, true])('a new card can synchronize and restore after its note moves (previous restoration: %s)', async previousRestoration => {
-  await withPairedCollections(2, async ([owner, observer]) => {
-    const file = await restorationPackage(true, true)
-    await (await prepareAnkiImport(file, owner, { SQL })).commit()
-    const original = await readAnkiExportSnapshot(owner)
-    const root = original.decks.find(deck => deck.name === 'Restoration root')!
-    const other = original.decks.find(deck => deck.name === 'Other root')!
-    const note = original.notes.find(note => Object.values(note.fields).includes('a small feline'))!
-    await syncComplete(owner, 'new-card step 1: owner')
-    await syncComplete(observer, 'new-card step 2: observer')
-    if (previousRestoration) {
-      await owner.deleteDeck(root.id, { mode: 'delete-subtree' })
-      await syncComplete(owner, 'new-card step 3: owner')
+  let sequence = 999999999999
+  const uuid = vi.spyOn(crypto, 'randomUUID').mockImplementation(() => `00000000-0000-4000-8000-${sequence--}`)
+  try {
+    await withPairedCollections(2, async ([owner, observer]) => {
+      const file = await restorationPackage(true, true)
       await (await prepareAnkiImport(file, owner, { SQL })).commit()
-      await syncComplete(owner, 'new-card step 4: owner')
-    }
-    const restoredNote = (await readAnkiExportSnapshot(owner)).notes.find(row => row.id === note.id)!
-    const type = (await readAnkiExportSnapshot(owner)).types.find(row => row.id === note.typeId)!
-    const extra = type.fields.find(field => field.name === 'extra')!
-    await owner.updateNote(note.id, { ...restoredNote.fields, [extra.id]: 'new recognition question' })
-    expect((await readAnkiExportSnapshot(owner)).cards.filter(card => card.noteId === note.id)).toHaveLength(2)
-    await owner.moveNote(note.id, root.id)
-    await owner.moveNote(note.id, other.id)
-    if (!previousRestoration) {
-      const unchanged = await readAnkiExportSnapshot(observer)
-      const unrelated = (await owner.pendingOperations()).map(operation => operation.entityType === 'card' && operation.action === 'update' ? { ...operation, parents: [] } : operation)
-      await expect(observer.applyRemoteChanges(unrelated, (await observer.syncSettings())!.cursor)).rejects.toThrow('Synced card deck does not match its note deck')
-      expect(await readAnkiExportSnapshot(observer)).toEqual(unchanged)
-    }
-    await syncComplete(owner, 'new-card step 5: owner')
-    await syncComplete(observer, 'new-card step 6: observer')
-    const before = await readAnkiExportSnapshot(owner)
-    expect(before.cards.filter(card => card.noteId === note.id)).toHaveLength(2)
-    const exported = await exportAnkiPackage(owner, { SQL, scheduling: true, history: true, media: true })
-    const movedFile = new File([exported.bytes.slice().buffer as ArrayBuffer], 'moved-note-restoration.apkg')
-    await owner.deleteDeck(other.id, { mode: 'delete-subtree' })
-    await syncComplete(owner, 'new-card step 7: owner')
-    await syncComplete(observer, 'new-card step 8: observer')
-    const restoration = await prepareAnkiImport(movedFile, owner, { SQL })
-    expect(restoration.issues.filter(issue => issue.severity === 'error')).toEqual([])
-    await restoration.commit()
-    await syncComplete(owner, 'new-card step 9: owner')
-    await syncComplete(observer, 'new-card step 10: observer')
-    const restored = await readAnkiExportSnapshot(owner)
-    for (const key of ['decks', 'notes', 'cards', 'reviews'] as const) expect((await readAnkiExportSnapshot(observer))[key]).toEqual(restored[key])
-    expect(restored.cards.filter(card => card.noteId === note.id).map(card => card.id)).toEqual(before.cards.filter(card => card.noteId === note.id).map(card => card.id))
-  })
+      const original = await readAnkiExportSnapshot(owner)
+      const root = original.decks.find(deck => deck.name === 'Restoration root')!
+      const other = original.decks.find(deck => deck.name === 'Other root')!
+      const note = original.notes.find(note => Object.values(note.fields).includes('a small feline'))!
+      await syncComplete(owner, 'new-card step 1: owner')
+      await syncComplete(observer, 'new-card step 2: observer')
+      if (previousRestoration) {
+        await owner.deleteDeck(root.id, { mode: 'delete-subtree' })
+        await syncComplete(owner, 'new-card step 3: owner')
+        await (await prepareAnkiImport(file, owner, { SQL })).commit()
+        await syncComplete(owner, 'new-card step 4: owner')
+      }
+      const restoredNote = (await readAnkiExportSnapshot(owner)).notes.find(row => row.id === note.id)!
+      const type = (await readAnkiExportSnapshot(owner)).types.find(row => row.id === note.typeId)!
+      const extra = type.fields.find(field => field.name === 'extra')!
+      await owner.updateNote(note.id, { ...restoredNote.fields, [extra.id]: 'new recognition question' })
+      expect((await readAnkiExportSnapshot(owner)).cards.filter(card => card.noteId === note.id)).toHaveLength(2)
+      await owner.moveNote(note.id, root.id)
+      await owner.moveNote(note.id, other.id)
+      if (!previousRestoration) {
+        const unchanged = await readAnkiExportSnapshot(observer)
+        const unrelated = (await owner.pendingOperations()).map(operation => operation.entityType === 'card' && operation.action === 'update' ? { ...operation, parents: [] } : operation)
+        await expect(observer.applyRemoteChanges(unrelated, (await observer.syncSettings())!.cursor)).rejects.toThrow('Synced card deck does not match its note deck')
+        expect(await readAnkiExportSnapshot(observer)).toEqual(unchanged)
+      }
+      await syncComplete(owner, 'new-card step 5: owner')
+      await syncComplete(observer, 'new-card step 6: observer')
+      const before = await readAnkiExportSnapshot(owner)
+      expect(before.cards.filter(card => card.noteId === note.id)).toHaveLength(2)
+      const exported = await exportAnkiPackage(owner, { SQL, scheduling: true, history: true, media: true })
+      const movedFile = new File([exported.bytes.slice().buffer as ArrayBuffer], 'moved-note-restoration.apkg')
+      await owner.deleteDeck(other.id, { mode: 'delete-subtree' })
+      await syncComplete(owner, 'new-card step 7: owner')
+      await syncComplete(observer, 'new-card step 8: observer')
+      const restoration = await prepareAnkiImport(movedFile, owner, { SQL })
+      expect(restoration.issues.filter(issue => issue.severity === 'error')).toEqual([])
+      await restoration.commit()
+      await syncComplete(owner, 'new-card step 9: owner')
+      await syncComplete(observer, 'new-card step 10: observer')
+      const restored = await readAnkiExportSnapshot(owner)
+      for (const key of ['decks', 'notes', 'cards', 'reviews'] as const) expect((await readAnkiExportSnapshot(observer))[key]).toEqual(restored[key])
+      expect(restored.cards.filter(card => card.noteId === note.id).map(card => card.id)).toEqual(before.cards.filter(card => card.noteId === note.id).map(card => card.id))
+    })
+  } finally { uuid.mockRestore() }
 })
 
 test('a later-dated prior-lifetime schedule command cannot change a current review', async () => {

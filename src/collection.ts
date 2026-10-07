@@ -384,7 +384,7 @@ function orderInboundChanges(changes: SyncOperation[]) {
   }
   for (const entry of deckIndexes) visit(entry)
   const replacement = new Map(parentFirst.map((entry, index) => [entry.index, index]))
-  return ordered.sort((left, right) => {
+  const structurallyOrdered = ordered.sort((left, right) => {
     const rank = inboundDependencyOrder(left.change) - inboundDependencyOrder(right.change)
     if (rank) return rank
     const leftDeck = replacement.get(left.index)
@@ -395,6 +395,25 @@ function orderInboundChanges(changes: SyncOperation[]) {
     }
     return left.index - right.index
   }).map(({ change }) => change)
+  // Durable pending rows are read by operation identity. Restore their causal
+  // order before materializing later revisions of the same entity.
+  const byOperation = new Map(structurallyOrdered.map(operation => [operation.opId, operation]))
+  const completed = new Set<string>()
+  const ancestors = new Set<string>()
+  const causal: SyncOperation[] = []
+  const visitRevision = (operation: SyncOperation) => {
+    if (completed.has(operation.opId) || ancestors.has(operation.opId)) return
+    ancestors.add(operation.opId)
+    for (const parentId of operation.parents ?? []) {
+      const parent = byOperation.get(parentId)
+      if (parent?.entityType === operation.entityType && parent.entityId === operation.entityId) visitRevision(parent)
+    }
+    ancestors.delete(operation.opId)
+    completed.add(operation.opId)
+    causal.push(operation)
+  }
+  for (const operation of structurallyOrdered) visitRevision(operation)
+  return causal
 }
 
 function relatedEntityIds(change: SyncOperation) {
