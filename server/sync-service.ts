@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import { createBackupStore } from './backups.js'
 import { readBuildIdentity } from './build-identity.js'
 import { SERVER_MAX_COLLECTION_SCHEMA_VERSION, SYNC_CHANGE_PAGE_SIZE, SYNC_PROTOCOL_VERSION, type IncompatibleSync, type SyncCapabilities, type SyncHealth } from '../sync-capabilities.js'
-import type { EntityLifetimeMetadata } from '../entity-lifetimes.js'
+import { restoredLifetime, validateRestorationEvidence, type EntityLifetimeMetadata, type EntityLifetimeOperation } from '../entity-lifetimes.js'
 import { schemaRequiredByOperation } from '../schema-ladder.js'
 import { isSupportedMediaType } from '../anki-interchange.js'
 import { collectionGeneration as getCollectionGeneration, requiresCollectionGeneration } from './collection-generation.js'
@@ -305,6 +305,15 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
         const currentWatermark = persistedCollectionSchemaVersion()
         const nextWatermark = assertCapabilities(request, currentWatermark)
         validateRevisionParents(request.operations, database)
+        if (request.operations.some(operation => operation.action === 'restore')) {
+          const retained = database.prepare('SELECT op_id, entity_type, entity_id, action, payload, parents, lifetime, related_lifetimes, restore_of FROM changes').all() as Array<PersistedChange & { op_id: string; entity_id: string }>
+          const evidence = [...retained.map(row => ({ opId: row.op_id, entityType: row.entity_type, entityId: row.entity_id, action: row.action, payload: JSON.parse(row.payload), parents: row.parents !== null ? JSON.parse(row.parents) : undefined, lifetime: row.lifetime !== null ? JSON.parse(row.lifetime) : undefined })), ...request.operations] as EntityLifetimeOperation[]
+          for (const operation of request.operations.filter(operation => operation.action === 'restore')) {
+            if (!Array.isArray(operation.restoreOf) || !operation.restoreOf.length || !Array.isArray(operation.lifetime) || !Array.isArray(operation.relatedLifetimes)) throw new Error('Restoration requires deletion provenance and original lifetime references.')
+            if (JSON.stringify(operation.lifetime) !== JSON.stringify(restoredLifetime(operation.restoreOf))) throw new Error('Restoration lifetime does not match its deletion provenance.')
+            validateRestorationEvidence(operation as EntityLifetimeOperation, operation.restoreOf, evidence)
+          }
+        }
         const insert = database.prepare('INSERT OR IGNORE INTO changes (op_id, device_id, entity_type, entity_id, action, occurred_at, payload, parents, review_id, lifetime, related_lifetimes, restore_of) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
         for (const operation of request.operations) {
           const previous = database.prepare('SELECT entity_type, entity_id, action, occurred_at, payload, parents, review_id, lifetime, related_lifetimes, restore_of FROM changes WHERE op_id = ?').get(operation.opId) as { entity_type: string; entity_id: string; action: string; occurred_at: string; payload: string; parents: string | null; review_id: string | null; lifetime: string | null; related_lifetimes: string | null; restore_of: string | null } | undefined

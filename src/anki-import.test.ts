@@ -257,6 +257,37 @@ describe('Anki package import', () => {
     expect(await collection.pendingOperations()).toEqual(pending)
   })
 
+  test('restoration dependencies survive a receive-page interruption', async () => {
+    collection = createCollection(`kiroku-restoration-source-${crypto.randomUUID()}`)
+    const receiverName = `kiroku-restoration-pages-${crypto.randomUUID()}`
+    syncReplica = createCollection(receiverName)
+    const file = await japanesePackage()
+    await (await prepareAnkiImport(file, collection, { SQL })).commit()
+    const before = await readAnkiExportSnapshot(collection)
+    const created = await collection.pendingOperations()
+    await syncReplica.applyRemoteChanges(created, created.length)
+    await collection.acknowledgeOperations(created.map(operation => operation.opId))
+    const deck = before.decks.find(candidate => before.notes.some(note => note.deckId === candidate.id))!
+    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
+    const deleted = await collection.pendingOperations()
+    await syncReplica.applyRemoteChanges(deleted, created.length + deleted.length)
+    await collection.acknowledgeOperations(deleted.map(operation => operation.opId))
+    await (await prepareAnkiImport(file, collection, { SQL })).commit()
+    const restoration = await collection.pendingOperations()
+    const children = restoration.filter(operation => operation.entityType !== 'deck')
+    const parents = restoration.filter(operation => operation.entityType === 'deck')
+    const cursor = created.length + deleted.length + children.length
+    await syncReplica.applyRemoteChanges(children, cursor)
+    syncReplica.closeLocalCollection()
+    syncReplica = createCollection(receiverName)
+    await syncReplica.applyRemoteChanges(parents, cursor + parents.length)
+    const received = await readAnkiExportSnapshot(syncReplica)
+    for (const key of ['notes', 'cards', 'references'] as const) expect(received[key].map(row => row.id).sort()).toEqual(before[key].map(row => row.id).sort())
+    await syncReplica.applyRemoteChanges(children, cursor + parents.length)
+    await syncReplica.applyRemoteChanges(parents, cursor + parents.length)
+    expect(await readAnkiExportSnapshot(syncReplica)).toEqual(received)
+  })
+
   test('restores a deleted package deck to a replica after reopening and re-imports it idempotently', async () => {
     const name = `kiroku-delete-reimport-${crypto.randomUUID()}`
     collection = createCollection(name)

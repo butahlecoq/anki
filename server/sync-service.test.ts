@@ -51,6 +51,45 @@ test('schema 22 operation lifetime metadata survives service reopen and replay',
   }
 })
 
+for (const scenario of ['unknown restoration cause', 'identity reuse with changed lifecycle metadata'] as const) {
+  test(`paired HTTP rejects ${scenario} without acknowledging or changing stored history`, async () => {
+    runtimeDirectory = await mkdtemp(join(tmpdir(), 'kiroku-restoration-http-validation-'))
+    const service = createSyncService({ databasePath: join(runtimeDirectory, 'collection.sqlite') })
+    const server = createServer(createSyncHttpHandler(service))
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    assert(address && typeof address !== 'string')
+    const origin = `http://127.0.0.1:${address.port}`
+    try {
+      const pairing = await fetch(`${origin}/api/pair`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: service.createPairingCode(), deviceId: 'lifecycle-validation-phone' }) })
+      assert.equal(pairing.status, 201)
+      const { token } = await pairing.json() as { token: string }
+      const send = (operations: unknown[]) => fetch(`${origin}/api/sync`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, collectionSchemaVersion: 22, cursor: 0, operations }) })
+      const original = { opId: 'lifecycle-original', entityType: 'deck', entityId: 'lifecycle-deck', action: 'create', occurredAt: '2026-10-07T00:00:00.000Z', payload: { id: 'lifecycle-deck', name: 'Keep original history', parentId: null, optionGroupId: 'default' }, lifetime: [], relatedLifetimes: [] }
+      if (scenario === 'unknown restoration cause') {
+        const invalid = { ...original, action: 'restore', lifetime: ['missing-delete'], restoreOf: [{ source: { entityType: 'deck', entityId: original.entityId }, opId: 'missing-delete', deletedLifetime: [] }] }
+        const response = await send([invalid])
+        assert.equal(response.status, 400)
+        assert.match((await response.json() as { error: string }).error, /deletion|provenance|restoration/i)
+        assert.equal(service.changeCount(), 0)
+        assert.equal(service.health().collectionSchemaVersion, 1)
+      } else {
+        assert.equal((await send([original])).status, 200)
+        const response = await send([{ ...original, relatedLifetimes: [{ entityType: 'deck', entityId: 'another-parent', lifetime: ['different-lifetime'] }] }])
+        assert.equal(response.status, 400)
+        assert.match((await response.json() as { error: string }).error, /identity.*reused/i)
+        assert.equal(service.changeCount(), 1)
+        const replay = await send([original])
+        assert.equal(replay.status, 200)
+        assert.equal((await replay.json() as { accepted: number }).accepted, 0)
+      }
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+      service.close()
+    }
+  })
+}
+
 afterEach(async () => {
   if (runtimeDirectory) await rm(runtimeDirectory, { recursive: true, force: true })
   runtimeDirectory = undefined
