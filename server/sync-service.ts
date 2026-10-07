@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path'
 import { createBackupStore } from './backups.js'
 import { readBuildIdentity } from './build-identity.js'
 import { SERVER_MAX_COLLECTION_SCHEMA_VERSION, SYNC_CHANGE_PAGE_SIZE, SYNC_PROTOCOL_VERSION, type IncompatibleSync, type SyncCapabilities, type SyncHealth } from '../sync-capabilities.js'
-import { restoredLifetime, validateRestorationEvidence, type EntityLifetimeMetadata, type EntityLifetimeOperation } from '../entity-lifetimes.js'
+import { restoredLifetime, validateRestorationEvidence, validateLifetimeMetadata, type EntityLifetimeMetadata, type EntityLifetimeOperation } from '../entity-lifetimes.js'
 import { schemaRequiredByOperation } from '../schema-ladder.js'
 import { isSupportedMediaType } from '../anki-interchange.js'
 import { collectionGeneration as getCollectionGeneration, requiresCollectionGeneration } from './collection-generation.js'
@@ -305,6 +305,7 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
         const currentWatermark = persistedCollectionSchemaVersion()
         const nextWatermark = assertCapabilities(request, currentWatermark)
         validateRevisionParents(request.operations, database)
+        for (const operation of request.operations) validateLifetimeMetadata(operation as EntityLifetimeOperation)
         if (request.operations.some(operation => operation.action === 'restore')) {
           const retained = database.prepare('SELECT op_id, entity_type, entity_id, action, payload, parents, lifetime, related_lifetimes, restore_of FROM changes').all() as Array<PersistedChange & { op_id: string; entity_id: string }>
           const evidence = [...retained.map(row => ({ opId: row.op_id, entityType: row.entity_type, entityId: row.entity_id, action: row.action, payload: JSON.parse(row.payload), parents: row.parents !== null ? JSON.parse(row.parents) : undefined, lifetime: row.lifetime !== null ? JSON.parse(row.lifetime) : undefined })), ...request.operations] as EntityLifetimeOperation[]

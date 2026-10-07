@@ -10,7 +10,7 @@ import initSqlJs, { type SqlJsStatic } from 'sql.js'
 import { createSyncService } from '../server/sync-service'
 import { createSyncHttpHandler } from '../server/sync-http'
 import { pairCollection, syncCollection } from './sync-client'
-import { createCollection, Rating, type Collection } from './collection'
+import { createCollection, Rating, type Collection, type SyncOperation } from './collection'
 import { exportAnkiPackage } from './anki-export'
 import { prepareAnkiImport } from './anki-import'
 import { readAnkiExportSnapshot, readAnkiImportSnapshot, readCardsForNote, readSyncConflicts } from './collection-queries'
@@ -32,7 +32,7 @@ async function restorationPackage() {
   } finally { await owner.removeLocalCollection() }
 }
 
-async function withPairedCollections(count: number, run: (devices: Collection[]) => Promise<void>) {
+async function withPairedCollections(count: number, run: (devices: Collection[], service: ReturnType<typeof createSyncService>, origin: string) => Promise<void>, initiallyPaired = count) {
   const runtime = await mkdtemp(join(tmpdir(), 'kiroku-restoration-client-'))
   const service = createSyncService({ databasePath: join(runtime, 'collection.sqlite') })
   const server = createServer(createSyncHttpHandler(service))
@@ -41,8 +41,8 @@ async function withPairedCollections(count: number, run: (devices: Collection[])
   const address = server.address()
   if (!address || typeof address === 'string') throw new Error('Test service did not bind its isolated loopback port')
   try {
-    for (const device of devices) expect(await pairCollection(device, `http://127.0.0.1:${address.port}`, service.createPairingCode())).toMatchObject({ state: 'paired' })
-    await run(devices)
+    for (const device of devices.slice(0, initiallyPaired)) expect(await pairCollection(device, `http://127.0.0.1:${address.port}`, service.createPairingCode())).toMatchObject({ state: 'paired' })
+    await run(devices, service, `http://127.0.0.1:${address.port}`)
   } finally {
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
     service.close()
@@ -55,6 +55,67 @@ async function syncComplete(device: Collection) {
   const result = await syncCollection(device)
   expect(result).toMatchObject({ state: 'complete', media: { pending: 0 } })
 }
+
+for (const relatedLifetimes of [[null], []]) test(`malformed receiver parent references roll back the entire batch (${relatedLifetimes.length ? 'null' : 'missing'})`, async () => {
+  const device = createCollection(`kiroku-malformed-receive-${crypto.randomUUID()}`)
+  try {
+    const deck = await device.createDeck('Keep local work')
+    const before = await readAnkiExportSnapshot(device)
+    const queued = await device.pendingOperations()
+    const valid = { opId: 'valid-before-invalid', entityType: 'deck', entityId: 'new-deck', action: 'create', occurredAt: '2026-10-07T12:00:00Z', payload: { id: 'new-deck', name: 'Must roll back', parentId: null }, lifetime: [], relatedLifetimes: [] }
+    const invalid = { ...valid, opId: 'invalid-reference', entityId: 'new-child', payload: { id: 'new-child', name: 'Invalid', parentId: deck.id }, relatedLifetimes }
+    await expect(device.applyRemoteChanges([valid, invalid] as unknown as SyncOperation[], 10)).rejects.toThrow(/lifetime reference/i)
+    expect(await readAnkiExportSnapshot(device)).toEqual(before)
+    expect(await device.pendingOperations()).toEqual(queued)
+    expect(await device.syncSettings()).toBeUndefined()
+  } finally { await device.removeLocalCollection() }
+})
+
+test('verified backup restoration keeps stale work fenced and current lifetime edits usable', async () => {
+  await withPairedCollections(3, async ([owner, stale, receiver], service, origin) => {
+    const file = await restorationPackage()
+    await (await prepareAnkiImport(file, owner, { SQL })).commit()
+    await syncComplete(owner)
+    await syncComplete(stale)
+    const original = await readAnkiExportSnapshot(owner)
+    const deck = original.decks.find(row => row.parentId === null)!
+    const note = original.notes[0]
+    const field = Object.keys(note.fields)[0]
+    await stale.updateNote(note.id, { ...note.fields, [field]: 'prior lifetime edit' })
+    await stale.createBasicNote(deck.id, { front: 'prior lifetime new child', back: 'must be suppressed' })
+    const queued = await stale.pendingOperations()
+    await owner.deleteDeck(deck.id, { mode: 'delete-subtree' })
+    await syncComplete(owner)
+    await (await prepareAnkiImport(file, owner, { SQL })).commit()
+    await syncComplete(owner)
+    const expected = await readAnkiExportSnapshot(owner)
+    const settings = (await owner.syncSettings())!
+    const backup = await service.createBackup(settings.token)
+    await owner.updateNote(note.id, { ...expected.notes.find(row => row.id === note.id)!.fields, [field]: 'after backup' })
+    await syncComplete(owner)
+    const restored = await service.restoreBackup(settings.token, backup.id, 'RESTORE')
+    expect(await syncCollection(stale)).toMatchObject({ state: 'collection-generation-required' })
+    expect(await stale.pendingOperations()).toEqual(queued)
+    expect(await pairCollection(receiver, origin, service.createPairingCode())).toMatchObject({ state: 'paired' })
+    await syncComplete(receiver)
+    const received = await readAnkiExportSnapshot(receiver)
+    for (const key of ['decks', 'notes', 'cards', 'reviews', 'references'] as const) expect(received[key]).toEqual(expected[key])
+    const response = await fetch(`${origin}/api/sync`, { method: 'POST', headers: { authorization: `Bearer ${settings.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, collectionSchemaVersion: 22, collectionGeneration: restored.generation, cursor: 0, operations: queued }) })
+    expect(response.status).toBe(200)
+    await syncComplete(receiver)
+    expect(await readAnkiExportSnapshot(receiver)).toEqual(received)
+    const current = (await readAnkiExportSnapshot(receiver)).notes.find(row => row.id === note.id)!
+    await receiver.updateNote(note.id, { ...current.fields, [field]: 'current lifetime edit after backup restore' })
+    await syncComplete(receiver)
+    const name = receiver.databaseName
+    receiver.closeLocalCollection()
+    const reopened = createCollection(name)
+    try {
+      await syncComplete(reopened)
+      expect((await readAnkiExportSnapshot(reopened)).notes.find(row => row.id === note.id)?.fields[field]).toBe('current lifetime edit after backup restore')
+    } finally { reopened.closeLocalCollection() }
+  }, 2)
+})
 
   test('offline work cannot change a restored lifetime through paired HTTP', async () => {
     await withPairedCollections(3, async ([owner, observer, stale]) => {

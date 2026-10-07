@@ -1,5 +1,5 @@
 import Dexie, { type EntityTable } from 'dexie'
-import { relatedEntities, recoverDeletionProvenance, currentLifetime, decideOperationLifetime, restoredLifetime, validateRestorationEvidence, type EntityType, type EntityLifetimeMetadata, type DeletionCause } from '../entity-lifetimes'
+import { relatedEntities, recoverDeletionProvenance, currentLifetime, decideOperationLifetime, restoredLifetime, validateRestorationEvidence, validateLifetimeMetadata, type EntityType, type EntityLifetimeMetadata, type DeletionCause } from '../entity-lifetimes'
 import { customStudyKey, customStudyMembership, customStudySessions, type CustomStudySession } from './custom-study-state'
 import { createEmptyCard } from 'ts-fsrs'
 import { answerWithSchedule, deserializeCard, eligibleForQueue, eligibleForStudy, isBuried, isInterdayLearning, isLearningCard, nextStudyBoundary, Rating, reviewChoices as previewReviewChoices, selectDueCards, serializeCard, State, templateSuspended, validateSteps, type Grade } from './scheduler'
@@ -2456,6 +2456,7 @@ class DexieCollection extends Dexie {
         let progress = false
         for (const source of orderInboundChanges(incoming)) {
         const change = { ...source }
+        validateLifetimeMetadata(change)
         const key = tombstoneKey(change.entityType, change.entityId)
         const previousRevision = await this.syncRevisions.get(change.opId)
         const pending = await this.pendingRemoteOperations.get(change.opId)
@@ -2488,12 +2489,16 @@ class DexieCollection extends Dexie {
         progress = true
         await this.pendingRemoteOperations.delete(change.opId)
         if (decision.state === 'stale') {
-          if (change.entityType === 'note') suppressedNoteIds.add(change.entityId)
-          if (change.entityType === 'card') suppressedCardIds.add(change.entityId)
+          if (change.entityType === 'note' && !(await this.notes.get(change.entityId))) suppressedNoteIds.add(change.entityId)
+          if (change.entityType === 'card' && !(await this.cards.get(change.entityId))) suppressedCardIds.add(change.entityId)
           await this.receivedOperations.add({ opId: change.opId })
           continue
         }
-        if (change.action === 'restore') await this.deletedEntities.delete(key)
+        if (change.action === 'restore') {
+          await this.deletedEntities.delete(key)
+          if (change.entityType === 'note') suppressedNoteIds.delete(change.entityId)
+          if (change.entityType === 'card') suppressedCardIds.delete(change.entityId)
+        }
         const history = await this.syncRevisions.where('key').equals(key).toArray()
         const merged = this.mergeSyncRevisions(change.entityType, history)
         if (merged.conflicts.length) await this.syncConflicts.put({ ...merged, key, entityType: change.entityType, entityId: change.entityId })

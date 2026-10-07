@@ -80,6 +80,7 @@ export function validateRestorationEvidence(target: EntityRef, causes: readonly 
   for (const cause of causes) {
     const source = revisions.find(revision => revision.opId === cause.opId)
     if (!source || source.action !== 'delete' || source.entityType !== cause.source.entityType || source.entityId !== cause.source.entityId) throw new Error('Deletion provenance does not match retained deletion history.')
+    if (target.entityType === source.entityType && target.entityId === source.entityId && JSON.stringify(cause.deletedLifetime) !== JSON.stringify(source.lifetime ?? [])) throw new Error('Deletion provenance names the wrong deleted lifetime.')
     const visited = new Set<string>()
     const belongs = (ref: EntityRef): boolean => {
       if (ref.entityType === source.entityType && ref.entityId === source.entityId) return true
@@ -101,6 +102,39 @@ function assertLifetime(value: EntityLifetime): void {
   if (!Array.isArray(value) || value.some(id => typeof id !== 'string' || !id) || !sameLifetime(value, [...new Set(value)].sort())) throw new Error('Invalid entity lifetime; retain local work and recover the original sync history.')
 }
 
+/** Validate wire metadata before storage or classification; omitted owner references are unsafe. */
+export function validateLifetimeMetadata(operation: EntityLifetimeOperation): void {
+  const entityTypes: EntityType[] = ['deck', 'deckOptionGroup', 'note', 'card', 'review', 'noteMedia', 'noteType']
+  function assertReference(value: unknown): asserts value is EntityRef {
+    if (!value || typeof value !== 'object' || !('entityType' in value) || !entityTypes.includes(value.entityType as EntityType) || !('entityId' in value) || typeof value.entityId !== 'string' || !value.entityId) throw new Error('Invalid entity lifetime reference; retain local work and recover the original sync history.')
+  }
+  if (operation.lifetime !== undefined) assertLifetime(operation.lifetime)
+  if (operation.relatedLifetimes !== undefined) {
+    if (!Array.isArray(operation.relatedLifetimes)) throw new Error('Invalid related lifetime references.')
+    const keys = new Set<string>()
+    for (const reference of operation.relatedLifetimes) {
+      assertReference(reference)
+      assertLifetime((reference as EntityLifetimeReference).lifetime)
+      const key = `${reference.entityType}:${reference.entityId}`
+      if (keys.has(key)) throw new Error('Duplicate related lifetime reference.')
+      keys.add(key)
+    }
+    if (operation.action !== 'delete' && relatedEntities(operation.entityType, operation.payload).some(reference => !keys.has(`${reference.entityType}:${reference.entityId}`))) throw new Error('A required parent lifetime reference is missing; retain local work and retry with the original operation.')
+  } else if (operation.lifetime !== undefined) throw new Error('Entity lifetime requires original related lifetime references.')
+  if (operation.action === 'restore') {
+    if (!operation.lifetime || !operation.relatedLifetimes || !Array.isArray(operation.restoreOf) || !operation.restoreOf.length) throw new Error('Restoration requires original deletion provenance and lifetime references.')
+    const causes = new Set<string>()
+    for (const cause of operation.restoreOf) {
+      if (!cause || typeof cause !== 'object' || typeof cause.opId !== 'string' || !cause.opId) throw new Error('Invalid restoration deletion provenance.')
+      assertReference(cause.source)
+      assertLifetime(cause.deletedLifetime)
+      if (cause.deletedLifetime.includes(cause.opId)) throw new Error('Cyclic restoration deletion provenance; recover the original lifetime history.')
+      if (causes.has(cause.opId)) throw new Error('Duplicate restoration deletion provenance.')
+      causes.add(cause.opId)
+    }
+  } else if (operation.restoreOf !== undefined) throw new Error('Deletion provenance requires an explicit restoration operation.')
+}
+
 /** Ordinary heads do not choose an epoch; only validated explicit restores advance it. */
 export function currentLifetime(revisions: readonly EntityLifetimeOperation[]): EntityLifetime {
   let current: EntityLifetime = []
@@ -120,6 +154,7 @@ export function currentLifetime(revisions: readonly EntityLifetimeOperation[]): 
 
 /** Classify prior epochs explicitly; future dependencies are held rather than lost. */
 export function decideOperationLifetime(operation: EntityLifetimeOperation, context: LifetimeContext): LifetimeDecision {
+  validateLifetimeMetadata(operation)
   const lifetime = operation.lifetime ?? []
   assertLifetime(lifetime)
   const missing: string[] = []

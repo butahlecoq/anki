@@ -118,11 +118,11 @@ Modify `schema-ladder.ts`, `src/collection.ts`, `src/sync-revisions.ts`, `src/im
 
 **Interfaces:** Existing `client-upgrade-required` / `server-upgrade-required` responses carry the required schema. Backup restore preserves lifecycle columns, retained revisions, and the collection schema watermark, while keeping existing collection-generation safety.
 
-- [ ] Write `schema 21 cannot acknowledge a schema 22 restored collection`: attempt old-client receive and send against a restored collection. Both fail before acknowledgment/materialization; pending local work remains. A new client against an old PC receives the existing PC update message.
-- [ ] Write `verified backup restoration preserves deletion and lifetime barriers`: back up a restored collection, reopen/restore through the public service, then replay stale and current operations. Old work remains fenced and current work still converges.
-- [ ] Add malformed metadata and unrecoverable-provenance cases to the real HTTP tests. Assert actionable failure, unchanged durable state, and no successful partial acknowledgment.
-- [ ] Run `npm run test:server` and focused sync-client tests to red; implement compatibility and complete all explicit backup select/insert paths. Do not lower a restored collection's required schema watermark by ignoring unknown fields.
-- [ ] Run to green. Commit `fix: preserve restoration barriers across upgrades and backups`.
+- [x] Write `schema 21 cannot acknowledge a schema 22 restored collection`: attempt old-client receive and send against a restored collection. Both fail before acknowledgment/materialization; pending local work remains. A new client against an old PC receives the existing PC update message.
+- [x] Write `verified backup restoration preserves deletion and lifetime barriers`: back up a restored collection, reopen/restore through the public service, then replay stale and current operations. Old work remains fenced and current work still converges.
+- [x] Add malformed metadata and unrecoverable-provenance cases to the real HTTP tests. Assert actionable failure, unchanged durable state, and no successful partial acknowledgment.
+- [x] Run `npm run test:server` and focused sync-client tests to red; implement compatibility and complete all explicit backup select/insert paths. Do not lower a restored collection's required schema watermark by ignoring unknown fields.
+- [x] Run to green. Commit `fix: preserve restoration barriers across upgrades and backups`.
 
 ### Task 6: Complete the user journey and whole-branch evidence
 

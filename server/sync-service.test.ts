@@ -65,7 +65,7 @@ for (const scenario of ['unknown restoration cause', 'identity reuse with change
       assert.equal(pairing.status, 201)
       const { token } = await pairing.json() as { token: string }
       const send = (operations: unknown[]) => fetch(`${origin}/api/sync`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ protocolVersion: 2, collectionSchemaVersion: 22, cursor: 0, operations }) })
-      const original = { opId: 'lifecycle-original', entityType: 'deck', entityId: 'lifecycle-deck', action: 'create', occurredAt: '2026-10-07T00:00:00.000Z', payload: { id: 'lifecycle-deck', name: 'Keep original history', parentId: null, optionGroupId: 'default' }, lifetime: [], relatedLifetimes: [] }
+      const original = { opId: 'lifecycle-original', entityType: 'deck', entityId: 'lifecycle-deck', action: 'create', occurredAt: '2026-10-07T00:00:00.000Z', payload: { id: 'lifecycle-deck', name: 'Keep original history', parentId: null, optionGroupId: 'default' }, lifetime: [], relatedLifetimes: [{ entityType: 'deckOptionGroup', entityId: 'default', lifetime: [] }] }
       if (scenario === 'unknown restoration cause') {
         const invalid = { ...original, action: 'restore', lifetime: ['missing-delete'], restoreOf: [{ source: { entityType: 'deck', entityId: original.entityId }, opId: 'missing-delete', deletedLifetime: [] }] }
         const response = await send([invalid])
@@ -75,7 +75,7 @@ for (const scenario of ['unknown restoration cause', 'identity reuse with change
         assert.equal(service.health().collectionSchemaVersion, 1)
       } else {
         assert.equal((await send([original])).status, 200)
-        const response = await send([{ ...original, relatedLifetimes: [{ entityType: 'deck', entityId: 'another-parent', lifetime: ['different-lifetime'] }] }])
+        const response = await send([{ ...original, relatedLifetimes: [...original.relatedLifetimes, { entityType: 'deck', entityId: 'another-parent', lifetime: ['different-lifetime'] }] }])
         assert.equal(response.status, 400)
         assert.match((await response.json() as { error: string }).error, /identity.*reused/i)
         assert.equal(service.changeCount(), 1)
