@@ -409,7 +409,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .occlusion-back-extra { padding-top: 16px; border-top: 1px solid var(--border-subtle); color: var(--text-muted); }
 .type-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .compact-hero .type-actions { flex: none; }
-.compact-hero .type-actions > button, .compact-hero .collection-actions > button, .dialog-actions > button { box-sizing: border-box; flex: 0 0 150px; width: 150px; height: 42px; min-height: 42px; justify-content: center; }
+.compact-hero .type-actions > button, .compact-hero .collection-actions > button, .dialog-actions > button { box-sizing: border-box; flex: 0 0 150px; width: 150px; height: 44px; min-height: 44px; justify-content: center; }
 .dialog-actions > button:only-child { flex-basis: 150px; width: 150px; }
 .type-list { padding: 28px 0 40px; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
 .type-tile { padding: 24px; border: 1px solid var(--border-subtle); background: var(--surface-panel); }
@@ -742,7 +742,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 @media (max-width: 700px) { .matching-columns { grid-template-columns: minmax(0, 1fr); } }
 .custom-study-create, .custom-session-list { margin-top: 2rem; }
 .custom-study-create form { display: grid; gap: 1rem; max-width: 48rem; }
-.custom-study-create label { display: grid; gap: .4rem; }
+.custom-study-create label { display: grid; grid-template-columns: minmax(0, 1fr); gap: .4rem; }
 .custom-study-help, .temporary-membership { color: var(--text-muted); font-size: .85rem; }
 .temporary-membership { display: block; }
 .custom-session { padding: 1.5rem 0; border-bottom: 1px solid var(--border-subtle); }
@@ -752,6 +752,8 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .custom-study, .custom-study-create form, .custom-study-create label, .custom-session { min-width: 0; max-width: 100%; }
 .custom-study { overflow-wrap: anywhere; }
 .custom-study-create input, .custom-study-create select { width: 100%; min-width: 0; min-height: 44px; padding: 12px; color: var(--text-primary); border: 1px solid var(--border-subtle); background: var(--surface-panel); font: inherit; }
+/* Native WebKit options can enlarge ancestor overflow beyond the select box. */
+.custom-study-create select { contain: paint; }
 .custom-study-help, .temporary-membership { color: var(--text-muted); line-height: 1.8; }
 .custom-review-mode { background: var(--surface-panel); }
 @media (max-width: 680px) { .custom-study-create input, .custom-study-create select { font-size: 16px; } }

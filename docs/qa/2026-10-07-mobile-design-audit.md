@@ -80,8 +80,11 @@ so the audit uses overlapping ordinary viewport screenshots instead.
 - #238: Persistent global utility controls and tall heroes push Browse search
   and Study's form below the first screen. The non-review header truncates its
   offline status. WebKit also records a 440px document scroll width against a
-  390.4px root in Study and its Custom Study Session preview. Compact mobile
-  composition and this overflow are tracked in that issue's own worktree.
+  390.4px root in Study and its Custom Study Session preview. Review identified
+  that deferring this overflow left #235 AC-02 incomplete. The select's native
+  painting is now contained and its label uses a shrinkable grid column here;
+  #238 retains the independent page composition work. Focused and whole-gate
+  verification of this correction is recorded below.
 - #239: Statistics date buttons measured approximately 41.86 × 44px at actual
   width 390. A separate regression covers widths 320 and 390, date selection,
   keyboard access, page overflow, and lower Statistics panels.
@@ -144,3 +147,35 @@ iOS installation, cold offline launch, or audible playback. Existing unsupported
 WebKit service worker journeys retain their documented skips. The account dialog
 is audited without submitting owner credentials. No successful owner AnkiWeb
 exchange is claimed by this audit.
+
+## Independent review and follow-up
+
+At `1549f1c`, the full gate passed: type/lint/build, 686 unit passes (4 skips),
+22 tracker/status passes, 45 server passes, and 136 browser passes (14 skips).
+The skips include external official-Anki/account fixtures without a configured
+interpreter and platform-specific WebKit limitations. Artifacts are retained in
+`runtime/235-final-green`; log: `ui-dialog-completion-full-check.log`.
+
+The separate Matt Pocock standards review found no documented standard
+violations, with a minor duplicate geometry-helper observation. The sample-card
+journey now reuses `reviewGeometry` and `expectFixedReview`, including the
+unchanged one-pixel tolerance and a stronger reveal-time answer-area check.
+
+The spec review found Study overflow and desktop 42px dialog/hero actions below
+AC-01's 44px minimum. Stronger public browser assertions reproduced both:
+`review-findings-red.log` reports three failures and three passes, with Chromium
+measuring 42px actions and actual-width-320 WebKit measuring 440px document
+overflow. Actions now have a 44px minimum on desktop too. Study's scheduling
+options and preview are checked at actual widths 320 and 390, and every all-page
+audit capture now asserts no document overflow. The follow-up passed in both
+engines: **18 passed in 2.1 minutes**, covering button alignment, Study at actual
+widths 320/390, every route/main-dialog audit, and all five review-layout
+journeys. Command: `npx playwright test tests/e2e/button-alignment.spec.ts
+tests/e2e/mobile-design-audit.spec.ts tests/e2e/review-layout.spec.ts
+--output=runtime/235-review-findings-green`. Ports were isolated at 4182/4183.
+Log: `review-findings-green.log`; screenshots and observations are retained in
+that output directory. The actual-width-390 WebKit Study image was inspected:
+the page fits the screen, the native choice remains selectable, and the full
+explanatory text below it remains readable. A fresh whole gate and independent
+final-head review are still required; the earlier full gate does not cover
+these changes.

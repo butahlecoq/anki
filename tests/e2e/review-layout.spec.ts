@@ -1,16 +1,7 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test } from '@playwright/test'
+import { expectFixedReview, reviewGeometry } from './review-geometry'
 
 test.use({ viewport: { width: 390, height: 844 }, hasTouch: true })
-
-async function settledCard(page: Page) {
-  await page.frameLocator('iframe[title="Review card"]').locator('body').evaluate(() => document.fonts.ready)
-  await page.evaluate(async () => {
-    await document.fonts.ready
-    await Promise.all([...document.querySelectorAll<HTMLImageElement>('.review-card img')].map(image => image.decode()))
-    for (let frame = 0; frame < 5; frame++) await new Promise(requestAnimationFrame)
-  })
-  return page.locator('.review-card').boundingBox()
-}
 
 test('card and answer area stay fixed through reveal and the next sample card', async ({ page }) => {
   test.setTimeout(60_000)
@@ -23,37 +14,23 @@ test('card and answer area stay fixed through reveal and the next sample card', 
   const content = page.frameLocator('iframe[title="Review card"]')
   await expect(content.locator('ruby')).toContainText(/猫|犬/)
   const word = await content.locator('ruby').innerText()
-  const front = await settledCard(page)
-  expect(front).not.toBeNull()
+  const front = await reviewGeometry(page)
 
   await page.getByRole('button', { name: 'Show answer', exact: true }).click()
   await expect(content.locator('body')).toContainText(/The cat eats fish|The dog plays in the garden/)
-  const answer = await settledCard(page)
+  const answer = await reviewGeometry(page)
   const textLayout = await content.locator('body').evaluate(body => ({
     scale: new DOMMatrix(getComputedStyle(body).transform).a,
   }))
   expect(textLayout.scale, 'ordinary sample text keeps its readable size').toBeGreaterThanOrEqual(.9)
-  expect(answer).not.toBeNull()
-  for (const dimension of ['x', 'y', 'width', 'height'] as const) {
-    expect(Math.abs(answer![dimension] - front![dimension]), `card ${dimension} on reveal`).toBeLessThanOrEqual(1)
-  }
-  const answerArea = await page.locator('.review-answer-controls').boundingBox()
-  expect(answerArea).not.toBeNull()
+  expectFixedReview(front, answer)
   const nav = await page.getByRole('navigation', { name: 'Mobile navigation' }).boundingBox()
-  expect(answerArea!.y + answerArea!.height).toBeLessThanOrEqual(nav!.y)
-  const answerScroll = await page.evaluate(() => window.scrollY)
+  expect(answer.answers.y + answer.answers.height).toBeLessThanOrEqual(nav!.y)
 
   await page.getByRole('button', { name: /^Good ·/ }).click()
   await expect(content.locator('ruby')).toContainText(word.includes('猫') ? '犬' : '猫')
-  const next = await settledCard(page)
-  for (const dimension of ['x', 'y', 'width', 'height'] as const) {
-    expect(Math.abs(next![dimension] - front![dimension]), `card ${dimension} on next card`).toBeLessThanOrEqual(1)
-  }
-  const nextAnswerArea = await page.locator('.review-answer-controls').boundingBox()
-  for (const dimension of ['x', 'y', 'width', 'height'] as const) {
-    expect(Math.abs(nextAnswerArea![dimension] - answerArea![dimension]), `answer area ${dimension}`).toBeLessThanOrEqual(1)
-  }
-  expect(await page.evaluate(() => window.scrollY)).toBe(answerScroll)
+  const next = await reviewGeometry(page)
+  expectFixedReview(front, next)
 })
 
 test('secondary review actions are reachable by keyboard and return focus to their menu', async ({ page }) => {

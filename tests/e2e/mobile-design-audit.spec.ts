@@ -23,6 +23,30 @@ const test = base.extend<{ hostScale: number }>({
   deviceScaleFactor: async ({ hostScale }, provide) => provide(3 / hostScale),
 })
 
+test('Study controls and preview avoid horizontal overflow on small screens', async ({ page, hostScale }, testInfo) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Load sample deck' }).click()
+  await page.getByRole('navigation', { name: 'Mobile navigation' }).getByRole('link', { name: 'Study', exact: true }).click()
+  for (const width of [320, 390]) {
+    await page.setViewportSize({ width: Math.round(width * hostScale), height: Math.round(844 * hostScale) })
+    expect(await page.evaluate(() => innerWidth)).toBe(width)
+    const scheduling = page.getByRole('combobox', { name: 'Review scheduling', exact: true })
+    for (const mode of ['practice', 'reschedule']) {
+      await scheduling.selectOption(mode)
+      await expect(scheduling).toHaveValue(mode)
+      const geometry = await page.evaluate(() => ({ root: document.documentElement.getBoundingClientRect().width, scroll: document.documentElement.scrollWidth }))
+      await page.screenshot({ path: testInfo.outputPath(`study-${width}-${mode}.png`) })
+      expect(geometry.scroll).toBeLessThanOrEqual(Math.ceil(geometry.root))
+    }
+    await page.getByLabel('Session name', { exact: true }).fill('Small screen practice')
+    await page.getByLabel('Session search', { exact: true }).fill('deck:*')
+    await page.getByRole('button', { name: 'Preview session', exact: true }).click()
+    await expect(page.getByRole('button', { name: 'Create session', exact: true })).toBeEnabled()
+    const geometry = await page.evaluate(() => ({ root: document.documentElement.getBoundingClientRect().width, scroll: document.documentElement.scrollWidth }))
+    expect(geometry.scroll).toBeLessThanOrEqual(Math.ceil(geometry.root))
+  }
+})
+
 test('audit every route and its main dialogs on an iPhone sized screen', async ({ page }, testInfo) => {
   test.setTimeout(120_000)
   const errors: string[] = []
@@ -49,6 +73,8 @@ test('audit every route and its main dialogs on an iPhone sized screen', async (
       return { actualViewport: { innerWidth, innerHeight, devicePixelRatio, visualWidth: visualViewport?.width, visualHeight: visualViewport?.height }, rootWidth: root.width, scrollWidth: document.documentElement.scrollWidth, controls }
     }) })
     await writeFile(testInfo.outputPath('mobile-design-observations.json'), JSON.stringify(observations, null, 2))
+    const documentWidth = await page.evaluate(() => ({ root: document.documentElement.getBoundingClientRect().width, scroll: document.documentElement.scrollWidth }))
+    expect(documentWidth.scroll, `${name} has no page-level horizontal overflow`).toBeLessThanOrEqual(Math.ceil(documentWidth.root))
     console.log(`Measured ${name}; taking screenshot`)
     await page.screenshot({ path: testInfo.outputPath(`${name}.png`), animations: 'disabled', timeout: 10_000 })
     if (/^08-|^10-|^21-|^26-/.test(name)) {

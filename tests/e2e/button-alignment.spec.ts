@@ -8,6 +8,8 @@ async function expectSameButtonSize(first: Locator, second: Locator) {
   const [firstBox, secondBox] = await Promise.all([first.boundingBox(), second.boundingBox()])
   expect(firstBox).not.toBeNull()
   expect(secondBox).not.toBeNull()
+  expect(firstBox!.height).toBeGreaterThanOrEqual(43.99)
+  expect(secondBox!.height).toBeGreaterThanOrEqual(43.99)
   expect(Math.abs(firstBox!.width - secondBox!.width)).toBeLessThanOrEqual(1)
   expect(Math.abs(firstBox!.height - secondBox!.height)).toBeLessThanOrEqual(1)
 }
@@ -73,9 +75,9 @@ test('Collection landing actions have matching desktop and phone dimensions', as
     await page.locator('#overflow-probe').evaluate(element => element.remove())
   } else {
     expect(importBox!.width).toBe(150)
-    expect(importBox!.height).toBe(42)
+    expect(importBox!.height).toBe(44)
     expect(newDeckBox!.width).toBe(150)
-    expect(newDeckBox!.height).toBe(42)
+    expect(newDeckBox!.height).toBe(44)
   }
 
   await importPackage.focus()
