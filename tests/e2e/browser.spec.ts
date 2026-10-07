@@ -5,7 +5,9 @@ import { Deck, Note, Notetype, Package } from 'ankipack'
 const PACKAGE_PREVIEW_TIMEOUT = 10_000 // Windows WebKit SQL/WASM preview measured at ~5.2s; Chromium remains sub-second.
 
 async function search(page: Page, query: string) {
-  await page.getByLabel('Collection search', { exact: true }).fill(query)
+  const input = page.getByLabel('Collection search', { exact: true })
+  await input.fill(query)
+  await expect(input).toHaveValue(query)
   await page.getByRole('button', { name: 'Search', exact: true }).click()
 }
 
@@ -142,6 +144,7 @@ test('bulk move and suspension preserve identities and empty reports open affect
   const editor = page.getByRole('dialog', { name: 'Edit note fields' })
   await editor.getByLabel('front', { exact: true }).fill('')
   await editor.getByRole('button', { name: 'Save fields', exact: true }).click()
+  await expect(editor).not.toBeVisible()
   await search(page, '')
   await page.getByLabel('Report', { exact: true }).selectOption('empty')
   await expect(page.getByRole('table').locator('tbody tr')).toHaveCount(1)
