@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import { collection } from './collection'
 import { prepareAnkiImport, type PreparedAnkiImport } from './anki-import'
 import { ImportSkipReport } from './ImportSkipReport'
@@ -10,10 +10,14 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState('')
   const [importRepresentableOnly, setImportRepresentableOnly] = useState(false)
   const [committed, setCommitted] = useState(false)
+  const [filename, setFilename] = useState('')
+  const fileInput = useRef<HTMLInputElement>(null)
+  const fileInputId = useId()
 
   async function selectPackage(files: FileList | null) {
     const file = files?.[0]
     if (!file) return
+    setFilename(file.name)
     setBusy(true)
     setError('')
     setPrepared(undefined)
@@ -49,9 +53,12 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
       <span className="section-code">ANKI // PACKAGE IMPORT</span>
       <h2 id="import-dialog-title">Import Anki package</h2>
       <p className="dialog-intro">Preview a local .apkg or .colpkg before making one atomic change to this collection.</p>
-      <label>Anki package
-        <input type="file" accept=".apkg,.colpkg,application/octet-stream" disabled={busy} onChange={(event) => void selectPackage(event.target.files)} />
-      </label>
+      <label htmlFor={fileInputId}>Anki package</label>
+      <div className="package-file-picker">
+        <input ref={fileInput} id={fileInputId} hidden type="file" accept=".apkg,.colpkg,application/octet-stream" disabled={busy} onChange={(event) => void selectPackage(event.target.files)} />
+        <button className="text-button" data-dialog-initial-focus type="button" disabled={busy} onClick={() => fileInput.current?.click()}>Choose package</button>
+        <span title={filename || undefined} aria-live="polite">{filename || 'No package selected'}</span>
+      </div>
       {busy && !prepared && <p className="media-pending" role="status">Reading package…</p>}
       {prepared && <>
         <section className="import-summary" aria-label="Package summary">

@@ -8,9 +8,24 @@ async function expectSameButtonSize(first: Locator, second: Locator) {
   const [firstBox, secondBox] = await Promise.all([first.boundingBox(), second.boundingBox()])
   expect(firstBox).not.toBeNull()
   expect(secondBox).not.toBeNull()
+  expect(firstBox!.height).toBeGreaterThanOrEqual(43.99)
+  expect(secondBox!.height).toBeGreaterThanOrEqual(43.99)
   expect(Math.abs(firstBox!.width - secondBox!.width)).toBeLessThanOrEqual(1)
   expect(Math.abs(firstBox!.height - secondBox!.height)).toBeLessThanOrEqual(1)
 }
+
+test('workspace utility and deck actions meet the minimum touch size', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Load sample deck' }).click()
+  for (const name of ['Connect a PC', 'Export Anki package', 'Import / export text', 'Open Sample — Japanese Starter']) {
+    const action = page.getByRole('button', { name, exact: true })
+    await expect(action).toBeVisible()
+    const box = await action.boundingBox()
+    expect(box).not.toBeNull()
+    expect(box!.height, name).toBeGreaterThanOrEqual(43.99)
+    expect(box!.width, name).toBeGreaterThanOrEqual(43.99)
+  }
+})
 
 test('paired note-type and dialog actions use matching button dimensions', async ({ page }) => {
   await page.goto('/')
@@ -51,18 +66,31 @@ test('Collection landing actions have matching desktop and phone dimensions', as
   if (viewportWidth < 600) {
     const actionsBox = await actions.boundingBox()
     expect(actionsBox).not.toBeNull()
-    expect(importBox!.width).toBe(newDeckBox!.width)
-    expect(importBox!.height).toBeGreaterThanOrEqual(54)
+    expect(Math.abs(importBox!.width - newDeckBox!.width)).toBeLessThanOrEqual(1)
+    expect(importBox!.height).toBeGreaterThanOrEqual(54 - .01)
     expect(importBox!.x).toBeGreaterThanOrEqual(actionsBox!.x)
     expect(importBox!.x + importBox!.width).toBeLessThanOrEqual(actionsBox!.x + actionsBox!.width + 1)
     expect(newDeckBox!.x).toBeGreaterThanOrEqual(actionsBox!.x)
     expect(newDeckBox!.x + newDeckBox!.width).toBeLessThanOrEqual(actionsBox!.x + actionsBox!.width + 1)
-    expect(await page.evaluate(width => document.documentElement.scrollWidth <= width, viewportWidth)).toBe(true)
+    const documentWidth = await page.evaluate(() => ({ root: document.documentElement.getBoundingClientRect().width, scroll: document.documentElement.scrollWidth }))
+    // WebKit rounds the CSS root to device pixels on Windows (390.4 → 391).
+    expect(documentWidth.root).toBeLessThanOrEqual(viewportWidth + 1)
+    expect(documentWidth.scroll).toBeLessThanOrEqual(Math.ceil(documentWidth.root))
+    // Prove this measurement still detects genuine horizontal overflow.
+    await page.evaluate(() => {
+      const wide = document.createElement('div')
+      wide.id = 'overflow-probe'
+      wide.style.width = '200vw'
+      wide.textContent = 'Deliberately wide content'
+      document.body.append(wide)
+    })
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > Math.ceil(document.documentElement.getBoundingClientRect().width))).toBe(true)
+    await page.locator('#overflow-probe').evaluate(element => element.remove())
   } else {
     expect(importBox!.width).toBe(150)
-    expect(importBox!.height).toBe(42)
+    expect(importBox!.height).toBe(44)
     expect(newDeckBox!.width).toBe(150)
-    expect(newDeckBox!.height).toBe(42)
+    expect(newDeckBox!.height).toBe(44)
   }
 
   await importPackage.focus()

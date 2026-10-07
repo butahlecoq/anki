@@ -29,6 +29,8 @@ test('load, review, and remove the Japanese sample deck without changing other d
   for (let card = 0; card < 2; card++) {
     const review = page.frameLocator('iframe[title="Review card"]')
     await expect(review.locator('body')).toBeVisible()
+    await expect(review.locator('ruby')).toContainText(/猫|犬/)
+    const question = await review.locator('ruby').innerText()
     if (await review.locator('ruby').count()) {
       sawFurigana = true
       await expect(review.locator('ruby')).toContainText(/ねこ|いぬ/)
@@ -50,6 +52,10 @@ test('load, review, and remove the Japanese sample deck without changing other d
     await page.getByRole('button', { name: 'Show answer' }).click()
     await expect(review.locator('body')).toContainText(/The cat eats fish\.|The dog plays in the garden\./)
     await page.getByRole('button', { name: /^Good · / }).click()
+    if (card === 0) {
+      await expect(page.locator('.review-card .card-side')).toHaveText('QUESTION')
+      await expect(review.locator('ruby')).toContainText(question.includes('猫') ? '犬' : '猫')
+    }
   }
 
   await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()

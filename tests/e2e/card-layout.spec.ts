@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 import initSqlJs from 'sql.js'
 import { Deck, Note, Notetype, Package } from 'ankipack'
+import { expectFixedReview, reviewGeometry } from './review-geometry'
 
 test('oversized imported cards fit the frame on both sides and after resizing', async ({ page }) => {
   const SQL = await initSqlJs({ locateFile: () => './node_modules/sql.js/dist/sql-wasm.wasm' })
@@ -42,11 +43,20 @@ test('oversized imported cards fit the frame on both sides and after resizing', 
     }), { timeout: 5000 }).toMatchObject({ fitsWidth: true, fitsHeight: true, overflowing: [] })
   }
   await expect(body).toContainText('木')
+  await page.getByRole('combobox', { name: 'Appearance', exact: true }).selectOption('dark')
+  await expect.poll(() => body.evaluate(element => getComputedStyle(element).backgroundColor)).toBe('rgb(16, 19, 23)')
+  await page.getByText('More actions', { exact: true }).click()
+  await page.getByRole('combobox', { name: 'Card colors' }).selectOption('deck')
+  await expect.poll(() => body.evaluate(element => getComputedStyle(element).backgroundColor)).toBe('rgb(255, 255, 255)')
+  await page.getByRole('combobox', { name: 'Card colors' }).selectOption('app')
+  await page.keyboard.press('Escape')
   await fits()
   await expect(frame).toHaveAttribute('sandbox', 'allow-same-origin')
+  const frontGeometry = await reviewGeometry(page)
   await page.getByRole('button', { name: 'Show answer' }).click()
   await expect(body).toContainText('tree')
   await fits()
+  expectFixedReview(frontGeometry, await reviewGeometry(page))
   expect(await frame.evaluate((element) => element.clientHeight)).toBeGreaterThan(260)
   await page.setViewportSize({ width: 320, height: 720 })
   await fits()

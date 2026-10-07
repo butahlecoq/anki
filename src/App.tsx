@@ -60,6 +60,7 @@ export function App() {
   const onNoteTypes = route.view === 'note-types'
   const onBrowse = route.view === 'browse'
   const onStudy = route.view === 'study' || route.view === 'activity-selection' || route.view === 'review' || route.view === 'custom-review'
+  const reviewing = route.view === 'review' || route.view === 'custom-review'
 
   async function activateUpdate() {
     setActivatingUpdate(true)
@@ -87,7 +88,7 @@ export function App() {
   }, [])
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${reviewing ? ' is-reviewing' : ''}`}>
       {/* The sidebar precedes main content in the DOM, so a keyboard user would
           otherwise tab past the brand and five destinations on every view. */}
       <a className="skip-link" href="#decks">Skip to main content</a>

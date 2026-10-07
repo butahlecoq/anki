@@ -284,7 +284,7 @@ test('auto follows the operating system setting while the app is open', async ({
   await expect.poll(() => appliedTheme(page)).toEqual(LIGHT)
 })
 
-test('an imported note type owns its card colours in every app theme', async ({ page }, testInfo) => {
+test('Original deck preserves imported card colours in every app theme', async ({ page }, testInfo) => {
   const SQL = await initSqlJs({ locateFile: () => './node_modules/sql.js/dist/sql-wasm.wasm' })
   const cardCSS = '.card{background:#123456;color:#fedcba;font-size:29px}'
   const type = new Notetype({
@@ -308,6 +308,10 @@ test('an imported note type owns its card colours in every app theme', async ({ 
   await expect(page.getByText('Offline shell ready', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Study now', exact: true }).click()
 
+  await page.getByText('More actions', { exact: true }).click()
+  await page.getByRole('combobox', { name: 'Card colors', exact: true }).selectOption('deck')
+  await page.keyboard.press('Escape')
+
   const rendered = new Map<string, unknown>()
   for (const theme of ['dark', 'light'] as const) {
     await control(page).selectOption(theme)
@@ -324,9 +328,7 @@ test('an imported note type owns its card colours in every app theme', async ({ 
       const style = getComputedStyle(body)
       return { background: style.backgroundColor, color: style.color, fontSize: style.fontSize }
     })
-    // The imported note type owns the card. The theme supplies only a default
-    // for a card that names no background of its own, so a deck that does name
-    // one keeps it and these values must not move.
+    // The explicit Original deck choice retains its stylesheet across themes.
     expect(card).toEqual({ background: 'rgb(18, 52, 86)', color: 'rgb(254, 220, 186)', fontSize: '29px' })
     rendered.set(theme, card)
 

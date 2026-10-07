@@ -18,7 +18,9 @@ afterEach(cleanup)
 
 describe('iPhone chrome', () => {
   test('the phone breakpoint keeps the bottom navigation clear of the home indicator', () => {
-    expect(phone).toContain('env(safe-area-inset-bottom)')
+    expect(stylesheet).toContain('--safe-bottom: env(safe-area-inset-bottom, 0px)')
+    expect(phone).toContain('--mobile-nav-height: calc(66px + var(--safe-bottom))')
+    expect(phone).toMatch(/\.mobile-nav\s*\{[^}]*padding:[^;]*var\(--safe-bottom\)/)
     expect(phone).toMatch(/\.mobile-nav\s*\{[^}]*position:\s*fixed/)
   })
 

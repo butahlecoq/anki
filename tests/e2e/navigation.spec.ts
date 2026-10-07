@@ -53,6 +53,7 @@ test('Japanese imported links require a clear learner action and survive offline
   expect(page.url()).toBe(cardURL)
   await page.getByRole('button', { name: 'Show answer', exact: true }).click()
   await expect(review.locator('body')).toContainText('cat · ねこ')
+  await page.getByText('More actions', { exact: true }).click()
   await page.getByRole('button', { name: 'Export Anki package', exact: true }).click()
   const exported = page.getByRole('dialog', { name: 'Export Anki package' })
   const downloading = page.waitForEvent('download')

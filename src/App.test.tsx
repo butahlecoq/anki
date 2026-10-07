@@ -553,6 +553,7 @@ test('review shortcuts stay silent while a control owns the press', async () => 
     // it - and the reviewer state flags would mask a broken guard anyway. The
     // flag select is a real control in the review view that a shortcut must not
     // reach through.
+    fireEvent.click(await screen.findByText('More actions', { exact: true }))
     const flag = await screen.findByRole('combobox', { name: 'Card flag' })
     for (const key of ['e', 'd', 'm', 't', 'i', 's', 'b', 'f', 'k', ' ', '3']) fireEvent.keyDown(flag, { key })
 
@@ -573,10 +574,10 @@ test('a shortcut cannot reach through a dialog that kept focus on its trigger', 
   render(<CollectionWorkspace />)
   try {
     await screen.findByRole('button', { name: 'Show answer' })
-    // The export trigger is rendered outside ReviewSession and the dialog takes
-    // no initial focus, so in a real browser focus is still on the trigger.
-    const trigger = await screen.findByRole('button', { name: 'Export Anki package' })
+    // Exercise the shortcut guard even if focus escapes an external dialog.
+    const trigger = screen.getByText('More actions', { exact: true })
     fireEvent.click(trigger)
+    fireEvent.click(await screen.findByRole('button', { name: 'Export Anki package' }))
     await screen.findByRole('dialog', { name: 'Export Anki package' })
     trigger.focus()
     expect(trigger).toHaveFocus()
@@ -676,6 +677,7 @@ test('reviewer flag control and keyboard shortcut update the current card', asyn
     await waitFor(async () => expect(await readCard(collection, card.id)).toMatchObject({ flag: 2 }))
     fireEvent.click(screen.getByRole('button', { name: 'Mark note' }))
     await waitFor(async () => expect(await readNote(collection, note.id)).toMatchObject({ tags: ['marked'] }))
+    fireEvent.click(screen.getByText('More actions', { exact: true }))
     expect(await screen.findByRole('button', { name: 'Unmark note' })).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: 'Card info' }))
     expect(within(await screen.findByRole('dialog', { name: 'Card info' })).getByText('Orange')).toBeVisible()
