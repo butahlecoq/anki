@@ -22,6 +22,7 @@ export interface SchemaStep {
   schema: number
   /** Fields this step added. A step that only re-indexes declares none. */
   fields: SchemaField[]
+  actions?: readonly string[]
   /** Why the step exists, for whoever has to reason about it later. */
   note?: string
 }
@@ -48,6 +49,7 @@ export const SCHEMA_LADDER: readonly SchemaStep[] = [
   { schema: 19, fields: [{ entity: 'card', field: 'newPosition' }, { entity: 'card', field: 'templateOrdinal' }], note: 'New-card gather and template order.' },
   { schema: 20, fields: [{ entity: 'deckOptionGroup', field: 'newCardGatherOrder' }], note: 'New-card gather priority.' },
   { schema: 21, fields: [{ entity: 'deckOptionGroup', field: 'newCardSortOrder' }], note: 'New-card sort order after gathering.' },
+  { schema: 22, fields: [{ entity: 'operation', field: 'lifetime' }, { entity: 'operation', field: 'relatedLifetimes' }, { entity: 'operation', field: 'restoreOf' }], actions: ['restore'], note: 'Causal deletion provenance, explicit restoration, and durable receive dependencies.' },
 ]
 
 /** The highest step in the ladder. This is the client's store version. */
@@ -97,6 +99,13 @@ export function schemaRequiredByPayload(entityType: string, payload: unknown): n
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+/** Wire metadata and action requirements share the same ladder as row fields. */
+export function schemaRequiredByOperation(operation: { entityType: string; action: string; payload: unknown; parents?: unknown; reviewId?: unknown }): number {
+  const causal = operation.parents !== undefined || operation.reviewId !== undefined ? 15 : 1
+  const actions = SCHEMA_LADDER.filter(step => step.actions?.includes(operation.action)).map(step => step.schema)
+  return Math.max(causal, schemaRequiredByPayload(operation.entityType, operation.payload), schemaRequiredByPayload('operation', operation), ...actions)
 }
 
 /**

@@ -38,7 +38,7 @@ afterEach(async () => {
 })
 
 describe('local collection', () => {
-  test.each(['direct', 'cascade', 'missing'] as const)('version 21 migration preserves %s deletion provenance', async (scenario) => {
+  test.each(['direct', 'cascade', 'missing', 'ambiguous'] as const)('version 21 migration preserves %s deletion provenance', async (scenario) => {
     const databaseName = `kiroku-test-${crypto.randomUUID()}`
     const old = new Dexie(databaseName)
     old.version(21).stores({ decks: 'id, parentId, optionGroupId, name, createdAt', notes: 'id, deckId, typeId, updatedAt', cards: 'id, deckId, noteId, templateId, due, state, newPosition', reviewEntries: 'id, cardId, deckId, reviewedAt', outbox: 'opId, entityType, entityId, occurredAt', settings: 'key', receivedOperations: 'opId', deletedEntities: 'key, entityType, entityId, occurredAt', noteMedia: 'id, noteId, digest, side, kind, updatedAt', mediaBlobs: 'digest, verifiedAt', noteTypes: 'id, name, updatedAt', deckOptionGroups: 'id, name, protected', syncRevisions: 'opId, key', syncConflicts: 'key, entityType, entityId' })
@@ -52,11 +52,12 @@ describe('local collection', () => {
       await old.table('syncRevisions').add({ ...deleted, key: `${sourceType}:${sourceId}` })
       await old.table('outbox').add(deleted)
     }
+    if (scenario === 'ambiguous') await old.table('syncRevisions').add({ ...deleted, opId: 'legacy-other-deletion', key: `${sourceType}:${sourceId}` })
     await old.table('deletedEntities').add({ key: `note:${note.id}`, entityType: 'note', entityId: note.id, occurredAt: '2099-01-01T00:00:00.000Z' })
     old.close()
     collection = createCollection(databaseName)
     const tombstone = await readDeletedEntity(collection, `note:${note.id}`)
-    if (scenario === 'missing') {
+    if (scenario === 'missing' || scenario === 'ambiguous') {
       expect(tombstone).toMatchObject({ entityId: note.id, causes: [], provenanceError: expect.stringMatching(/deletion.*provenance/i) })
     } else {
       expect(tombstone).toMatchObject({ causes: [{ source: { entityType: sourceType, entityId: sourceId }, opId: deleted.opId, deletedLifetime: [] }] })

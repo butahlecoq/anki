@@ -2,7 +2,7 @@
 export interface Revision {
   opId: string
   parents?: string[]
-  action: 'create' | 'update' | 'delete'
+  action: 'create' | 'update' | 'delete' | 'restore'
   payload: unknown
 }
 
