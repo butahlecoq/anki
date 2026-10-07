@@ -73,3 +73,29 @@ Physical-phone visual approval was waived by the owner.
 The final-commit full check, independent standards/spec review, acceptance update,
 push/PR/premerge/merge and owner-service deployment remain pending. No intermediate
 restoration implementation has replaced the owner service.
+
+
+## Additional creation and movement coverage
+
+The real HTTP fixture now covers adding a new note to a restored child, moving
+that child, deleting its new root and restoring the exported collection. It also
+covers generating a conditional card on an existing note, moving the note twice
+before synchronization, deleting the destination and restoring the export, both
+with and without a preceding restoration. Stable note/card identities and
+receiver convergence are asserted.
+
+`npx vitest run src/restoration-sync.test.ts` in
+`restoration-card-move-green.log`: **10 passed**, 4.31 seconds. Before the receive
+fix, `restoration-card-move-red.log` records both movement cases failing with
+`Synced card deck does not match its note deck` on the receiving client. Notes
+were materialized before the historical card creation in the same batch.
+The receiver now retains that intermediate revision only when a causal card
+successor in the same batch resolves its deck reference. Unrelated successors
+still fail and roll back the entire transaction; the negative fixture checks
+that the receiver snapshot remains unchanged.
+
+The first SQL template-extension probe also encountered incompatible package
+metadata; it was replaced by normal `updateNote` conditional-card generation.
+No restoration ancestry-validation defect was established by that probe, and
+that validator was not changed. These targeted results do not replace the
+pending final whole software gate or independent review.

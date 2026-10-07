@@ -2451,10 +2451,10 @@ class DexieCollection extends Dexie {
       const suppressedNoteIds = new Set<string>()
       const suppressedCardIds = new Set<string>()
       // Resolve type and note changes before their cards, even when equal timestamps arrive in index order.
-      let incoming = [...new Map([...(await this.pendingRemoteOperations.toArray()), ...changes].map(operation => [operation.opId, operation])).values()]
-      while (incoming.length) {
+      let pendingBatch = [...new Map([...(await this.pendingRemoteOperations.toArray()), ...changes].map(operation => [operation.opId, operation])).values()]
+      while (pendingBatch.length) {
         let progress = false
-        for (const source of orderInboundChanges(incoming)) {
+        for (const source of orderInboundChanges(pendingBatch)) {
         const change = { ...source }
         validateLifetimeMetadata(change)
         const key = tombstoneKey(change.entityType, change.entityId)
@@ -2585,7 +2585,36 @@ class DexieCollection extends Dexie {
             }
             const note = await this.notes.get(incoming.noteId)
             if (!note) throw new Error('Synced card note was not found')
-            if (incoming.deckId !== note.deckId) throw new Error('Synced card deck does not match its note deck')
+            if (incoming.deckId !== note.deckId) {
+              // Notes are materialized before cards. A card created before a
+              // move can therefore temporarily reference the preceding deck;
+              // retain it until its causal move revision in this batch applies.
+              const batch = new Map(pendingBatch.map(operation => [operation.opId, operation]))
+              const follows = (operation: SyncOperation): boolean => {
+                const parents = [...(operation.parents ?? [])]
+                const visited = new Set<string>()
+                while (parents.length) {
+                  const parentId = parents.pop()!
+                  if (parentId === change.opId) return true
+                  if (visited.has(parentId)) continue
+                  visited.add(parentId)
+                  const parent = batch.get(parentId)
+                  if (parent?.entityType === 'card' && parent.entityId === change.entityId) parents.push(...(parent.parents ?? []))
+                }
+                return false
+              }
+              const successor = [...batch.values()].find(operation => operation.entityType === 'card'
+                && operation.entityId === change.entityId
+                && operation.action !== 'delete'
+                && JSON.stringify(operation.lifetime ?? []) === JSON.stringify(change.lifetime ?? [])
+                && (operation.payload as Partial<CardRecord>)?.noteId === incoming.noteId
+                && (operation.payload as Partial<CardRecord>)?.deckId === note.deckId
+                && follows(operation))
+              if (!successor) throw new Error('Synced card deck does not match its note deck')
+              await this.pendingRemoteOperations.put(source)
+              progress ||= !previousRevision
+              continue
+            }
             const noteType = note && await this.noteTypes.get(note.typeId)
             const deletedType = note && !noteType && await this.deletedEntities.get(tombstoneKey('noteType', note.typeId))
             if (note && noteType?.kind === 'image-occlusion') {
@@ -2717,6 +2746,7 @@ class DexieCollection extends Dexie {
           await this.reviewEntries.put(review)
           reviewedCardIds.add(review.cardId)
         }
+        progress = true
         await this.receivedOperations.add({ opId: change.opId })
         if (change.entityType === 'note') affectedNoteIds.add(change.entityId)
         if (change.entityType === 'noteMedia') {
@@ -2730,7 +2760,7 @@ class DexieCollection extends Dexie {
         if (change.entityType === 'noteType') affectedTypeIds.add(change.entityId)
       }
         if (!progress) break
-        incoming = await this.pendingRemoteOperations.toArray()
+        pendingBatch = await this.pendingRemoteOperations.toArray()
       }
       for (const cardId of reviewedCardIds) {
         const conflict = await this.syncConflicts.get(tombstoneKey('card', cardId))
