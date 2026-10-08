@@ -15,7 +15,7 @@ type Complete = { state: 'complete'; accepted: number; cursor: number; changes: 
 type UpgradeRequired = { state: 'upgrade-required'; target: 'this-device' | 'pc-service'; message: string; requiredSchemaVersion?: number }
 type SyncResult = Complete | UpgradeRequired | BackupFailed | { state: 'collection-generation-required'; message: string } | { state: 'authentication-required' } | { state: 'unreachable' } | { state: 'incomplete'; accepted: number; cursor: number; pendingOperations: number; remoteChangesPending: boolean; pendingIncomingOperations?: number; dependencyProblem?: 'deck-cycle' }
 type PreflightResult = { state: 'ready' } | Exclude<SyncResult, Complete>
-export type PairingResult = { state: 'paired' } | { state: 'pairing-error' } | { state: 'unreachable' } | { state: 'collection-generation-required' }
+export type PairingResult = { state: 'paired' } | { state: 'address-error' } | { state: 'pairing-error' } | { state: 'unreachable' } | { state: 'collection-generation-required' }
 export type PcBackup = { format: string; formatVersion: number; id: string; createdAt: string; reason: 'manual' | 'before-sync' | 'before-restore'; collectionGeneration?: string; collectionSchemaVersion: number; changeCount: number; latestCursor: number; databaseBytes: number; databaseSha256: string; media: Array<{ digest: string; byteLength: number; mimeType: string }>; archiveSha256: string; archiveBytes: number }
 
 export async function listPcBackups(settings: SyncSettings, fetcher: Fetcher = fetch) {
@@ -131,7 +131,7 @@ export async function preflightSync(settings: SyncSettings, fetcher: Fetcher = f
 
 export async function pairCollection(collection: Collection, endpoint: string, code: string, fetcher: Fetcher = fetch): Promise<PairingResult> {
   const serviceEndpoint = endpoint.trim().replace(/\/$/, '')
-  if (!isSafeServiceEndpoint(serviceEndpoint)) return { state: 'pairing-error' }
+  if (!isSafeServiceEndpoint(serviceEndpoint)) return { state: 'address-error' }
   try {
     const existing = await collection.syncSettings()
     if (existing) {

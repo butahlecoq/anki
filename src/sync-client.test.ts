@@ -138,13 +138,13 @@ test('also invalidates undo for a review recorded during sync preflight', async 
   }
 })
 
-test('pairs a collection and persists only the returned device credential', async () => {
+test.each(['https://pc.example.test', 'http://127.0.0.1:4174', 'http://localhost:4174'])('pairs at allowed address %s and persists only the returned device credential', async endpoint => {
   const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
   const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ deviceId: 'phone-1', token: 'device-token' }), { status: 201 }))
 
-  await expect(pairCollection(collection, 'https://pc.example.test/', 'ABCD1234', fetcher)).resolves.toEqual({ state: 'paired' })
-  await expect(collection.syncSettings()).resolves.toEqual({ endpoint: 'https://pc.example.test', token: 'device-token', cursor: 0 })
-  expect(fetcher).toHaveBeenCalledWith('https://pc.example.test/api/pair', expect.objectContaining({ method: 'POST' }))
+  await expect(pairCollection(collection, `${endpoint}/`, 'ABCD1234', fetcher)).resolves.toEqual({ state: 'paired' })
+  await expect(collection.syncSettings()).resolves.toEqual({ endpoint, token: 'device-token', cursor: 0 })
+  expect(fetcher).toHaveBeenCalledWith(`${endpoint}/api/pair`, expect.objectContaining({ method: 'POST' }))
   await collection.removeLocalCollection()
 })
 
@@ -181,11 +181,23 @@ test('keeps existing sync settings when pairing fails', async () => {
   await collection.removeLocalCollection()
 })
 
-test('does not send pairing codes to a non-loopback HTTP endpoint', async () => {
+test('keeps unreachable service distinct from a rejected code without changing sync settings', async () => {
+  const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+  const settings = { endpoint: 'https://old.example.test', token: 'old-token', cursor: 5 }
+  try {
+    await collection.configureSync(settings)
+    const fetcher = vi.fn().mockRejectedValue(new TypeError('connection refused'))
+    await expect(pairCollection(collection, 'http://localhost:4174', 'code', fetcher)).resolves.toEqual({ state: 'unreachable' })
+    await expect(collection.syncSettings()).resolves.toEqual(settings)
+    expect(fetcher).toHaveBeenCalled()
+  } finally { await collection.removeLocalCollection() }
+})
+
+test.each(['not-a-url', 'http://192.168.1.20:4174', 'file:///private-collection'])('identifies invalid address %s without sending a pairing code', async endpoint => {
   const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
   const fetcher = vi.fn()
 
-  await expect(pairCollection(collection, 'http://192.168.1.20:4174', 'code', fetcher)).resolves.toEqual({ state: 'pairing-error' })
+  await expect(pairCollection(collection, endpoint, 'code', fetcher)).resolves.toEqual({ state: 'address-error' })
   expect(fetcher).not.toHaveBeenCalled()
   await collection.removeLocalCollection()
 })
