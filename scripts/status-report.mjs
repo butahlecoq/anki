@@ -49,7 +49,7 @@ function isLocalHead(pr, owner) {
 }
 
 export function deferredLines(pr, comments = []) {
-  const markers = /\b(?:remains? open|does not close|doesn't close|not yet|still required|blocked|pending (?:review|verification|acceptance|evidence|decision|device|human|full gate)|remains? (?:non-zero|incomplete)|remains? outstanding)\b|\b(?:is|are|was|were|remains?|remain) deferred\b/i
+  const markers = /\b(?:remains? open|does not close|doesn't close|not yet|still required|blocked(?!\s+(?:scripts?|requests?)\b)|pending (?:review|verification|acceptance|evidence|decision|device|human|full gate)|remains? (?:non-zero|incomplete)|remains? outstanding)\b|\b(?:is|are|was|were|remains?|remain) deferred\b/i
   const prLines = (pr.body ?? '').split('\n')
   const extractSections = (lines) => {
     const selected = []
