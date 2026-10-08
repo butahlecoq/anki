@@ -9,11 +9,11 @@ test('release diagnostics reject severe console errors independently', async ({ 
   diagnostics.observe(page)
   diagnostics.phase('synthetic-negative-control')
   await page.setContent('<main><h1>Diagnostic negative control</h1></main>')
-  diagnostics.assertClean()
+  await diagnostics.assertClean()
   const logged = page.waitForEvent('console', message => message.type() === 'error')
   await page.evaluate(() => { console.error('release-negative-console') })
   await logged
-  expect(() => diagnostics.assertClean()).toThrow()
+  await expect(diagnostics.assertClean()).rejects.toThrow()
   await diagnostics.attach(info)
 })
 
@@ -21,11 +21,11 @@ test('release diagnostics reject uncaught exceptions independently', async ({ pa
   const diagnostics = releaseDiagnostics('http://127.0.0.1:1')
   diagnostics.observe(page)
   await page.setContent('<main><h1>Uncaught negative control</h1></main>')
-  diagnostics.assertClean()
+  await diagnostics.assertClean()
   const thrown = page.waitForEvent('pageerror')
   await page.evaluate(() => { setTimeout(() => { throw new Error('release-negative-uncaught') }, 0) })
   await thrown
-  expect(() => diagnostics.assertClean()).toThrow()
+  await expect(diagnostics.assertClean()).rejects.toThrow()
   await diagnostics.attach(info)
 })
 
@@ -43,11 +43,11 @@ test('release diagnostics reject required HTTP and network failures and accept a
     const healthy = releaseDiagnostics('http://127.0.0.1:1')
     healthy.observe(page)
     await page.goto(url)
-    healthy.assertClean()
+    await healthy.assertClean()
     const failedHTTP = releaseDiagnostics('http://127.0.0.1:1')
     failedHTTP.observe(page)
     await page.goto(`${url}/missing`)
-    expect(() => failedHTTP.assertClean()).toThrow()
+    await expect(failedHTTP.assertClean()).rejects.toThrow()
     await failedHTTP.attach(info)
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
     stopped = true
@@ -56,7 +56,7 @@ test('release diagnostics reject required HTTP and network failures and accept a
     const failed = page.waitForEvent('requestfailed')
     await page.goto(url).catch(() => undefined)
     await failed
-    expect(() => failedNetwork.assertClean()).toThrow()
+    await expect(failedNetwork.assertClean()).rejects.toThrow()
     await failedNetwork.attach(info)
   } finally {
     if (!stopped) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
@@ -67,8 +67,8 @@ test('a fresh release diagnostic observer accepts the repaired synthetic documen
   const diagnostics = releaseDiagnostics('http://127.0.0.1:1')
   diagnostics.observe(page)
   await page.setContent('<main><h1>Healthy document</h1><button>Accessible action</button></main>')
-  await expect.poll(() => {
-    diagnostics.assertClean()
+  await expect.poll(async () => {
+    await diagnostics.assertClean()
     return true
   }).toBe(true)
   await releaseLayout(page)

@@ -30,12 +30,43 @@ export async function releaseInventory(bytes: Buffer) {
   }
 }
 
+async function nativeAudioDocuments(page: Page) {
+  return page.evaluate(() => {
+    const frames: Array<{ title: string; sandbox: string | null; readable: boolean; scripts: number; activeAttributes: number; audioControls: number }> = []
+    function executableAttribute(attribute: Attr) {
+      if (/^on/i.test(attribute.name)) return true
+      try { return new URL(attribute.value, document.baseURI).protocol === 'javascript:' }
+      catch { return false }
+    }
+    function inspect(document: Document) {
+      for (const frame of document.querySelectorAll<HTMLIFrameElement>('iframe')) {
+        const child = frame.contentDocument
+        const scripts = child?.querySelectorAll('script, object, embed').length ?? 0
+        const attributes = child ? [...child.querySelectorAll('*')].flatMap(element => [...element.attributes]) : []
+        const activeAttributes = attributes.filter(executableAttribute).length
+        frames.push({ title: frame.title, sandbox: frame.getAttribute('sandbox'), readable: !!child?.body && frame.hasAttribute('srcdoc'), scripts, activeAttributes, audioControls: child?.querySelectorAll('audio[controls][src^="data:audio/wav;base64,"]').length ?? 0 })
+        if (child) inspect(child)
+      }
+    }
+    inspect(document)
+    return {
+      safe: frames.some(frame => frame.audioControls > 0) && frames.every(frame => frame.readable && frame.sandbox === 'allow-same-origin' && frame.scripts === 0 && frame.activeAttributes === 0),
+      frames,
+    }
+  })
+}
+
 export function releaseDiagnostics(serviceURL: string) {
   let phase = 'setup'
   let offline = false
-  const events: Array<{ phase: string; kind: string; detail: string; expected: boolean }> = []
+  const events: Array<{ phase: string; kind: string; detail: string; expected: boolean; nativeAudioAudit?: Awaited<ReturnType<typeof nativeAudioDocuments>> }> = []
+  const pending: Promise<void>[] = []
   const observed = new WeakSet<Page>()
-  const record = (kind: string, detail: string, expected = false) => events.push({ phase, kind, detail, expected })
+  const record = (kind: string, detail: string, expected = false) => {
+    const event: typeof events[number] = { phase, kind, detail, expected }
+    events.push(event)
+    return event
+  }
   return {
     phase(name: string, isOffline = false) { phase = name; offline = isOffline },
     observe(page: Page) {
@@ -44,16 +75,33 @@ export function releaseDiagnostics(serviceURL: string) {
       page.on('pageerror', error => record('uncaught', error.message))
       page.on('console', message => {
         if (message.type() !== 'error') return
-        const location = message.location().url
-        record('console-error', `${message.text()} (${location})`, offline && location.startsWith(serviceURL))
+        const location = message.location()
+        const event = record('console-error', `${message.text()} (${location.url})`, offline && location.url.startsWith(serviceURL))
+        // WebKit's native audio controls emit this measured signature even in
+        // script-free frames. Template code has the same signature: inspect
+        // every child document at delivery rather than accepting the text alone.
+        if (page.context().browser()?.browserType().name() === 'webkit'
+          && message.text() === "Blocked script execution in 'about:srcdoc' because the document's frame is sandboxed and the 'allow-scripts' permission is not set."
+          && message.args().length === 0 && location.url === '' && location.lineNumber === 0 && location.columnNumber === 0) {
+          pending.push(nativeAudioDocuments(page).then(audit => {
+            event.nativeAudioAudit = audit
+            event.expected = audit.safe
+          }).catch(() => { /* Unreadable or detached documents remain fatal. */ }))
+        }
       })
       page.on('requestfailed', request => record('request-failed', `${request.method()} ${request.url()} ${request.failure()?.errorText}`, offline && request.url().startsWith(`${serviceURL}/`)))
       page.on('response', response => {
         if (response.status() >= 400) record('http-error', `${response.status()} ${response.url()}`)
       })
     },
-    assertClean() { expect(events.filter(event => !event.expected), `diagnostics in ${phase}`).toEqual([]) },
-    async attach(info: TestInfo) { await info.attach('release-diagnostics', { body: JSON.stringify(events, null, 2), contentType: 'application/json' }) },
+    async assertClean() {
+      await Promise.all(pending)
+      expect(events.filter(event => !event.expected), `diagnostics in ${phase}`).toEqual([])
+    },
+    async attach(info: TestInfo) {
+      await Promise.all(pending)
+      await info.attach('release-diagnostics', { body: JSON.stringify(events, null, 2), contentType: 'application/json' })
+    },
   }
 }
 
@@ -77,11 +125,21 @@ export async function releaseLayout(page: Page) {
 export async function releaseMedia(page: Page, browserName: string) {
   const review = page.frameLocator('iframe[title="Review card"]')
   await expect(review.locator('body')).toContainText(/猫|犬|鳥/)
-  const image = review.getByRole('img', { name: 'release.png' })
-  await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true)
-  const audio = review.locator('audio')
-  await expect(audio).toHaveAttribute('src', /^data:audio\/wav;base64,/)
-  if (browserName === 'chromium') await expect.poll(() => audio.evaluate((element: HTMLAudioElement) => element.readyState >= 1 && !element.error)).toBe(true)
+  // The keyed review frame can be replaced while media resolves. Read the
+  // current document from its parent atomically, without retaining a frame handle.
+  const media = () => page.evaluate(() => {
+    const frameDocument = document.querySelector<HTMLIFrameElement>('iframe[title="Review card"]')?.contentDocument
+    const image = frameDocument?.querySelector<HTMLImageElement>('img[alt="release.png"]')
+    const audio = frameDocument?.querySelector<HTMLAudioElement>('audio')
+    return {
+      imageDecoded: !!image && image.complete && image.naturalWidth > 0,
+      audioSource: audio?.getAttribute('src') ?? '',
+      audioReady: !!audio && audio.readyState >= 1 && !audio.error,
+    }
+  })
+  await expect.poll(async () => (await media()).imageDecoded).toBe(true)
+  await expect.poll(async () => (await media()).audioSource).toMatch(/^data:audio\/wav;base64,/)
+  if (browserName === 'chromium') await expect.poll(async () => (await media()).audioReady).toBe(true)
   // WebKit on Windows lacks a media backend. A source is evidence of retained
   // bytes only; neither metadata nor audible physical playback is inferred.
 }

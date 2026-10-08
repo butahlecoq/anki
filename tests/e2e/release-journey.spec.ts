@@ -1,4 +1,4 @@
-import { expect, type BrowserContext, type Page } from '@playwright/test'
+import { expect, type BrowserContext, type Page, type Route } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -12,6 +12,8 @@ import { releaseService } from './release-service'
 import { releaseDiagnostics, releaseInventory, releaseLayout, releaseMedia, sha256 } from './release-oracles'
 
 const test = nativeCanvasTest()
+// DOM snapshot injection attempts scripts in deliberately script-free card frames.
+test.use({ trace: { mode: 'on', snapshots: false, screenshots: true, sources: true } })
 
 async function japaneseFixture() {
   const SQL = await initSqlJs({ locateFile: () => './node_modules/sql.js/dist/sql-wasm.wasm' })
@@ -67,32 +69,30 @@ test('production release collection survives two offline reopenings and converge
   const profile = await mkdtemp(join(tmpdir(), 'kiroku-release-profile-'))
   const options = { baseURL, viewport, isMobile, deviceScaleFactor, hasTouch, userAgent, acceptDownloads: true }
   const contexts = new Set<BrowserContext>()
-  let contextNumber = 0
-  const contextNumbers = new WeakMap<BrowserContext, number>()
   const phases: Array<{ name: string; geometry: unknown; elapsedMs: number }> = []
-  const limitation = browserName === 'webkit' ? [WEBKIT_COLD_OFFLINE_LIMITATION, 'Automated audio source retention does not establish audible physical-iPhone playback. Windows WebKit has no audio backend.'] : []
+  const limitation = browserName === 'webkit' ? [WEBKIT_COLD_OFFLINE_LIMITATION, 'WebKit warm offline coverage aborts HTTP(S) requests while the actual PC service is stopped. setOffline(true) incorrectly rejects local SVG blob icons in native audio controls; no global network-disable or physical-iPhone result is inferred.', 'Automated audio source retention does not establish audible physical-iPhone playback. Windows WebKit has no audio backend.'] : []
+  const networkRequests = /^https?:/
+  const rejectNetwork = (route: Route) => route.abort('internetdisconnected')
   let active: BrowserContext | undefined
   const createClient = async (persistent = false, offline = false) => {
     const context = persistent
       ? await browser.browserType().launchPersistentContext(profile, { ...options, offline })
       : await browser.newContext({ ...options, offline })
     contexts.add(context)
-    contextNumbers.set(context, ++contextNumber)
-    await context.tracing.start({ screenshots: true, snapshots: true, sources: true })
     const page = context.pages()[0] ?? await context.newPage()
     diagnostics.observe(page)
     return { context, page }
   }
   const closeClient = async (context: BrowserContext) => {
-    try { await context.tracing.stop({ path: info.outputPath(`release-client-${contextNumbers.get(context)}-trace.zip`) }) }
-    finally { await context.close(); contexts.delete(context) }
+    try { await context.close() }
+    finally { contexts.delete(context) }
   }
   const checkpoint = async (page: Page, name: string, offline = false) => {
     diagnostics.phase(name, offline)
     const geometry = await releaseLayout(page)
     phases.push({ name, geometry, elapsedMs: Date.now() - started })
     await page.screenshot({ path: info.outputPath(`${name}.png`), fullPage: true })
-    diagnostics.assertClean()
+    await diagnostics.assertClean()
   }
   const pair = async (page: Page) => {
     await navigate(page, 'Decks')
@@ -191,7 +191,12 @@ test('production release collection survives two offline reopenings and converge
       await closeClient(active)
       client = await createClient(true, true); active = client.context; page = client.page
       await openOfflineProfileDocument(page, deckURL)
-    } else await active.setOffline(true)
+    } else {
+      // The reduced native-widget control reproduces WebKit's setOffline blob
+      // failure without the app. Abort network transport, preserving local
+      // icon blobs; every application/media failure remains a fatal diagnostic.
+      await active.route(networkRequests, rejectNetwork)
+    }
     await expect(page.getByText('NEW 2', { exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'Study now', exact: true }).click()
     for (let index = 0; index < 2; index++) {
@@ -251,7 +256,8 @@ test('production release collection survives two offline reopenings and converge
     }
     diagnostics.phase('reconnect')
     expect((await service.start()).build).toEqual(health.build)
-    await active.setOffline(false)
+    if (browserName === 'webkit') await active.unroute(networkRequests, rejectNetwork)
+    else await active.setOffline(false)
     await sync(page)
     await sync(second.page)
     await second.page.reload()
@@ -263,7 +269,7 @@ test('production release collection survives two offline reopenings and converge
     expect(expected.notes).toHaveLength(4)
     expect(expected.cards).toHaveLength(4)
     expect(expected.reviews).toHaveLength(4)
-    expect(expected.decks.map(deck => deck.name)).toEqual(expect.arrayContaining(['Release', 'Release::日本語', '手作り']))
+    expect(expected.decks.map(deck => deck.name.replaceAll('\u001f', '::'))).toEqual(expect.arrayContaining(['Release', 'Release::日本語', '手作り']))
     expect(expected.media.map(media => media.digest).sort()).toEqual(fixture.mediaDigests)
     expect(await releaseInventory(await exportPackage(second.page))).toEqual(expected)
     await checkpoint(second.page, '09-converged-receiver')
@@ -278,7 +284,7 @@ test('production release collection survives two offline reopenings and converge
     await info.attach('release-inventory', { body: JSON.stringify(expected, null, 2), contentType: 'application/json' })
     await info.attach('release-fixture', { body: fixture.bytes, contentType: 'application/octet-stream' })
     await info.attach('release-build', { body: JSON.stringify({ commit, build: health.build, browser: browser.version(), browserName, project: info.project.name, configuredViewport: viewport, phases, fixtureSha256: sha256(fixture.bytes), fixtureMediaDigests: fixture.mediaDigests, durationMs: Date.now() - started, limitations: limitation, physicalIPhone: 'UNVERIFIED: see docs/offline-verification.md and issue #24' }, null, 2), contentType: 'application/json' })
-    diagnostics.assertClean()
+    await diagnostics.assertClean()
   } finally {
     await info.attach('release-run', { body: JSON.stringify({ expectedCommit: commit, browser: browser.version(), browserName, project: info.project.name, configuredViewport: viewport, phases, durationMs: Date.now() - started, limitations: limitation, physicalIPhone: 'UNVERIFIED: see docs/offline-verification.md and issue #24' }, null, 2), contentType: 'application/json' })
     await diagnostics.attach(info)

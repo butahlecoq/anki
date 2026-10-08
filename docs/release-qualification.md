@@ -41,6 +41,17 @@ compare the whole supported package inventory. Reconnecting the same service
 must preserve all changes and converge with the second client after reload. A
 third clean client imports the final export, reloads, searches, and re-exports it.
 
+Chromium uses actual browser-context offline mode for both persisted-profile
+reopenings. WebKit's supported warm stage aborts HTTP and HTTPS requests while
+the actual PC service is stopped. A reduced native-widget control shows that
+WebKit `setOffline(true)` also rejects local SVG blob icons inside its native
+audio controls: all ten failed URLs load as SVG again when networking is
+restored, without any application or collection code. The HTTP-disruption
+control verifies an actual TCP request fails while local widget icons remain
+available. This is a named emulation boundary, not a global network-disable
+or physical-Safari result. The journey keeps its audio sources, image decoding,
+WAV inventory hashes and strict request/console guards intact.
+
 The semantic inventory retains decks' supported Native Identity and Deck Path,
 notes and tags, full note types/fields/templates, cards' native schedules and
 kiroku scheduling/review metadata, review logs, supported note creation/update
@@ -53,10 +64,24 @@ initialization cannot obscure schedule comparisons. The current exporter emits
 Deck Path and Native Identity rather than local deck option groups/descriptions;
 this journey does not claim those unsupported package properties are preserved.
 
-Phase guards reject uncaught exceptions, console errors, HTTP/request failures,
+Phase guards reject uncaught exceptions, severe console errors, HTTP/request failures,
 unloaded media, blank loading shells, unnamed visible controls, and document
-overflow. Only failed service-origin requests while intentionally offline can be
-recorded as expected. Screenshots, browser traces for every owned context, JSON
+overflow. Failed service-origin requests while intentionally offline are recorded
+as expected. WebKit native audio controls also emit a measured sandbox warning
+in script-free card documents. That exact warning is expected only with zero
+JavaScript arguments and an empty, zero-line/column location, and after a
+delivery-time audit finds native WAV audio controls and verifies every child
+document is readable, uses the script-free `allow-same-origin` sandbox, and
+contains no scripts, executable attributes or embedded objects. Unreadable,
+detached or unsafe documents fail closed. All warnings and audit results remain
+in the diagnostic attachment; identical application console text and attempted
+template code remain fatal. Guards await the audit before checking results.
+Playwright owns tracing for every context. Traces retain
+actions, screenshots and sources with DOM snapshots disabled: snapshot injection
+attempts scripts in the deliberately script-free card sandbox and produces
+instrumentation console errors. The native audio warning has separate positive
+and negative controls with snapshots disabled. Screenshots,
+browser traces for every owned context, JSON
 diagnostics, service logs, fixture bytes/hash, media digests, build identity,
 actual engine version, configured/measured viewports, phase duration, and final
 inventory are retained under Playwright's `test-results` output. The negative
