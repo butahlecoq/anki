@@ -18,7 +18,7 @@ export type SyncOutcome =
   | { state: 'unreachable' }
   | { state: 'error'; message?: string }
 
-export type PairOutcome = 'paired' | 'unreachable' | 'pairing-error' | 'collection-generation-required'
+export type PairOutcome = 'paired' | 'unreachable' | 'address-error' | 'pairing-error' | 'collection-generation-required'
 
 /** Shown before a device has ever been paired. */
 export const SYNC_LOCAL_ONLY = 'This collection stays on this device until you connect a PC.'
@@ -60,6 +60,7 @@ export function syncOutcomeMessage(result: SyncOutcome): string {
 
 export function pairOutcomeMessage(result: PairOutcome): string {
   if (result === 'paired') return 'PC connected. Your collections are ready to sync.'
+  if (result === 'address-error') return 'The PC service address is invalid or unsafe. Enter its full HTTPS address, or use HTTP with localhost or 127.0.0.1 on the same PC.'
   if (result === 'collection-generation-required') return 'The PC collection was replaced from a backup. This device’s offline collection and queued changes remain unchanged; export them before recovering or resetting this device.'
   if (result === 'unreachable') return 'Your PC service could not be reached. Check its address and that it is running.'
   return 'That pairing code was not accepted. Create a new code on your PC and try again.'

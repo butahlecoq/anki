@@ -15,6 +15,7 @@ describe('PC pairing dialog', () => {
   test.each([
     ['paired', /PC connected/i, false],
     ['unreachable', /could not be reached/i, true],
+    ['address-error', /PC service address is invalid or unsafe/i, true],
     ['pairing-error', /code was not accepted/i, true],
     ['collection-generation-required', /offline collection/i, true],
   ] as const)('shows %s and closes only on success', async (state, message, remainsOpen) => {
@@ -25,7 +26,11 @@ describe('PC pairing dialog', () => {
     fireEvent.change(screen.getByLabelText('One-time pairing code'), { target: { value: 'ABC123' } })
     fireEvent.click(screen.getByRole('button', { name: 'Connect device' }))
     await waitFor(() => expect(screen.getByText(message)).toBeInTheDocument())
-    if (remainsOpen) expect(screen.getByRole('dialog')).toBeInTheDocument()
+    if (remainsOpen) {
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+      expect(screen.getByLabelText('PC service address')).toHaveValue('https://pc.example.net')
+      expect(screen.getByLabelText('One-time pairing code')).toHaveValue('ABC123')
+    }
     else expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
