@@ -9,7 +9,7 @@ import { unzipSync, zipSync } from 'fflate'
 import initSqlJs, { type SqlJsStatic } from 'sql.js'
 import { createSyncService } from '../server/sync-service'
 import { createSyncHttpHandler } from '../server/sync-http'
-import { foregroundSync, pairCollection, syncCollection } from './sync-client'
+import { foregroundSync, pairCollection, syncCollection, uploadMedia } from './sync-client'
 import { createCollection, Rating, type Collection, type SyncOperation } from './collection'
 import { exportAnkiPackage } from './anki-export'
 import { prepareAnkiImport } from './anki-import'
@@ -119,6 +119,68 @@ test('image occlusion restoration waits atomically for its generated source rest
     expect(actual.reviews).toEqual(expected.reviews)
     expect(actual.references).toEqual(expected.references)
     expect(actual.blobs.map(blob => blob.digest)).toEqual(expected.blobs.map(blob => blob.digest))
+    expect(await readSyncProgressCounts(observer)).toMatchObject({ incomingPending: 0, conflicts: 0 })
+  })
+}, 15_000)
+
+test('an imported Basic note can convert to image occlusion when its first source reference arrives on a later HTTP page', async () => {
+  const builder = createCollection(`kiroku-io-conversion-${crypto.randomUUID()}`)
+  let basicFile: File, convertedFile: File, guid: string
+  try {
+    const deck = await builder.createDeck('Imported conversion', new Date('2026-10-01T12:00:00Z'))
+    const basic = await builder.createBasicNote(deck.id, { front: '骨', back: 'bone' }, new Date('2026-10-01T12:00:00Z'))
+    guid = basic.id
+    const initial = await exportAnkiPackage(builder, { SQL, scheduling: true, history: true, media: true })
+    basicFile = new File([initial.bytes.slice().buffer as ArrayBuffer], 'basic-before-conversion.apkg')
+    await builder.deleteNote(basic.id)
+    const png = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL4+QAAAABJRU5ErkJggg==', 'base64'))
+    const image = await builder.createImageOcclusionNote(deck.id, { image: new File([png], 'diagram.png', { type: 'image/png' }), imageWidth: 1, imageHeight: 1, header: '骨', backExtra: 'bone', tags: ['diagram'], masks: [{ x: .1, y: .2, width: .3, height: .2 }] }, new Date('2026-10-02T12:00:00Z'))
+    await builder.answer((await readCardsForNote(builder, image.id))[0].id, Rating.Good, new Date('2026-10-02T13:00:00Z'))
+    const converted = await exportAnkiPackage(builder, { SQL, scheduling: true, history: true, media: true })
+    convertedFile = await editedPackage(new File([converted.bytes.slice().buffer as ArrayBuffer], 'conversion.apkg'), database => {
+      // Anki retains a note's GUID when the learner changes its note type.
+      database.run('UPDATE notes SET guid = ?', [guid])
+    }, 'same-guid-occlusion.apkg')
+  } finally { await builder.removeLocalCollection() }
+  await withPairedCollections(2, async ([owner, observer]) => {
+    await (await prepareAnkiImport(basicFile, owner, { SQL })).commit()
+    await syncComplete(owner)
+    await syncComplete(observer)
+    const beforeConversion = await readAnkiExportSnapshot(observer)
+    const prior = beforeConversion.notes[0]
+    expect(prior.imageOcclusion).toBeUndefined()
+    const preview = await prepareAnkiImport(convertedFile, owner, { SQL })
+    expect(preview.issues.filter(issue => issue.severity === 'error')).toEqual([])
+    await preview.commit()
+    const converted = (await readAnkiExportSnapshot(owner)).notes[0]
+    expect(converted.id).toBe(prior.id)
+    expect(converted.imageOcclusion?.sourceMediaId).toBe(`${prior.id}:image-occlusion-source`)
+    const generated = await owner.pendingOperations()
+    expect(generated.find(operation => operation.entityType === 'note' && operation.entityId === prior.id)?.action).toBe('update')
+    const sources = generated.filter(operation => operation.entityType === 'noteMedia')
+    expect(sources).toHaveLength(1)
+    expect(sources[0].action).toBe('create')
+    await owner.acknowledgeOperations(generated.map(operation => operation.opId))
+    for (let index = 0; index < 300; index++) await owner.createDeck(`Conversion filler ${index}`)
+    const operations = [...generated.filter(operation => operation.entityType !== 'noteMedia'), ...await owner.pendingOperations(), ...sources]
+    expect(operations.indexOf(sources[0]) - operations.findIndex(operation => operation.entityType === 'note')).toBeGreaterThan(250)
+    for (const blob of (await readAnkiExportSnapshot(owner)).blobs) await uploadMedia((await owner.syncSettings())!, blob.digest, (await owner.verifiedMediaBlob(blob.digest))!.blob)
+    expect(await foregroundSync((await owner.syncSettings())!, operations.slice(0, 250))).toMatchObject({ state: 'complete' })
+    expect(await syncCollection(observer)).toMatchObject({ state: 'incomplete', remoteChangesPending: false })
+    const waiting = await readAnkiExportSnapshot(observer)
+    expect(waiting.notes).toEqual(beforeConversion.notes)
+    expect(waiting.cards).toEqual(beforeConversion.cards)
+    expect(waiting.references).toEqual(beforeConversion.references)
+    expect((await readSyncProgressCounts(observer)).incomingPending).toBeGreaterThan(0)
+    for (let offset = 250; offset < operations.length; offset += 250) expect(await foregroundSync((await owner.syncSettings())!, operations.slice(offset, offset + 250))).toMatchObject({ state: 'complete' })
+    await syncComplete(observer)
+    const actual = await readAnkiExportSnapshot(observer)
+    const expected = await readAnkiExportSnapshot(owner)
+    expect(actual.notes).toEqual(expected.notes)
+    expect(actual.cards).toHaveLength(expected.cards.length)
+    for (const card of expected.cards) expect(actual.cards).toContainEqual({ ...card, suspended: card.suspended ?? card.templateSuspended ?? false })
+    expect(actual.reviews).toEqual(expected.reviews)
+    expect(actual.references).toEqual(expected.references)
     expect(await readSyncProgressCounts(observer)).toMatchObject({ incomingPending: 0, conflicts: 0 })
   })
 }, 15_000)

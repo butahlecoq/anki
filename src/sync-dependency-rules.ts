@@ -2,6 +2,15 @@ import { currentLifetime, decideOperationLifetime, validateRestorationEvidence, 
 import type { Deck, Note, NoteMediaReference, SyncOperation } from './collection'
 import { mergeRevisions } from './sync-revisions'
 
+/** Validate a card against the settled owner, not a prior note type or deck. */
+export function cardWaitsForPendingNote(operation: SyncOperation, pending: readonly SyncOperation[]): boolean {
+  if (operation.entityType !== 'card' || operation.action === 'delete') return false
+  const noteId = (operation.payload as { noteId?: string } | undefined)?.noteId
+  const lifetime = operation.relatedLifetimes?.find(ref => ref.entityType === 'note' && ref.entityId === noteId)?.lifetime ?? []
+  return pending.some(candidate => candidate.entityType === 'note' && candidate.entityId === noteId && candidate.action !== 'delete'
+    && JSON.stringify(candidate.lifetime ?? []) === JSON.stringify(lifetime))
+}
+
 /** Diagnose only unambiguous creates without a materialized or retired history. */
 export function hasPendingDeckCycle(snapshot: {
   operations: readonly SyncOperation[]
@@ -49,7 +58,7 @@ export function validateOcclusionSource(note: Pick<Note, 'id' | 'imageOcclusion'
 /** A note/source pair may become valid together, but never publish half a pair. */
 export function occlusionSourceReady(operation: SyncOperation, snapshot: {
   source?: NoteMediaReference
-  ownerMaterialized: boolean
+  previousOwner?: Pick<Note, 'imageOcclusion'>
   operations: readonly SyncOperation[]
   revisions: readonly SyncOperation[]
   barriers: readonly DeletionBarrier[]
@@ -78,6 +87,6 @@ export function occlusionSourceReady(operation: SyncOperation, snapshot: {
     return true
   }
   // Existing invalid edits remain errors; a new note can wait for a later page.
-  if (snapshot.ownerMaterialized) validateOcclusionSource(note, undefined)
+  if (snapshot.previousOwner?.imageOcclusion) validateOcclusionSource(note, undefined)
   return false
 }

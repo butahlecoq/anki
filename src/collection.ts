@@ -1,7 +1,7 @@
 import { assertOperationIdentity, canWaitForCardMove, orderCausalOperations, uniqueSyncOperations } from './sync-operation-rules'
 import Dexie, { type EntityTable } from 'dexie'
 import { relatedEntities, recoverDeletionProvenance, inheritedDeletionBarrier, currentLifetime, decideOperationLifetime, restoredLifetime, validateRestorationEvidence, validateLifetimeMetadata, type EntityType, type EntityLifetimeMetadata, type DeletionCause } from '../entity-lifetimes'
-import { occlusionSourceReady, validateOcclusionSource } from './sync-dependency-rules'
+import { cardWaitsForPendingNote, occlusionSourceReady, validateOcclusionSource } from './sync-dependency-rules'
 import { customStudyKey, customStudyMembership, customStudySessions, type CustomStudySession } from './custom-study-state'
 import { createEmptyCard } from 'ts-fsrs'
 import { answerWithSchedule, deserializeCard, eligibleForQueue, eligibleForStudy, isBuried, isInterdayLearning, isLearningCard, nextStudyBoundary, Rating, reviewChoices as previewReviewChoices, selectDueCards, serializeCard, State, templateSuspended, validateSteps, type Grade } from './scheduler'
@@ -2476,6 +2476,10 @@ class DexieCollection extends Dexie {
           unavailable,
         })
         if (decision.state === 'pending') { await this.pendingRemoteOperations.put(change); continue }
+        if (decision.state === 'apply' && change.entityType === 'card' && cardWaitsForPendingNote(change, await this.pendingRemoteOperations.where('entityType').equals('note').toArray())) {
+          await this.pendingRemoteOperations.put(source)
+          continue
+        }
         if (change.action === 'restore' && decision.state === 'apply') validateRestorationEvidence(change, change.restoreOf!, retained)
         if (decision.state === 'apply' && change.action !== 'delete' && change.entityType === 'note'
           && (change.payload as Note).typeId === IMAGE_OCCLUSION_NOTE_TYPE_ID) {
@@ -2483,7 +2487,7 @@ class DexieCollection extends Dexie {
           if (!note.imageOcclusion) throw new Error('Synced image occlusion metadata is missing')
           validateImageOcclusion(note.imageOcclusion)
           if (!occlusionSourceReady(change, { source: note.imageOcclusion && await this.noteMedia.get(note.imageOcclusion.sourceMediaId),
-            ownerMaterialized: Boolean(await this.notes.get(change.entityId)), operations: pendingBatch, revisions: retained,
+            previousOwner: await this.notes.get(change.entityId), operations: pendingBatch, revisions: retained,
             barriers: await this.deletedEntities.toArray() })) {
             await this.pendingRemoteOperations.put(source)
             continue

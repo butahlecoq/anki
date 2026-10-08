@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest'
 import { inheritedDeletionBarrier } from '../entity-lifetimes'
 import type { SyncOperation } from './collection'
-import { hasPendingDeckCycle, occlusionSourceReady } from './sync-dependency-rules'
+import { cardWaitsForPendingNote, hasPendingDeckCycle, occlusionSourceReady } from './sync-dependency-rules'
 
 const operation = (entityType: SyncOperation['entityType'], entityId: string, payload: unknown, extra: Partial<SyncOperation> = {}): SyncOperation => ({
   opId: `${entityType}-${entityId}`, entityType, entityId, action: 'create', occurredAt: '2026-10-08T12:00:00Z', payload, ...extra,
@@ -33,12 +33,24 @@ test('atomic occlusion source evidence rejects malformed sources and cannot bypa
   const note = operation('note', 'note', { id: 'note', imageOcclusion: { sourceMediaId: 'source' } })
   const reference = { id: 'source', noteId: 'note', digest: 'a'.repeat(64), kind: 'image', mimeType: 'image/png', side: 'front' }
   const media = operation('noteMedia', 'source', reference)
-  const snapshot = { ownerMaterialized: false, operations: [media], revisions: [], barriers: [] }
+  const snapshot = { operations: [media], revisions: [], barriers: [] }
   expect(occlusionSourceReady(note, snapshot)).toBe(true)
   expect(occlusionSourceReady(note, { ...snapshot, operations: [] })).toBe(false)
+  expect(occlusionSourceReady(note, { ...snapshot, operations: [], previousOwner: {} })).toBe(false)
+  expect(() => occlusionSourceReady(note, { ...snapshot, operations: [], previousOwner: { imageOcclusion: { version: 1, sourceMediaId: 'previous-source', imageWidth: 1, imageHeight: 1, masks: [], nextOrdinal: 1 } } })).toThrow(/source image reference.*invalid/i)
   expect(occlusionSourceReady(note, { ...snapshot, barriers: [{ entityType: 'noteMedia', entityId: 'source', occurredAt: note.occurredAt }] })).toBe(false)
   expect(occlusionSourceReady(note, { ...snapshot, operations: [{ ...media, lifetime: ['future'], relatedLifetimes: [{ entityType: 'note', entityId: 'note', lifetime: [] }] }] })).toBe(false)
   for (const invalid of [{ noteId: 'other' }, { kind: 'audio' }, { mimeType: 'image/svg+xml' }, { side: 'back' }, { digest: 'invalid' }]) {
     expect(() => occlusionSourceReady(note, { ...snapshot, operations: [{ ...media, payload: { ...reference, ...invalid } }] })).toThrow(/source image reference.*invalid/i)
   }
+})
+
+test('cards wait for same-lifetime pending owner revisions instead of validating a prior note type', () => {
+  const card = operation('card', 'card', { noteId: 'note' })
+  const pendingNote = operation('note', 'note', { typeId: 'image-occlusion' }, { action: 'update' })
+  expect(cardWaitsForPendingNote(card, [pendingNote])).toBe(true)
+  expect(cardWaitsForPendingNote(card, [{ ...pendingNote, entityId: 'other' }])).toBe(false)
+  expect(cardWaitsForPendingNote(card, [{ ...pendingNote, lifetime: ['future'] }])).toBe(false)
+  expect(cardWaitsForPendingNote({ ...card, action: 'delete' }, [pendingNote])).toBe(false)
+  expect(cardWaitsForPendingNote(card, [{ ...pendingNote, action: 'delete' }])).toBe(false)
 })
