@@ -125,6 +125,16 @@ independent Standards/Spec review. Record the exact commands, start/end/duration
 commit, counts, and artifact paths on the issue and PR. Browser source preparation
 or a focused pass cannot establish the complete software gate.
 
+Each public export also records its named phase, package-ready message, native
+download event and read-file byte count/digest as `release-export` JSON in the
+job log. Package readiness and native delivery are both required; a ready message
+alone cannot replace the download or semantic inventory checks. This distinguishes
+the observed application and browser boundaries when a download wait fails.
+Issue #278 retains a first hosted WebKit warm-offline download timeout and its
+successful retry. Three unchanged Linux/WebKit journeys subsequently passed;
+nonreproduction does not establish the original cause or a repaired application.
+Keep that first failure and remaining uncertainty visible when reporting results.
+
 An exploratory production-browser pass remains a separate required observation:
 inspect the retained onboarding, editor/decks, question/answer, offline, sync,
 Browse, Statistics, and restored screenshots; exercise narrow/wide layout,
