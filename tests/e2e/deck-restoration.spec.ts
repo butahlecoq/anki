@@ -1,5 +1,7 @@
 import { expect, test as base, type Page } from '@playwright/test'
-import { createServer } from 'node:http'
+import { createServer, type Server } from 'node:http'
+import { createConnection } from 'node:net'
+import { once } from 'node:events'
 import { mkdtemp, rm, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -87,6 +89,34 @@ async function inventory(bytes: Buffer) {
     media: data.media.map(file => ({ name: file.name, digest: createHash('sha256').update(file.data).digest('hex') })).sort((a, b) => a.name.localeCompare(b.name)),
   }
 }
+
+function closeOwnedServer(server: Server) {
+  const stopped = new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+  // Browser preconnections have no HTTP request for close() to reap. Stop
+  // accepting connections first, then release only this fixture's sockets.
+  server.closeAllConnections()
+  return stopped
+}
+
+test('restoration fixture cleanup closes an unused TCP connection', async () => {
+  const server = createServer((_request, response) => response.end('Owned fixture'))
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('No fixture address')
+  const accepted = once(server, 'connection')
+  const client = createConnection(address.port, '127.0.0.1')
+  await once(client, 'connect')
+  await accepted
+  let closed = false
+  const stopped = closeOwnedServer(server).then(() => { closed = true })
+  try {
+    await expect.poll(() => closed, { timeout: 1000 }).toBe(true)
+    expect(server.listening).toBe(false)
+  } finally {
+    client.destroy()
+    await stopped
+  }
+})
 
 test('a deleted nested deck can be imported again and studied on a second device', async ({ page, browser, browserName, hostScale }, info) => {
   test.setTimeout(120000)
@@ -176,7 +206,7 @@ test('a deleted nested deck can be imported again and studied on a second device
   } finally {
     await receiverContext.close()
     await roundtripContext.close()
-    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+    await closeOwnedServer(server)
     service.close()
     await rm(runtime, { recursive: true, force: true })
   }
