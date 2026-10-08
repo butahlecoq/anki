@@ -2,6 +2,7 @@ import { currentLifetime, decideOperationLifetime, validateRestorationEvidence, 
 import type { CardRecord, Deck, Note, NoteMediaReference, NoteType, ReviewEntry, SyncOperation } from './collection'
 import { templateSuspended } from './scheduler'
 import { mergeRevisions } from './sync-revisions'
+import { canWaitForCardMove } from './sync-operation-rules'
 
 /** Template identity belongs to its defining type even after an owner moves. */
 export function cardTemplateOwnerIds(card: Pick<CardRecord, 'templateId'>, revisions: readonly SyncOperation[]): string[] {
@@ -22,6 +23,42 @@ export function canRetainReviewHistory(operation: SyncOperation, revisions: read
     && Number.isFinite(Date.parse(review.reviewedAt)) && Number.isFinite(Date.parse(review.due))
     && [review.state, review.stability, review.difficulty, review.elapsedDays, review.lastElapsedDays, review.scheduledDays, review.learningSteps].every(Number.isFinite)
     && (explicitReferences || witnessed)
+}
+
+/** Own the full generation/retirement disposition; storage supplies settled facts. */
+export function decideCardGenerationDependency(operation: SyncOperation, snapshot: {
+  note: Note
+  existing?: CardRecord
+  revisions: readonly SyncOperation[]
+  operations: readonly SyncOperation[]
+  templateId: string
+  templateDeleted: boolean
+  ownerTypeDeleted: boolean
+  eligible: boolean | undefined
+}): 'apply' | 'pending' | 'stale' {
+  const card = operation.payload as CardRecord
+  const retired = templateSuspended(card)
+  if (snapshot.templateDeleted && !retired) return 'stale'
+  const occlusion = decideOcclusionCardDependency(operation, snapshot)
+  if (occlusion !== 'apply') return occlusion
+  if (card.deckId !== snapshot.note.deckId) {
+    if (!canWaitForCardMove(operation, snapshot.note, snapshot.operations, snapshot.revisions)) throw new Error('Synced card deck does not match its note deck')
+    return 'pending'
+  }
+  if (snapshot.ownerTypeDeleted && !retired) return 'stale'
+  if (snapshot.eligible === false && !retired) return 'pending'
+  return 'apply'
+}
+
+/** Immutable retired reviews need identity proof; active future generations wait. */
+export function decideReviewGenerationDependency(operation: SyncOperation, snapshot: {
+  card: CardRecord
+  eligible: boolean | undefined
+  revisions: readonly SyncOperation[]
+}): 'apply' | 'pending' | 'stale' {
+  if (snapshot.eligible !== false) return 'apply'
+  if (!canRetainReviewHistory(operation, snapshot.revisions)) return 'stale'
+  return templateSuspended(snapshot.card) ? 'apply' : 'pending'
 }
 
 /** Validate a card against the settled owner, not a prior note type or deck. */

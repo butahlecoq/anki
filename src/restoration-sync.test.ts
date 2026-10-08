@@ -149,9 +149,9 @@ test.each([false, true])('an imported Basic note can convert to image occlusion 
     const beforeConversion = await readAnkiExportSnapshot(observer)
     const prior = beforeConversion.notes[0]
     expect(prior.imageOcclusion).toBeUndefined()
-    const preview = await prepareAnkiImport(convertedFile, owner, { SQL })
-    expect(preview.issues.filter(issue => issue.severity === 'error')).toEqual([])
-    await preview.commit()
+    const importPlan = await prepareAnkiImport(convertedFile, owner, { SQL })
+    expect(importPlan.issues.filter(issue => issue.severity === 'error')).toEqual([])
+    await importPlan.commit()
     const converted = (await readAnkiExportSnapshot(owner)).notes[0]
     expect(converted.id).toBe(prior.id)
     expect(converted.imageOcclusion?.sourceMediaId).toBe(`${prior.id}:image-occlusion-source`)
@@ -239,9 +239,9 @@ test.each([
     const prior = before.notes[0]
     if (originalKind === 'image occlusion') expect(prior.imageOcclusion).toBeDefined()
     else expect(prior.imageOcclusion).toBeUndefined()
-    const preview = await prepareAnkiImport(basicFile, owner, { SQL })
-    expect(preview.issues.filter(issue => issue.severity === 'error')).toEqual([])
-    await preview.commit()
+    const importPlan = await prepareAnkiImport(basicFile, owner, { SQL })
+    expect(importPlan.issues.filter(issue => issue.severity === 'error')).toEqual([])
+    await importPlan.commit()
     if (deletedPriorType) await owner.deleteNoteType(prior.typeId)
     const converted = (await readAnkiExportSnapshot(owner)).notes[0]
     expect(converted.id).toBe(prior.id)

@@ -1,7 +1,7 @@
-import { assertOperationIdentity, canWaitForCardMove, orderCausalOperations, uniqueSyncOperations } from './sync-operation-rules'
+import { assertOperationIdentity, orderCausalOperations, uniqueSyncOperations } from './sync-operation-rules'
 import Dexie, { type EntityTable } from 'dexie'
 import { relatedEntities, recoverDeletionProvenance, inheritedDeletionBarrier, currentLifetime, decideOperationLifetime, restoredLifetime, validateRestorationEvidence, validateLifetimeMetadata, type EntityType, type EntityLifetimeMetadata, type DeletionCause } from '../entity-lifetimes'
-import { canRetainReviewHistory, cardTemplateOwnerIds, cardWaitsForPendingNote, decideOcclusionCardDependency, occlusionSourceReady, validateOcclusionSource } from './sync-dependency-rules'
+import { cardTemplateOwnerIds, cardWaitsForPendingNote, decideCardGenerationDependency, decideReviewGenerationDependency, occlusionSourceReady, validateOcclusionSource } from './sync-dependency-rules'
 import { customStudyKey, customStudyMembership, customStudySessions, type CustomStudySession } from './custom-study-state'
 import { createEmptyCard } from 'ts-fsrs'
 import { answerWithSchedule, deserializeCard, eligibleForQueue, eligibleForStudy, isBuried, isInterdayLearning, isLearningCard, nextStudyBoundary, Rating, reviewChoices as previewReviewChoices, selectDueCards, serializeCard, State, templateSuspended, validateSteps, type Grade } from './scheduler'
@@ -2613,37 +2613,17 @@ class DexieCollection extends Dexie {
             const note = await this.notes.get(incoming.noteId)
             if (!note) throw new Error('Synced card note was not found')
             const templateDeleted = (await this.deletedEntities.bulkGet(cardTemplateOwnerIds(incoming, retained).map(id => tombstoneKey('noteType', id)))).some(Boolean)
-            if (templateDeleted && !templateSuspended(incoming)) {
+            const noteType = await this.noteTypes.get(note.typeId)
+            const ownerTypeDeleted = !noteType && Boolean(await this.deletedEntities.get(tombstoneKey('noteType', note.typeId)))
+            const decision = decideCardGenerationDependency(change, { note, existing: await this.cards.get(incoming.id), revisions: retained,
+              operations: pendingBatch, templateId: IMAGE_OCCLUSION_TEMPLATE_ID, templateDeleted, ownerTypeDeleted,
+              eligible: noteType ? this.cardIsEligible(noteType, note, incoming) : undefined })
+            if (decision === 'stale') {
               progress = true
               await this.receivedOperations.add({ opId: change.opId })
               continue
             }
-            const occlusion = decideOcclusionCardDependency(change, { note, existing: await this.cards.get(incoming.id), revisions: retained, templateId: IMAGE_OCCLUSION_TEMPLATE_ID })
-            if (occlusion === 'pending') { await this.pendingRemoteOperations.put(source); continue }
-            if (occlusion === 'stale') {
-              progress = true
-              await this.receivedOperations.add({ opId: change.opId })
-              continue
-            }
-            if (incoming.deckId !== note.deckId) {
-              // Notes are materialized before cards. A card created before a
-              // move can therefore temporarily reference the preceding deck;
-              // retain it when causal evidence proves a move, even across pages.
-              if (!canWaitForCardMove(change, note, pendingBatch, retained)) throw new Error('Synced card deck does not match its note deck')
-              await this.pendingRemoteOperations.put(source)
-              continue
-            }
-            const noteType = note && await this.noteTypes.get(note.typeId)
-            const deletedType = note && !noteType && await this.deletedEntities.get(tombstoneKey('noteType', note.typeId))
-            if (note && deletedType && !templateSuspended(incoming)) {
-              progress = true
-              await this.receivedOperations.add({ opId: change.opId })
-              continue
-            }
-            if (note && noteType && !this.cardIsEligible(noteType, note, incoming) && !templateSuspended(incoming)) {
-              await this.pendingRemoteOperations.put(source)
-              continue
-            }
+            if (decision === 'pending') { await this.pendingRemoteOperations.put(source); continue }
           }
           if (change.entityType === 'review') {
             const review = change.payload as ReviewEntry
@@ -2656,17 +2636,14 @@ class DexieCollection extends Dexie {
             if (!card) throw new Error('Synced review card was not found')
             const note = card && await this.notes.get(card.noteId)
             const noteType = note && await this.noteTypes.get(note.typeId)
-            if (card && note && (!noteType || !this.cardIsEligible(noteType, note, card))) {
-              if (!canRetainReviewHistory(source, retained)) {
-                progress = true
-                await this.receivedOperations.add({ opId: change.opId })
-                continue
-              }
-              if (!templateSuspended(card)) {
-                await this.pendingRemoteOperations.put(source)
-                continue
-              }
+            const decision = decideReviewGenerationDependency(source, { card, revisions: retained,
+              eligible: note ? Boolean(noteType && this.cardIsEligible(noteType, note, card)) : undefined })
+            if (decision === 'stale') {
+              progress = true
+              await this.receivedOperations.add({ opId: change.opId })
+              continue
             }
+            if (decision === 'pending') { await this.pendingRemoteOperations.put(source); continue }
           }
           if (change.entityType === 'noteMedia') {
             const reference = change.payload as NoteMediaReference
