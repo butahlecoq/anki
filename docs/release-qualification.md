@@ -130,6 +130,12 @@ download event and read-file byte count/digest as `release-export` JSON in the
 job log. Package readiness and native delivery are both required; a ready message
 alone cannot replace the download or semantic inventory checks. This distinguishes
 the observed application and browser boundaries when a download wait fails.
+Failure records retain the visible Preparing/disabled state, public result and
+alerts, plus the original exception and an absolute timestamp. If the page has
+ended, an unavailable observation is recorded without replacing that exception.
+The existing classified network/console observations also appear as
+`release-diagnostics` JSON in job logs, with their artifact attachment preserved;
+classification and fatal-error assertions remain unchanged.
 Issue #278 retains a first hosted WebKit warm-offline download timeout and its
 successful retry. Three unchanged Linux/WebKit journeys subsequently passed;
 nonreproduction does not establish the original cause or a repaired application.

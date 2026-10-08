@@ -52,7 +52,7 @@ async function exportPackage(page: Page, info: TestInfo, phase: string) {
   const dialog = page.getByRole('dialog', { name: 'Export Anki package' })
   const started = Date.now()
   const record = (event: string, detail: Record<string, unknown> = {}) => {
-    console.log(`release-export ${JSON.stringify({ project: info.project.name, phase, event, elapsedMs: Date.now() - started, ...detail })}`)
+    console.log(`release-export ${JSON.stringify({ project: info.project.name, phase, event, timestamp: new Date().toISOString(), elapsedMs: Date.now() - started, ...detail })}`)
   }
   record('started')
   try {
@@ -76,7 +76,18 @@ async function exportPackage(page: Page, info: TestInfo, phase: string) {
     await dialog.getByRole('button', { name: 'Close export' }).click()
     return bytes
   } catch (error) {
-    record('failed', { error: String(error) })
+    const state = await dialog.evaluate(element => {
+      const button = [...element.querySelectorAll('button')].find(candidate => ['Download package', 'Preparing package…'].includes(candidate.textContent?.trim() ?? ''))
+      return {
+        busy: button?.disabled ?? null,
+        button: button?.textContent?.trim() ?? null,
+        status: element.querySelector('[role="status"]')?.textContent ?? null,
+        alerts: [...element.querySelectorAll('[role="alert"]')].map(alert => alert.textContent ?? ''),
+      }
+    }).catch(observationError => ({ unavailable: String(observationError), pageClosed: page.isClosed() }))
+    // A closed/ended page may prevent this secondary observation. Preserve
+    // that limit in the log and always rethrow the original export failure.
+    record('failed', { error: String(error), dialog: state })
     throw error
   }
 }
