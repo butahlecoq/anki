@@ -14,6 +14,32 @@ const pr = {
   url: 'https://github.com/butahlecoq/anki/pull/43',
 }
 
+test('technical blocked-script and request descriptions are not acceptance deferrals', () => {
+  for (const body of [
+    'Removed script-bearing frames, dynamic blocked scripts and application console errors remain fatal.',
+    'Blocked script execution is a native diagnostic; application console errors remain fatal.',
+    'The browser records blocked requests without treating them as successful responses.',
+  ]) assert.deepEqual(deferredLines({ body }), [])
+
+  const output = renderStatus({
+    issues: [{ ...issue, number: 26 }],
+    prs: [{ ...pr, number: 269, title: 'Release journey #26', body: 'Removed script-bearing frames, dynamic blocked scripts and application console errors remain fatal.' }],
+    worktrees: [], branches: [], generatedFrom: 'a9a9ba5',
+  })
+  assert.match(output, /#269.*deferred: none stated/)
+  assert.doesNotMatch(output, /deferred:.*dynamic blocked scripts/)
+})
+
+test('technical descriptions do not suppress actual acceptance blockers or named sections', () => {
+  for (const body of [
+    'Acceptance is blocked by the missing physical device check.',
+    'Blocked by the unavailable full gate runner.',
+    'Release acceptance is blocked until independent review passes.',
+    'Dynamic blocked scripts remain fatal. Acceptance is blocked by an unresolved media defect.',
+  ]) assert.deepEqual(deferredLines({ body }), [body])
+  assert.deepEqual(deferredLines({ body: '## Deferred acceptance\n- Investigate blocked scripts before release.\n\n## Evidence\nBlocked requests are recorded.' }), ['- Investigate blocked scripts before release.'])
+})
+
 test('status names the matching issue PR, current-head checks, deferral, and worktree', () => {
   const input = {
     issues: [issue],
