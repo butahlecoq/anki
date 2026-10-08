@@ -112,7 +112,7 @@ export function App() {
           <div className="eyebrow"><span>COLLECTION</span><span>/</span><span>LOCAL</span></div>
           <div className="topbar-controls">
             <div className={`connection ${online ? 'online' : 'offline'}`} role="status"><span className="pulse" />{connection}</div>
-            <details className="build-identity"><summary>Support</summary><dl><dt>Version</dt><dd>{buildIdentity.version}</dd><dt>Commit</dt><dd>{buildIdentity.commit}</dd><dt>Channel</dt><dd>{buildIdentity.release ? 'Release build' : 'Development build (not a release)'}</dd></dl></details>
+            <details className="build-identity"><summary>Support</summary><dl><dt>Version</dt><dd>{buildIdentity.version}</dd><dt>Commit</dt><dd>{buildIdentity.commit}</dd><dt>Channel</dt><dd>{buildIdentity.release ? 'Release build' : 'Development build (not a release)'}</dd></dl>{buildIdentity.release && <a href="notices/index.html">Dependency notices</a>}</details>
             <label className="appearance-control">
               <span className="visually-hidden">Appearance</span>
               <select value={appearance.preference} onChange={(event) => appearance.select(event.target.value as Appearance)}>

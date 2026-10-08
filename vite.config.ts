@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { defineConfig, type UserConfig } from 'vite'
 import { VitePWA, type ManifestOptions } from 'vite-plugin-pwa'
+import { dependencyNotices } from './scripts/dependency-notices.ts'
 
 const version = (JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string }).version
 const previewAllowedHost = process.env.KIROKU_PREVIEW_ALLOWED_HOST
@@ -18,6 +19,7 @@ export default defineConfig(({ command }) => ({
   ...(previewAllowedHost ? { preview: { allowedHosts: [previewAllowedHost] } } : {}),
   plugins: [
     react(),
+    dependencyNotices(),
     VitePWA({
       registerType: 'prompt',
       includeAssets: ['favicon.svg', 'favicon.ico', 'apple-touch-icon-180x180.png'],
@@ -53,7 +55,7 @@ export default defineConfig(({ command }) => ({
         ],
       } as Partial<ManifestOptions> & { kiroku: { version: string; commit: string } }),
       workbox: {
-        globPatterns: ['**/*.{js,css,html,svg,png,wav,woff2,wasm}'],
+        globPatterns: ['**/*.{js,css,html,svg,png,wav,woff2,wasm}', 'notices/**/*.{txt,json}'],
         navigateFallback: '/index.html',
         cleanupOutdatedCaches: true,
       },
