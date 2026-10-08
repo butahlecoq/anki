@@ -13,7 +13,7 @@ import { foregroundSync, pairCollection, syncCollection, uploadMedia } from './s
 import { createCollection, Rating, type Collection, type SyncOperation } from './collection'
 import { exportAnkiPackage } from './anki-export'
 import { prepareAnkiImport } from './anki-import'
-import { readAnkiExportSnapshot, readAnkiImportSnapshot, readCardsForNote, readSyncConflicts, readSyncProgressCounts } from './collection-queries'
+import { readAnkiExportSnapshot, readAnkiImportSnapshot, readCardsForNote, readReceivedOperation, readSyncConflicts, readSyncProgressCounts } from './collection-queries'
 
 let SQL: SqlJsStatic
 beforeAll(async () => { SQL = await initSqlJs({ locateFile: () => './node_modules/sql.js/dist/sql-wasm.wasm' }) })
@@ -123,7 +123,7 @@ test('image occlusion restoration waits atomically for its generated source rest
   })
 }, 15_000)
 
-test('an imported Basic note can convert to image occlusion when its first source reference arrives on a later HTTP page', async () => {
+test.each([false, true])('an imported Basic note can convert to image occlusion with later owner/source pages (card precedes owner: %s)', async cardBeforeNote => {
   const builder = createCollection(`kiroku-io-conversion-${crypto.randomUUID()}`)
   let basicFile: File, convertedFile: File, guid: string
   try {
@@ -161,8 +161,17 @@ test('an imported Basic note can convert to image occlusion when its first sourc
     expect(sources).toHaveLength(1)
     expect(sources[0].action).toBe('create')
     await owner.acknowledgeOperations(generated.map(operation => operation.opId))
-    for (let index = 0; index < 300; index++) await owner.createDeck(`Conversion filler ${index}`)
-    const operations = [...generated.filter(operation => operation.entityType !== 'noteMedia'), ...await owner.pendingOperations(), ...sources]
+    for (let index = 0; index < (cardBeforeNote ? 600 : 300); index++) await owner.createDeck(`Conversion filler ${index}`)
+    const fillers = await owner.pendingOperations()
+    const maskCards = generated.filter(operation => operation.entityType === 'card' && (operation.payload as { occlusionId?: string }).occlusionId)
+    expect(maskCards).toHaveLength(1)
+    const early = cardBeforeNote ? maskCards : []
+    const earlyIds = new Set(early.map(operation => operation.opId))
+    const remainder = generated.filter(operation => operation.entityType !== 'noteMedia' && !earlyIds.has(operation.opId))
+    const operations = cardBeforeNote
+      ? [...early, ...fillers.slice(0, 300), ...remainder, ...fillers.slice(300), ...sources]
+      : [...remainder, ...fillers, ...sources]
+    if (cardBeforeNote) expect(operations.findIndex(operation => operation.entityType === 'note') - operations.indexOf(maskCards[0])).toBeGreaterThan(250)
     expect(operations.indexOf(sources[0]) - operations.findIndex(operation => operation.entityType === 'note')).toBeGreaterThan(250)
     for (const blob of (await readAnkiExportSnapshot(owner)).blobs) await uploadMedia((await owner.syncSettings())!, blob.digest, (await owner.verifiedMediaBlob(blob.digest))!.blob)
     expect(await foregroundSync((await owner.syncSettings())!, operations.slice(0, 250))).toMatchObject({ state: 'complete' })
@@ -171,6 +180,7 @@ test('an imported Basic note can convert to image occlusion when its first sourc
     expect(waiting.notes).toEqual(beforeConversion.notes)
     expect(waiting.cards).toEqual(beforeConversion.cards)
     expect(waiting.references).toEqual(beforeConversion.references)
+    expect(await readReceivedOperation(observer, maskCards[0].opId)).toBeUndefined()
     expect((await readSyncProgressCounts(observer)).incomingPending).toBeGreaterThan(0)
     for (let offset = 250; offset < operations.length; offset += 250) expect(await foregroundSync((await owner.syncSettings())!, operations.slice(offset, offset + 250))).toMatchObject({ state: 'complete' })
     await syncComplete(observer)

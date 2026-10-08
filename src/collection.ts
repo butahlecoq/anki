@@ -1,7 +1,7 @@
 import { assertOperationIdentity, canWaitForCardMove, orderCausalOperations, uniqueSyncOperations } from './sync-operation-rules'
 import Dexie, { type EntityTable } from 'dexie'
 import { relatedEntities, recoverDeletionProvenance, inheritedDeletionBarrier, currentLifetime, decideOperationLifetime, restoredLifetime, validateRestorationEvidence, validateLifetimeMetadata, type EntityType, type EntityLifetimeMetadata, type DeletionCause } from '../entity-lifetimes'
-import { cardWaitsForPendingNote, occlusionSourceReady, validateOcclusionSource } from './sync-dependency-rules'
+import { cardWaitsForPendingNote, decideOcclusionCardDependency, occlusionSourceReady, validateOcclusionSource } from './sync-dependency-rules'
 import { customStudyKey, customStudyMembership, customStudySessions, type CustomStudySession } from './custom-study-state'
 import { createEmptyCard } from 'ts-fsrs'
 import { answerWithSchedule, deserializeCard, eligibleForQueue, eligibleForStudy, isBuried, isInterdayLearning, isLearningCard, nextStudyBoundary, Rating, reviewChoices as previewReviewChoices, selectDueCards, serializeCard, State, templateSuspended, validateSteps, type Grade } from './scheduler'
@@ -2612,6 +2612,13 @@ class DexieCollection extends Dexie {
             }
             const note = await this.notes.get(incoming.noteId)
             if (!note) throw new Error('Synced card note was not found')
+            const occlusion = decideOcclusionCardDependency(change, { note, existing: await this.cards.get(incoming.id), revisions: retained, templateId: IMAGE_OCCLUSION_TEMPLATE_ID })
+            if (occlusion === 'pending') { await this.pendingRemoteOperations.put(source); continue }
+            if (occlusion === 'stale') {
+              progress = true
+              await this.receivedOperations.add({ opId: change.opId })
+              continue
+            }
             if (incoming.deckId !== note.deckId) {
               // Notes are materialized before cards. A card created before a
               // move can therefore temporarily reference the preceding deck;
@@ -2622,16 +2629,6 @@ class DexieCollection extends Dexie {
             }
             const noteType = note && await this.noteTypes.get(note.typeId)
             const deletedType = note && !noteType && await this.deletedEntities.get(tombstoneKey('noteType', note.typeId))
-            if (note && noteType?.kind === 'image-occlusion') {
-              const existing = await this.cards.get(incoming.id)
-              const mask = note.imageOcclusion?.masks.find((item) => item.id === incoming.occlusionId)
-              const expectedOrdinal = existing?.occlusionOrdinal ?? mask?.ordinal
-              if (!incoming.occlusionId || incoming.id !== `${note.id}:${IMAGE_OCCLUSION_TEMPLATE_ID}:m${incoming.occlusionId}` || incoming.templateId !== IMAGE_OCCLUSION_TEMPLATE_ID || expectedOrdinal !== incoming.occlusionOrdinal) {
-                progress = true
-                await this.receivedOperations.add({ opId: change.opId })
-                continue
-              }
-            }
             if (note && (deletedType || (noteType && !this.cardIsEligible(noteType, note, incoming))) && !templateSuspended(incoming)) {
               progress = true
               await this.receivedOperations.add({ opId: change.opId })

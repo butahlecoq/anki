@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest'
 import { inheritedDeletionBarrier } from '../entity-lifetimes'
-import type { SyncOperation } from './collection'
-import { cardWaitsForPendingNote, hasPendingDeckCycle, occlusionSourceReady } from './sync-dependency-rules'
+import type { CardRecord, Note, SyncOperation } from './collection'
+import { cardWaitsForPendingNote, decideOcclusionCardDependency, hasPendingDeckCycle, occlusionSourceReady } from './sync-dependency-rules'
 
 const operation = (entityType: SyncOperation['entityType'], entityId: string, payload: unknown, extra: Partial<SyncOperation> = {}): SyncOperation => ({
   opId: `${entityType}-${entityId}`, entityType, entityId, action: 'create', occurredAt: '2026-10-08T12:00:00Z', payload, ...extra,
@@ -53,4 +53,22 @@ test('cards wait for same-lifetime pending owner revisions instead of validating
   expect(cardWaitsForPendingNote(card, [{ ...pendingNote, lifetime: ['future'] }])).toBe(false)
   expect(cardWaitsForPendingNote({ ...card, action: 'delete' }, [pendingNote])).toBe(false)
   expect(cardWaitsForPendingNote(card, [{ ...pendingNote, action: 'delete' }])).toBe(false)
+})
+
+test('unknown mask generations wait while malformed, mutated and historically removed masks stay suppressed', () => {
+  const note = { id: 'note', typeId: 'basic' } as Note
+  const card = { id: 'note:image-occlusion:mnext', noteId: note.id, templateId: 'image-occlusion', occlusionId: 'next', occlusionOrdinal: 2 } as CardRecord
+  const incoming = operation('card', card.id, card)
+  const snapshot = { note, revisions: [], templateId: 'image-occlusion' }
+  expect(decideOcclusionCardDependency(incoming, snapshot)).toBe('pending')
+  expect(decideOcclusionCardDependency({ ...incoming, payload: { ...card, id: 'wrong' } }, snapshot)).toBe('stale')
+  expect(decideOcclusionCardDependency({ ...incoming, payload: { ...card, occlusionOrdinal: -1 } }, snapshot)).toBe('stale')
+  const owner = { ...note, imageOcclusion: { version: 1 as const, sourceMediaId: 'source', imageWidth: 1, imageHeight: 1, masks: [{ id: 'next', ordinal: 2, x: .1, y: .1, width: .2, height: .2 }], nextOrdinal: 3 } }
+  expect(decideOcclusionCardDependency(incoming, { ...snapshot, note: owner })).toBe('apply')
+  expect(decideOcclusionCardDependency(incoming, { ...snapshot, note: owner, existing: { ...card, occlusionOrdinal: 1 } })).toBe('stale')
+  const removed = { ...owner, imageOcclusion: { ...owner.imageOcclusion, masks: [] } }
+  expect(decideOcclusionCardDependency(incoming, { ...snapshot, note: removed })).toBe('stale')
+  expect(decideOcclusionCardDependency(incoming, { ...snapshot, revisions: [operation('note', note.id, owner)] })).toBe('stale')
+  expect(decideOcclusionCardDependency({ ...incoming, payload: { ...card, templateSuspended: true } }, { ...snapshot, note: removed, existing: card })).toBe('apply')
+  expect(decideOcclusionCardDependency(incoming, { ...snapshot, note: { ...removed, imageOcclusion: { ...removed.imageOcclusion, nextOrdinal: 2 } } })).toBe('pending')
 })

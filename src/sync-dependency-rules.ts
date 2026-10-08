@@ -1,5 +1,6 @@
 import { currentLifetime, decideOperationLifetime, validateRestorationEvidence, type DeletionBarrier, type EntityLifetimeReference } from '../entity-lifetimes'
-import type { Deck, Note, NoteMediaReference, SyncOperation } from './collection'
+import type { CardRecord, Deck, Note, NoteMediaReference, SyncOperation } from './collection'
+import { templateSuspended } from './scheduler'
 import { mergeRevisions } from './sync-revisions'
 
 /** Validate a card against the settled owner, not a prior note type or deck. */
@@ -9,6 +10,31 @@ export function cardWaitsForPendingNote(operation: SyncOperation, pending: reado
   const lifetime = operation.relatedLifetimes?.find(ref => ref.entityType === 'note' && ref.entityId === noteId)?.lifetime ?? []
   return pending.some(candidate => candidate.entityType === 'note' && candidate.entityId === noteId && candidate.action !== 'delete'
     && JSON.stringify(candidate.lifetime ?? []) === JSON.stringify(lifetime))
+}
+
+/** Unknown valid mask generations wait; known removed or malformed masks cannot revive. */
+export function decideOcclusionCardDependency(operation: SyncOperation, snapshot: {
+  note: Note
+  existing?: CardRecord
+  revisions: readonly SyncOperation[]
+  templateId: string
+}): 'apply' | 'pending' | 'stale' {
+  const card = operation.payload as CardRecord
+  const { note, existing, templateId } = snapshot
+  if (!note.imageOcclusion && !card.occlusionId && card.templateId !== templateId) return 'apply'
+  if (typeof card.occlusionId !== 'string' || !card.occlusionId || card.id !== `${note.id}:${templateId}:m${card.occlusionId}` || card.templateId !== templateId
+    || !Number.isSafeInteger(card.occlusionOrdinal) || (card.occlusionOrdinal ?? 0) < 1) return 'stale'
+  const mask = note.imageOcclusion?.masks.find(candidate => candidate.id === card.occlusionId)
+  const expectedOrdinal = existing?.occlusionOrdinal ?? mask?.ordinal
+  if (expectedOrdinal !== undefined && expectedOrdinal !== card.occlusionOrdinal) return 'stale'
+  if (mask) return 'apply'
+  if (existing?.occlusionOrdinal !== undefined) return templateSuspended(card) ? 'apply' : 'stale'
+  const ownerLifetime = operation.relatedLifetimes?.find(ref => ref.entityType === 'note' && ref.entityId === note.id)?.lifetime ?? []
+  const knownMask = snapshot.revisions.some(revision => revision.entityType === 'note' && revision.entityId === note.id
+    && JSON.stringify(revision.lifetime ?? []) === JSON.stringify(ownerLifetime)
+    && (revision.payload as Partial<Note> | undefined)?.imageOcclusion?.masks.some(candidate => candidate.id === card.occlusionId))
+  if (knownMask || (note.imageOcclusion && card.occlusionOrdinal! < note.imageOcclusion.nextOrdinal)) return 'stale'
+  return 'pending'
 }
 
 /** Diagnose only unambiguous creates without a materialized or retired history. */
