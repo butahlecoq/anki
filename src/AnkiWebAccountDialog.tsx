@@ -23,13 +23,6 @@ function AccountMediaVersion({ label, name, bytes }: { label: string; name: stri
     : <span ref={host}>{label}: <audio controls preload="metadata">{name}</audio></span>
 }
 
-async function pcServiceIsReachable(endpoint: string) {
-  try {
-    await fetch(`${endpoint.replace(/\/$/, '')}/api/health`, { mode: 'no-cors', credentials: 'omit', signal: AbortSignal.timeout(5000) })
-    return true
-  } catch { return false }
-}
-
 export function AnkiWebAccountDialog({ settings, onClose }: { settings: SyncSettings; onClose: () => void }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -79,12 +72,7 @@ export function AnkiWebAccountDialog({ settings, onClose }: { settings: SyncSett
       await refreshAccountMedia(account)
       setMessage('Account connected. No notes, cards, or study history were uploaded.')
     } catch (error) {
-      if (error instanceof TypeError) {
-        const reachable = await pcServiceIsReachable(settings.endpoint)
-        setMessage(reachable
-          ? 'The PC service is reachable but rejected this app origin. Check its trusted application origin setting.'
-          : 'The PC service could not be reached. Check the private network and make sure the PC service is running.')
-      } else setMessage(nativeAnkiAccountErrorMessage(error))
+      setMessage(nativeAnkiAccountErrorMessage(error))
     } finally {
       setPassword('')
       setBusy(false)

@@ -78,7 +78,10 @@ async function forwardAnkiWebRequest(
     'x-kiroku-response-source': 'relay',
   })
   const reply = (message: string, status: number) => new Response(message, { status, headers: cors })
-  if (request.headers.get('origin') !== pwaOrigin) return reply('Origin not allowed', 403)
+  if (request.headers.get('origin') !== pwaOrigin) {
+    cors.set('x-kiroku-relay-error', 'origin-rejected')
+    return reply('Origin not allowed', 403)
+  }
   const url = new URL(request.url)
   const route = url.pathname.replace(/^\/api\/ankiweb\//, '').replace(/^\/ankiweb\//, '')
   if (!url.pathname.startsWith('/api/ankiweb/') && !url.pathname.startsWith('/ankiweb/')) return reply('Unknown account route', 404)
