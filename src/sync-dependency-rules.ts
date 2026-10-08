@@ -10,11 +10,18 @@ export function cardTemplateOwnerIds(card: Pick<CardRecord, 'templateId'>, revis
     .map(revision => revision.entityId))]
 }
 
-/** Retired cards can retain complete review logs, never incomplete commands. */
-export function hasReviewHistory(review: ReviewEntry): boolean {
+/** Lifetime validation precedes this identity proof for retired-card history. */
+export function canRetainReviewHistory(operation: SyncOperation, revisions: readonly SyncOperation[]): boolean {
+  const review = operation.payload as ReviewEntry
+  const card = operation.relatedLifetimes?.find(ref => ref.entityType === 'card' && ref.entityId === review.cardId)
+  const deck = operation.relatedLifetimes?.find(ref => ref.entityType === 'deck' && ref.entityId === review.deckId)
+  const explicitReferences = operation.lifetime !== undefined && card !== undefined && deck !== undefined
+  const witnessed = revisions.some(revision => revision.entityType === 'card' && revision.entityId === review.cardId
+    && revision.reviewId === review.id && JSON.stringify(revision.lifetime ?? []) === JSON.stringify(card?.lifetime ?? []))
   return Number.isInteger(review.rating) && review.rating >= 1 && review.rating <= 4
     && Number.isFinite(Date.parse(review.reviewedAt)) && Number.isFinite(Date.parse(review.due))
     && [review.state, review.stability, review.difficulty, review.elapsedDays, review.lastElapsedDays, review.scheduledDays, review.learningSteps].every(Number.isFinite)
+    && (explicitReferences || witnessed)
 }
 
 /** Validate a card against the settled owner, not a prior note type or deck. */

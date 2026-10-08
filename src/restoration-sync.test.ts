@@ -196,19 +196,21 @@ test.each([false, true])('an imported Basic note can convert to image occlusion 
 }, 15_000)
 
 test.each([
-  { originalKind: 'image occlusion', delayedPriorReview: false },
-  { originalKind: 'standard', delayedPriorReview: false },
-  { originalKind: 'image occlusion', delayedPriorReview: true },
-  { originalKind: 'standard', delayedPriorReview: true },
-])('an imported note can convert to another standard card with cross-page history (%j)', async ({ originalKind, delayedPriorReview }) => {
+  { originalKind: 'image occlusion', delayedPriorReview: false, deletedPriorType: false },
+  { originalKind: 'standard', delayedPriorReview: false, deletedPriorType: false },
+  { originalKind: 'image occlusion', delayedPriorReview: true, deletedPriorType: false },
+  { originalKind: 'standard', delayedPriorReview: true, deletedPriorType: false },
+  { originalKind: 'standard', delayedPriorReview: true, deletedPriorType: true },
+])('an imported note can convert to another standard card with cross-page history (%j)', async ({ originalKind, delayedPriorReview, deletedPriorType }) => {
   const builder = createCollection(`kiroku-basic-conversion-${crypto.randomUUID()}`)
   let imageFile: File, basicFile: File, guid: string
   try {
     const deck = await builder.createDeck('Imported reverse conversion', new Date('2026-10-01T12:00:00Z'))
     const png = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL4+QAAAABJRU5ErkJggg==', 'base64'))
+    const originalType = originalKind === 'standard' ? await builder.createNoteType({ name: 'Original vocabulary', fields: [{ name: 'Word' }, { name: 'Meaning' }], templates: [{ name: 'Original recognition', front: '{{Word}}', back: '{{Meaning}}', css: '' }] }, new Date('2026-10-01T12:00:00Z')) : undefined
     const image = originalKind === 'image occlusion'
       ? await builder.createImageOcclusionNote(deck.id, { image: new File([png], 'diagram.png', { type: 'image/png' }), imageWidth: 1, imageHeight: 1, header: '骨', backExtra: 'bone', tags: ['diagram'], masks: [{ x: .1, y: .2, width: .3, height: .2 }] }, new Date('2026-10-01T12:00:00Z'))
-      : await builder.createBasicNote(deck.id, { front: '骨', back: 'bone' }, new Date('2026-10-01T12:00:00Z'))
+      : await builder.createNote(deck.id, originalType!.id, { [originalType!.fields[0].id]: '骨', [originalType!.fields[1].id]: 'bone' }, new Date('2026-10-01T12:00:00Z'))
     guid = image.id
     await builder.answer((await readCardsForNote(builder, image.id))[0].id, Rating.Good, new Date('2026-10-01T13:00:00Z'))
     const initial = await exportAnkiPackage(builder, { SQL, scheduling: true, history: true, media: true })
@@ -240,6 +242,7 @@ test.each([
     const preview = await prepareAnkiImport(basicFile, owner, { SQL })
     expect(preview.issues.filter(issue => issue.severity === 'error')).toEqual([])
     await preview.commit()
+    if (deletedPriorType) await owner.deleteNoteType(prior.typeId)
     const converted = (await readAnkiExportSnapshot(owner)).notes[0]
     expect(converted.id).toBe(prior.id)
     expect(converted.imageOcclusion).toBeUndefined()

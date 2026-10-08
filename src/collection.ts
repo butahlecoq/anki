@@ -1,7 +1,7 @@
 import { assertOperationIdentity, canWaitForCardMove, orderCausalOperations, uniqueSyncOperations } from './sync-operation-rules'
 import Dexie, { type EntityTable } from 'dexie'
 import { relatedEntities, recoverDeletionProvenance, inheritedDeletionBarrier, currentLifetime, decideOperationLifetime, restoredLifetime, validateRestorationEvidence, validateLifetimeMetadata, type EntityType, type EntityLifetimeMetadata, type DeletionCause } from '../entity-lifetimes'
-import { cardTemplateOwnerIds, cardWaitsForPendingNote, decideOcclusionCardDependency, hasReviewHistory, occlusionSourceReady, validateOcclusionSource } from './sync-dependency-rules'
+import { canRetainReviewHistory, cardTemplateOwnerIds, cardWaitsForPendingNote, decideOcclusionCardDependency, occlusionSourceReady, validateOcclusionSource } from './sync-dependency-rules'
 import { customStudyKey, customStudyMembership, customStudySessions, type CustomStudySession } from './custom-study-state'
 import { createEmptyCard } from 'ts-fsrs'
 import { answerWithSchedule, deserializeCard, eligibleForQueue, eligibleForStudy, isBuried, isInterdayLearning, isLearningCard, nextStudyBoundary, Rating, reviewChoices as previewReviewChoices, selectDueCards, serializeCard, State, templateSuspended, validateSteps, type Grade } from './scheduler'
@@ -2657,8 +2657,7 @@ class DexieCollection extends Dexie {
             const note = card && await this.notes.get(card.noteId)
             const noteType = note && await this.noteTypes.get(note.typeId)
             if (card && note && (!noteType || !this.cardIsEligible(noteType, note, card))) {
-              const templateDeleted = (await this.deletedEntities.bulkGet(cardTemplateOwnerIds(card, retained).map(id => tombstoneKey('noteType', id)))).some(Boolean)
-              if (templateDeleted || !hasReviewHistory(review)) {
+              if (!canRetainReviewHistory(source, retained)) {
                 progress = true
                 await this.receivedOperations.add({ opId: change.opId })
                 continue
