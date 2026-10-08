@@ -195,6 +195,86 @@ test.each([false, true])('an imported Basic note can convert to image occlusion 
   })
 }, 15_000)
 
+test.each([
+  { originalKind: 'image occlusion', delayedPriorReview: false },
+  { originalKind: 'standard', delayedPriorReview: false },
+  { originalKind: 'image occlusion', delayedPriorReview: true },
+  { originalKind: 'standard', delayedPriorReview: true },
+])('an imported note can convert to another standard card with cross-page history (%j)', async ({ originalKind, delayedPriorReview }) => {
+  const builder = createCollection(`kiroku-basic-conversion-${crypto.randomUUID()}`)
+  let imageFile: File, basicFile: File, guid: string
+  try {
+    const deck = await builder.createDeck('Imported reverse conversion', new Date('2026-10-01T12:00:00Z'))
+    const png = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL4+QAAAABJRU5ErkJggg==', 'base64'))
+    const image = originalKind === 'image occlusion'
+      ? await builder.createImageOcclusionNote(deck.id, { image: new File([png], 'diagram.png', { type: 'image/png' }), imageWidth: 1, imageHeight: 1, header: '骨', backExtra: 'bone', tags: ['diagram'], masks: [{ x: .1, y: .2, width: .3, height: .2 }] }, new Date('2026-10-01T12:00:00Z'))
+      : await builder.createBasicNote(deck.id, { front: '骨', back: 'bone' }, new Date('2026-10-01T12:00:00Z'))
+    guid = image.id
+    await builder.answer((await readCardsForNote(builder, image.id))[0].id, Rating.Good, new Date('2026-10-01T13:00:00Z'))
+    const initial = await exportAnkiPackage(builder, { SQL, scheduling: true, history: true, media: true })
+    imageFile = new File([initial.bytes.slice().buffer as ArrayBuffer], 'occlusion-before-conversion.apkg')
+    await builder.deleteNote(image.id)
+    if (originalKind === 'image occlusion') await builder.createBasicNote(deck.id, { front: '骨', back: 'bone' }, new Date('2026-10-02T12:00:00Z'))
+    else {
+      const type = await builder.createNoteType({ name: 'Converted vocabulary', fields: [{ name: 'Word' }, { name: 'Meaning' }], templates: [{ name: 'Converted recognition', front: '{{Word}}', back: '{{Meaning}}', css: '' }] }, new Date('2026-10-02T12:00:00Z'))
+      await builder.createNote(deck.id, type.id, { [type.fields[0].id]: '骨', [type.fields[1].id]: 'bone' }, new Date('2026-10-02T12:00:00Z'))
+    }
+    const converted = await exportAnkiPackage(builder, { SQL, scheduling: true, history: true, media: true })
+    basicFile = await editedPackage(new File([converted.bytes.slice().buffer as ArrayBuffer], 'basic-conversion.apkg'), database => {
+      database.run('UPDATE notes SET guid = ?', [guid])
+    }, 'same-guid-basic.apkg')
+  } finally { await builder.removeLocalCollection() }
+  await withPairedCollections(2, async ([owner, observer]) => {
+    await (await prepareAnkiImport(imageFile, owner, { SQL })).commit()
+    const delayed = delayedPriorReview ? (await owner.pendingOperations()).filter(operation => operation.entityType === 'review') : []
+    if (delayedPriorReview) {
+      expect(delayed).toHaveLength(1)
+      await owner.acknowledgeOperations(delayed.map(operation => operation.opId))
+    }
+    await syncComplete(owner)
+    await syncComplete(observer)
+    const before = await readAnkiExportSnapshot(observer)
+    const prior = before.notes[0]
+    if (originalKind === 'image occlusion') expect(prior.imageOcclusion).toBeDefined()
+    else expect(prior.imageOcclusion).toBeUndefined()
+    const preview = await prepareAnkiImport(basicFile, owner, { SQL })
+    expect(preview.issues.filter(issue => issue.severity === 'error')).toEqual([])
+    await preview.commit()
+    const converted = (await readAnkiExportSnapshot(owner)).notes[0]
+    expect(converted.id).toBe(prior.id)
+    expect(converted.imageOcclusion).toBeUndefined()
+    const basic = (await readCardsForNote(owner, prior.id)).find(card => !card.occlusionId && !card.templateSuspended)!
+    expect(basic).toBeDefined()
+    await owner.answer(basic.id, Rating.Good, new Date('2026-10-02T13:00:00Z'))
+    const generated = await owner.pendingOperations()
+    const early = generated.find(operation => operation.entityType === 'card' && operation.action === 'create' && operation.entityId === basic.id)!
+    expect(early).toBeDefined()
+    expect(generated.find(operation => operation.entityType === 'note' && operation.entityId === prior.id)?.action).toBe('update')
+    await owner.acknowledgeOperations(generated.map(operation => operation.opId))
+    for (let index = 0; index < 300; index++) await owner.createDeck(`Reverse conversion filler ${index}`)
+    const operations = [early, ...await owner.pendingOperations(), ...generated.filter(operation => operation.opId !== early.opId), ...delayed]
+    expect(operations.findIndex(operation => operation.entityType === 'note' && operation.entityId === prior.id)).toBeGreaterThan(250)
+    expect(await foregroundSync((await owner.syncSettings())!, operations.slice(0, 250))).toMatchObject({ state: 'complete' })
+    expect(await syncCollection(observer)).toMatchObject({ state: 'incomplete', remoteChangesPending: false })
+    expect(await readReceivedOperation(observer, early.opId)).toBeUndefined()
+    const waiting = await readAnkiExportSnapshot(observer)
+    expect(waiting.notes).toEqual(before.notes)
+    expect(waiting.cards).toEqual(before.cards)
+    expect((await readSyncProgressCounts(observer)).incomingPending).toBeGreaterThan(0)
+    for (let offset = 250; offset < operations.length; offset += 250) expect(await foregroundSync((await owner.syncSettings())!, operations.slice(offset, offset + 250))).toMatchObject({ state: 'complete' })
+    await syncComplete(observer)
+    const actual = await readAnkiExportSnapshot(observer)
+    const expected = await readAnkiExportSnapshot(owner)
+    expect(actual.notes).toEqual(expected.notes)
+    expect(actual.cards).toEqual(expected.cards)
+    expect(actual.reviews).toEqual(expected.reviews)
+    expect(actual.references).toEqual(expected.references)
+    expect(await readSyncProgressCounts(observer)).toMatchObject({ incomingPending: 0, conflicts: 0 })
+    await syncComplete(observer)
+    expect((await readAnkiExportSnapshot(observer)).reviews).toEqual(expected.reviews)
+  })
+}, 15_000)
+
 test('new content in a restored child can be restored after moving the child to another root', async () => {
   await withPairedCollections(2, async ([owner, observer]) => {
     const file = await restorationPackage(true)

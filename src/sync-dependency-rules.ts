@@ -1,7 +1,21 @@
 import { currentLifetime, decideOperationLifetime, validateRestorationEvidence, type DeletionBarrier, type EntityLifetimeReference } from '../entity-lifetimes'
-import type { CardRecord, Deck, Note, NoteMediaReference, SyncOperation } from './collection'
+import type { CardRecord, Deck, Note, NoteMediaReference, NoteType, ReviewEntry, SyncOperation } from './collection'
 import { templateSuspended } from './scheduler'
 import { mergeRevisions } from './sync-revisions'
+
+/** Template identity belongs to its defining type even after an owner moves. */
+export function cardTemplateOwnerIds(card: Pick<CardRecord, 'templateId'>, revisions: readonly SyncOperation[]): string[] {
+  return [...new Set(revisions.filter(revision => revision.entityType === 'noteType'
+    && (revision.payload as Partial<NoteType> | undefined)?.templates?.some(template => template.id === card.templateId))
+    .map(revision => revision.entityId))]
+}
+
+/** Retired cards can retain complete review logs, never incomplete commands. */
+export function hasReviewHistory(review: ReviewEntry): boolean {
+  return Number.isInteger(review.rating) && review.rating >= 1 && review.rating <= 4
+    && Number.isFinite(Date.parse(review.reviewedAt)) && Number.isFinite(Date.parse(review.due))
+    && [review.state, review.stability, review.difficulty, review.elapsedDays, review.lastElapsedDays, review.scheduledDays, review.learningSteps].every(Number.isFinite)
+}
 
 /** Validate a card against the settled owner, not a prior note type or deck. */
 export function cardWaitsForPendingNote(operation: SyncOperation, pending: readonly SyncOperation[]): boolean {
@@ -21,7 +35,9 @@ export function decideOcclusionCardDependency(operation: SyncOperation, snapshot
 }): 'apply' | 'pending' | 'stale' {
   const card = operation.payload as CardRecord
   const { note, existing, templateId } = snapshot
-  if (!note.imageOcclusion && !card.occlusionId && card.templateId !== templateId) return 'apply'
+  // A standard card can precede a later conversion of its current mask owner.
+  // Explicit template retirement remains applicable and keeps its history.
+  if (!card.occlusionId && card.templateId !== templateId) return !note.imageOcclusion || templateSuspended(card) ? 'apply' : 'pending'
   if (typeof card.occlusionId !== 'string' || !card.occlusionId || card.id !== `${note.id}:${templateId}:m${card.occlusionId}` || card.templateId !== templateId
     || !Number.isSafeInteger(card.occlusionOrdinal) || (card.occlusionOrdinal ?? 0) < 1) return 'stale'
   const mask = note.imageOcclusion?.masks.find(candidate => candidate.id === card.occlusionId)

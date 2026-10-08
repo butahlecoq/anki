@@ -1,7 +1,7 @@
 import { assertOperationIdentity, canWaitForCardMove, orderCausalOperations, uniqueSyncOperations } from './sync-operation-rules'
 import Dexie, { type EntityTable } from 'dexie'
 import { relatedEntities, recoverDeletionProvenance, inheritedDeletionBarrier, currentLifetime, decideOperationLifetime, restoredLifetime, validateRestorationEvidence, validateLifetimeMetadata, type EntityType, type EntityLifetimeMetadata, type DeletionCause } from '../entity-lifetimes'
-import { cardWaitsForPendingNote, decideOcclusionCardDependency, occlusionSourceReady, validateOcclusionSource } from './sync-dependency-rules'
+import { cardTemplateOwnerIds, cardWaitsForPendingNote, decideOcclusionCardDependency, hasReviewHistory, occlusionSourceReady, validateOcclusionSource } from './sync-dependency-rules'
 import { customStudyKey, customStudyMembership, customStudySessions, type CustomStudySession } from './custom-study-state'
 import { createEmptyCard } from 'ts-fsrs'
 import { answerWithSchedule, deserializeCard, eligibleForQueue, eligibleForStudy, isBuried, isInterdayLearning, isLearningCard, nextStudyBoundary, Rating, reviewChoices as previewReviewChoices, selectDueCards, serializeCard, State, templateSuspended, validateSteps, type Grade } from './scheduler'
@@ -2612,6 +2612,12 @@ class DexieCollection extends Dexie {
             }
             const note = await this.notes.get(incoming.noteId)
             if (!note) throw new Error('Synced card note was not found')
+            const templateDeleted = (await this.deletedEntities.bulkGet(cardTemplateOwnerIds(incoming, retained).map(id => tombstoneKey('noteType', id)))).some(Boolean)
+            if (templateDeleted && !templateSuspended(incoming)) {
+              progress = true
+              await this.receivedOperations.add({ opId: change.opId })
+              continue
+            }
             const occlusion = decideOcclusionCardDependency(change, { note, existing: await this.cards.get(incoming.id), revisions: retained, templateId: IMAGE_OCCLUSION_TEMPLATE_ID })
             if (occlusion === 'pending') { await this.pendingRemoteOperations.put(source); continue }
             if (occlusion === 'stale') {
@@ -2629,9 +2635,13 @@ class DexieCollection extends Dexie {
             }
             const noteType = note && await this.noteTypes.get(note.typeId)
             const deletedType = note && !noteType && await this.deletedEntities.get(tombstoneKey('noteType', note.typeId))
-            if (note && (deletedType || (noteType && !this.cardIsEligible(noteType, note, incoming))) && !templateSuspended(incoming)) {
+            if (note && deletedType && !templateSuspended(incoming)) {
               progress = true
               await this.receivedOperations.add({ opId: change.opId })
+              continue
+            }
+            if (note && noteType && !this.cardIsEligible(noteType, note, incoming) && !templateSuspended(incoming)) {
+              await this.pendingRemoteOperations.put(source)
               continue
             }
           }
@@ -2647,9 +2657,16 @@ class DexieCollection extends Dexie {
             const note = card && await this.notes.get(card.noteId)
             const noteType = note && await this.noteTypes.get(note.typeId)
             if (card && note && (!noteType || !this.cardIsEligible(noteType, note, card))) {
-              progress = true
-              await this.receivedOperations.add({ opId: change.opId })
-              continue
+              const templateDeleted = (await this.deletedEntities.bulkGet(cardTemplateOwnerIds(card, retained).map(id => tombstoneKey('noteType', id)))).some(Boolean)
+              if (templateDeleted || !hasReviewHistory(review)) {
+                progress = true
+                await this.receivedOperations.add({ opId: change.opId })
+                continue
+              }
+              if (!templateSuspended(card)) {
+                await this.pendingRemoteOperations.put(source)
+                continue
+              }
             }
           }
           if (change.entityType === 'noteMedia') {
