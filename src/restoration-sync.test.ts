@@ -83,6 +83,46 @@ async function syncComplete(device: Collection, stage?: string) {
   expect(result).toMatchObject({ state: 'complete', media: { pending: 0 } })
 }
 
+test('image occlusion restoration waits atomically for its generated source restoration on a later HTTP page', async () => {
+  const builder = createCollection(`kiroku-io-restoration-${crypto.randomUUID()}`)
+  let file: File
+  try {
+    const deck = await builder.createDeck('Occlusion restoration')
+    const png = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL4+QAAAABJRU5ErkJggg==', 'base64'))
+    const note = await builder.createImageOcclusionNote(deck.id, { image: new File([png], 'diagram.png', { type: 'image/png' }), imageWidth: 1, imageHeight: 1, header: '骨', backExtra: 'bone', tags: ['diagram'], masks: [{ x: .1, y: .2, width: .3, height: .2 }] })
+    await builder.answer((await readCardsForNote(builder, note.id))[0].id, Rating.Good)
+    const exported = await exportAnkiPackage(builder, { SQL, scheduling: true, history: true, media: true })
+    file = new File([exported.bytes.slice().buffer as ArrayBuffer], 'occlusion-restoration.apkg')
+  } finally { await builder.removeLocalCollection() }
+  await withPairedCollections(2, async ([owner, observer]) => {
+    await (await prepareAnkiImport(file, owner, { SQL })).commit()
+    await syncComplete(owner)
+    await syncComplete(observer)
+    const original = await readAnkiExportSnapshot(owner)
+    await owner.deleteDeck(original.notes[0].deckId, { mode: 'delete-subtree' })
+    await syncComplete(owner)
+    await syncComplete(observer)
+    await (await prepareAnkiImport(file, owner, { SQL })).commit()
+    const restored = await owner.pendingOperations()
+    const media = restored.filter(operation => operation.entityType === 'noteMedia')
+    expect(media.every(operation => operation.action === 'restore')).toBe(true)
+    await owner.acknowledgeOperations(restored.map(operation => operation.opId))
+    for (let index = 0; index < 300; index++) await owner.createDeck(`Restoration filler ${index}`)
+    const operations = [...restored.filter(operation => operation.entityType !== 'noteMedia'), ...await owner.pendingOperations(), ...media]
+    expect(operations.indexOf(media[0]) - operations.findIndex(operation => operation.entityType === 'note')).toBeGreaterThan(250)
+    for (let offset = 0; offset < operations.length; offset += 250) expect(await foregroundSync((await owner.syncSettings())!, operations.slice(offset, offset + 250))).toMatchObject({ state: 'complete' })
+    await syncComplete(observer)
+    const actual = await readAnkiExportSnapshot(observer)
+    const expected = await readAnkiExportSnapshot(owner)
+    expect(actual.notes).toEqual(expected.notes)
+    expect(actual.cards).toEqual(expected.cards.map(card => ({ ...card, suspended: false })))
+    expect(actual.reviews).toEqual(expected.reviews)
+    expect(actual.references).toEqual(expected.references)
+    expect(actual.blobs.map(blob => blob.digest)).toEqual(expected.blobs.map(blob => blob.digest))
+    expect(await readSyncProgressCounts(observer)).toMatchObject({ incomingPending: 0, conflicts: 0 })
+  })
+}, 15_000)
+
 test('new content in a restored child can be restored after moving the child to another root', async () => {
   await withPairedCollections(2, async ([owner, observer]) => {
     const file = await restorationPackage(true)

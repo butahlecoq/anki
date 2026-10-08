@@ -16,7 +16,7 @@ function correctParent(operation: SyncOperation, parent: Deck): SyncOperation {
     relatedLifetimes: operation.relatedLifetimes?.map(ref => ref.entityType === 'deck' ? { ...ref, entityId: parent.parentId! } : ref) }
 }
 
-async function withHistory(customOptions: boolean, run: (source: Collection, receiver: Collection, operations: SyncOperation[], receiverName: string, sendRemaining: () => Promise<void>) => Promise<void>, options: { deleteRoot?: boolean; firstPageOnly?: boolean; cycle?: boolean; correctedCycle?: boolean } = {}) {
+async function withHistory(customOptions: boolean, run: (source: Collection, receiver: Collection, operations: SyncOperation[], receiverName: string, sendRemaining: () => Promise<void>) => Promise<void>, options: { deleteRoot?: boolean; firstPageOnly?: boolean; firstTwoPagesOnly?: boolean; cycle?: boolean; correctedCycle?: boolean; imageOcclusion?: boolean; invalidSource?: boolean; moveNote?: boolean } = {}) {
   const runtime = await mkdtemp(join(tmpdir(), 'kiroku-paginated-'))
   const service = createSyncService({ databasePath: join(runtime, 'collection.sqlite') })
   const server = createServer(createSyncHttpHandler(service))
@@ -35,19 +35,32 @@ async function withHistory(customOptions: boolean, run: (source: Collection, rec
     const parent = await source.createDeck('Grammar', { parentId: root.id, ...(customOptions ? { optionGroupId: group.id } : {}) }, now)
     const child = await source.createDeck('Verbs', { parentId: parent.id, ...(customOptions ? { optionGroupId: group.id } : {}) }, now)
     const type = await source.createNoteType({ name: 'Vocabulary', fields: [{ name: 'Expression' }, { name: 'Meaning' }], templates: [{ name: 'Recognition', front: '{{Expression}}', back: '{{Meaning}}', css: '' }] }, now)
-    const note = await source.createNote(child.id, type.id, { [type.fields[0].id]: '食べる', [type.fields[1].id]: 'to eat' }, now)
     const png = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL4+QAAAABJRU5ErkJggg==', 'base64'))
-    await source.attachMedia(note.id, { file: new File([png], 'food.png', { type: 'image/png' }), side: 'front' }, now)
+    const note = options.imageOcclusion
+      ? await source.createImageOcclusionNote(child.id, { image: new File([png], 'food.png', { type: 'image/png' }), imageWidth: 1, imageHeight: 1, header: '食べる', backExtra: 'to eat', tags: ['diagram'], masks: [{ x: .1, y: .1, width: .2, height: .2 }] }, now)
+      : await source.createNote(child.id, type.id, { [type.fields[0].id]: '食べる', [type.fields[1].id]: 'to eat' }, now)
+    if (!options.imageOcclusion) await source.attachMedia(note.id, { file: new File([png], 'food.png', { type: 'image/png' }), side: 'front' }, now)
+    if (options.moveNote) await source.moveNote(note.id, root.id, new Date('2026-10-01T12:30:00Z'))
     const card = (await readCardsForNote(source, note.id))[0]
     await source.answer(card.id, Rating.Good, new Date('2026-10-01T13:00:00Z'))
     if (options.deleteRoot) await source.deleteDeck(root.id, { mode: 'delete-subtree' })
     const original = await source.pendingOperations()
     const lateIds = new Set([parent.id, root.id, group.id, type.id])
-    const early = original.filter(op => !lateIds.has(op.entityId))
+    const finalOperations = original.filter(op => options.imageOcclusion ? op.entityId === note.imageOcclusion!.sourceMediaId : options.moveNote && op.entityType === 'card' && op.action === 'update')
+    const finalIds = new Set(finalOperations.map(op => op.opId))
+    const early = original.filter(op => !lateIds.has(op.entityId) && !finalIds.has(op.opId))
     const rootOperation = original.find(op => op.entityId === root.id)!
     const fillers: SyncOperation[] = Array.from({ length: 300 }, (_, index) => ({ ...rootOperation, opId: `filler-op-${index}`, entityId: `filler-${index}`, payload: { ...root, id: `filler-${index}`, name: `Unrelated ${index}` } }))
     // The real service must retain this old append order, not repair the fixture.
     const operations = [...early, ...fillers, ...original.filter(op => lateIds.has(op.entityId))]
+    if (finalOperations.length) {
+      operations.push(...fillers.map((op, index) => ({ ...op, opId: `final-filler-op-${index}`, entityId: `final-filler-${index}`, payload: { ...root, id: `final-filler-${index}`, name: `Final unrelated ${index}` } })), ...finalOperations)
+      expect(operations.indexOf(finalOperations[0]) - operations.findIndex(op => op.entityId === note.id)).toBeGreaterThan(500)
+    }
+    if (options.invalidSource) {
+      const index = operations.findIndex(op => op.entityId === note.imageOcclusion!.sourceMediaId)
+      operations[index] = { ...operations[index], payload: { ...operations[index].payload as object, kind: 'audio', mimeType: 'audio/mpeg' } }
+    }
     if (options.cycle) {
       const index = operations.findIndex(op => op.entityId === parent.id)
       const operation = operations[index]
@@ -61,7 +74,7 @@ async function withHistory(customOptions: boolean, run: (source: Collection, rec
     const send = async (offset: number) => {
       expect(await foregroundSync(settings, operations.slice(offset, offset + 250))).toMatchObject({ state: 'complete', accepted: Math.min(250, operations.length - offset) })
     }
-    const sent = options.firstPageOnly ? 250 : operations.length
+    const sent = options.firstPageOnly ? 250 : options.firstTwoPagesOnly ? 500 : operations.length
     for (let offset = 0; offset < sent; offset += 250) await send(offset)
     const sendRemaining = async () => { for (let offset = sent; offset < operations.length; offset += 250) await send(offset) }
     await run(source, receiver, operations, receiverName, sendRemaining)
@@ -91,6 +104,60 @@ test.each([false, true])('downloads nested decks and every related record when t
     expect((await readAnkiExportSnapshot(receiver)).reviews).toHaveLength(1)
   })
 })
+
+test.each([{ imageOcclusion: true }, { moveNote: true }])('downloads actual note/card history with a related revision on a third page (%j)', async options => {
+  await withHistory(true, async (source, receiver, operations) => {
+    expect(await syncCollection(receiver)).toMatchObject({ state: 'complete', cursor: operations.length, media: { pending: 0 } })
+    const expected = await readAnkiExportSnapshot(source)
+    const actual = await readAnkiExportSnapshot(receiver)
+    expect(actual.notes).toEqual(expected.notes)
+    expect(actual.cards).toEqual(expected.cards)
+    expect(actual.reviews).toEqual(expected.reviews)
+    expect(actual.references).toEqual(expected.references)
+    expect(actual.blobs.map(blob => blob.digest)).toEqual(expected.blobs.map(blob => blob.digest))
+    expect(await readSyncProgressCounts(receiver)).toMatchObject({ incomingPending: 0, conflicts: 0 })
+    expect(await syncCollection(receiver)).toMatchObject({ state: 'complete', cursor: operations.length })
+    expect((await readAnkiExportSnapshot(receiver)).reviews).toHaveLength(1)
+  }, options)
+}, 15_000)
+
+test('a missing image occlusion source retains safe progress across reopening and an ordinary later upload', async () => {
+  await withHistory(true, async (source, receiver, operations, name, sendRemaining) => {
+    const outcome = await syncCollection(receiver)
+    expect(outcome).toMatchObject({ state: 'incomplete', cursor: 500, remoteChangesPending: false })
+    expect(syncOutcomeMessage(outcome)).toContain('Sync the sending device')
+    const waiting = await readAnkiExportSnapshot(receiver)
+    expect(waiting.notes).toEqual([])
+    expect(waiting.cards).toEqual([])
+    expect(waiting.references).toEqual([])
+    expect((await readSyncProgressCounts(receiver)).incomingPending).toBeGreaterThan(0)
+    receiver.closeLocalCollection()
+    const reopened = createCollection(name)
+    try {
+      expect(await syncCollection(reopened)).toMatchObject({ state: 'incomplete', cursor: 500 })
+      await sendRemaining()
+      expect(await syncCollection(reopened)).toMatchObject({ state: 'complete', cursor: operations.length })
+      const expected = await readAnkiExportSnapshot(source)
+      const actual = await readAnkiExportSnapshot(reopened)
+      expect(actual.notes).toEqual(expected.notes)
+      expect(actual.cards).toEqual(expected.cards)
+      expect(actual.reviews).toEqual(expected.reviews)
+      expect(actual.references).toEqual(expected.references)
+    } finally { reopened.closeLocalCollection() }
+  }, { imageOcclusion: true, firstTwoPagesOnly: true })
+}, 15_000)
+
+test('a genuinely invalid later image occlusion source rejects without publishing a partial note or advancing its page', async () => {
+  await withHistory(true, async (_source, receiver) => {
+    await expect(syncCollection(receiver)).rejects.toThrow(/source image reference.*invalid/i)
+    expect((await receiver.syncSettings())?.cursor).toBe(500)
+    const actual = await readAnkiExportSnapshot(receiver)
+    expect(actual.notes).toEqual([])
+    expect(actual.cards).toEqual([])
+    expect(actual.references).toEqual([])
+    expect((await readSyncProgressCounts(receiver)).incomingPending).toBeGreaterThan(0)
+  }, { imageOcclusion: true, invalidSource: true })
+}, 15_000)
 
 test('an exhausted cyclic history reports a repairable hierarchy problem and converges after an ordinary corrective upload', async () => {
   await withHistory(true, async (source, receiver, operations) => {

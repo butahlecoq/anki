@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import type { SyncOperation } from './collection'
-import { assertOperationIdentity, findCardMoveSuccessor, orderCausalOperations, uniqueSyncOperations } from './sync-operation-rules'
+import { assertOperationIdentity, canWaitForCardMove, findCardMoveSuccessor, orderCausalOperations, uniqueSyncOperations } from './sync-operation-rules'
 
 const card = (opId: string, deckId: string, parents: string[] = []): SyncOperation => ({
   opId, entityType: 'card', entityId: 'card', action: 'update',
@@ -31,4 +31,19 @@ test('legacy retained parents may be inferred but conflicting wire parents canno
   expect(() => assertOperationIdentity(retained, legacy)).not.toThrow()
   expect(() => uniqueSyncOperations([retained, legacy])).toThrow('identity was reused')
   expect(uniqueSyncOperations([legacy, legacy])).toEqual([legacy])
+})
+
+test('a historical card can wait across pages only with same-lifetime causal note movement evidence', () => {
+  const original = { ...card('original', 'previous'), action: 'create' as const }
+  const created: SyncOperation = { ...original, entityType: 'note', entityId: 'note', opId: 'note-created', payload: { deckId: 'previous' } }
+  const moved: SyncOperation = { ...created, opId: 'note-moved', action: 'update', parents: [created.opId], payload: { deckId: 'current' } }
+  const note = { id: 'note', deckId: 'current' }
+  expect(canWaitForCardMove(original, note, [], [created, moved])).toBe(true)
+  expect(canWaitForCardMove(original, note, [card('disconnected-move', 'current')], [created, moved])).toBe(false)
+  expect(canWaitForCardMove(original, note, [], [created, { ...moved, parents: [] }])).toBe(false)
+  expect(canWaitForCardMove(original, note, [], [{ ...created, lifetime: ['restored'] }, moved])).toBe(false)
+  expect(canWaitForCardMove({ ...original, payload: { noteId: note.id, deckId: 'unrelated' } }, note, [], [created, moved])).toBe(false)
+  const oldUpdate = card('old-update', 'previous', [original.opId])
+  expect(canWaitForCardMove(oldUpdate, note, [], [created, moved, original])).toBe(true)
+  expect(canWaitForCardMove({ ...oldUpdate, parents: [] }, note, [], [created, moved, original])).toBe(false)
 })
