@@ -2,6 +2,7 @@ import Dexie, { type Table } from 'dexie'
 import type { CardRecord, Collection, CollectionStorage, Note } from './collection'
 import type { BrowserSelection } from './browser-maintenance'
 import type { CustomStudySession } from './custom-study-state'
+import { hasPendingDeckCycle } from './sync-dependency-rules'
 
 function storage(collection: Collection): CollectionStorage { return collection as unknown as CollectionStorage }
 
@@ -313,6 +314,22 @@ export function readSyncProgressCounts(collection: Collection) {
   return readLiveSnapshot(collection, [storage(collection).outbox, storage(collection).syncConflicts, storage(collection).pendingRemoteOperations], async () => ({
     pending: await storage(collection).outbox.count(), conflicts: await storage(collection).syncConflicts.count(), incomingPending: await storage(collection).pendingRemoteOperations.count(),
   }))
+}
+
+/** Diagnose only unambiguous, never-materialized creates after the remote history is exhausted. */
+export function readPendingDeckCycle(collection: Collection) {
+  const db = storage(collection)
+  return readSnapshot(collection, [db.pendingRemoteOperations, db.decks, db.deletedEntities, db.syncRevisions], async () => {
+    const operations = await db.pendingRemoteOperations.where('entityType').equals('deck').toArray()
+    const ids = [...new Set(operations.map(operation => operation.entityId))]
+    if (!ids.length) return false
+    const keys = ids.map(id => `deck:${id}`)
+    const decks = await db.decks.bulkGet(ids)
+    const barriers = await db.deletedEntities.bulkGet(keys)
+    const histories = await db.syncRevisions.where('key').anyOf(keys).toArray()
+    return hasPendingDeckCycle({ operations, materializedIds: decks.flatMap(deck => deck ? [deck.id] : []),
+      deletedIds: barriers.flatMap(barrier => barrier ? [barrier.entityId] : []), revisedIds: histories.map(operation => operation.entityId) })
+  })
 }
 
 /** Reads the visible sync status including collection sizes and stored media. */

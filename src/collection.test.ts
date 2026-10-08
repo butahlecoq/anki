@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto'
 import Dexie from 'dexie'
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { BASIC_NOTE_TYPE_ID, createCollection, Rating, State, type CardRecord, type Collection, type DeckOptionSettings, type SyncOperation } from './collection'
+import { BASIC_NOTE_TYPE_ID, DEFAULT_DECK_OPTION_GROUP_ID, createCollection, Rating, State, type CardRecord, type Collection, type DeckOptionSettings, type SyncOperation } from './collection'
 import { readAnkiExportSnapshot, readCard, readCardReviewHistory, readCardsForNote, readDeck, readDeckOptionGroup, readDeletedEntity, readNote, readNoteMediaReference, readNoteType, readReceivedOperationCount, readReviewEntry, readSyncProgressCounts } from './collection-queries'
 import { intervalLabel } from './scheduler'
 import { createCustomStudy } from './custom-study'
@@ -1151,7 +1151,7 @@ describe('local collection', () => {
     await expect(readDeckOptionGroup(collection, custom.id)).resolves.toBeUndefined()
   })
 
-  test('rejects remote deck cycles, missing option groups, and cards that do not match a moved note deck', async () => {
+  test('rejects remote deck cycles and mismatched cards while retaining missing option groups', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const root = await collection.createDeck('Root')
     const child = await collection.createDeck('Child', { parentId: root.id })
@@ -1160,7 +1160,10 @@ describe('local collection', () => {
     const changedRoot = { ...root, parentId: child.id, updatedAt: '2026-10-02T00:00:00Z' }
     await expect(collection.applyRemoteChanges([{ opId: 'cycle', entityType: 'deck', entityId: root.id, action: 'update', occurredAt: changedRoot.updatedAt, payload: changedRoot }], 1)).rejects.toThrow(/cycle/i)
     const badGroup = { ...child, optionGroupId: 'missing-group', updatedAt: '2026-10-02T00:01:00Z' }
-    await expect(collection.applyRemoteChanges([{ opId: 'bad-group', entityType: 'deck', entityId: child.id, action: 'update', occurredAt: badGroup.updatedAt, payload: badGroup }], 1)).rejects.toThrow(/option group/i)
+    await collection.applyRemoteChanges([{ opId: 'bad-group', entityType: 'deck', entityId: child.id, action: 'update', occurredAt: badGroup.updatedAt, payload: badGroup }], 1)
+    expect(await readDeck(collection, child.id)).toEqual(child)
+    expect(await readDeckOptionGroup(collection, 'missing-group')).toBeUndefined()
+    expect(await readSyncProgressCounts(collection)).toMatchObject({ incomingPending: 1 })
     const mismatched = { ...card, deckId: root.id }
     await expect(collection.applyRemoteChanges([{ opId: 'mismatched-card', entityType: 'card', entityId: card.id, action: 'update', occurredAt: '2026-10-02T00:02:00Z', payload: mismatched }], 1)).rejects.toThrow(/deck/i)
   })
@@ -1182,7 +1185,53 @@ describe('local collection', () => {
     await expect(readDeckOptionGroup(collection, group.id)).resolves.toMatchObject(group)
   })
 
-  test('rejects inbound notes, cards, reviews, and media with missing owners', async () => {
+  test('a retired option group does not delete a never-materialized deck before its replacement update arrives', async () => {
+    const owner = createCollection(`kiroku-retired-group-owner-${crypto.randomUUID()}`)
+    collection = createCollection(`kiroku-retired-group-receiver-${crypto.randomUUID()}`)
+    try {
+      const group = await owner.createDeckOptionGroup('Retired settings')
+      const deck = await owner.createDeck('Japanese', { optionGroupId: group.id })
+      await owner.deleteDeckOptionGroup(group.id, DEFAULT_DECK_OPTION_GROUP_ID)
+      const operations = await owner.pendingOperations()
+      const groupOperations = operations.filter(operation => operation.entityId === group.id)
+      await collection.applyRemoteChanges(groupOperations, 2)
+      await collection.applyRemoteChanges(operations.filter(operation => operation.entityId === deck.id && operation.action === 'create'), 3)
+      expect(await readDeletedEntity(collection, `deck:${deck.id}`)).toBeUndefined()
+      await collection.applyRemoteChanges(operations.filter(operation => operation.entityId === deck.id && operation.action === 'update'), 4)
+      expect(await readDeck(collection, deck.id)).toMatchObject({ name: 'Japanese', optionGroupId: DEFAULT_DECK_OPTION_GROUP_ID })
+      expect(await readSyncProgressCounts(collection)).toMatchObject({ incomingPending: 0, conflicts: 0 })
+    } finally { await owner.removeLocalCollection() }
+  })
+
+  test('a retired note type does not delete a never-materialized note before its mapped replacement arrives', async () => {
+    const owner = createCollection(`kiroku-retired-type-owner-${crypto.randomUUID()}`)
+    collection = createCollection(`kiroku-retired-type-receiver-${crypto.randomUUID()}`)
+    try {
+      const deck = await owner.createDeck('Japanese')
+      const type = await owner.createNoteType({ name: 'Retired vocabulary', fields: [{ name: 'Expression' }, { name: 'Meaning' }], templates: [{ name: 'Recognition', front: '{{Expression}}', back: '{{Meaning}}', css: '' }] })
+      const note = await owner.createNote(deck.id, type.id, { [type.fields[0].id]: '食べる', [type.fields[1].id]: 'to eat' })
+      await owner.deleteNoteType(type.id, { replacementTypeId: BASIC_NOTE_TYPE_ID, fieldMapping: { [type.fields[0].id]: 'front', [type.fields[1].id]: 'back' } })
+      const operations = await owner.pendingOperations()
+      await collection.applyRemoteChanges(operations.filter(operation => operation.entityId === deck.id || operation.entityId === type.id), 3)
+      await collection.applyRemoteChanges(operations.filter(operation => operation.entityId === note.id && operation.action === 'create'), 4)
+      expect(await readDeletedEntity(collection, `note:${note.id}`)).toBeUndefined()
+      await collection.applyRemoteChanges(operations.filter(operation => operation.entityId === note.id && operation.action === 'update'), 5)
+      expect(await readNote(collection, note.id)).toMatchObject({ typeId: BASIC_NOTE_TYPE_ID, fields: { front: '食べる', back: 'to eat' } })
+      expect(await readSyncProgressCounts(collection)).toMatchObject({ incomingPending: 0, conflicts: 0 })
+    } finally { await owner.removeLocalCollection() }
+  })
+
+  test('rejects a never-materialized self-parent deck instead of waiting for its own dependency', async () => {
+    collection = createCollection(`kiroku-self-parent-${crypto.randomUUID()}`)
+    const timestamp = '2026-10-02T00:00:00Z'
+    const deck = { id: 'self-parent', name: 'Invalid hierarchy', parentId: 'self-parent', optionGroupId: 'missing-options', createdAt: timestamp, updatedAt: timestamp }
+    await expect(collection.applyRemoteChanges([{ opId: 'self-parent-op', entityType: 'deck', entityId: deck.id, action: 'create', occurredAt: timestamp, payload: deck }], 1)).rejects.toThrow(/own parent|cycle/i)
+    expect(await readDeck(collection, deck.id)).toBeUndefined()
+    expect(await readSyncProgressCounts(collection)).toMatchObject({ incomingPending: 0 })
+    expect(await readReceivedOperationCount(collection)).toBe(0)
+  })
+
+  test('retains inbound notes, cards, reviews, and media with missing owners without materializing them', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const timestamp = '2026-10-02T00:00:00Z'
     const note = { id: 'orphan-note', deckId: 'missing-deck', type: 'basic' as const, fields: { front: '猫', back: 'cat' }, createdAt: timestamp, updatedAt: timestamp }
@@ -1190,11 +1239,14 @@ describe('local collection', () => {
     const review = { id: 'orphan-review', cardId: card.id, deckId: note.deckId, rating: Rating.Good, state: 0, due: timestamp, stability: 0, difficulty: 0, elapsedDays: 0, lastElapsedDays: 0, scheduledDays: 0, learningSteps: 0, reviewedAt: timestamp }
     const media = { id: 'orphan-media', noteId: note.id, digest: 'a'.repeat(64), kind: 'image' as const, mimeType: 'image/png', displayName: 'cat.png', side: 'front' as const, playback: 'manual' as const, createdAt: timestamp, updatedAt: timestamp }
 
-    await expect(collection.applyRemoteChanges([{ opId: 'orphan-note', entityType: 'note', entityId: note.id, action: 'create', occurredAt: timestamp, payload: note }], 1)).rejects.toThrow(/deck/i)
-    await expect(collection.applyRemoteChanges([{ opId: 'orphan-card', entityType: 'card', entityId: card.id, action: 'create', occurredAt: timestamp, payload: card }], 1)).rejects.toThrow(/note/i)
-    await expect(collection.applyRemoteChanges([{ opId: 'orphan-review', entityType: 'review', entityId: review.id, action: 'create', occurredAt: timestamp, payload: review }], 1)).rejects.toThrow(/card/i)
-    await expect(collection.applyRemoteChanges([{ opId: 'orphan-media', entityType: 'noteMedia', entityId: media.id, action: 'create', occurredAt: timestamp, payload: media }], 1)).rejects.toThrow(/note/i)
+    const before = await readAnkiExportSnapshot(collection)
+    await collection.applyRemoteChanges([{ opId: 'orphan-note', entityType: 'note', entityId: note.id, action: 'create', occurredAt: timestamp, payload: note }], 1)
+    await collection.applyRemoteChanges([{ opId: 'orphan-card', entityType: 'card', entityId: card.id, action: 'create', occurredAt: timestamp, payload: card }], 2)
+    await collection.applyRemoteChanges([{ opId: 'orphan-review', entityType: 'review', entityId: review.id, action: 'create', occurredAt: timestamp, payload: review }], 3)
+    await collection.applyRemoteChanges([{ opId: 'orphan-media', entityType: 'noteMedia', entityId: media.id, action: 'create', occurredAt: timestamp, payload: media }], 4)
     await expect(readReceivedOperationCount(collection)).resolves.toBe(0)
+    expect(await readAnkiExportSnapshot(collection)).toEqual(before)
+    expect(await readSyncProgressCounts(collection)).toMatchObject({ incomingPending: 4 })
   })
 
   test('suppresses a historical create-and-subtree-delete batch without orphaned records', async () => {

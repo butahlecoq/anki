@@ -1,6 +1,7 @@
-import { assertOperationIdentity, findCardMoveSuccessor, orderCausalOperations, uniqueSyncOperations } from './sync-operation-rules'
+import { assertOperationIdentity, orderCausalOperations, uniqueSyncOperations } from './sync-operation-rules'
 import Dexie, { type EntityTable } from 'dexie'
-import { relatedEntities, recoverDeletionProvenance, currentLifetime, decideOperationLifetime, restoredLifetime, validateRestorationEvidence, validateLifetimeMetadata, type EntityType, type EntityLifetimeMetadata, type DeletionCause } from '../entity-lifetimes'
+import { relatedEntities, recoverDeletionProvenance, inheritedDeletionBarrier, currentLifetime, decideOperationLifetime, restoredLifetime, validateRestorationEvidence, validateLifetimeMetadata, type EntityType, type EntityLifetimeMetadata, type DeletionCause } from '../entity-lifetimes'
+import { cardTemplateOwnerIds, cardWaitsForPendingNote, decideCardGenerationDependency, decideReviewGenerationDependency, occlusionSourceReady, validateOcclusionSource } from './sync-dependency-rules'
 import { customStudyKey, customStudyMembership, customStudySessions, type CustomStudySession } from './custom-study-state'
 import { createEmptyCard } from 'ts-fsrs'
 import { answerWithSchedule, deserializeCard, eligibleForQueue, eligibleForStudy, isBuried, isInterdayLearning, isLearningCard, nextStudyBoundary, Rating, reviewChoices as previewReviewChoices, selectDueCards, serializeCard, State, templateSuspended, validateSteps, type Grade } from './scheduler'
@@ -2475,7 +2476,23 @@ class DexieCollection extends Dexie {
           unavailable,
         })
         if (decision.state === 'pending') { await this.pendingRemoteOperations.put(change); continue }
+        if (decision.state === 'apply' && change.entityType === 'card' && cardWaitsForPendingNote(change, await this.pendingRemoteOperations.where('entityType').equals('note').toArray())) {
+          await this.pendingRemoteOperations.put(source)
+          continue
+        }
         if (change.action === 'restore' && decision.state === 'apply') validateRestorationEvidence(change, change.restoreOf!, retained)
+        if (decision.state === 'apply' && change.action !== 'delete' && change.entityType === 'note'
+          && (change.payload as Note).typeId === IMAGE_OCCLUSION_NOTE_TYPE_ID) {
+          const note = change.payload as Note
+          if (!note.imageOcclusion) throw new Error('Synced image occlusion metadata is missing')
+          validateImageOcclusion(note.imageOcclusion)
+          if (!occlusionSourceReady(change, { source: note.imageOcclusion && await this.noteMedia.get(note.imageOcclusion.sourceMediaId),
+            previousOwner: await this.notes.get(change.entityId), operations: pendingBatch, revisions: retained,
+            barriers: await this.deletedEntities.toArray() })) {
+            await this.pendingRemoteOperations.put(source)
+            continue
+          }
+        }
         if (!previousRevision) {
           const history = histories[0].history
           await this.syncRevisions.add({ ...change, parents: change.parents ?? revisionHeads(history), key })
@@ -2483,6 +2500,14 @@ class DexieCollection extends Dexie {
         progress ||= !previousRevision
         await this.pendingRemoteOperations.delete(change.opId)
         if (decision.state === 'stale') {
+          // A descendant can arrive only after its ancestor was deleted, so it
+          // never materialized in the cascade. Retain the original deletion
+          // provenance for its own later dependents, including across pages.
+          // Retiring settings or a note type reassigns/converts its owners; it
+          // does not delete them or prevent their later replacement updates.
+          const inherited = inheritedDeletionBarrier(change, { materialized: Boolean(await tables[change.entityType].get(change.entityId)),
+            revisions: retained, barriers: barriers.flatMap(barrier => barrier ? [barrier] : []) })
+          if (inherited) await this.deletedEntities.put({ key, ...inherited })
           if (change.entityType === 'note' && !(await this.notes.get(change.entityId))) suppressedNoteIds.add(change.entityId)
           if (change.entityType === 'card' && !(await this.cards.get(change.entityId))) suppressedCardIds.add(change.entityId)
           progress = true
@@ -2587,32 +2612,18 @@ class DexieCollection extends Dexie {
             }
             const note = await this.notes.get(incoming.noteId)
             if (!note) throw new Error('Synced card note was not found')
-            if (incoming.deckId !== note.deckId) {
-              // Notes are materialized before cards. A card created before a
-              // move can therefore temporarily reference the preceding deck;
-              // retain it until its causal move revision in this batch applies.
-              const successor = findCardMoveSuccessor(change, note, pendingBatch)
-              if (!successor) throw new Error('Synced card deck does not match its note deck')
-              await this.pendingRemoteOperations.put(source)
-              continue
-            }
-            const noteType = note && await this.noteTypes.get(note.typeId)
-            const deletedType = note && !noteType && await this.deletedEntities.get(tombstoneKey('noteType', note.typeId))
-            if (note && noteType?.kind === 'image-occlusion') {
-              const existing = await this.cards.get(incoming.id)
-              const mask = note.imageOcclusion?.masks.find((item) => item.id === incoming.occlusionId)
-              const expectedOrdinal = existing?.occlusionOrdinal ?? mask?.ordinal
-              if (!incoming.occlusionId || incoming.id !== `${note.id}:${IMAGE_OCCLUSION_TEMPLATE_ID}:m${incoming.occlusionId}` || incoming.templateId !== IMAGE_OCCLUSION_TEMPLATE_ID || expectedOrdinal !== incoming.occlusionOrdinal) {
-                progress = true
-                await this.receivedOperations.add({ opId: change.opId })
-                continue
-              }
-            }
-            if (note && (deletedType || (noteType && !this.cardIsEligible(noteType, note, incoming))) && !templateSuspended(incoming)) {
+            const templateDeleted = (await this.deletedEntities.bulkGet(cardTemplateOwnerIds(incoming, retained).map(id => tombstoneKey('noteType', id)))).some(Boolean)
+            const noteType = await this.noteTypes.get(note.typeId)
+            const ownerTypeDeleted = !noteType && Boolean(await this.deletedEntities.get(tombstoneKey('noteType', note.typeId)))
+            const decision = decideCardGenerationDependency(change, { note, existing: await this.cards.get(incoming.id), revisions: retained,
+              operations: pendingBatch, templateId: IMAGE_OCCLUSION_TEMPLATE_ID, templateDeleted, ownerTypeDeleted,
+              eligible: noteType ? this.cardIsEligible(noteType, note, incoming) : undefined })
+            if (decision === 'stale') {
               progress = true
               await this.receivedOperations.add({ opId: change.opId })
               continue
             }
+            if (decision === 'pending') { await this.pendingRemoteOperations.put(source); continue }
           }
           if (change.entityType === 'review') {
             const review = change.payload as ReviewEntry
@@ -2625,11 +2636,14 @@ class DexieCollection extends Dexie {
             if (!card) throw new Error('Synced review card was not found')
             const note = card && await this.notes.get(card.noteId)
             const noteType = note && await this.noteTypes.get(note.typeId)
-            if (card && note && (!noteType || !this.cardIsEligible(noteType, note, card))) {
+            const decision = decideReviewGenerationDependency(source, { card, revisions: retained,
+              eligible: note ? Boolean(noteType && this.cardIsEligible(noteType, note, card)) : undefined })
+            if (decision === 'stale') {
               progress = true
               await this.receivedOperations.add({ opId: change.opId })
               continue
             }
+            if (decision === 'pending') { await this.pendingRemoteOperations.put(source); continue }
           }
           if (change.entityType === 'noteMedia') {
             const reference = change.payload as NoteMediaReference
@@ -2640,10 +2654,7 @@ class DexieCollection extends Dexie {
             }
             const note = await this.notes.get(reference.noteId)
             if (!note) throw new Error('Synced media note was not found')
-            if (note?.imageOcclusion?.sourceMediaId === reference.id &&
-              (reference.kind !== 'image' || !['image/png', 'image/jpeg', 'image/webp'].includes(reference.mimeType) || reference.side !== 'front' || !/^[a-f0-9]{64}$/.test(reference.digest))) {
-              throw new Error('Synced source image reference is invalid')
-            }
+            if (note.imageOcclusion?.sourceMediaId === reference.id) validateOcclusionSource(note, reference)
           }
         }
         if (change.action === 'delete' && change.entityType === 'card') {
@@ -2796,7 +2807,7 @@ class DexieCollection extends Dexie {
         const noteType = await this.noteTypes.get(note.typeId)
         if (noteType?.kind === 'image-occlusion') {
           const source = note.imageOcclusion && await this.noteMedia.get(note.imageOcclusion.sourceMediaId)
-          if (!source || source.noteId !== note.id || source.kind !== 'image' || !['image/png', 'image/jpeg', 'image/webp'].includes(source.mimeType) || source.side !== 'front' || !/^[a-f0-9]{64}$/.test(source.digest)) throw new Error('Image occlusion source image reference is invalid')
+          validateOcclusionSource(note, source)
         }
         const generation = noteType && this.tryCardGenerationStatus(noteType, note.fields, note.imageOcclusion)
         const eligible = new Set(generation?.ok ? generation.value.eligible.map((template) => cardKey({ templateId: template.id, clozeOrdinal: template.clozeOrdinal, occlusionId: template.occlusionId })) : [])

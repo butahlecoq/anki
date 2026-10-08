@@ -25,6 +25,32 @@ export type LifetimeContext = {
   blocked?: readonly EntityRef[]
 }
 export type LifetimeDecision = { state: 'apply' | 'stale' | 'pending'; missing: string[] }
+export type DeletionBarrier = EntityRef & { occurredAt: string; causes?: DeletionCause[]; provenanceError?: string }
+
+const isStructuralAncestor = (ref: EntityRef) => ['deck', 'note', 'card'].includes(ref.entityType)
+
+/** Preserve a cascade for a stale descendant that never existed locally. */
+export function inheritedDeletionBarrier(operation: EntityLifetimeOperation, context: {
+  materialized: boolean
+  revisions: readonly EntityLifetimeOperation[]
+  barriers: readonly DeletionBarrier[]
+}): DeletionBarrier | undefined {
+  if (context.materialized || context.barriers.some(barrier => sameEntity(barrier, operation))) return
+  const historyFor = (ref: EntityRef) => context.revisions.filter(revision => sameEntity(revision, ref))
+  if (!sameLifetime(operation.lifetime ?? [], currentLifetime(historyFor(operation)))) return
+  const refs = operation.relatedLifetimes ?? relatedEntities(operation.entityType, operation.payload).map(ref => ({ ...ref, lifetime: [] }))
+  const ancestors = refs.flatMap(ref => {
+    const barrier = context.barriers.find(candidate => sameEntity(candidate, ref))
+    return isStructuralAncestor(ref) && barrier && sameLifetime(ref.lifetime, currentLifetime(historyFor(ref))) ? [barrier] : []
+  })
+  if (!ancestors.length) return
+  const causes = ancestors.flatMap(barrier => (barrier.causes ?? []).map(cause => ({ ...cause, deletedLifetime: operation.lifetime ?? [] })))
+  return { entityType: operation.entityType, entityId: operation.entityId,
+    occurredAt: ancestors.map(barrier => barrier.occurredAt).sort().at(-1)!,
+    causes: [...new Map(causes.map(cause => [cause.opId, cause])).values()],
+    ...(ancestors.some(barrier => barrier.provenanceError || !barrier.causes?.length) ? { provenanceError: 'Ancestor deletion provenance is missing or ambiguous. Retain the collection and recover its original deletion history.' } : {}),
+  }
+}
 
 export function restoredLifetime(causes: readonly DeletionCause[]): EntityLifetime {
   return [...new Set(causes.map(cause => cause.opId))].sort()
@@ -60,7 +86,7 @@ export function recoverDeletionProvenance(target: EntityRef, revisions: readonly
       return
     }
     const heads = new Set(revisionHeads(history))
-    const relationships = history.filter(revision => heads.has(revision.opId)).map(revision => relatedEntities(ref.entityType, revision.payload).filter(parent => ['deck', 'note', 'card'].includes(parent.entityType)))
+    const relationships = history.filter(revision => heads.has(revision.opId)).map(revision => relatedEntities(ref.entityType, revision.payload).filter(isStructuralAncestor))
     const fingerprint = (refs: EntityRef[]) => JSON.stringify(refs.map(parent => `${parent.entityType}:${parent.entityId}`).sort())
     if (new Set(relationships.map(fingerprint)).size > 1) { uncertain = true; return }
     for (const parent of relationships[0] ?? []) visit(parent)
@@ -90,7 +116,7 @@ export function validateRestorationEvidence(target: EntityRef, causes: readonly 
       // A retained stale move must not erase the membership that explains an
       // original cascade. Historical links still name each ancestor's exact
       // lifetime, so a later deletion of the same identity is not interchangeable.
-      return history.some(revision => relatedEntities(ref.entityType, revision.payload).filter(parent => ['deck', 'note', 'card'].includes(parent.entityType)).some(parent => belongs({ ...parent, lifetime: revision.relatedLifetimes?.find(reference => sameEntity(reference, parent))?.lifetime ?? [] })))
+      return history.some(revision => relatedEntities(ref.entityType, revision.payload).filter(isStructuralAncestor).some(parent => belongs({ ...parent, lifetime: revision.relatedLifetimes?.find(reference => sameEntity(reference, parent))?.lifetime ?? [] })))
     }
     if (!belongs({ ...target, lifetime: cause.deletedLifetime })) throw new Error('Deletion provenance names an unrelated record or lifetime. Nothing was restored.')
   }
@@ -176,6 +202,7 @@ export function decideOperationLifetime(operation: EntityLifetimeOperation, cont
   } else if (operation.action !== 'delete' && context.blocked?.some(ref => sameEntity(ref, operation))) return { state: 'stale', missing: [] }
   const references = operation.relatedLifetimes ?? relatedEntities(operation.entityType, operation.payload).map(ref => ({ ...ref, lifetime: [] }))
   for (const reference of references) {
+    if (operation.action !== 'delete' && operation.entityType === 'deck' && sameEntity(reference, operation)) throw new Error('Deck cannot be its own parent. Correct the hierarchy on the sending device and retry.')
     assertLifetime(reference.lifetime)
     const current = context.related.find(ref => sameEntity(ref, reference))?.lifetime ?? []
     if (!sameLifetime(reference.lifetime, current)) {
@@ -185,7 +212,7 @@ export function decideOperationLifetime(operation: EntityLifetimeOperation, cont
     else if (context.blocked?.some(ref => sameEntity(ref, reference))) {
       if (operation.action !== 'restore') return { state: 'stale', missing: [] }
       missing.push(`${reference.entityType}:${reference.entityId}`)
-    } else if ((operation.action === 'restore' || lifetime.length > 0) && context.unavailable?.some(ref => sameEntity(ref, reference))) missing.push(`${reference.entityType}:${reference.entityId}`)
+    } else if (context.unavailable?.some(ref => sameEntity(ref, reference))) missing.push(`${reference.entityType}:${reference.entityId}`)
   }
   return { state: missing.length ? 'pending' : 'apply', missing: [...new Set(missing)] }
 }

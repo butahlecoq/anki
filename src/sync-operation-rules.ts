@@ -46,6 +46,55 @@ export function findCardMoveSuccessor(operation: SyncOperation, note: Pick<Note,
     && follows(candidate))
 }
 
+/** Cross-page waiting needs causal evidence, never a timestamp or arbitrary deck mismatch. */
+export function canWaitForCardMove(operation: SyncOperation, note: Pick<Note, 'id' | 'deckId'>, operations: readonly SyncOperation[], revisions: readonly SyncOperation[]): boolean {
+  if (findCardMoveSuccessor(operation, note, operations)) return true
+  // Present corrective envelopes must prove their own causality. Waiting is
+  // for a missing later page, not permission to accept a disconnected update.
+  if (operations.some(candidate => candidate.entityType === 'card' && candidate.entityId === operation.entityId
+    && candidate.opId !== operation.opId && candidate.action !== 'delete'
+    && (candidate.payload as Partial<CardRecord>)?.noteId === note.id
+    && (candidate.payload as Partial<CardRecord>)?.deckId === note.deckId)) return false
+  const incoming = operation.payload as Partial<CardRecord>
+  if (incoming.noteId !== note.id || !incoming.deckId || incoming.deckId === note.deckId || operation.action === 'delete') return false
+  const sameLifetime = (candidate: SyncOperation) => JSON.stringify(candidate.lifetime ?? []) === JSON.stringify(operation.lifetime ?? [])
+  const noteLifetime = operation.relatedLifetimes?.find(ref => ref.entityType === 'note' && ref.entityId === note.id)?.lifetime ?? []
+  const noteHistory = revisions.filter(candidate => candidate.entityType === 'note' && candidate.entityId === note.id
+    && JSON.stringify(candidate.lifetime ?? []) === JSON.stringify(noteLifetime) && candidate.action !== 'delete')
+  const byId = new Map(noteHistory.map(candidate => [candidate.opId, candidate]))
+  const preceded = (candidate: SyncOperation): boolean => {
+    const parents = [...(candidate.parents ?? [])]
+    const visited = new Set<string>()
+    while (parents.length) {
+      const parentId = parents.pop()!
+      if (visited.has(parentId)) continue
+      visited.add(parentId)
+      const parent = byId.get(parentId)
+      if (!parent) continue
+      if ((parent.payload as Partial<Note>)?.deckId === incoming.deckId) return true
+      parents.push(...(parent.parents ?? []))
+    }
+    return false
+  }
+  if (!noteHistory.some(candidate => (candidate.payload as Partial<Note>)?.deckId === note.deckId && preceded(candidate))) return false
+  if (operation.action === 'create') return true
+  // An old card update also needs its own retained causal predecessor in that deck.
+  const cardHistory = new Map(revisions.filter(candidate => candidate.entityType === 'card' && candidate.entityId === operation.entityId && sameLifetime(candidate)).map(candidate => [candidate.opId, candidate]))
+  const parents = [...(operation.parents ?? [])]
+  const visited = new Set<string>()
+  while (parents.length) {
+    const parentId = parents.pop()!
+    if (visited.has(parentId)) continue
+    visited.add(parentId)
+    const parent = cardHistory.get(parentId)
+    if (!parent || parent.action === 'delete') continue
+    const payload = parent.payload as Partial<CardRecord>
+    if (payload.noteId === note.id && payload.deckId === incoming.deckId) return true
+    parents.push(...(parent.parents ?? []))
+  }
+  return false
+}
+
 /** Received replays must preserve the complete original operation envelope. */
 export function assertOperationIdentity(previous: SyncOperation, incoming: SyncOperation): void {
   if (previous.entityType !== incoming.entityType || previous.entityId !== incoming.entityId

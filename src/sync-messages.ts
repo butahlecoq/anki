@@ -10,7 +10,7 @@
 /** The sync result shapes the client can report. */
 export type SyncOutcome =
   | { state: 'complete'; accepted: number; media?: { uploaded: number; downloaded: number; pending: number; uploadError?: string; downloadError?: string }; conflicts?: number }
-  | { state: 'incomplete'; accepted: number; pendingOperations: number; remoteChangesPending: boolean; pendingIncomingOperations?: number }
+  | { state: 'incomplete'; accepted: number; pendingOperations: number; remoteChangesPending: boolean; pendingIncomingOperations?: number; dependencyProblem?: 'deck-cycle' }
   | { state: 'authentication-required' }
   | { state: 'upgrade-required'; target: 'this-device' | 'pc-service' }
   | { state: 'collection-generation-required'; message: string }
@@ -42,6 +42,7 @@ export function syncOutcomeMessage(result: SyncOutcome): string {
     return `Sync complete. ${plural(result.accepted, 'local change')} sent; ${media?.uploaded ?? 0} uploaded and ${media?.downloaded ?? 0} downloaded.${conflicts}`
   }
   if (result.state === 'incomplete') {
+    if (result.dependencyProblem === 'deck-cycle') return 'Sync saved progress, but received decks contain a deck parent cycle. Correct the hierarchy on the sending device, sync it, then tap Sync now here. Your local work and received changes remain on this device.'
     if (result.pendingIncomingOperations) return `Sync saved progress after sending ${plural(result.accepted, 'local change')}. ${plural(result.pendingOperations, 'local change')} remain. ${incomingDependencyMessage(result.pendingIncomingOperations, result.remoteChangesPending)}`
     const remote = result.remoteChangesPending ? ' More changes are waiting from the PC.' : ''
     return `Sync saved progress after sending ${plural(result.accepted, 'local change')}. ${plural(result.pendingOperations, 'local change')} remain; tap Sync now to continue.${remote}`
