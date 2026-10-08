@@ -2486,9 +2486,12 @@ class DexieCollection extends Dexie {
           // A descendant can arrive only after its ancestor was deleted, so it
           // never materialized in the cascade. Retain the original deletion
           // provenance for its own later dependents, including across pages.
+          // Retiring settings or a note type reassigns/converts its owners; it
+          // does not delete them or prevent their later replacement updates.
           const relatedBarriers = refs.flatMap((ref, index) => {
             const barrier = barriers[index + 1]
-            return barrier && JSON.stringify(ref.lifetime) === JSON.stringify(currentLifetime(histories[index + 1].history)) ? [barrier] : []
+            return ['deck', 'note', 'card'].includes(ref.entityType) && barrier
+              && JSON.stringify(ref.lifetime) === JSON.stringify(currentLifetime(histories[index + 1].history)) ? [barrier] : []
           })
           if (!barriers[0] && relatedBarriers.length
             && JSON.stringify(change.lifetime ?? []) === JSON.stringify(currentLifetime(histories[0].history))
