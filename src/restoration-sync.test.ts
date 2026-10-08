@@ -278,6 +278,48 @@ test.each([
   })
 }, 15_000)
 
+test('a clean receiver retains retired occlusion cards and reviews when their owner arrives on an earlier page', async () => {
+  await withPairedCollections(2, async ([owner, observer]) => {
+    const deck = await owner.createDeck('Retired mask history', new Date('2026-10-01T12:00:00Z'))
+    const png = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL4+QAAAABJRU5ErkJggg==', 'base64'))
+    const masks = [{ id: 'alpha', x: .1, y: .1, width: .2, height: .2 }, { id: 'beta', x: .6, y: .1, width: .2, height: .2 }]
+    const note = await owner.createImageOcclusionNote(deck.id, { image: new File([png], 'diagram.png', { type: 'image/png' }), imageWidth: 1, imageHeight: 1, header: '骨', backExtra: 'bone', tags: ['diagram'], masks }, new Date('2026-10-01T12:00:00Z'))
+    const retired = (await readCardsForNote(owner, note.id)).find(card => card.occlusionId === 'alpha')!
+    await owner.answer(retired.id, Rating.Good, new Date('2026-10-01T13:00:00Z'))
+    await owner.updateImageOcclusionNote(note.id, { masks: [masks[1]] }, new Date('2026-10-02T12:00:00Z'))
+    const generated = await owner.pendingOperations()
+    const history = generated.filter(operation => operation.entityType === 'card' || operation.entityType === 'review')
+    const retirement = history.find(operation => operation.entityType === 'card' && operation.entityId === retired.id && (operation.payload as { templateSuspended?: boolean }).templateSuspended)!
+    expect(retirement).toBeDefined()
+    await owner.acknowledgeOperations(generated.map(operation => operation.opId))
+    for (let index = 0; index < 300; index++) await owner.createDeck(`Retired history filler ${index}`)
+    const operations = [...generated.filter(operation => operation.entityType !== 'card' && operation.entityType !== 'review'), ...await owner.pendingOperations(), ...history]
+    expect(operations.indexOf(retirement) - operations.findIndex(operation => operation.entityType === 'note')).toBeGreaterThan(250)
+    const expected = await readAnkiExportSnapshot(owner)
+    expect(expected.cards.find(card => card.id === retired.id)).toMatchObject({ templateSuspended: true, reps: 1 })
+    expect(expected.reviews).toHaveLength(1)
+    for (const blob of expected.blobs) await uploadMedia((await owner.syncSettings())!, blob.digest, (await owner.verifiedMediaBlob(blob.digest))!.blob)
+    expect(await foregroundSync((await owner.syncSettings())!, operations.slice(0, 250))).toMatchObject({ state: 'complete' })
+    await syncComplete(observer)
+    expect((await readAnkiExportSnapshot(observer)).cards).toEqual([])
+    const name = observer.databaseName
+    observer.closeLocalCollection()
+    const reopened = createCollection(name)
+    try {
+      for (let offset = 250; offset < operations.length; offset += 250) expect(await foregroundSync((await owner.syncSettings())!, operations.slice(offset, offset + 250))).toMatchObject({ state: 'complete' })
+      await syncComplete(reopened)
+      const actual = await readAnkiExportSnapshot(reopened)
+      expect(actual.notes).toEqual(expected.notes)
+      expect(actual.cards).toEqual(expected.cards)
+      expect(actual.reviews).toEqual(expected.reviews)
+      expect(actual.references).toEqual(expected.references)
+      expect(await readSyncProgressCounts(reopened)).toMatchObject({ incomingPending: 0, conflicts: 0 })
+      await syncComplete(reopened)
+      expect((await readAnkiExportSnapshot(reopened)).reviews).toEqual(expected.reviews)
+    } finally { reopened.closeLocalCollection() }
+  })
+}, 15_000)
+
 test('new content in a restored child can be restored after moving the child to another root', async () => {
   await withPairedCollections(2, async ([owner, observer]) => {
     const file = await restorationPackage(true)

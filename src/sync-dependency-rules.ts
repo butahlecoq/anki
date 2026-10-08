@@ -48,15 +48,17 @@ export function decideOcclusionCardDependency(operation: SyncOperation, snapshot
   if (typeof card.occlusionId !== 'string' || !card.occlusionId || card.id !== `${note.id}:${templateId}:m${card.occlusionId}` || card.templateId !== templateId
     || !Number.isSafeInteger(card.occlusionOrdinal) || (card.occlusionOrdinal ?? 0) < 1) return 'stale'
   const mask = note.imageOcclusion?.masks.find(candidate => candidate.id === card.occlusionId)
-  const expectedOrdinal = existing?.occlusionOrdinal ?? mask?.ordinal
+  const ownerLifetime = operation.relatedLifetimes?.find(ref => ref.entityType === 'note' && ref.entityId === note.id)?.lifetime ?? []
+  const historicalMask = snapshot.revisions.filter(revision => revision.entityType === 'note' && revision.entityId === note.id
+    && JSON.stringify(revision.lifetime ?? []) === JSON.stringify(ownerLifetime))
+    .flatMap(revision => (revision.payload as Partial<Note> | undefined)?.imageOcclusion?.masks ?? [])
+    .find(candidate => candidate.id === card.occlusionId)
+  const expectedOrdinal = existing?.occlusionOrdinal ?? mask?.ordinal ?? historicalMask?.ordinal
   if (expectedOrdinal !== undefined && expectedOrdinal !== card.occlusionOrdinal) return 'stale'
   if (mask) return 'apply'
   if (existing?.occlusionOrdinal !== undefined) return templateSuspended(card) ? 'apply' : 'stale'
-  const ownerLifetime = operation.relatedLifetimes?.find(ref => ref.entityType === 'note' && ref.entityId === note.id)?.lifetime ?? []
-  const knownMask = snapshot.revisions.some(revision => revision.entityType === 'note' && revision.entityId === note.id
-    && JSON.stringify(revision.lifetime ?? []) === JSON.stringify(ownerLifetime)
-    && (revision.payload as Partial<Note> | undefined)?.imageOcclusion?.masks.some(candidate => candidate.id === card.occlusionId))
-  if (knownMask || (note.imageOcclusion && card.occlusionOrdinal! < note.imageOcclusion.nextOrdinal)) return 'stale'
+  if (historicalMask) return templateSuspended(card) ? 'apply' : 'stale'
+  if (note.imageOcclusion && card.occlusionOrdinal! < note.imageOcclusion.nextOrdinal) return 'stale'
   return 'pending'
 }
 

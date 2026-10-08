@@ -70,5 +70,10 @@ test('unknown mask generations wait while malformed, mutated and historically re
   expect(decideOcclusionCardDependency(incoming, { ...snapshot, note: removed })).toBe('stale')
   expect(decideOcclusionCardDependency(incoming, { ...snapshot, revisions: [operation('note', note.id, owner)] })).toBe('stale')
   expect(decideOcclusionCardDependency({ ...incoming, payload: { ...card, templateSuspended: true } }, { ...snapshot, note: removed, existing: card })).toBe('apply')
+  const retired = { ...incoming, payload: { ...card, templateSuspended: true } }
+  const history = [operation('note', note.id, owner)]
+  expect(decideOcclusionCardDependency(retired, { ...snapshot, revisions: history })).toBe('apply')
+  expect(decideOcclusionCardDependency({ ...retired, payload: { ...card, templateSuspended: true, occlusionOrdinal: 1 } }, { ...snapshot, revisions: history })).toBe('stale')
+  expect(decideOcclusionCardDependency(retired, { ...snapshot, revisions: [{ ...history[0], lifetime: ['another-owner-lifetime'] }] })).toBe('pending')
   expect(decideOcclusionCardDependency(incoming, { ...snapshot, note: { ...removed, imageOcclusion: { ...removed.imageOcclusion, nextOrdinal: 2 } } })).toBe('pending')
 })
