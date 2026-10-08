@@ -144,7 +144,10 @@ export function TemplatePreview({ rendering, side, title = 'Card preview', templ
     <div className="template-preview">
       {error && <p role="alert">{error}</p>}
       {!error && !isRenderedCardDisplayable(rendering) && <p className="form-warning" role="status">No card will be created: front has no visible field content.</p>}
-      {!error && <iframe ref={combinedFrameRef} title={title} sandbox="allow-same-origin" srcDoc={srcDoc} />}
+      {/* Separate content revisions so an older pending WebKit srcdoc navigation
+          cannot replace the latest card. Theme and review colours leave srcDoc
+          unchanged, retaining the document and its cached media. */}
+      {!error && <iframe key={srcDoc} ref={combinedFrameRef} title={title} sandbox="allow-same-origin" srcDoc={srcDoc} />}
       {!error && navigationActions.length > 0 && <section className="external-card-links" aria-label="External card links">
         <p>Links from this card are also available here. Preview the destination before opening another tab.</p>
         <div>{navigationActions.map((link, index) => <button className="text-button" type="button" aria-label={`${link.label} · ${link.host}`} key={`${index}:${link.url}`} onClick={() => chooseNavigation(link.url)}><span>{link.label}</span><span aria-hidden="true"> · </span><bdi>{link.host}</bdi></button>)}</div>

@@ -262,6 +262,18 @@ for (const reopen of [false, true]) {
     await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true)
     const audio = review.locator('audio')
     await expectAudioReady(audio, browserName)
+    const frame = await page.locator('iframe[title="Review card"]').evaluateHandle((element: HTMLIFrameElement) => element)
+    const document = await frame.evaluateHandle((element) => element.contentDocument)
+    const cachedImage = await image.elementHandle()
+    const cachedAudio = await audio.elementHandle()
+    for (const theme of ['light', 'dark']) {
+      await page.getByRole('combobox', { name: 'Appearance' }).selectOption(theme)
+      await expect.poll(() => frame.evaluate((element) => element.contentDocument?.documentElement.getAttribute('data-theme'))).toBe(theme === 'light' ? 'light' : null)
+      expect(await frame.evaluate((element, original) => element.isConnected && element.contentDocument === original, document)).toBe(true)
+      expect(await image.evaluate((element, original) => element === original, cachedImage)).toBe(true)
+      expect(await audio.evaluate((element, original) => element === original, cachedAudio)).toBe(true)
+      await expect(review.locator('body')).toHaveCSS('color', 'rgb(30, 40, 50)')
+    }
     await page.evaluate(async () => { await navigator.serviceWorker.ready })
     await page.context().setOffline(true)
     if (reopen) await navigateOfflineDocument(page)
@@ -1016,7 +1028,12 @@ test('a phone reopens a synced image occlusion source offline', async ({ browser
   }
 })
 
-test('cloze editor previews ordinals and reviewer shows furigana and typed differences', async ({ page }) => {
+nativeCanvasTest()('cloze editor previews ordinals and reviewer shows furigana and typed differences', async ({ page, browser, hostScale }, testInfo) => {
+  const configured = testInfo.project.use.viewport!
+  const measured = await page.evaluate(() => ({ viewport: { width: innerWidth, height: innerHeight }, dpr: devicePixelRatio, userAgent: navigator.userAgent }))
+  expect(measured.viewport).toEqual(configured)
+  expect(measured.dpr).toBeCloseTo(testInfo.project.use.deviceScaleFactor ?? 1)
+  await testInfo.attach('cloze-browser-canvas', { body: JSON.stringify({ configured, measured, hostScale, browserVersion: browser.version() }), contentType: 'application/json' })
   await page.getByRole('link', { name: 'Note types' }).click()
   await page.getByRole('button', { name: 'Create note type' }).click()
   await page.getByLabel('Note type name').fill('Cloze Japanese')
@@ -1027,6 +1044,14 @@ test('cloze editor previews ordinals and reviewer shows furigana and typed diffe
   const preview = page.frameLocator('iframe[title="Card preview"]')
   await expect(preview.getByText('東京に[…]')).toBeVisible()
   await expect(preview.locator('ruby')).toHaveText('猫ねこ')
+  for (let index = 0; index < 20; index += 1) {
+    await page.getByLabel('Sample Extra').fill(`猫[ねこ]${index}`)
+    await page.getByLabel('Preview ordinal').selectOption(index % 2 ? '2' : '1')
+    await expect(preview.getByText(index % 2 ? '東京に[…]' : '[city]に行く')).toBeVisible()
+    await expect(preview.locator('ruby')).toHaveText('猫ねこ')
+    await expect(preview.locator('body')).toContainText(String(index))
+  }
+  await page.getByLabel('Sample Extra').fill('猫[ねこ]')
   await page.getByRole('button', { name: 'Save note type' }).click()
 
   await createDeck(page, 'Cloze deck')

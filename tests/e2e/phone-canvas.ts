@@ -16,7 +16,7 @@ export function nativeCanvasTest(phoneViewport?: { width: number; height: number
       await provide(canvas && { width: Math.round(canvas.width * hostScale), height: Math.round(canvas.height * hostScale) })
     },
     isMobile: async ({ isMobile, browserName }, provide) => provide(browserName === 'webkit' && process.platform === 'win32' ? false : phoneViewport ? true : isMobile),
-    deviceScaleFactor: async ({ deviceScaleFactor, hostScale }, provide) => provide((phoneViewport ? 3 : deviceScaleFactor) / hostScale),
+    deviceScaleFactor: async ({ deviceScaleFactor, hostScale }, provide) => provide((phoneViewport ? 3 : deviceScaleFactor ?? 1) / hostScale),
   })
 }
 
