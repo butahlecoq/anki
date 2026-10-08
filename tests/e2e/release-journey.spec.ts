@@ -163,7 +163,7 @@ test('production release collection survives two offline reopenings and converge
   const openJapanese = async (page: Page) => {
     await navigate(page, 'Decks')
     await page.getByRole('button', { name: 'Open 日本語', exact: true }).click()
-    await expect(page.getByRole('heading', { name: '日本語', exact: true })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '日本語', exact: true, level: 1 })).toBeVisible()
   }
   const search = async (page: Page, query: string) => {
     await navigate(page, 'Browse')
@@ -257,7 +257,10 @@ test('production release collection survives two offline reopenings and converge
       // icon blobs; every application/media failure remains a fatal diagnostic.
       await active.route(networkRequests, rejectNetwork)
     }
-    await expect(page.getByText('NEW 2', { exact: true })).toBeVisible()
+    const japaneseDeckCounts = page.getByRole('heading', { name: '日本語', exact: true, level: 1 })
+      .locator('xpath=..')
+      .getByRole('group', { name: 'Deck counts' })
+    await expect(japaneseDeckCounts.getByText('NEW 2', { exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'Study now', exact: true }).click()
     for (let index = 0; index < 2; index++) {
       await releaseMedia(page, browserName)
