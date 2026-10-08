@@ -33,7 +33,7 @@ Any one of these is enough:
 | A paid resource | hosted minutes, a paid certificate |
 | A domain or router configuration | #24 |
 | A person judging whether output looks right | #23's "coherent token-driven dark design" |
-| An environment this repository cannot produce | #77 needs a Linux CI run for its baselines |
+| An environment this repository cannot produce | A required runner or platform unavailable locally and in CI |
 
 The last one is easy to miss and worth stating plainly: an issue can be blocked
 by the *environment* rather than by a person. Read the body for what it needs in
@@ -105,5 +105,7 @@ The generated status report counts only checked criteria with named evidence,
 prints remaining items, and reports parent-story coverage from explicit story
 references in issue bodies. Run `npm run premerge -- <PR-number>` before merging;
 it blocks unchecked/unproven criteria unless each is deferred in an issue
-comment. This is a local guard: the repository has no hosted required check, so
-the GitHub merge UI can bypass it.
+comment. This is a local guard: the required hosted **Complete software gate**
+checks software, but does not run this acceptance check. The GitHub merge UI
+can therefore allow a merge without proven issue criteria; run `premerge`
+immediately before merging. See [the CI guide](ci.md).
