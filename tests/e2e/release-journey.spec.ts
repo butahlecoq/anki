@@ -69,7 +69,7 @@ test('production release collection survives two offline reopenings and converge
   const profile = await mkdtemp(join(tmpdir(), 'kiroku-release-profile-'))
   const options = { baseURL, viewport, isMobile, deviceScaleFactor, hasTouch, userAgent, acceptDownloads: true }
   const contexts = new Set<BrowserContext>()
-  const phases: Array<{ name: string; geometry: unknown; elapsedMs: number }> = []
+  const phases: Array<{ name: string; geometry: unknown; elapsedMs: number; screenshotFullPage: boolean }> = []
   const limitation = browserName === 'webkit' ? [WEBKIT_COLD_OFFLINE_LIMITATION, 'WebKit warm offline coverage aborts HTTP(S) requests while the actual PC service is stopped. setOffline(true) incorrectly rejects local SVG blob icons in native audio controls; no global network-disable or physical-iPhone result is inferred.', 'Automated audio source retention does not establish audible physical-iPhone playback. Windows WebKit has no audio backend.'] : []
   const networkRequests = /^https?:/
   const rejectNetwork = (route: Route) => route.abort('internetdisconnected')
@@ -90,8 +90,12 @@ test('production release collection survives two offline reopenings and converge
   const checkpoint = async (page: Page, name: string, offline = false) => {
     diagnostics.phase(name, offline)
     const geometry = await releaseLayout(page)
-    phases.push({ name, geometry, elapsedMs: Date.now() - started })
-    await page.screenshot({ path: info.outputPath(`${name}.png`), fullPage: true })
+    // Windows WebKit's full-page clip uses CSS bounds in a host-scaled backing
+    // canvas. The colored-marker control loses the right marker in fullPage
+    // and retains it in a calibrated viewport capture, with no layout resize.
+    const screenshotFullPage = process.platform !== 'win32' || browserName !== 'webkit'
+    phases.push({ name, geometry, elapsedMs: Date.now() - started, screenshotFullPage })
+    await page.screenshot({ path: info.outputPath(`${name}.png`), fullPage: screenshotFullPage })
     await diagnostics.assertClean()
   }
   const pair = async (page: Page) => {

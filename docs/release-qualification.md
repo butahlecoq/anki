@@ -88,6 +88,13 @@ inventory are retained under Playwright's `test-results` output. The negative
 controls independently exercise exception, console, HTTP/network, blank shell,
 control-name, overflow, broken media, and damaged semantic inventory failures.
 
+Windows WebKit phase screenshots capture the calibrated learner viewport.
+A synthetic colored-marker control verifies that its full-page capture clips
+off the right marker while the viewport capture retains it, even though the
+DOM viewport and resize telemetry stay unchanged. Desktop Chromium and Linux
+keep full-page captures. The report records the screenshot mode for each phase;
+a viewport image is not presented as a full-page or physical-iPhone capture.
+
 Retain the command output and HTML report for pass/fail/skip/retry counts and
 artifact paths. Then run the **entire** `npm run check` at the same final commit
 with the qualification flag and private ports/runtime still set, and obtain
