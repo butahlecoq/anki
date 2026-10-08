@@ -28,7 +28,7 @@ Any one of these is enough:
 
 | Requirement | Example |
 | --- | --- |
-| A physical device | #26 ends in a real-iPhone confirmation checklist |
+| A physical device | #24 requires installed-iPhone observations; #26 qualifies supported automated browser journeys separately |
 | A real account | #56 syncs the owner's actual AnkiWeb account |
 | A paid resource | hosted minutes, a paid certificate |
 | A domain or router configuration | #24 |
