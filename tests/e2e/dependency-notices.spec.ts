@@ -13,7 +13,8 @@ test('release dependency notices preserve exact served and cached publisher text
   await page.getByRole('link', { name: 'Dependency notices', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Kiroku dependency notices', level: 1 })).toBeVisible()
   for (const dependency of source.dependencies) await expect(page.getByRole('heading', { name: `${dependency.name} — ${dependency.version}`, exact: true, level: 2 })).toBeVisible()
-  await page.screenshot({ path: info.outputPath('dependency-notices-online.png'), fullPage: true })
+  // Keep visual evidence within WebKit's full-page pixel limit; all published text is asserted below.
+  await page.screenshot({ path: info.outputPath('dependency-notices-online.png') })
   const expected = source.dependencies.flatMap(dependency => dependency.notices)
   const readDelivered = (fromCache: boolean) => page.evaluate(async ({ notices, fromCache }) => {
       const load = async (file: string) => {
@@ -49,6 +50,6 @@ test('release dependency notices preserve exact served and cached publisher text
     const delivered = await readDelivered(browserName === 'webkit')
     assertDelivered(delivered)
     await info.attach('offline-dependency-notice-evidence', { body: JSON.stringify({ mode: browserName === 'webkit' ? 'native-cache-retention-in-existing-document' : 'fresh-service-worker-document-and-fetch', limitation: browserName === 'webkit' ? WEBKIT_COLD_OFFLINE_LIMITATION : null, ...delivered }, null, 2), contentType: 'application/json' })
-    await page.screenshot({ path: info.outputPath('dependency-notices-offline.png'), fullPage: true })
+    await page.screenshot({ path: info.outputPath('dependency-notices-offline.png') })
   } finally { await page.context().setOffline(false) }
 })
