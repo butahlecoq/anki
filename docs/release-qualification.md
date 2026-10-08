@@ -134,8 +134,10 @@ Failure records retain the visible Preparing/disabled state, public result and
 alerts, plus the original exception and an absolute timestamp. If the page has
 ended, an unavailable observation is recorded without replacing that exception.
 The existing classified network/console observations also appear as
-`release-diagnostics` JSON in job logs, with their artifact attachment preserved;
-classification and fatal-error assertions remain unchanged.
+individual `release-diagnostics` JSON records in job logs; an empty list explicitly
+records no observations. Native frame-audit verdict/counts accompany each event,
+with full audits retained in the artifact attachment. Classification and fatal-error
+assertions remain unchanged.
 Issue #278 retains a first hosted WebKit warm-offline download timeout and its
 successful retry. Three unchanged Linux/WebKit journeys subsequently passed;
 nonreproduction does not establish the original cause or a repaired application.
