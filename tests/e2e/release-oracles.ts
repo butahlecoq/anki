@@ -150,6 +150,9 @@ export function releaseDiagnostics(serviceURL: string) {
     },
     async attach(info: TestInfo) {
       await Promise.all(pending)
+      // Hosted qualification retains job logs without uploading paid artifacts.
+      // Print the same classified observations; never suppress an app error.
+      console.log(`release-diagnostics ${JSON.stringify({ project: info.project.name, timestamp: new Date().toISOString(), events })}`)
       await info.attach('release-diagnostics', { body: JSON.stringify(events, null, 2), contentType: 'application/json' })
     },
   }
