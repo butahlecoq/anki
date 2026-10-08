@@ -138,11 +138,6 @@ individual `release-diagnostics` JSON records in job logs; an empty list explici
 records no observations. Native frame-audit verdict/counts accompany each event,
 with full audits retained in the artifact attachment. Classification and fatal-error
 assertions remain unchanged.
-Issue #278 retains a first hosted WebKit warm-offline download timeout and its
-successful retry. Three unchanged Linux/WebKit journeys subsequently passed;
-nonreproduction does not establish the original cause or a repaired application.
-Keep that first failure and remaining uncertainty visible when reporting results.
-
 An exploratory production-browser pass remains a separate required observation:
 inspect the retained onboarding, editor/decks, question/answer, offline, sync,
 Browse, Statistics, and restored screenshots; exercise narrow/wide layout,
