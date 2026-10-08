@@ -139,15 +139,21 @@ One agent works in one worktree, and two agents never share a checkout. Worktree
 
 ### Every push runs the local gate
 
-The hosted workflow cannot run on this repository, so a broken change could reach
-`main` without an automated check. A flaky device-key rotation test once reached
-`main` for exactly that reason. Running `npm ci` in a fresh clone invokes the
-repository's `prepare` script, which configures `core.hooksPath=.githooks`; no
-separate hook-install command is needed. Before each push, `.githooks/pre-push`
-runs `npm run check:push` (typecheck, lint, unit tests, status tests, and server
-tests). On the reference Windows machine this took **about 29 seconds**; the
-target is under two minutes. The full `npm run check` remains the pull-request
-gate and also covers production build and browser journeys.
+The fast local gate catches failures before a push and gives early feedback
+without waiting for the hosted run. Before hosted CI was restored, a flaky
+device-key rotation test reached `main` without an automated check. Running
+`npm ci` in a fresh clone invokes the repository's `prepare` script, which
+configures `core.hooksPath=.githooks`; no separate hook-install command is needed.
+Before each push, `.githooks/pre-push` runs `npm run check:push` (typecheck, lint,
+unit tests, status tests, and server tests). On the reference Windows machine
+this took **about 29 seconds**; the target is under two minutes.
+
+Run the full `npm run check` locally before requesting review; it also covers
+production build and browser journeys. Protected `main` additionally requires
+the successful hosted **Complete software gate** on the pull request, including
+for administrators. The separate `npm run premerge -- <PR-number>` acceptance
+gate must pass immediately before merging; software checks alone do not prove
+issue criteria. See [the CI guide](docs/agents/ci.md).
 
 ### Text files use the same line endings on every platform
 
@@ -161,7 +167,7 @@ command to replace and stage the local copy from the remote branch.
 ## Pull requests
 
 - Keep one ticket per PR unless an issue explicitly says otherwise.
-- State the user-visible outcome and test evidence. With no automated checks, this is the only record that anything was verified.
+- State the user-visible outcome and test evidence, including the local gate result and required hosted check. Record acceptance evidence separately; a passing software gate does not prove issue criteria.
 - Call out skipped physical-device checks separately from passing automated WebKit checks.
 - Do not commit user collections, packages, credentials, certificates, runtime data, or generated backups.
 - Preserve unknown files and changes; do not reset or discard another agent's work.
