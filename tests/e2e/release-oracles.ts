@@ -151,8 +151,14 @@ export function releaseDiagnostics(serviceURL: string) {
     async attach(info: TestInfo) {
       await Promise.all(pending)
       // Hosted qualification retains job logs without uploading paid artifacts.
-      // Print the same classified observations; never suppress an app error.
-      console.log(`release-diagnostics ${JSON.stringify({ project: info.project.name, timestamp: new Date().toISOString(), events })}`)
+      // Emit each classified event separately so long journeys do not become
+      // one enormous job-log line. Full frame audits remain in the attachment.
+      const write = (observations: unknown[]) => console.log(`release-diagnostics ${JSON.stringify({ project: info.project.name, timestamp: new Date().toISOString(), events: observations })}`)
+      if (!events.length) write([])
+      for (const { nativeAudioAudit, ...event } of events) write([{
+        ...event,
+        ...(nativeAudioAudit ? { nativeAudioAudit: { safe: nativeAudioAudit.safe, frameCount: nativeAudioAudit.frames.length } } : {}),
+      }])
       await info.attach('release-diagnostics', { body: JSON.stringify(events, null, 2), contentType: 'application/json' })
     },
   }
