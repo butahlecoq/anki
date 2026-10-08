@@ -40,7 +40,7 @@ test('conflict choices label the record and fields, reject a changed version, an
     expect(decideLater).toHaveFocus()
     fireEvent.keyDown(dialog, { key: 'Escape' })
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
-    expect(opener).toHaveFocus()
+    await waitFor(() => expect(opener).toHaveFocus())
     fireEvent.click(opener)
     dialog = screen.getByRole('dialog', { name: 'Choose the saved version' })
     const version = within(dialog).getAllByRole('group').find((group) => group.textContent?.includes('ネコ'))!
@@ -62,6 +62,6 @@ test('conflict choices label the record and fields, reject a changed version, an
     fireEvent.click(saveChoice)
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     expect(screen.queryByRole('button', { name: 'Review note conflict' })).not.toBeInTheDocument()
-    expect(screen.getByRole('region', { name: 'Sync conflicts' })).toHaveFocus()
+    await waitFor(() => expect(screen.getByRole('region', { name: 'Sync conflicts' })).toHaveFocus())
   } finally { cleanup(); peer.closeLocalCollection(); await peer.removeLocalCollection() }
 })
