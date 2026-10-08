@@ -25,6 +25,9 @@ export default defineConfig({
   workers: process.env.CI ? undefined : 1,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
+  // Only the documented update command deliberately creates/replaces images.
+  updateSnapshots: 'none',
+  snapshotPathTemplate: '{testDir}/__screenshots__/{testFilePath}/{projectName}-{platform}/{arg}{ext}',
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
     baseURL: webURL,

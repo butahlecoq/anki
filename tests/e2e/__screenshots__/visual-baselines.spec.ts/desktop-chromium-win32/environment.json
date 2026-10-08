@@ -1,0 +1,372 @@
+{
+  "signature": {
+    "platform": "win32",
+    "architecture": "x64",
+    "playwright": "1.63.0",
+    "browser": {
+      "name": "chromium",
+      "version": "153.0.8010.12",
+      "revision": "1243"
+    },
+    "fonts": {
+      "system": {
+        "kind": "system-stack-candidates",
+        "resolutions": [],
+        "files": [
+          {
+            "filename": "arialbd.ttf",
+            "sha256": "8df7a2c69fc4044835814899534e5fee6e72f78285b5a6dcb19531142b51d742",
+            "versions": [
+              "Version 7.01"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "arialbi.ttf",
+            "sha256": "94d0872622e6d592f01440b58dac8f5d7e010509bd76bb71cbed71fc5f4dc173",
+            "versions": [
+              "Version 7.01"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "ariali.ttf",
+            "sha256": "090b89742910172c69e1fd3b1814ad4e482a1c712b87d24e96b377beaac3a6d1",
+            "versions": [
+              "Version 7.01"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "ARIALN.TTF",
+            "sha256": "cad552553cf2a75afca01955751aaa115e2a64fd6c6eea42e1fbd236630b7e0a",
+            "versions": [
+              "Version 2.40"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "ARIALNB.TTF",
+            "sha256": "6c4a4b643461def5411e0217b74a625dcf2fb681252ef5da1db0af4eae80aa7e",
+            "versions": [
+              "Version 2.40"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "ARIALNBI.TTF",
+            "sha256": "161b859efd20c69ddebb23012a49f4f2030d56a0c1b9bcfd4df753217ce3e358",
+            "versions": [
+              "Version 2.40"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "ARIALNI.TTF",
+            "sha256": "faf73aa7ce40b77ad19c09507a2263fe3f3ce9fa5642e8a1cd54fb3c9f52d599",
+            "versions": [
+              "Version 2.40"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "consola.ttf",
+            "sha256": "c6e6ce8119fdd47ec6a5449a08e2d2ad7f41ea03143aae193068ed9fa58eaebc",
+            "versions": [
+              "Version 7.00"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "consolab.ttf",
+            "sha256": "8fa803e5abc7fff0c78c62cd22d07c705f3273c53312380c36ff484246ed3c1b",
+            "versions": [
+              "Version 7.00"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "consolai.ttf",
+            "sha256": "81e2a95d3c49468029c07e58f71a5f0ca4cfcb617eaf6bd77576fb03aa430bb2",
+            "versions": [
+              "Version 7.00"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "consolaz.ttf",
+            "sha256": "1df27cbcc8a9fb7f843bc24e257b78e8ff93de70e8c1ad2caab8379e7d6a1eab",
+            "versions": [
+              "Version 7.00"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "SegoeIcons.ttf",
+            "sha256": "8174e92a5f9a19ada80827bb3536088438c683f0cd96cb382dc8b919191cd0d4",
+            "versions": [
+              "Version 1.34"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "segoepr.ttf",
+            "sha256": "91046862e08fbade0bdd648e81c4efbe6a963947f8b6e32b64a28fe39073c468",
+            "versions": [
+              "Version 5.04"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "segoeprb.ttf",
+            "sha256": "3cced0162ddb9e5f1e63ee1b36fd6e581c090318dce1a0af01b77f5ea9952c80",
+            "versions": [
+              "Version 5.04"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "segoesc.ttf",
+            "sha256": "b24aa49a4bcb99a0ffc60cad77f00941e4b121153d8b0a519c03719d9be6004e",
+            "versions": [
+              "Version 5.03"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "segoescb.ttf",
+            "sha256": "6cd482205e1390b32a2b6327e1e5039424e346172c187074eac12006bc51935e",
+            "versions": [
+              "Version 5.03"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "segoeui.ttf",
+            "sha256": "74f2b3d0c20cf7380eb121a09fd7cdfdc1ccdd12a00db83caec0feb48b4db9f7",
+            "versions": [
+              "Version 5.65"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "segoeuib.ttf",
+            "sha256": "d105038ae445a7ab3e7c037eae9c6a436f71f603136f353e8338cfca40e6ca18",
+            "versions": [
+              "Version 5.65"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "segoeuii.ttf",
+            "sha256": "821ee79ea06ea1ce24964baf760d740086e8e1e6b88528978307cf1729cfaf1d",
+            "versions": [
+              "Version 5.65"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "segoeuil.ttf",
+            "sha256": "fe28fdf790453728a07233877c0a708477319fa798363ae4a1657d04fd173416",
+            "versions": [
+              "Version 5.65"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "segoeuisl.ttf",
+            "sha256": "483bb4800d30031ae1970dbd44a64f2f476a9fcba326bd0a216dac6e0b92e333",
+            "versions": [
+              "Version 5.65"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "segoeuiz.ttf",
+            "sha256": "79872dff519fde7a0c7cc8ed4f454a5fd7fd7628c527dc74473056a32a9eeb38",
+            "versions": [
+              "Version 5.65"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "seguibl.ttf",
+            "sha256": "e17738f092c8b02f4443867a7dfcdde66fb4cd6f6b10de8e40b2f3192f8a5835",
+            "versions": [
+              "Version 2.02"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "seguibli.ttf",
+            "sha256": "33212faa85fad61785cd6917172378b798bc9f5d4c47c121437354f47980aa6f",
+            "versions": [
+              "Version 2.02"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "seguiemj.ttf",
+            "sha256": "12c5253251f45c57fa57e2a1c748f821d3ca030a3e757e049a5da6316f213bcb",
+            "versions": [
+              "Version 1.51"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "seguihis.ttf",
+            "sha256": "fec0897934d26625b17bb3e4ffb3a7b0b6a138f6e61d5eff7535417cfbbc7884",
+            "versions": [
+              "Version 1.07"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "seguili.ttf",
+            "sha256": "d3366c28fc5d73644465fe08bc2d8571710955238e525dec4c9d6b5d22fb92fa",
+            "versions": [
+              "Version 5.65"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "seguisb.ttf",
+            "sha256": "b381730d47408ced8f104b62c9042a6abbbd08501a37f14b76858760a6cf176c",
+            "versions": [
+              "Version 5.65"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "seguisbi.ttf",
+            "sha256": "60cd474595d07bbdfa9d87de1a1e24c876e218d117c4a3098e0ac937157a1b9d",
+            "versions": [
+              "Version 5.65"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "seguisli.ttf",
+            "sha256": "254ad309e8f6b49cf0379a565adaf85a78994b4420b98a94119f45449d7b70ab",
+            "versions": [
+              "Version 5.65"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "seguisym.ttf",
+            "sha256": "d2f8326a354456d93e78b0537c58793e7072c3617af7d9ee187f10d6d595f510",
+            "versions": [
+              "Version 6.23"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "SegUIVar.ttf",
+            "sha256": "27ca1ab4bd5ad3b0404ee6a9a03b143408dbd7e5a4c9e4b2054639c03fc0f682",
+            "versions": [
+              "Version 2.03"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "YuGothB.ttc",
+            "sha256": "9d0437d151ddd907d72ba9ba348d670575a86e4f5cbf018de18645f2353140e5",
+            "versions": [
+              "Version 1.93"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "YuGothL.ttc",
+            "sha256": "95392428a804b937919526fec91bab64200664f7f22f777211da6bb244988f56",
+            "versions": [
+              "Version 1.93"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "YuGothM.ttc",
+            "sha256": "14afc5b98fc53165a2f760fcff11f6ed55ab80f20ae46a2a4a08b7af2b9044d5",
+            "versions": [
+              "Version 1.93"
+            ],
+            "versionMetadata": "reported"
+          },
+          {
+            "filename": "YuGothR.ttc",
+            "sha256": "27c9b8e4cc7c5cbd846d1fa978b7713938e8ae766875962c70c3986b004bbc85",
+            "versions": [
+              "Version 1.93"
+            ],
+            "versionMetadata": "reported"
+          }
+        ]
+      },
+      "bundled": {
+        "package": "@fontsource-variable/jetbrains-mono",
+        "version": "5.3.0",
+        "files": [
+          {
+            "filename": "jetbrains-mono-cyrillic-ext-wght-normal.woff2",
+            "sha256": "593ccd6fe36e299e151aeae4521be9bfe83ac487d96d7cdb44f50be4a04041c7"
+          },
+          {
+            "filename": "jetbrains-mono-cyrillic-wght-normal.woff2",
+            "sha256": "d274604c40757f98f07df623a8b8fb5194508a6fa4f5413a7a107f09e3b7452a"
+          },
+          {
+            "filename": "jetbrains-mono-greek-wght-normal.woff2",
+            "sha256": "ee863198077f3093ffa81c072581cc4bd608a04e60a8a9c0b846396ce4f14109"
+          },
+          {
+            "filename": "jetbrains-mono-latin-ext-wght-normal.woff2",
+            "sha256": "79bfdab9ba467e26eea4122e6f2567e188dd8a09a8c730d501fc487c4ab99c6e"
+          },
+          {
+            "filename": "jetbrains-mono-latin-wght-normal.woff2",
+            "sha256": "18be452724bfdc236c074ca94a249a7f41a86752c7d04ab258ce9ed5651f6a7e"
+          },
+          {
+            "filename": "jetbrains-mono-vietnamese-wght-normal.woff2",
+            "sha256": "2288795da89dd97e648954b96e22b4501bd85dfc453264460b252f888b582ca2"
+          }
+        ]
+      }
+    },
+    "canvas": {
+      "width": 1280,
+      "height": 720,
+      "dpr": 1
+    },
+    "locale": "en-US",
+    "timezone": "UTC",
+    "fixedTime": "2026-10-07T12:00:00.000Z",
+    "reviewElapsedMs": 0,
+    "comparison": {
+      "threshold": 0,
+      "maxDiffPixels": 0,
+      "masks": []
+    },
+    "capturePreparation": "full-page capture before viewport/panel comparison",
+    "fontStacks": {
+      "ui": "\"JetBrains Mono Variable\", \"JetBrains Mono\", ui-monospace, SFMono-Regular, Consolas, monospace",
+      "japanese": "\"Hiragino Kaku Gothic ProN\", \"Hiragino Sans\", \"BIZ UDPGothic\", \"Noto Sans JP\", \"Noto Sans CJK JP\", \"Yu Gothic\", Meiryo, system-ui, sans-serif",
+      "deck": "\"Segoe UI\", system-ui, \"Hiragino Kaku Gothic ProN\", \"Hiragino Sans\", \"BIZ UDPGothic\", \"Noto Sans JP\", \"Noto Sans CJK JP\", \"Yu Gothic\", Meiryo, system-ui, sans-serif"
+    }
+  },
+  "observed": {
+    "osRelease": "10.0.22631",
+    "node": "v22.18.0",
+    "osDistribution": [
+      "Windows"
+    ],
+    "sourceCommit": "731dc02b0658c5c67710a959d79b3c93f175b9bf",
+    "lockfileSha256": "5584b0a066f115e62c025b4b03260583bbf695f482fd8844422164ecb5b18276",
+    "configuredViewport": {
+      "width": 1280,
+      "height": 720
+    },
+    "hostScale": 1
+  }
+}
