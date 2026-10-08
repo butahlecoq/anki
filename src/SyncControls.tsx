@@ -38,6 +38,7 @@ export function SyncControls({ offlineSyncAvailable, collectionActions }: { offl
     }
   }, [], undefined)
   const [pairing, setPairing] = useState(false)
+  const [pairingFeedback, setPairingFeedback] = useState('')
   const [endpoint, setEndpoint] = useState('')
   const [code, setCode] = useState('')
   const [message, setMessage] = useState(SYNC_LOCAL_ONLY)
@@ -67,12 +68,20 @@ export function SyncControls({ offlineSyncAvailable, collectionActions }: { offl
     return () => { active = false }
   }, [settings])
 
+  function openPairing() {
+    setPairingFeedback('')
+    setPairing(true)
+  }
+
   async function pair(event: FormEvent) {
     event.preventDefault()
     setBusy(true)
+    setPairingFeedback('')
     try {
       const result = await pairCollection(collection, endpoint, code)
-      setMessage(pairOutcomeMessage(result.state))
+      const feedback = pairOutcomeMessage(result.state)
+      setMessage(feedback)
+      if (!pairingClosesOn(result.state)) setPairingFeedback(feedback)
       // Only a successful pairing closes the form; a rejection keeps the code the
       // learner just typed, which is the one thing that could still work.
       if (pairingClosesOn(result.state)) {
@@ -80,7 +89,9 @@ export function SyncControls({ offlineSyncAvailable, collectionActions }: { offl
         setCode('')
       }
     } catch (error) {
-      setMessage(error instanceof Error ? `Pairing failed. ${error.message}` : 'Pairing failed. Check the PC address and pairing code, then retry.')
+      const feedback = error instanceof Error ? `Pairing failed. ${error.message}` : 'Pairing failed. Check the PC address and pairing code, then retry.'
+      setMessage(feedback)
+      setPairingFeedback(feedback)
     } finally {
       setBusy(false)
     }
@@ -93,7 +104,7 @@ export function SyncControls({ offlineSyncAvailable, collectionActions }: { offl
     }
     // With no pairing yet, "Sync now" means "connect a PC".
     if (!settings) {
-      setPairing(true)
+      openPairing()
       return
     }
     setBusy(true)
@@ -225,7 +236,7 @@ export function SyncControls({ offlineSyncAvailable, collectionActions }: { offl
         {settings && <button className="text-button" type="button" disabled={busy || !offlineSyncAvailable || !offlineShellSupported} onClick={() => void sync()}>{busy ? 'Syncing…' : 'Sync now'}</button>}
         {settings && <button className="text-button" type="button" disabled={busy} onClick={() => void backupPcCollection()}>{busy ? 'Working…' : 'Download PC backup'}</button>}
         {settings && <button className="text-button" type="button" disabled={busy} title="Invalidates this device’s previous key immediately" onClick={() => void rotateDeviceCredential()}>{busy ? 'Working…' : 'Rotate device key'}</button>}
-        <button className="primary-action" type="button" disabled={busy} onClick={() => setPairing(true)}>{settings ? 'Pair another device' : 'Connect a PC'}</button>
+        <button className="primary-action" type="button" disabled={busy} onClick={openPairing}>{settings ? 'Pair another device' : 'Connect a PC'}</button>
       </div>
       {settings && backups[0] && <p className="sync-help">Latest backup currently listed by the PC: {new Date(backups[0].createdAt).toLocaleString()} · {backups[0].changeCount} sync changes · {backups[0].media.length} media files · {backups[0].reason === 'manual' ? 'manual' : 'before sync'}.</p>}
       {settings && backups[0] && <div className="sync-help"><button className="text-button" type="button" disabled={busy} onClick={() => void previewPcRestore(backups[0])}>Preview latest backup</button>{restorePreview && <><p role="status">{restorePreview.summary}</p>{restorePreview.available && <><label>Type RESTORE to replace the active PC collection<input value={restoreConfirmation} onChange={(event) => setRestoreConfirmation(event.target.value)} autoComplete="off" /></label><button className="text-button" type="button" disabled={busy || restoreConfirmation !== 'RESTORE'} onClick={() => void restorePcCollection()}>Restore this PC collection</button></>}</>}</div>}
@@ -248,6 +259,7 @@ export function SyncControls({ offlineSyncAvailable, collectionActions }: { offl
                 <input autoCapitalize="characters" value={code} onChange={(event) => setCode(event.target.value)} required />
               </label>
               <p className="sync-help">On the PC, run <code>npm run server:pair</code> to create a one-time code.</p>
+              {pairingFeedback && <p className="sync-help" role="alert">{pairingFeedback}</p>}
               <div className="dialog-actions">
                 <button className="text-button" type="button" disabled={busy} onClick={() => setPairing(false)}>Cancel</button>
                 <button className="primary-action" type="submit" disabled={busy}>{busy ? 'Connecting…' : 'Connect device'}</button>

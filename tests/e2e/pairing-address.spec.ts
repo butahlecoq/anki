@@ -1,4 +1,7 @@
-import { expect, test } from '@playwright/test'
+import { expect } from '@playwright/test'
+import { nativeCanvasTest } from './phone-canvas'
+
+const test = nativeCanvasTest()
 
 test('invalid PC addresses keep the pairing form and local collection without sending a request', async ({ page }, testInfo) => {
   const pairingRequests: string[] = []
@@ -19,7 +22,8 @@ test('invalid PC addresses keep the pairing form and local collection without se
     await dialog.getByLabel('PC service address').fill(address)
     await dialog.getByLabel('One-time pairing code').fill(code)
     await dialog.getByRole('button', { name: 'Connect device', exact: true }).click()
-    await expect(page.getByRole('region', { name: 'PC sync' })).toContainText('The PC service address is invalid or unsafe.')
+    await expect(dialog.getByRole('alert')).toContainText('The PC service address is invalid or unsafe.')
+    await expect(dialog.getByRole('alert')).toBeVisible()
     await expect(dialog).toBeVisible()
     await expect(dialog.getByLabel('PC service address')).toHaveValue(address)
     await expect(dialog.getByLabel('One-time pairing code')).toHaveValue(code)
