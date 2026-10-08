@@ -2483,6 +2483,23 @@ class DexieCollection extends Dexie {
         progress ||= !previousRevision
         await this.pendingRemoteOperations.delete(change.opId)
         if (decision.state === 'stale') {
+          // A descendant can arrive only after its ancestor was deleted, so it
+          // never materialized in the cascade. Retain the original deletion
+          // provenance for its own later dependents, including across pages.
+          const relatedBarriers = refs.flatMap((ref, index) => {
+            const barrier = barriers[index + 1]
+            return barrier && JSON.stringify(ref.lifetime) === JSON.stringify(currentLifetime(histories[index + 1].history)) ? [barrier] : []
+          })
+          if (!barriers[0] && relatedBarriers.length
+            && JSON.stringify(change.lifetime ?? []) === JSON.stringify(currentLifetime(histories[0].history))
+            && !await tables[change.entityType].get(change.entityId)) {
+            const causes = relatedBarriers.flatMap(barrier => (barrier.causes ?? []).map(cause => ({ ...cause, deletedLifetime: change.lifetime ?? [] })))
+            await this.deletedEntities.put({ key, entityType: change.entityType, entityId: change.entityId,
+              occurredAt: relatedBarriers.map(barrier => barrier.occurredAt).sort().at(-1)!,
+              causes: [...new Map(causes.map(cause => [cause.opId, cause])).values()],
+              ...(relatedBarriers.some(barrier => barrier.provenanceError || !barrier.causes?.length) ? { provenanceError: 'Ancestor deletion provenance is missing or ambiguous. Retain the collection and recover its original deletion history.' } : {}),
+            })
+          }
           if (change.entityType === 'note' && !(await this.notes.get(change.entityId))) suppressedNoteIds.add(change.entityId)
           if (change.entityType === 'card' && !(await this.cards.get(change.entityId))) suppressedCardIds.add(change.entityId)
           progress = true

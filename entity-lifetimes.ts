@@ -176,6 +176,7 @@ export function decideOperationLifetime(operation: EntityLifetimeOperation, cont
   } else if (operation.action !== 'delete' && context.blocked?.some(ref => sameEntity(ref, operation))) return { state: 'stale', missing: [] }
   const references = operation.relatedLifetimes ?? relatedEntities(operation.entityType, operation.payload).map(ref => ({ ...ref, lifetime: [] }))
   for (const reference of references) {
+    if (operation.action !== 'delete' && operation.entityType === 'deck' && sameEntity(reference, operation)) throw new Error('Deck cannot be its own parent. Correct the hierarchy on the sending device and retry.')
     assertLifetime(reference.lifetime)
     const current = context.related.find(ref => sameEntity(ref, reference))?.lifetime ?? []
     if (!sameLifetime(reference.lifetime, current)) {
@@ -185,7 +186,7 @@ export function decideOperationLifetime(operation: EntityLifetimeOperation, cont
     else if (context.blocked?.some(ref => sameEntity(ref, reference))) {
       if (operation.action !== 'restore') return { state: 'stale', missing: [] }
       missing.push(`${reference.entityType}:${reference.entityId}`)
-    } else if ((operation.action === 'restore' || lifetime.length > 0) && context.unavailable?.some(ref => sameEntity(ref, reference))) missing.push(`${reference.entityType}:${reference.entityId}`)
+    } else if (context.unavailable?.some(ref => sameEntity(ref, reference))) missing.push(`${reference.entityType}:${reference.entityId}`)
   }
   return { state: missing.length ? 'pending' : 'apply', missing: [...new Set(missing)] }
 }

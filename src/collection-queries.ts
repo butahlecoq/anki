@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie'
-import type { CardRecord, Collection, CollectionStorage, Note } from './collection'
+import type { CardRecord, Collection, CollectionStorage, Deck, Note } from './collection'
 import type { BrowserSelection } from './browser-maintenance'
 import type { CustomStudySession } from './custom-study-state'
 
@@ -313,6 +313,47 @@ export function readSyncProgressCounts(collection: Collection) {
   return readLiveSnapshot(collection, [storage(collection).outbox, storage(collection).syncConflicts, storage(collection).pendingRemoteOperations], async () => ({
     pending: await storage(collection).outbox.count(), conflicts: await storage(collection).syncConflicts.count(), incomingPending: await storage(collection).pendingRemoteOperations.count(),
   }))
+}
+
+/** Diagnose only unambiguous, never-materialized creates after the remote history is exhausted. */
+export function readPendingDeckCycle(collection: Collection) {
+  const db = storage(collection)
+  return readSnapshot(collection, [db.pendingRemoteOperations, db.decks, db.deletedEntities, db.syncRevisions], async () => {
+    const operations = await db.pendingRemoteOperations.where('entityType').equals('deck').toArray()
+    const byEntity = new Map<string, typeof operations>()
+    for (const operation of operations) {
+      const candidates = byEntity.get(operation.entityId) ?? []
+      candidates.push(operation)
+      byEntity.set(operation.entityId, candidates)
+    }
+    const ids = [...byEntity.keys()]
+    if (!ids.length) return false
+    const keys = ids.map(id => `deck:${id}`)
+    const decks = await db.decks.bulkGet(ids)
+    const barriers = await db.deletedEntities.bulkGet(keys)
+    const histories = new Set((await db.syncRevisions.where('key').anyOf(keys).toArray()).map(operation => operation.entityId))
+    const parents = new Map<string, string>()
+    for (const [index, id] of ids.entries()) {
+      const candidates = byEntity.get(id)!
+      if (candidates.length !== 1 || decks[index] || barriers[index] || histories.has(id)) continue
+      const operation = candidates[0]
+      if (operation.action !== 'create' || operation.lifetime?.length || operation.relatedLifetimes?.some(ref => ref.lifetime.length)) continue
+      const parent = (operation.payload as Partial<Deck> | undefined)?.parentId
+      if (typeof parent === 'string' && parent) parents.set(id, parent)
+    }
+    const visited = new Set<string>()
+    for (const id of parents.keys()) {
+      const path = new Set<string>()
+      let current: string | undefined = id
+      while (current && parents.has(current) && !visited.has(current)) {
+        if (path.has(current)) return true
+        path.add(current)
+        current = parents.get(current)
+      }
+      for (const node of path) visited.add(node)
+    }
+    return false
+  })
 }
 
 /** Reads the visible sync status including collection sizes and stored media. */

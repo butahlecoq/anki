@@ -376,7 +376,7 @@ test('caps one sync attempt and reports remote work that must resume on the next
   } finally { await collection.removeLocalCollection() }
 })
 
-test('resumes a long paginated backlog from its durable cursor after the client restarts', async () => {
+test('resumes a long paginated backlog and retained child from its durable cursor after the client restarts', async () => {
   const databaseName = `kiroku-test-${crypto.randomUUID()}`
   let collection = createCollection(databaseName)
   let online = true
@@ -391,12 +391,13 @@ test('resumes a long paginated backlog from its durable cursor after the client 
       return Promise.resolve(new Response(JSON.stringify({
         accepted: 0,
         cursor,
-        changes: [{ opId: `remote-${cursor}`, entityType: 'deck', entityId: `remote-${cursor}`, action: 'create', occurredAt, payload: { id: `remote-${cursor}`, name: `Remote ${cursor}`, parentId: null, optionGroupId: DEFAULT_DECK_OPTION_GROUP_ID, createdAt: occurredAt, updatedAt: occurredAt } }],
+        changes: [{ opId: `remote-${cursor}`, entityType: 'deck', entityId: `remote-${cursor}`, action: 'create', occurredAt, payload: { id: `remote-${cursor}`, name: `Remote ${cursor}`, parentId: cursor === 1 ? `remote-${SYNC_REQUESTS_PER_ATTEMPT + 1}` : null, optionGroupId: DEFAULT_DECK_OPTION_GROUP_ID, createdAt: occurredAt, updatedAt: occurredAt } }],
         hasMore: cursor < SYNC_REQUESTS_PER_ATTEMPT + 1,
       }), { status: 200 }))
     })
 
-    await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'incomplete', cursor: SYNC_REQUESTS_PER_ATTEMPT, pendingOperations: 0, remoteChangesPending: true })
+    await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'incomplete', cursor: SYNC_REQUESTS_PER_ATTEMPT, pendingOperations: 0, pendingIncomingOperations: 1, remoteChangesPending: true })
+    await expect(readDeck(collection, 'remote-1')).resolves.toBeUndefined()
     await expect(readDeck(collection, `remote-${SYNC_REQUESTS_PER_ATTEMPT}`)).resolves.toMatchObject({ name: `Remote ${SYNC_REQUESTS_PER_ATTEMPT}` })
     await expect(collection.syncSettings()).resolves.toMatchObject({ cursor: SYNC_REQUESTS_PER_ATTEMPT })
 
@@ -408,6 +409,7 @@ test('resumes a long paginated backlog from its durable cursor after the client 
 
     online = true
     await expect(syncCollection(collection, fetcher as typeof fetch)).resolves.toMatchObject({ state: 'complete', cursor: SYNC_REQUESTS_PER_ATTEMPT + 1 })
+    await expect(readDeck(collection, 'remote-1')).resolves.toMatchObject({ parentId: `remote-${SYNC_REQUESTS_PER_ATTEMPT + 1}` })
     await expect(readDeck(collection, `remote-${SYNC_REQUESTS_PER_ATTEMPT + 1}`)).resolves.toMatchObject({ name: `Remote ${SYNC_REQUESTS_PER_ATTEMPT + 1}` })
     await expect(collection.syncSettings()).resolves.toMatchObject({ cursor: SYNC_REQUESTS_PER_ATTEMPT + 1 })
   } finally { await collection.removeLocalCollection() }
