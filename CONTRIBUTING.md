@@ -51,6 +51,20 @@ before merging because the hosted gate cannot prove tracker criteria.
 
 Open **Support / build details** in the application to record its version, 12-character Git commit, and whether it is a release build. For a sync-service observation, record the `build` object from `GET /api/health` as well. The generated web app manifest carries the same version and commit in its `kiroku` member. Compare the commit with `git rev-parse --short=12 <commit>` in the checkout used to build the app; a development build is explicitly labelled and is not a release artifact.
 
+### Local unit verification
+
+The normal unit command (`npm run test`), pre-push hook and complete local gate
+cap Vitest at four workers on Windows. Full-suite measurements on a Windows host
+with 12 logical processors and 32 GiB RAM showed that the CPU-derived default
+worker count could exhaust the unchanged 20-second import/export stress-test
+deadlines; four workers passed the same suite. This bounds resource contention
+while preserving every test, fixture, assertion and deadline. Other platforms,
+including the Linux hosted gate, keep Vitest's default worker allocation.
+On a host with measured capacity, override it explicitly with
+`npm run test -- --maxWorkers=6` (or another tested value); keep the normal
+four-worker Windows result as the local gate evidence. See
+[Vitest's worker configuration](https://v4.vitest.dev/config/maxworkers).
+
 ### Local browser verification
 
 Use Node.js 22 or newer and the repository's pinned npm version (`npm@11.16.0`). In a fresh worktree, install dependencies and matching browser engines:
