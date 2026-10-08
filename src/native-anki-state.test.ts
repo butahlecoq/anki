@@ -35,6 +35,25 @@ beforeEach(async () => {
 afterEach(async () => { await state.delete(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 const client = () => NativeAnkiClient.login(async () => Response.json({ key: 'generated-in-memory-key' }), 'generated-user', 'generated-password')
 
+it('retains the durable checkpoint and recovery backup when a successful collection response body fails', async () => {
+  const account = await NativeAnkiClient.login(async (route) => {
+    if (route === 'sync/hostKey') return Response.json({ key: 'private-key' })
+    if (route === 'sync/meta') return Response.json({ mod: 0, scm: 0, usn: 0, ts: 1, cont: true, empty: false })
+    return new Response(new ReadableStream<Uint8Array>({ pull(controller) { controller.error(new TypeError('private body details')) } }))
+  }, 'private-user', 'private-password')
+  const before = await state.checkpoint()
+  const preview = await state.previewFullSync(account, SQL)
+  await expect(state.fullSynchronize(account, SQL, { ...preview, direction: 'download' })).rejects.toMatchObject({
+    code: 'transfer', requestFailure: { route: 'sync/download', status: 200, phase: 'response-body' },
+    message: expect.stringContaining('collection download was interrupted'),
+  })
+  state.close()
+  await state.open()
+  expect(await state.checkpoint()).toEqual(before)
+  expect(await state.recovery()).toMatchObject({ status: 'recovery-required', direction: 'download', baseRevision: 1 })
+  expect((await state.backups.toArray()).map((backup) => Array.from(backup.collection))).toContainEqual(Array.from(snapshot))
+})
+
 it('persists a projection map only while its exact native checkpoint remains current', async () => {
   const manifest = await state.saveProjectionManifest(SQL, 1)
   expect(manifest).toMatchObject({ version: 1, collectionId: 12, schema: 11, notes: [], cards: [], reviews: [] })

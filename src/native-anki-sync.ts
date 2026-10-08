@@ -12,7 +12,7 @@ export function sameRemoteRevision(left: NativeSyncMeta, right: NativeSyncMeta) 
 export async function nativeSnapshotHash(bytes: Uint8Array) { return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes.slice().buffer))].map((byte) => byte.toString(16).padStart(2, '0')).join('') }
 export class NativeSyncError extends Error {
   constructor(public readonly code: 'authentication' | 'service-authentication' | 'protocol' | 'upgrade' | 'unsupported' | 'transfer' | 'conflict' | 'cancelled' | 'timeout', message: string,
-    public readonly requestFailure?: { route: string; status: number; source: 'relay' | 'upstream' | 'unknown' },
+    public readonly requestFailure?: { route: string; status?: number; source: 'relay' | 'upstream' | 'unknown'; phase?: 'before-response' | 'response-body' | 'response-status' },
   ) { super(message); this.name = 'NativeSyncError' }
 }
 export class NativeSyncConflict extends NativeSyncError {
@@ -217,8 +217,15 @@ export class NativeAnkiClient {
       form.append('c', '0')
       if (this.#key) form.append('k', this.#key)
       if (session) form.append('s', session)
-      const response = await wait(this.transport(route, form, this.#hostNumber, { signal: controller.signal }))
+      let response: Response
+      try { response = await wait(this.transport(route, form, this.#hostNumber, { signal: controller.signal })) }
+      catch (error) {
+        if (controller.signal.aborted) throw controller.signal.reason
+        if (error instanceof NativeSyncError) throw error
+        throw new NativeSyncError('transfer', 'The PC service could not be reached or the browser blocked the request. Check that the PC service is running, the private network, and its trusted application origin setting, then retry. The browser did not provide a response, so the cause could not be confirmed. Your local work is preserved.', { route, source: 'unknown', phase: 'before-response' })
+      }
       if (response.headers.get('x-kiroku-relay-error') === 'paired-authentication') throw new NativeSyncError('service-authentication', 'This device is no longer paired with the PC service. Reconnect it, then try again.')
+      if (response.status === 403 && response.headers.get('x-kiroku-response-source') === 'relay' && response.headers.get('x-kiroku-relay-error') === 'origin-rejected') throw new NativeSyncError('transfer', 'The PC service rejected this app origin. Check its trusted application origin setting, then retry. Your local work is preserved.', { route, status: response.status, source: 'relay', phase: 'response-status' })
       if (!response.ok) {
         const origin = response.headers.get('x-kiroku-response-source')
         const source = origin === 'relay' || origin === 'upstream' ? origin : 'unknown'
@@ -230,10 +237,10 @@ export class NativeAnkiClient {
         throw new NativeSyncError('transfer', `${service} rejected ${phase} (HTTP ${response.status}; ${route}). ${action} Your local work is preserved.`, failure)
       }
       if (Number(response.headers.get('content-length')) > cap) throw new NativeSyncError('transfer', 'The Anki account response exceeds the 64 MiB transfer limit.')
-      reader = response.body?.getReader()
-      if (!reader) throw protocolError()
       const parts: Uint8Array[] = []; let total = 0
       try {
+        reader = response.body?.getReader()
+        if (!reader) throw protocolError()
         for (;;) {
           const chunk = await wait(reader.read())
           if (chunk.done) break
@@ -241,7 +248,13 @@ export class NativeAnkiClient {
           if (total > cap) throw new NativeSyncError('transfer', 'The Anki account response exceeds the 64 MiB transfer limit.')
           parts.push(chunk.value)
         }
-      } catch (error) { void reader.cancel().catch(() => undefined); throw error }
+      } catch (error) {
+        if (reader) void reader.cancel().catch(() => undefined)
+        if (controller.signal.aborted) throw controller.signal.reason
+        if (error instanceof NativeSyncError) throw error
+        const phase = route === 'sync/download' ? 'collection download' : route.startsWith('msync/') ? 'media transfer' : 'account response transfer'
+        throw new NativeSyncError('transfer', `The ${phase} was interrupted while reading the response. Check connectivity and retry. Your local work is preserved.`, { route, status: response.status, source: 'unknown', phase: 'response-body' })
+      }
       const bytes = new Uint8Array(total); let offset = 0
       for (const part of parts) { bytes.set(part, offset); offset += part.length }
       return bytes

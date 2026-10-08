@@ -10,6 +10,10 @@ export function nativeAnkiAccountErrorMessage(error: unknown) {
     return failure ? `${message} Request: ${failure.route} (HTTP ${failure.status}; ${failure.source}). App build: ${buildIdentity.commit}.` : message
   }
   if (error.code === 'service-authentication') return 'This device is no longer paired with the PC service. Reconnect it, then try again.'
+  if (error.requestFailure?.phase) {
+    const failure = error.requestFailure
+    return `${error.message} Request: ${failure.route} (${failure.phase}${failure.status === undefined ? '' : `; HTTP ${failure.status}`}; ${failure.source}). App build: ${buildIdentity.commit}.`
+  }
   if (error.code === 'transfer' && /unavailable|interrupted/i.test(error.message)) return 'The PC relay could not reach AnkiWeb or the transfer was interrupted. Check connectivity and retry.'
   if (error.requestFailure) return `${error.message} App build: ${buildIdentity.commit}.`
   return error.message
