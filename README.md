@@ -2,6 +2,8 @@
 
 Kiroku is a private, offline-first Japanese flashcard workspace with local collection editing, FSRS review scheduling, and PC-to-phone collection sync. It is a free web app: see [what it costs](#what-it-costs).
 
+Release builds include [dependency notices](docs/dependency-notices.md), available from Support and retained for offline access. Their recorded attribution and provenance limits do not supply a project licence grant.
+
 ## Requirements
 
 - Node.js 22 or newer

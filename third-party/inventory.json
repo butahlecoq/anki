@@ -1,0 +1,461 @@
+{
+  "schemaVersion": 1,
+  "limitations": [
+    "This notice bundle preserves publisher material; it is not a project licence grant, resolution of #184 deferred criteria, or permission to use AnkiWeb.",
+    "Ankipack MIT/AGPL statements remain unresolved.",
+    "Emscripten compiler/link-map and separately fetched SQLite contrib historical-input/licence provenance remain unverified. No legal compliance or complete free/open-source claim is made."
+  ],
+  "sourceChecks": [
+    {
+      "path": "node_modules/dexie/dist/dexie.js.map",
+      "sha256": "9b2e8fc69cb0793394f2b4945f0065330118a6dc2d21f7f7a7d26f77ec25127b"
+    },
+    {
+      "path": "node_modules/dexie/dist/dexie.min.js",
+      "sha256": "2de4d5ddf1000d31c3fa763b14148885bad87270cb1b02ff8317015314055978"
+    },
+    {
+      "path": "node_modules/dexie/import-wrapper-prod.mjs",
+      "sha256": "26295789f74860808b7d879ef649e53312ad8e44c2528aca5e0517c8af23ad58"
+    },
+    {
+      "path": "node_modules/ts-fsrs/dist/index.mjs.map",
+      "sha256": "c8451f03163a442b4ae7efff5306583a63c4a917548465d9e88ae3cc120f6119"
+    },
+    {
+      "path": "node_modules/sql.js/dist/sql-wasm.js",
+      "sha256": "43a1f4a4e43a3869ae290c55e67ffe166652bdc5aba5561e0e04eed7bf9651ee"
+    },
+    {
+      "path": "node_modules/sql.js/dist/sql-wasm.wasm",
+      "sha256": "083460b3e9d428ebbbbaa03918ba55da33d810e0fb3470d4b5d8677b462b2c2b"
+    }
+  ],
+  "dependencies": [
+    {
+      "name": "@bufbuild/protobuf",
+      "version": "2.16.0",
+      "declaredLicense": "(Apache-2.0 AND BSD-3-Clause)",
+      "packageSource": "https://registry.npmjs.org/@bufbuild/protobuf/-/protobuf-2.16.0.tgz",
+      "integrity": "sha512-FWa0sPlqYGJgpTs6OxBRcL/AW4JT0OIO+W1ajerluoTVh8CV0B7XM1qsNCRgnkSCkRCgOICKHRQlY17jrsm0+Q==",
+      "notices": [
+        {
+          "file": "bufbuild-protobuf-2.16.0-LICENSE.txt",
+          "sha256": "c04b4216f1cd4c5a4f7fb2f2a1b0ae70d847e9e0cac7c9dee9bf8cc03177c449",
+          "source": "https://github.com/bufbuild/protobuf-es/blob/b3b232f7f466eda27c66e8f63c82f930578b6cc6/LICENSE",
+          "sourceBlobSha": "0852eae3adf81df4a705737ec733a408a3e9ddc0",
+          "sourceRef": "b3b232f7f466eda27c66e8f63c82f930578b6cc6"
+        },
+        {
+          "file": "bufbuild-protobuf-2.16.0-varint-BSD-source.txt",
+          "sha256": "794a4cffb99eb15483efa73ee038e493d28bea3d247c0be9f13740c546b0c259",
+          "source": "https://github.com/bufbuild/protobuf-es/blob/b3b232f7f466eda27c66e8f63c82f930578b6cc6/packages/protobuf/src/wire/varint.ts",
+          "sourceBlobSha": "0d7246ce250fa90e9962b673753c254227d5fdfb",
+          "sourceRef": "b3b232f7f466eda27c66e8f63c82f930578b6cc6"
+        }
+      ]
+    },
+    {
+      "name": "@fontsource-variable/jetbrains-mono",
+      "version": "5.3.0",
+      "declaredLicense": "OFL-1.1",
+      "packageSource": "https://registry.npmjs.org/@fontsource-variable/jetbrains-mono/-/jetbrains-mono-5.3.0.tgz",
+      "integrity": "sha512-F32xpS2NsGYoQi2ADSkKTgpJj7ozajsGgDJ8woTnqjmIB+dxDIqImjl4pXZVEExu8UFZ2ndhmX18EBS/hdz3Lw==",
+      "notices": [
+        {
+          "file": "fontsource-variable-jetbrains-mono-5.3.0-LICENSE.txt",
+          "sha256": "403581b69dac5cff4079205e01c6b467e56af449ecbd7247693ddb1baafa005b",
+          "source": "https://registry.npmjs.org/@fontsource-variable/jetbrains-mono/-/jetbrains-mono-5.3.0.tgz",
+          "installedPath": "node_modules/@fontsource-variable/jetbrains-mono/LICENSE",
+          "installedSha256": "403581b69dac5cff4079205e01c6b467e56af449ecbd7247693ddb1baafa005b"
+        }
+      ]
+    },
+    {
+      "name": "ankipack",
+      "version": "0.3.1",
+      "declaredLicense": "MIT",
+      "packageSource": "https://registry.npmjs.org/ankipack/-/ankipack-0.3.1.tgz",
+      "integrity": "sha512-YueYplBeTLrBbb+YClziSyTeQNo3swkdrHP/JC7Sc5rNyetY+J1rvc/lohlFtftUcc5vC72B/R63KXY/S3eiVQ==",
+      "notices": [
+        {
+          "file": "ankipack-0.3.1-LICENSE.txt",
+          "sha256": "f9a5903e0f4f8d8a3081f5ddcd22038216d2ad45f13775c4ed5e0325b35c1a67",
+          "source": "https://registry.npmjs.org/ankipack/-/ankipack-0.3.1.tgz",
+          "installedPath": "node_modules/ankipack/LICENSE",
+          "installedSha256": "f9a5903e0f4f8d8a3081f5ddcd22038216d2ad45f13775c4ed5e0325b35c1a67"
+        },
+        {
+          "file": "ankipack-0.3.1-proto-LICENSE.txt",
+          "sha256": "fb3bcab9691fb1315932182b81efc6c781a6a84d78fb956d747fef82c93ea31c",
+          "source": "https://github.com/ImGajeed76/ankipack/blob/v0.3.1/proto/LICENSE",
+          "sourceBlobSha": "3aa6327e5765e7a79ef5c3746f1acc6e76cf8c9f",
+          "sourceRef": "v0.3.1"
+        },
+        {
+          "file": "ankipack-0.3.1-generated-Anki-attribution.txt",
+          "sha256": "2e6f553d3d61c70d923a2b697a5abd1cadf6c0f0f8aba148b4d3c46ce5695d84",
+          "source": "https://registry.npmjs.org/ankipack/-/ankipack-0.3.1.tgz",
+          "installedPath": "node_modules/ankipack/dist/generated/anki/collection_pb.js",
+          "installedSha256": "ce0c1cd5a19e91310cabc9b66dd33a77b7e022b56ebb1b6bba80bda6c47bc365",
+          "excerpt": "Exact first two lines of installed dist/generated/anki/collection_pb.js"
+        }
+      ],
+      "provenance": "UNRESOLVED: package/root/proto MIT statements conflict with installed generated Anki GNU AGPL v3-or-later headers. This record preserves statements and does not decide the combined licence or account permission."
+    },
+    {
+      "name": "dexie",
+      "version": "4.4.6",
+      "declaredLicense": "Apache-2.0",
+      "packageSource": "https://registry.npmjs.org/dexie/-/dexie-4.4.6.tgz",
+      "integrity": "sha512-hJP/BO6mjB+tX6hToIO1kmxYLNmun90wYbfcoAoLpKEyDYal/k33dg0TAfoUe2TDsbbLoVIzljJ3BN2UbR5EOg==",
+      "notices": [
+        {
+          "file": "dexie-4.4.6-LICENSE.txt",
+          "sha256": "cb5e8e7e5f4a3988e1063c142c60dc2df75605f4c46515e776e3aca6df976e14",
+          "source": "https://registry.npmjs.org/dexie/-/dexie-4.4.6.tgz",
+          "installedPath": "node_modules/dexie/LICENSE",
+          "installedSha256": "cb5e8e7e5f4a3988e1063c142c60dc2df75605f4c46515e776e3aca6df976e14"
+        },
+        {
+          "file": "dexie-4.4.6-NOTICE.txt",
+          "sha256": "6176d2e8a3fd8a881828a1a27bbcc5a9e03a75f437ce3c4ddbedd94fdac475c1",
+          "source": "https://registry.npmjs.org/dexie/-/dexie-4.4.6.tgz",
+          "installedPath": "node_modules/dexie/NOTICE",
+          "installedSha256": "6176d2e8a3fd8a881828a1a27bbcc5a9e03a75f437ce3c4ddbedd94fdac475c1"
+        }
+      ]
+    },
+    {
+      "name": "dexie-react-hooks",
+      "version": "4.4.0",
+      "declaredLicense": "Apache-2.0",
+      "packageSource": "https://registry.npmjs.org/dexie-react-hooks/-/dexie-react-hooks-4.4.0.tgz",
+      "integrity": "sha512-ObLXBS5+4BJU8vtSvBx6b9fY6zZYgniAtwxzjCHsUQadgbqYN6935X2/1TWw4Rf2N1aZV1io5/ziox4vKuxABA==",
+      "notices": [
+        {
+          "file": "dexie-react-hooks-4.4.0-LICENSE.txt",
+          "sha256": "cb5e8e7e5f4a3988e1063c142c60dc2df75605f4c46515e776e3aca6df976e14",
+          "source": "https://registry.npmjs.org/dexie-react-hooks/-/dexie-react-hooks-4.4.0.tgz",
+          "installedPath": "node_modules/dexie-react-hooks/LICENSE",
+          "installedSha256": "cb5e8e7e5f4a3988e1063c142c60dc2df75605f4c46515e776e3aca6df976e14"
+        }
+      ]
+    },
+    {
+      "name": "fflate",
+      "version": "0.8.3",
+      "declaredLicense": "MIT",
+      "packageSource": "https://registry.npmjs.org/fflate/-/fflate-0.8.3.tgz",
+      "integrity": "sha512-tbZNuJrLwGUp3zshBtdy4W+ORxZuIh8a5ilyIEQDC5rY1f3U20JMry0Ll3WBzU58EZKsEuJFXhb5gwv8CsPvgA==",
+      "notices": [
+        {
+          "file": "fflate-0.8.3-LICENSE.txt",
+          "sha256": "0a1df3a083d0c010560aa342e87959c8c1070e6fd54545741f083f22d0c8b551",
+          "source": "https://registry.npmjs.org/fflate/-/fflate-0.8.3.tgz",
+          "installedPath": "node_modules/fflate/LICENSE",
+          "installedSha256": "0a1df3a083d0c010560aa342e87959c8c1070e6fd54545741f083f22d0c8b551"
+        }
+      ]
+    },
+    {
+      "name": "fzstd",
+      "version": "0.1.1",
+      "declaredLicense": "MIT",
+      "packageSource": "https://registry.npmjs.org/fzstd/-/fzstd-0.1.1.tgz",
+      "integrity": "sha512-dkuVSOKKwh3eas5VkJy1AW1vFpet8TA/fGmVA5krThl8YcOVE/8ZIoEA1+U1vEn5ckxxhLirSdY837azmbaNHA==",
+      "notices": [
+        {
+          "file": "fzstd-0.1.1-LICENSE.txt",
+          "sha256": "62249119bb7df6e54300f37a37145c26a6d4420410aac8881a119c5b427cf751",
+          "source": "https://registry.npmjs.org/fzstd/-/fzstd-0.1.1.tgz",
+          "installedPath": "node_modules/fzstd/LICENSE",
+          "installedSha256": "62249119bb7df6e54300f37a37145c26a6d4420410aac8881a119c5b427cf751"
+        }
+      ]
+    },
+    {
+      "name": "react",
+      "version": "19.3.0",
+      "declaredLicense": "MIT",
+      "packageSource": "https://registry.npmjs.org/react/-/react-19.3.0.tgz",
+      "integrity": "sha512-E8LUcbtBWt20bbl2YoHfx4ZDBdxVTfOKtCZn9cDSJ4l6/nuoApcpIBcj47t2wZoVX8g2ZHuMHbiShgCR1T5Sog==",
+      "notices": [
+        {
+          "file": "react-19.3.0-LICENSE.txt",
+          "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93",
+          "source": "https://registry.npmjs.org/react/-/react-19.3.0.tgz",
+          "installedPath": "node_modules/react/LICENSE",
+          "installedSha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93"
+        }
+      ]
+    },
+    {
+      "name": "react-dom",
+      "version": "19.3.0",
+      "declaredLicense": "MIT",
+      "packageSource": "https://registry.npmjs.org/react-dom/-/react-dom-19.3.0.tgz",
+      "integrity": "sha512-JDk8dgif51OjFoDE70+OT9ICyYr+69HlmihNwp1+Nsfbna3t5sIiCa9ZJktDmQ4/1b/rn26hIAR2uYXDMr5r0Q==",
+      "notices": [
+        {
+          "file": "react-dom-19.3.0-LICENSE.txt",
+          "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93",
+          "source": "https://registry.npmjs.org/react-dom/-/react-dom-19.3.0.tgz",
+          "installedPath": "node_modules/react-dom/LICENSE",
+          "installedSha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93"
+        }
+      ]
+    },
+    {
+      "name": "scheduler",
+      "version": "0.28.0",
+      "declaredLicense": "MIT",
+      "packageSource": "https://registry.npmjs.org/scheduler/-/scheduler-0.28.0.tgz",
+      "integrity": "sha512-juorfCmIkIw8tT+p5BXSm6PJjQF/ycEYmKyzURCIt/RaZIhL+PulbQ9Yu2z1HdOJDdqDTlxA1+xKBmHXJsczAw==",
+      "notices": [
+        {
+          "file": "scheduler-0.28.0-LICENSE.txt",
+          "sha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93",
+          "source": "https://registry.npmjs.org/scheduler/-/scheduler-0.28.0.tgz",
+          "installedPath": "node_modules/scheduler/LICENSE",
+          "installedSha256": "da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93"
+        }
+      ]
+    },
+    {
+      "name": "sql.js",
+      "version": "1.12.0",
+      "declaredLicense": "MIT",
+      "packageSource": "https://registry.npmjs.org/sql.js/-/sql.js-1.12.0.tgz",
+      "integrity": "sha512-Bi+43yMx/tUFZVYD4AUscmdL6NHn3gYQ+CM+YheFWLftOmrEC/Mz6Yh7E96Y2WDHYz3COSqT+LP6Z79zgrwJlA==",
+      "notices": [
+        {
+          "file": "sql.js-1.12.0-LICENSE.txt",
+          "sha256": "60a3f6e4d7b29b4321359e683b36cf198d24f58e24582070f56e6fa89d5ee2be",
+          "source": "https://registry.npmjs.org/sql.js/-/sql.js-1.12.0.tgz",
+          "installedPath": "node_modules/sql.js/LICENSE",
+          "installedSha256": "60a3f6e4d7b29b4321359e683b36cf198d24f58e24582070f56e6fa89d5ee2be"
+        },
+        {
+          "file": "sql.js-1.12.0-AUTHORS.txt",
+          "sha256": "2bb11c65286bd0f2919022e119671036ff8d85c6cd1522b6ebcc1362e67f2ce5",
+          "source": "https://registry.npmjs.org/sql.js/-/sql.js-1.12.0.tgz",
+          "installedPath": "node_modules/sql.js/AUTHORS",
+          "installedSha256": "2bb11c65286bd0f2919022e119671036ff8d85c6cd1522b6ebcc1362e67f2ce5"
+        }
+      ],
+      "provenance": "SQL.js MIT/AUTHORS; installed WASM reports SQLite 3.45.2 and source ID d8cd6d49b46a395b13955387d05e9e1a2a47e54fb99f3c9b59835bbefad6af77. Compiler publication and contrib extension input provenance are bounded separately below."
+    },
+    {
+      "name": "ts-fsrs",
+      "version": "5.4.2",
+      "declaredLicense": "MIT",
+      "packageSource": "https://registry.npmjs.org/ts-fsrs/-/ts-fsrs-5.4.2.tgz",
+      "integrity": "sha512-z4qop4pzTcyTzuJ566d9EaX/4bZZzhYfeaPImfVr+xcYT65c5oBgFDijUhCE/D+C78eaolHIhKRZ04/RwF+v2g==",
+      "notices": [
+        {
+          "file": "ts-fsrs-5.4.2-LICENSE.txt",
+          "sha256": "8b83a73dd2894ff553d6de6113064b3ad9dfad3f839837b61f3b183881131d01",
+          "source": "https://registry.npmjs.org/ts-fsrs/-/ts-fsrs-5.4.2.tgz",
+          "installedPath": "node_modules/ts-fsrs/LICENSE",
+          "installedSha256": "8b83a73dd2894ff553d6de6113064b3ad9dfad3f839837b61f3b183881131d01"
+        }
+      ]
+    },
+    {
+      "name": "workbox-core",
+      "version": "7.4.1",
+      "declaredLicense": "MIT",
+      "packageSource": "https://registry.npmjs.org/workbox-core/-/workbox-core-7.4.1.tgz",
+      "integrity": "sha512-DT+vu46eh/2vRsSHTY4Xmc32Z1rr9PRlQUXr1Dx30ZuXRWwOsvZgGgcwxcasubQLQmbTNYZjv44LkBAQ4tT5tQ==",
+      "notices": [
+        {
+          "file": "workbox-core-7.4.1-LICENSE.txt",
+          "sha256": "aee9670e09b75ca8a2a1fe62d545ae38a6797970caf0335628e3a4dd15bc9b6c",
+          "source": "https://registry.npmjs.org/workbox-core/-/workbox-core-7.4.1.tgz",
+          "installedPath": "node_modules/workbox-core/LICENSE",
+          "installedSha256": "aee9670e09b75ca8a2a1fe62d545ae38a6797970caf0335628e3a4dd15bc9b6c"
+        }
+      ],
+      "provenance": "Installed package version 7.4.1; code embeds Workbox marker 7.4.0. The marker is not the installed package version. Runtime packages are shipped despite their development dependency labels."
+    },
+    {
+      "name": "workbox-precaching",
+      "version": "7.4.1",
+      "declaredLicense": "MIT",
+      "packageSource": "https://registry.npmjs.org/workbox-precaching/-/workbox-precaching-7.4.1.tgz",
+      "integrity": "sha512-cdr/9qByww7yzEp7zg/qI4ukUrrNjQLgN+ONQRpjy/VqGQXwkgHwr00KksGJK8v0VifwDXBb8a4cWNZH71jn3Q==",
+      "notices": [
+        {
+          "file": "workbox-precaching-7.4.1-LICENSE.txt",
+          "sha256": "aee9670e09b75ca8a2a1fe62d545ae38a6797970caf0335628e3a4dd15bc9b6c",
+          "source": "https://registry.npmjs.org/workbox-precaching/-/workbox-precaching-7.4.1.tgz",
+          "installedPath": "node_modules/workbox-precaching/LICENSE",
+          "installedSha256": "aee9670e09b75ca8a2a1fe62d545ae38a6797970caf0335628e3a4dd15bc9b6c"
+        }
+      ],
+      "provenance": "Installed package version 7.4.1; code embeds Workbox marker 7.4.0. The marker is not the installed package version. Runtime packages are shipped despite their development dependency labels."
+    },
+    {
+      "name": "workbox-routing",
+      "version": "7.4.1",
+      "declaredLicense": "MIT",
+      "packageSource": "https://registry.npmjs.org/workbox-routing/-/workbox-routing-7.4.1.tgz",
+      "integrity": "sha512-yubJGErZOusuidAenaL5ypfhQOa7urxP/f8E0ws7FPb4039RiWXUWBAyUkmUoOL/BcQGen3h0J8872d51IYxtA==",
+      "notices": [
+        {
+          "file": "workbox-routing-7.4.1-LICENSE.txt",
+          "sha256": "aee9670e09b75ca8a2a1fe62d545ae38a6797970caf0335628e3a4dd15bc9b6c",
+          "source": "https://registry.npmjs.org/workbox-routing/-/workbox-routing-7.4.1.tgz",
+          "installedPath": "node_modules/workbox-routing/LICENSE",
+          "installedSha256": "aee9670e09b75ca8a2a1fe62d545ae38a6797970caf0335628e3a4dd15bc9b6c"
+        }
+      ],
+      "provenance": "Installed package version 7.4.1; code embeds Workbox marker 7.4.0. The marker is not the installed package version. Runtime packages are shipped despite their development dependency labels."
+    },
+    {
+      "name": "workbox-strategies",
+      "version": "7.4.1",
+      "declaredLicense": "MIT",
+      "packageSource": "https://registry.npmjs.org/workbox-strategies/-/workbox-strategies-7.4.1.tgz",
+      "integrity": "sha512-GZxpaw9NbmOelj7667uZ2kpk5BFpOGbO4X0qjwh5ls8XQ8C+Lha5LQchTiUzsTFSS+NlUpftYAyOVXvQUrcqOQ==",
+      "notices": [
+        {
+          "file": "workbox-strategies-7.4.1-LICENSE.txt",
+          "sha256": "aee9670e09b75ca8a2a1fe62d545ae38a6797970caf0335628e3a4dd15bc9b6c",
+          "source": "https://registry.npmjs.org/workbox-strategies/-/workbox-strategies-7.4.1.tgz",
+          "installedPath": "node_modules/workbox-strategies/LICENSE",
+          "installedSha256": "aee9670e09b75ca8a2a1fe62d545ae38a6797970caf0335628e3a4dd15bc9b6c"
+        }
+      ],
+      "provenance": "Installed package version 7.4.1; code embeds Workbox marker 7.4.0. The marker is not the installed package version. Runtime packages are shipped despite their development dependency labels."
+    },
+    {
+      "name": "workbox-window",
+      "version": "7.4.1",
+      "declaredLicense": "MIT",
+      "packageSource": "https://registry.npmjs.org/workbox-window/-/workbox-window-7.4.1.tgz",
+      "integrity": "sha512-notZDH2u8VXaqyuD7xaqIfEFi6SRM4SUSd7ewe9PDsVqADuepxX2ZMY3uvuZGxzY5ZOsGC/vD3A/3smFtJt4/A==",
+      "notices": [
+        {
+          "file": "workbox-window-7.4.1-LICENSE.txt",
+          "sha256": "aee9670e09b75ca8a2a1fe62d545ae38a6797970caf0335628e3a4dd15bc9b6c",
+          "source": "https://registry.npmjs.org/workbox-window/-/workbox-window-7.4.1.tgz",
+          "installedPath": "node_modules/workbox-window/LICENSE",
+          "installedSha256": "aee9670e09b75ca8a2a1fe62d545ae38a6797970caf0335628e3a4dd15bc9b6c"
+        }
+      ],
+      "provenance": "Installed package version 7.4.1; code embeds Workbox marker 7.4.0. The marker is not the installed package version. Runtime packages are shipped despite their development dependency labels."
+    },
+    {
+      "name": "Alea (vendored by ts-fsrs)",
+      "version": "2010 source in ts-fsrs 5.4.2",
+      "includedBy": "ts-fsrs",
+      "provenance": "Installed ESM source-map member exactly matches the versioned publisher source SHA25669703874d19f7873b7bef790a2f8837e365debb11565dbd84dd1b9af95b343a1.",
+      "notices": [
+        {
+          "file": "tsfsrs-5.4.2-alea.ts.txt",
+          "sha256": "69703874d19f7873b7bef790a2f8837e365debb11565dbd84dd1b9af95b343a1",
+          "source": "https://github.com/open-spaced-repetition/ts-fsrs/blob/bb71e35a2f5af5a5ac6cce9ef7c41ad24855721d/packages/fsrs/src/alea.ts",
+          "sourceBlobSha": "4aca2380ea84b50394a9532a44b3f1d0edc1aa01",
+          "sourceRef": "bb71e35a2f5af5a5ac6cce9ef7c41ad24855721d"
+        }
+      ]
+    },
+    {
+      "name": "safari-14-idb-fix (vendored by Dexie)",
+      "version": "3.0.0",
+      "includedBy": "dexie",
+      "provenance": "Dexie4.4.6 selected legacy production wrapper and source map include this package.",
+      "notices": [
+        {
+          "file": "safari14idbfix-3.0.0-LICENSE.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+          "source": "https://github.com/jakearchibald/safari-14-idb-fix/blob/2a9084feb17a1226a5aed0fd3f3d3a49c5b3e9eb/LICENSE",
+          "sourceBlobSha": "d645695673349e3947e8e5ae42332d0ac3164cd7",
+          "sourceRef": "2a9084feb17a1226a5aed0fd3f3d3a49c5b3e9eb"
+        }
+      ]
+    },
+    {
+      "name": "tslib (vendored by Dexie)",
+      "version": "2.8.1",
+      "includedBy": "dexie",
+      "provenance": "Dexie4.4.6 selected legacy production wrapper and source map include Microsoft tslib helpers.",
+      "notices": [
+        {
+          "file": "tslib-2.8.1-LICENSE.txt",
+          "sha256": "210b19e543130388c68654b7497e967119ce17145f66ab7d85688fbd70f08751",
+          "source": "https://github.com/microsoft/tslib/blob/v2.8.1/LICENSE.txt",
+          "sourceBlobSha": "bfe6430cb0d83f34f5ed859d118dd3dc8ec1f7e8",
+          "sourceRef": "v2.8.1"
+        },
+        {
+          "file": "tslib-2.8.1-CopyrightNotice.txt",
+          "sha256": "da16ddb65f8ca390998fb99223d0112498b56b45784d00afd77ff8ce1ac4de8b",
+          "source": "https://github.com/microsoft/tslib/blob/v2.8.1/CopyrightNotice.txt",
+          "sourceBlobSha": "0e42542369729ec05635e54491d177e86ccea100",
+          "sourceRef": "v2.8.1"
+        }
+      ]
+    },
+    {
+      "name": "Emscripten runtime publication selected by SQL.js",
+      "version": "3.1.64",
+      "includedBy": "sql.js",
+      "provenance": "Release v1.12.0 Dockerfile selects3.1.64. Generated JS/WASM includes Emscripten runtime. Exact installed artifact compiler/link-map provenance is UNVERIFIED; these publisher texts do not assert every compiler repository component is shipped.",
+      "notices": [
+        {
+          "file": "emscripten-3.1.64-LICENSE.txt",
+          "sha256": "620a78084fc7ca97c0b5dea9abf891f3ffcadfdbf305276f099c9c4e12fc1d86",
+          "source": "https://github.com/emscripten-core/emscripten/blob/a1fe3902bf73a3802eae0357d273d0e37ea79898/LICENSE",
+          "sourceBlobSha": "70cabe388d27da221bd769c50b427a35354f4f1d",
+          "sourceRef": "a1fe3902bf73a3802eae0357d273d0e37ea79898"
+        },
+        {
+          "file": "emscripten-3.1.64-AUTHORS.txt",
+          "sha256": "56f7df65203d4858dac19cafe3a84a8c49abaff56b67d32d2d463d5fef6e440b",
+          "source": "https://github.com/emscripten-core/emscripten/blob/a1fe3902bf73a3802eae0357d273d0e37ea79898/AUTHORS",
+          "sourceBlobSha": "5aed48f68b996d61e83272c74094aa3be0badd14",
+          "sourceRef": "a1fe3902bf73a3802eae0357d273d0e37ea79898"
+        },
+        {
+          "file": "emscripten-3.1.64-musl-COPYRIGHT.txt",
+          "sha256": "f9bc4423732350eb0b3f7ed7e91d530298476f8fec0c6c427a1c04ade22655af",
+          "source": "https://github.com/emscripten-core/emscripten/blob/a1fe3902bf73a3802eae0357d273d0e37ea79898/system/lib/libc/musl/COPYRIGHT",
+          "sourceBlobSha": "c1628e9ac84f927fe791124ec172fb61c760bb9b",
+          "sourceRef": "a1fe3902bf73a3802eae0357d273d0e37ea79898"
+        }
+      ]
+    },
+    {
+      "name": "SQLite contrib extension source referenced by SQL.js",
+      "version": "historical build-input identity UNVERIFIED",
+      "includedBy": "sql.js",
+      "provenance": "UNRESOLVED: v1.12.0 Makefile links extension-functions.c from contrib get=25. Preserved current contributor source is not attested to historical installed input; no licence statement was located. It is separate from SQLite core and is not labelled public domain.",
+      "notices": [
+        {
+          "file": "sqljs-extension-functions-current-get25.c.txt",
+          "sha256": "991b40fe8b2799edc215f7260b890f14a833512c9d9896aa080891330ffe4052",
+          "source": "https://www.sqlite.org/contrib/download/extension-functions.c?get=25"
+        }
+      ]
+    },
+    {
+      "name": "SQLite core in SQL.js WASM",
+      "version": "3.45.2",
+      "includedBy": "sql.js",
+      "provenance": "Version/source ID obtained from installed WASM public SQL API and corroborated by SQL.js v1.12.0 Makefile. This exact publisher source header does not classify separately fetched contrib source.",
+      "notices": [
+        {
+          "file": "sqlite-3.45.2-source-disclaimer.txt",
+          "sha256": "71c9d370765c4e00aaf89d43bdb57cef6d2404aa3121a1f29931778c0e599b46",
+          "source": "https://github.com/sqlite/sqlite/blob/version-3.45.2/src/main.c",
+          "sourceBlobSha": "03429983d6ef2fcd291b4a3543c36433202c3de8",
+          "sourceRef": "version-3.45.2",
+          "excerpt": "Exact initial block comment of versioned src/main.c"
+        }
+      ]
+    }
+  ]
+}
