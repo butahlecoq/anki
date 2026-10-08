@@ -701,3 +701,47 @@ test('same-barrier concurrent restores retain different field versions through p
     } finally { reopened.closeLocalCollection() }
   })
 })
+test('a reactivated mask card waits for its later owner page and preserves a new flag', async () => {
+  await withPairedCollections(2, async ([owner, observer]) => {
+    const deck = await owner.createDeck('Mask reactivation')
+    const png = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL4+QAAAABJRU5ErkJggg==', 'base64'))
+    const masks = [{ id: 'alpha', x: .1, y: .1, width: .2, height: .2 }, { id: 'beta', x: .6, y: .1, width: .2, height: .2 }]
+    const note = await owner.createImageOcclusionNote(deck.id, { image: new File([png], 'diagram.png', { type: 'image/png' }), imageWidth: 1, imageHeight: 1, header: '骨', backExtra: 'bone', tags: ['diagram'], masks })
+    const card = (await readCardsForNote(owner, note.id)).find(card => card.occlusionId === 'alpha')!
+    await owner.answer(card.id, Rating.Good)
+    await owner.updateImageOcclusionNote(note.id, { masks: [masks[1]] })
+    await syncComplete(owner)
+    await syncComplete(observer)
+    const before = await readAnkiExportSnapshot(observer)
+    expect(before.cards.find(row => row.id === card.id)).toMatchObject({ templateSuspended: true })
+    await owner.updateImageOcclusionNote(note.id, { masks })
+    await owner.setCardFlag(card.id, 3)
+    const generated = await owner.pendingOperations()
+    const early = generated.filter(operation => operation.entityType === 'card')
+    const flagged = early.find(operation => operation.entityId === card.id && (operation.payload as { flag?: number }).flag === 3)!
+    expect(flagged).toBeDefined()
+    await owner.acknowledgeOperations(generated.map(operation => operation.opId))
+    for (let index = 0; index < 300; index++) await owner.createDeck(`Reactivation filler ${index}`)
+    const operations = [...early, ...await owner.pendingOperations(), ...generated.filter(operation => operation.entityType !== 'card')]
+    expect(operations.findIndex(operation => operation.entityType === 'note') - operations.indexOf(flagged)).toBeGreaterThan(250)
+    expect(await foregroundSync((await owner.syncSettings())!, operations.slice(0, 250))).toMatchObject({ state: 'complete' })
+    expect.soft(await syncCollection(observer)).toMatchObject({ state: 'incomplete', remoteChangesPending: false })
+    expect.soft(await readReceivedOperation(observer, flagged.opId)).toBeUndefined()
+    expect((await readAnkiExportSnapshot(observer)).cards).toEqual(before.cards)
+    const name = observer.databaseName
+    observer.closeLocalCollection()
+    const reopened = createCollection(name)
+    try {
+      for (let offset = 250; offset < operations.length; offset += 250) expect(await foregroundSync((await owner.syncSettings())!, operations.slice(offset, offset + 250))).toMatchObject({ state: 'complete' })
+      await syncComplete(reopened)
+      const actual = await readAnkiExportSnapshot(reopened)
+      const expected = await readAnkiExportSnapshot(owner)
+      expect(actual.notes).toEqual(expected.notes)
+      expect(actual.cards).toEqual(expected.cards)
+      expect(actual.reviews).toEqual(expected.reviews)
+      expect(actual.references).toEqual(expected.references)
+      expect(await readSyncProgressCounts(reopened)).toMatchObject({ incomingPending: 0, conflicts: 0 })
+    } finally { reopened.closeLocalCollection() }
+  })
+}, 15_000)
+

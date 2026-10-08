@@ -33,6 +33,24 @@ export function cardWaitsForPendingNote(operation: SyncOperation, pending: reado
     && JSON.stringify(candidate.lifetime ?? []) === JSON.stringify(lifetime))
 }
 
+/** An explicit descendant of retirement can precede its reactivated owner. */
+function cardFollowsTemplateRetirement(operation: SyncOperation, revisions: readonly SyncOperation[]): boolean {
+  const history = new Map(revisions.filter(revision => revision.entityType === 'card' && revision.entityId === operation.entityId
+    && JSON.stringify(revision.lifetime ?? []) === JSON.stringify(operation.lifetime ?? [])).map(revision => [revision.opId, revision]))
+  const parents = [...(operation.parents ?? [])]
+  const visited = new Set<string>()
+  while (parents.length) {
+    const parentId = parents.pop()!
+    if (visited.has(parentId)) continue
+    visited.add(parentId)
+    const parent = history.get(parentId)
+    if (!parent || parent.action === 'delete') continue
+    if (templateSuspended(parent.payload as CardRecord)) return true
+    parents.push(...(parent.parents ?? []))
+  }
+  return false
+}
+
 /** Unknown valid mask generations wait; known removed or malformed masks cannot revive. */
 export function decideOcclusionCardDependency(operation: SyncOperation, snapshot: {
   note: Note
@@ -56,6 +74,7 @@ export function decideOcclusionCardDependency(operation: SyncOperation, snapshot
   const expectedOrdinal = existing?.occlusionOrdinal ?? mask?.ordinal ?? historicalMask?.ordinal
   if (expectedOrdinal !== undefined && expectedOrdinal !== card.occlusionOrdinal) return 'stale'
   if (mask) return 'apply'
+  if (!templateSuspended(card) && cardFollowsTemplateRetirement(operation, snapshot.revisions)) return 'pending'
   if (existing?.occlusionOrdinal !== undefined) return templateSuspended(card) ? 'apply' : 'stale'
   if (historicalMask) return templateSuspended(card) ? 'apply' : 'stale'
   if (note.imageOcclusion && card.occlusionOrdinal! < note.imageOcclusion.nextOrdinal) return 'stale'

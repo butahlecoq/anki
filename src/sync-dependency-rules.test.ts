@@ -75,5 +75,11 @@ test('unknown mask generations wait while malformed, mutated and historically re
   expect(decideOcclusionCardDependency(retired, { ...snapshot, revisions: history })).toBe('apply')
   expect(decideOcclusionCardDependency({ ...retired, payload: { ...card, templateSuspended: true, occlusionOrdinal: 1 } }, { ...snapshot, revisions: history })).toBe('stale')
   expect(decideOcclusionCardDependency(retired, { ...snapshot, revisions: [{ ...history[0], lifetime: ['another-owner-lifetime'] }] })).toBe('pending')
+  const retirement = operation('card', card.id, { ...card, templateSuspended: true }, { opId: 'retired-mask' })
+  const reactivation = { ...incoming, action: 'update' as const, parents: [retirement.opId] }
+  expect(decideOcclusionCardDependency(reactivation, { ...snapshot, revisions: [...history, retirement] })).toBe('pending')
+  expect(decideOcclusionCardDependency(reactivation, { ...snapshot, revisions: [...history, { ...retirement, lifetime: ['another-card-lifetime'] }] })).toBe('stale')
+  expect(decideOcclusionCardDependency(reactivation, { ...snapshot, revisions: [...history, { ...retirement, entityId: 'unrelated-card' }] })).toBe('stale')
+  expect(decideOcclusionCardDependency({ ...reactivation, payload: { ...card, occlusionOrdinal: 1 } }, { ...snapshot, revisions: [...history, retirement] })).toBe('stale')
   expect(decideOcclusionCardDependency(incoming, { ...snapshot, note: { ...removed, imageOcclusion: { ...removed.imageOcclusion, nextOrdinal: 2 } } })).toBe('pending')
 })
