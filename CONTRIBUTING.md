@@ -4,6 +4,8 @@ Kiroku uses GitHub Issues as an executable dependency graph. Issue #1 is the par
 
 Read [the generated live repository status](docs/agents/status.md) before selecting work. Run `npm run status:check` to see whether its recorded base still matches `origin/main`; regenerate it with `npm run status`. It reports current PR, CI, branch and worktree evidence from Git and GitHub.
 
+After execution begins, follow the **Implementation Decisions** in [parent #1](https://github.com/butahlecoq/anki/issues/1) for unattended work. Resolve routine minor choices with the existing [domain decisions](docs/adr/) and [documented setup defaults](README.md), preserving unknown work and learner data. Continue independent work while an external requirement is unavailable, and report the exact remaining requirement with its evidence. The policy guides execution; issue acceptance criteria still determine completion.
+
 ## First, check for drift
 
 ```sh
@@ -93,6 +95,8 @@ the one-worker result as the local gate evidence.
 Playwright's WebKit project emulates a phone-sized browser; it is not installed iOS Safari. Warm offline journeys verify an already loaded application. Fresh offline navigation, service-worker behavior, and audible playback have documented WebKit or physical-device limits. Keep those skips and limitations separate from application failures.
 
 If a browser process fails before the application starts with `spawn UNKNOWN`, capture the Node/npm/Playwright versions, command, exact head, and process-launch context, then compare an unrestricted run with a clean baseline. Do not treat an application assertion, port collision, reused server, or browser automation limitation as the same failure, and do not claim an unproven historical root cause.
+
+For a recoverable failure, retain the first command, source and result before testing a reasonable alternative. Record what changed, the observed result and any remaining limit; run the complete gate and independent review at the final commit before merging. Witnessed examples include the [measured browser-worker alternative in #262](https://github.com/butahlecoq/anki/issues/262), [restoration cleanup repair in #272](https://github.com/butahlecoq/anki/issues/272), and [production release qualification in #26](https://github.com/butahlecoq/anki/issues/26). Their passing software evidence remains separate from the [physical iPhone handoff in #24](https://github.com/butahlecoq/anki/issues/24).
 
 ## Rules, and the failures they prevent
 
