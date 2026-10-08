@@ -16,6 +16,7 @@ for (const scenario of cases) test(`release native diagnostics boundary: ${scena
   const script = '<script>window.releaseUnsafeRan=true</script>'
   const html = `<!doctype html><html lang="ja"><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:"></head><body><p>東京</p><audio controls src="data:audio/wav;base64,${Buffer.from(wav).toString('base64')}"></audio>${scenario === 'card-script' ? script : ''}${scenario === 'event-handler' ? '<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL4+QAAAABJRU5ErkJggg==" onload="window.releaseUnsafeRan=true">' : ''}</body></html>`
   await page.setContent('<main><div id="cards"></div></main>')
+  await diagnostics.retainNativeFrames(page)
   await page.evaluate(({ html, scenario, script }) => {
     const card = document.createElement('iframe')
     card.title = 'Review card'

@@ -70,17 +70,25 @@ overflow. Failed service-origin requests while intentionally offline are recorde
 as expected. WebKit native audio controls also emit a measured sandbox warning
 in script-free card documents. That exact warning is expected only with zero
 JavaScript arguments and an empty, zero-line/column location, and after a
-delivery-time audit finds native WAV audio controls and verifies every child
-document is readable, uses the script-free `allow-same-origin` sandbox, and
-contains no scripts, executable attributes or embedded objects. Unreadable,
-detached or unsafe documents fail closed. All warnings and audit results remain
+delivery-time audit finds native WAV audio controls and verifies every live
+child document and retained authored frame source. A parent-document mutation
+observer, installed before interactions, retains added/removed frame sources
+and previous sandbox/srcdoc values: native control messages may arrive after
+review navigation removes a frame. The audit parses those retained sources
+without executing them, checks nested frames, and rejects any unsafe source
+observed during that document's lifetime. Every audited frame must be readable,
+use the script-free `allow-same-origin` sandbox, and contain no scripts,
+executable attributes or embedded objects. Missing or unverifiable evidence
+fails closed; removal alone cannot erase a script-bearing frame. All warnings,
+console argument/location metadata and audit results remain
 in the diagnostic attachment; identical application console text and attempted
 template code remain fatal. Guards await the audit before checking results.
 Playwright owns tracing for every context. Traces retain
 actions, screenshots and sources with DOM snapshots disabled: snapshot injection
 attempts scripts in the deliberately script-free card sandbox and produces
 instrumentation console errors. The native audio warning has separate positive
-and negative controls with snapshots disabled. Screenshots,
+and negative controls with snapshots disabled, including safe and script-bearing
+frames removed before the audit, and dynamic script insertion. Screenshots,
 browser traces for every owned context, JSON
 diagnostics, service logs, fixture bytes/hash, media digests, build identity,
 actual engine version, configured/measured viewports, phase duration, and final
@@ -94,9 +102,24 @@ off the right marker while the viewport capture retains it, even though the
 DOM viewport and resize telemetry stay unchanged. Desktop Chromium and Linux
 keep full-page captures. The report records the screenshot mode for each phase;
 a viewport image is not presented as a full-page or physical-iPhone capture.
+Imported collection screenshots wait for the restored Japanese deck control.
+The journey closes support details after its separate build-identity capture,
+scrolls the relevant collection/result/statistic into view, and retains an
+additional phone editor capture showing its save action.
+Review captures observe the child's loaded document, font status and fitted
+iframe height from the parent, then await parent animation frames. The retained
+negative control times out when readiness callbacks run in the script-free
+child realm. Card script permissions and diagnostic guards stay unchanged.
+Chromium additionally retains a native iframe close-up before each review page
+capture. A same-checkpoint control records identical readable DOM/geometry with
+a blank first full-page capture, followed by rendered viewport, iframe and
+full-page captures. Capturing the settled iframe first retains both the Japanese
+card close-up and the subsequent rendered page image. Windows WebKit keeps its
+calibrated viewport captures.
 
-Retain the command output and HTML report for pass/fail/skip/retry counts and
-artifact paths. Then run the **entire** `npm run check` at the same final commit
+Retain the command output and JSON report for pass/fail/skip/retry counts and
+artifact paths; retain the HTML report when that reporter is enabled. Then run
+the **entire** `npm run check` at the same final commit
 with the qualification flag and private ports/runtime still set, and obtain
 independent Standards/Spec review. Record the exact commands, start/end/duration,
 commit, counts, and artifact paths on the issue and PR. Browser source preparation

@@ -38,6 +38,7 @@ async function importPackage(page: Page, buffer: Buffer, notes: number) {
   await expect(page.getByRole('region', { name: 'Package summary' })).toContainText(`${notes} notes`, { timeout: 15000 })
   await page.getByRole('button', { name: 'Import package', exact: true }).click()
   await expect(page.getByRole('dialog', { name: /Import/ })).toBeHidden()
+  await expect(page.getByRole('button', { name: 'Open 日本語', exact: true })).toBeVisible()
 }
 
 async function navigate(page: Page, name: string) {
@@ -95,6 +96,19 @@ test('production release collection survives two offline reopenings and converge
     // and retains it in a calibrated viewport capture, with no layout resize.
     const screenshotFullPage = process.platform !== 'win32' || browserName !== 'webkit'
     phases.push({ name, geometry, elapsedMs: Date.now() - started, screenshotFullPage })
+    if (await page.locator('iframe[title="Review card"]').count()) {
+      // DOM/media assertions can precede the card's fitted, painted frame.
+      // Observe readiness from the parent: callbacks inside the script-free
+      // child's realm do not complete in the retained negative control.
+      await expect.poll(() => page.evaluate(() => {
+        const frame = document.querySelector<HTMLIFrameElement>('iframe[title="Review card"]')
+        return !!frame?.style.height && frame.contentDocument?.readyState === 'complete' && frame.contentDocument.fonts.status === 'loaded'
+      })).toBe(true)
+      await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+      // Retain a close-up using the native locator capture, which also waits
+      // for the actual frame bounds to settle before the whole-page image.
+      if (browserName === 'chromium') await page.locator('iframe[title="Review card"]').screenshot({ path: info.outputPath(`${name}-card.png`) })
+    }
     await page.screenshot({ path: info.outputPath(`${name}.png`), fullPage: screenshotFullPage })
     await diagnostics.assertClean()
   }
@@ -130,17 +144,21 @@ test('production release collection survives two offline reopenings and converge
     active = client.context
     let page = client.page
     await page.goto('/')
+    await diagnostics.retainNativeFrames(page)
     await expect(page.getByRole('heading', { name: 'Start with one deck' })).toBeVisible()
     await checkpoint(page, '01-onboarding')
     await page.locator('.build-identity summary').click()
     await expect(page.locator('.build-identity dd').nth(1)).toHaveText(commit)
     await expect(page.locator('.build-identity')).toContainText('Release build')
+    await checkpoint(page, '01-build-identity')
+    await page.locator('.build-identity summary').click()
     const manifestPath = await page.locator('link[rel="manifest"]').getAttribute('href')
     expect(manifestPath).toBeTruthy()
     const manifest = await (await page.request.get(new URL(manifestPath!, page.url()).href)).json()
     expect(manifest.kiroku).toEqual({ version: health.build.version, commit })
     const fixture = await japaneseFixture()
     await importPackage(page, fixture.bytes, 3)
+    await page.getByRole('button', { name: 'Open 日本語', exact: true }).scrollIntoViewIfNeeded()
     await checkpoint(page, '02-decks')
     // A learner-created note goes through the ordinary editor, then is reviewed
     // before export so every card has a real, preserved scheduling instant.
@@ -152,6 +170,10 @@ test('production release collection survives two offline reopenings and converge
     await page.getByLabel('Front', { exact: true }).fill('学ぶ')
     await page.getByLabel('Back', { exact: true }).fill('learn')
     await checkpoint(page, '02-editor')
+    if (browserName === 'webkit') {
+      await page.getByRole('button', { name: 'Save note', exact: true }).scrollIntoViewIfNeeded()
+      await checkpoint(page, '02-editor-actions')
+    }
     await page.getByRole('button', { name: 'Save note', exact: true }).click()
     await page.getByRole('button', { name: 'Study now', exact: true }).click()
     await expect(page.frameLocator('iframe[title="Review card"]').locator('body')).toContainText('学ぶ')
@@ -164,6 +186,7 @@ test('production release collection survives two offline reopenings and converge
     await checkpoint(page, '03-sync')
     const second = await createClient()
     await second.page.goto('/')
+    await diagnostics.retainNativeFrames(second.page)
     await pair(second.page)
     await sync(second.page)
     await openJapanese(page)
@@ -224,10 +247,12 @@ test('production release collection survives two offline reopenings and converge
     await editor.getByRole('button', { name: 'Apply field changes' }).click()
     await search(page, '"offline edit"')
     await expect(page.getByRole('button', { name: '猫', exact: true })).toBeVisible()
+    await page.getByRole('button', { name: '猫', exact: true }).scrollIntoViewIfNeeded()
     await checkpoint(page, '06-offline-browse', true)
     await navigate(page, 'Statistics')
     const answers = page.getByRole('region', { name: 'Period totals', exact: true }).locator('article').first().locator('strong')
     await expect(answers).toHaveText('4')
+    await answers.scrollIntoViewIfNeeded()
     await checkpoint(page, '07-offline-statistics', true)
     const offlineInventory = await releaseInventory(await exportPackage(page))
     expect(offlineInventory.reviews).toHaveLength(4)
@@ -265,6 +290,7 @@ test('production release collection survives two offline reopenings and converge
     await sync(page)
     await sync(second.page)
     await second.page.reload()
+    await diagnostics.retainNativeFrames(second.page)
     await search(second.page, '"offline edit"')
     await expect(second.page.getByRole('button', { name: '猫', exact: true })).toBeVisible()
     const exported = await exportPackage(page)
@@ -276,14 +302,18 @@ test('production release collection survives two offline reopenings and converge
     expect(expected.decks.map(deck => deck.name.replaceAll('\u001f', '::'))).toEqual(expect.arrayContaining(['Release', 'Release::日本語', '手作り']))
     expect(expected.media.map(media => media.digest).sort()).toEqual(fixture.mediaDigests)
     expect(await releaseInventory(await exportPackage(second.page))).toEqual(expected)
+    await second.page.getByRole('button', { name: 'Open 日本語', exact: true }).scrollIntoViewIfNeeded()
     await checkpoint(second.page, '09-converged-receiver')
     const restored = await createClient()
     await restored.page.goto('/')
+    await diagnostics.retainNativeFrames(restored.page)
     await importPackage(restored.page, exported, 4)
     await restored.page.reload()
+    await diagnostics.retainNativeFrames(restored.page)
     await search(restored.page, '"offline edit"')
     await expect(restored.page.getByRole('button', { name: '猫', exact: true })).toBeVisible()
     expect(await releaseInventory(await exportPackage(restored.page))).toEqual(expected)
+    await restored.page.getByRole('button', { name: 'Open 日本語', exact: true }).scrollIntoViewIfNeeded()
     await checkpoint(restored.page, '10-exported-restored')
     await info.attach('release-inventory', { body: JSON.stringify(expected, null, 2), contentType: 'application/json' })
     await info.attach('release-fixture', { body: fixture.bytes, contentType: 'application/octet-stream' })

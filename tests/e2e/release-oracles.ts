@@ -30,25 +30,72 @@ export async function releaseInventory(bytes: Buffer) {
   }
 }
 
+type NativeFrameSource = { title: string; sandbox: string | null; srcdoc: string | null }
+type NativeFrameHistory = { sources: Map<string, NativeFrameSource>; flush: () => void }
+
+/** Retain authored frame documents before review navigation can detach them. */
+async function retainNativeFrames(page: Page) {
+  await page.evaluate(() => {
+    const owner = window as Window & { releaseNativeFrameHistory?: NativeFrameHistory }
+    if (owner.releaseNativeFrameHistory) return
+    const sources = new Map<string, NativeFrameSource>()
+    function capture(frame: HTMLIFrameElement, oldAttribute?: { name: string; value: string | null }) {
+      const source = { title: frame.title, sandbox: frame.getAttribute('sandbox'), srcdoc: frame.getAttribute('srcdoc') }
+      if (oldAttribute?.name === 'sandbox') source.sandbox = oldAttribute.value
+      if (oldAttribute?.name === 'srcdoc') source.srcdoc = oldAttribute.value
+      sources.set(JSON.stringify(source), source)
+    }
+    function collect(node: Node) {
+      if (node instanceof HTMLIFrameElement) capture(node)
+      if (node instanceof Element) node.querySelectorAll('iframe').forEach(captureFrame)
+    }
+    function captureFrame(frame: HTMLIFrameElement) { capture(frame) }
+    function consume(records: MutationRecord[]) {
+      for (const record of records) {
+        if (record.type === 'attributes' && record.target instanceof HTMLIFrameElement) {
+          capture(record.target)
+          capture(record.target, { name: record.attributeName!, value: record.oldValue })
+        }
+        record.addedNodes.forEach(collect)
+        record.removedNodes.forEach(collect)
+      }
+    }
+    const observer = new MutationObserver(consume)
+    observer.observe(document, { subtree: true, childList: true, attributes: true, attributeOldValue: true, attributeFilter: ['srcdoc', 'sandbox'] })
+    collect(document.documentElement)
+    owner.releaseNativeFrameHistory = { sources, flush: () => consume(observer.takeRecords()) }
+  })
+}
+
 async function nativeAudioDocuments(page: Page) {
   return page.evaluate(() => {
-    const frames: Array<{ title: string; sandbox: string | null; readable: boolean; scripts: number; activeAttributes: number; audioControls: number }> = []
+    const frames: Array<{ title: string; sandbox: string | null; readable: boolean; scripts: number; activeAttributes: number; audioControls: number; source: 'live' | 'retained-srcdoc' }> = []
+    const history = (window as Window & { releaseNativeFrameHistory?: NativeFrameHistory }).releaseNativeFrameHistory
+    history?.flush()
     function executableAttribute(attribute: Attr) {
       if (/^on/i.test(attribute.name)) return true
       try { return new URL(attribute.value, document.baseURI).protocol === 'javascript:' }
       catch { return false }
     }
-    function inspect(document: Document) {
+    function inspectFrame(title: string, sandbox: string | null, child: Document | null, readable: boolean, source: 'live' | 'retained-srcdoc') {
+      const scripts = child?.querySelectorAll('script, object, embed').length ?? 0
+      const attributes = child ? [...child.querySelectorAll('*')].flatMap(element => [...element.attributes]) : []
+      const activeAttributes = attributes.filter(executableAttribute).length
+      frames.push({ title, sandbox, readable, scripts, activeAttributes, audioControls: child?.querySelectorAll('audio[controls][src^="data:audio/wav;base64,"]').length ?? 0, source })
+      if (child) inspect(child, source)
+    }
+    function inspect(document: Document, source: 'live' | 'retained-srcdoc') {
       for (const frame of document.querySelectorAll<HTMLIFrameElement>('iframe')) {
-        const child = frame.contentDocument
-        const scripts = child?.querySelectorAll('script, object, embed').length ?? 0
-        const attributes = child ? [...child.querySelectorAll('*')].flatMap(element => [...element.attributes]) : []
-        const activeAttributes = attributes.filter(executableAttribute).length
-        frames.push({ title: frame.title, sandbox: frame.getAttribute('sandbox'), readable: !!child?.body && frame.hasAttribute('srcdoc'), scripts, activeAttributes, audioControls: child?.querySelectorAll('audio[controls][src^="data:audio/wav;base64,"]').length ?? 0 })
-        if (child) inspect(child)
+        const srcdoc = frame.getAttribute('srcdoc')
+        const child = source === 'live' ? frame.contentDocument : srcdoc === null ? null : new DOMParser().parseFromString(srcdoc, 'text/html')
+        inspectFrame(frame.title, frame.getAttribute('sandbox'), child, !!child?.body && srcdoc !== null, source)
       }
     }
-    inspect(document)
+    inspect(document, 'live')
+    for (const source of history?.sources.values() ?? []) {
+      const child = source.srcdoc === null ? null : new DOMParser().parseFromString(source.srcdoc, 'text/html')
+      inspectFrame(source.title, source.sandbox, child, child !== null, 'retained-srcdoc')
+    }
     return {
       safe: frames.some(frame => frame.audioControls > 0) && frames.every(frame => frame.readable && frame.sandbox === 'allow-same-origin' && frame.scripts === 0 && frame.activeAttributes === 0),
       frames,
@@ -59,7 +106,7 @@ async function nativeAudioDocuments(page: Page) {
 export function releaseDiagnostics(serviceURL: string) {
   let phase = 'setup'
   let offline = false
-  const events: Array<{ phase: string; kind: string; detail: string; expected: boolean; nativeAudioAudit?: Awaited<ReturnType<typeof nativeAudioDocuments>> }> = []
+  const events: Array<{ phase: string; kind: string; detail: string; expected: boolean; console?: { arguments: number; location: { url: string; lineNumber: number; columnNumber: number } }; nativeAudioAudit?: Awaited<ReturnType<typeof nativeAudioDocuments>> }> = []
   const pending: Promise<void>[] = []
   const observed = new WeakSet<Page>()
   const record = (kind: string, detail: string, expected = false) => {
@@ -69,6 +116,7 @@ export function releaseDiagnostics(serviceURL: string) {
   }
   return {
     phase(name: string, isOffline = false) { phase = name; offline = isOffline },
+    retainNativeFrames,
     observe(page: Page) {
       if (observed.has(page)) return
       observed.add(page)
@@ -77,9 +125,11 @@ export function releaseDiagnostics(serviceURL: string) {
         if (message.type() !== 'error') return
         const location = message.location()
         const event = record('console-error', `${message.text()} (${location.url})`, offline && location.url.startsWith(serviceURL))
+        event.console = { arguments: message.args().length, location }
         // WebKit's native audio controls emit this measured signature even in
         // script-free frames. Template code has the same signature: inspect
-        // every child document at delivery rather than accepting the text alone.
+        // every live and retained authored document, including removed unsafe
+        // frames, rather than accepting the text or the last safe frame alone.
         if (page.context().browser()?.browserType().name() === 'webkit'
           && message.text() === "Blocked script execution in 'about:srcdoc' because the document's frame is sandboxed and the 'allow-scripts' permission is not set."
           && message.args().length === 0 && location.url === '' && location.lineNumber === 0 && location.columnNumber === 0) {
