@@ -311,13 +311,13 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
   }, [cardId, editingNote, movingNote, editingTags, deletingNote, showCardInfo, unavailable, promptReady, note, mediaBlocked])
 
   const answerCurrent = useCallback(async (targetCardId: string, rating: Grade) => {
-    if (isAnswering || (targetCardId === cardId && (!promptReady || mediaBlocked))) return false
+    if (isAnswering || (targetCardId === cardId && (mediaBlocked || (activity?.cardScope === 'current' && !promptReady)))) return false
     if (currentActivityPrompt) setLastActivityPrompt(currentActivityPrompt)
     const duration = targetCardId === cardId
       ? activeTime.current.elapsed + (activeTime.current.started === null ? 0 : performance.now() - activeTime.current.started)
       : 0
     return answer(targetCardId, rating, duration)
-  }, [cardId, isAnswering, promptReady, mediaBlocked, answer, currentActivityPrompt])
+  }, [cardId, isAnswering, activity?.cardScope, promptReady, mediaBlocked, answer, currentActivityPrompt])
 
   const skipCurrentCard = useCallback(() => {
     setActivityInteractionRevision((revision) => revision + 1)
@@ -422,7 +422,7 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
 
   const ActivityView = activity.View
 
-  if (queue === undefined || (cardId && (!promptReady || card === undefined || note === undefined || noteType === undefined || unavailable))) return <div className="loading-state" role="status">Preparing review…</div>
+  if (queue === undefined || (cardId && ((activity.cardScope === 'current' && !promptReady) || card === undefined || note === undefined || noteType === undefined || unavailable))) return <div className="loading-state" role="status">Preparing review…</div>
   if (!cardId || !card || !note || !noteType || !template) {
     if (activity.completion === 'activity' && lastActivityPrompt) return <>
       <section className="review-session">
