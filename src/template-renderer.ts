@@ -145,6 +145,33 @@ function replacement(raw: string, known: ReadonlySet<string>): Replacement {
   throw new Error(`Unsupported template filter: ${parts.slice(0, -1).join(':')}`)
 }
 
+function templateConditionValue(name: string, fields: Readonly<Record<string, string>>, options: Pick<RenderOptions, 'kind' | 'ordinal'>): boolean {
+  return /^c[1-9]\d*$/.test(name) && options.kind === 'cloze'
+    ? options.ordinal === Number(name.slice(1)) : Boolean(fields[name]?.trim())
+}
+
+/** Visible substitutions that retain appended image/audio markup. */
+export function templateMediaFields(template: string, fields: Readonly<Record<string, string>>, options: Pick<RenderOptions, 'kind' | 'ordinal'> = {}): ReadonlySet<string> {
+  const known = new Set(Object.keys(fields))
+  const eligible = new Set<string>()
+  let enabled = true
+  for (const [, marker, rawName] of template.matchAll(token)) {
+    const { field, filter } = replacement(rawName, known)
+    if (marker) {
+      // Validated templates support one conditional level.
+      if (marker === '/') enabled = true
+      else {
+        const value = templateConditionValue(field, fields, options)
+        enabled = marker === '#' ? value : !value
+      }
+      continue
+    }
+    // Text strips HTML; answer inputs and hints do not display attached media.
+    if (enabled && known.has(field) && !['text', 'type', 'type-cloze', 'hint'].includes(filter ?? '')) eligible.add(field)
+  }
+  return eligible
+}
+
 /** Validate the deliberately small template language before storing a template. */
 export function validateTemplate(template: string, fieldNames: readonly string[], side: 'front' | 'back', kind: 'standard' | 'cloze' = 'standard'): void {
   const known = new Set(fieldNames)
@@ -201,8 +228,7 @@ export function renderTemplate(template: string, fields: Record<string, string>,
     if (!section || section.enabled) html += template.slice(cursor, position)
     cursor = position + source.length
     const ordinal = options.ordinal ?? (filter === 'cloze' || filter === 'type-cloze' ? clozeOrdinals(fields[name] ?? '')[0] : undefined)
-    const conditionValue = /^c[1-9]\d*$/.test(name) && options.kind === 'cloze'
-      ? Boolean(options.ordinal === Number(name.slice(1))) : Boolean(fields[name]?.trim())
+    const conditionValue = templateConditionValue(name, fields, options)
     if (marker === '#' || marker === '^') {
       if (section) throw new Error('Nested template conditionals are not supported')
       section = { name, enabled: marker === '#' ? conditionValue : !conditionValue }

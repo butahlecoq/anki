@@ -779,6 +779,7 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
   let cards: CardRecord[] = []
   let reviews: ReviewEntry[] = []
   let references: NoteMediaReference[] = []
+  const discardedExportReferences = new Set<NoteMediaReference>()
   const referencesByNoteId = new Map<string, NoteMediaReference[]>()
   const addReference = (reference: NoteMediaReference) => {
     references.push(reference)
@@ -898,6 +899,7 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
         }
       }
     }
+    const fieldReferences = new Set(referencesByNoteId.get(noteId) ?? [])
     const staticPlacements = new Map<string, { name: string; side: MediaSide; templateId: string }>()
     for (const template of sourceType.templates) {
       for (const name of rewrittenTemplateMediaNames(template.front)) staticPlacements.set(`${template.id}:front:${name}`, { name, side: 'front', templateId: template.id })
@@ -945,19 +947,30 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
       }
       if (metadata && typeof metadata === 'object' && 'kirokuMedia' in metadata) {
         if (!Array.isArray(metadata.kirokuMedia)) throw new Error('Invalid exported media metadata')
+        const attachmentNames = new Set<string>()
+        const restoredAttachments = new Set<NoteMediaReference>()
         for (const hint of metadata.kirokuMedia as unknown[]) {
           if (!hint || typeof hint !== 'object') throw new Error('Invalid exported media placement')
           const value = hint as Record<string, unknown>
           if (typeof value.name !== 'string' || typeof value.displayName !== 'string' || !value.displayName || (value.inline && /[<>[\]\r\n]/.test(value.displayName)) || !['front', 'back'].includes(String(value.side)) || typeof value.inline !== 'boolean' || !['manual', 'automatic'].includes(String(value.playback)) || !(value.templateOrd === null || (typeof value.templateOrd === 'number' && Number.isInteger(value.templateOrd) && value.templateOrd >= 0 && value.templateOrd < sourceType.templates.length))) throw new Error('Invalid exported media placement')
           for (const reference of noteReferences) {
             if (reference.displayName !== value.name || reference.side !== value.side || (value.templateOrd !== null && reference.templateId !== sourceType.templates[value.templateOrd as number]?.id)) continue
+            if (!value.inline && !fieldReferences.has(reference)) continue
             reference.displayName = value.displayName
             reference.inline = value.inline
             reference.playback = value.playback as 'manual' | 'automatic'
             if (value.templateOrd === null) delete reference.templateId
+            if (!value.inline) { attachmentNames.add(value.name); restoredAttachments.add(reference) }
           }
           for (const key of Object.keys(note.fields)) note.fields[key] = note.fields[key].split(`[[kiroku-media:${value.name}]]`).join(value.inline ? `[[kiroku-media:${encodeURIComponent(value.displayName)}]]` : '')
         }
+        // An attachment is stored in a native field that may also occur on the
+        // other side. Its explicit placement restores the source attachment;
+        // those additional inferred inline placements are not extra attachments.
+        for (const reference of fieldReferences) {
+          if (attachmentNames.has(reference.displayName) && !restoredAttachments.has(reference)) discardedExportReferences.add(reference)
+        }
+        referencesByNoteId.set(noteId, noteReferences.filter(reference => !discardedExportReferences.has(reference)))
       }
     } catch (reason) {
       // Opaque native note data is permitted; our explicit metadata is checked.
@@ -1170,7 +1183,7 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
   cards = cards.filter((card) => representedNoteIds.has(card.noteId))
   const representedCardIds = new Set(cards.map(({ id }) => id))
   reviews = reviews.filter((review) => representedCardIds.has(review.cardId))
-  references = references.filter((reference) => representedNoteIds.has(reference.noteId))
+  references = references.filter((reference) => representedNoteIds.has(reference.noteId) && !discardedExportReferences.has(reference))
   noteTypes = noteTypes.filter((noteType) => notes.some((note) => note.typeId === noteType.id))
   const representedDeckIds = new Set(cards.map(({ deckId }) => deckId))
   const deckById = new Map(decks.map((deck) => [deck.id, deck]))

@@ -10,6 +10,7 @@ import { validateMediaBytes } from './anki-import'
 import { derivedNativeId, nativeNumberOf } from './anki-identity'
 import { readAnkiExportSnapshot } from './collection-queries'
 import { unzipSync, zipSync } from 'fflate'
+import { templateMediaFields } from './template-renderer'
 
 export interface AnkiExportOptions { deckId?: string; scheduling: boolean; history: boolean; media: boolean; SQL?: SqlJsStatic }
 let sqlPromise: Promise<SqlJsStatic> | undefined
@@ -161,13 +162,24 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
       if (!imageName) throw new Error('The image occlusion source media is missing.')
       fields = Object.values(serializeAnkiImageOcclusion({ imageName, header: note.fields.header ?? '', backExtra: note.fields.backExtra ?? '', comments: '', masks: note.imageOcclusion.masks }))
     } else if (options.media) {
-      for (const reference of referencesByNote.get(note.id) ?? []) if (!reference.inline) {
+      // Generated attachment markup must not depend on storage/reference IDs,
+      // which change after native re-import. Authored inline content stays ordered.
+      const attachments = [...(referencesByNote.get(note.id) ?? [])].filter(reference => !reference.inline)
+        .sort((a, b) => names.get(a.id)!.localeCompare(names.get(b.id)!))
+      for (const reference of attachments) {
         const template = localType.templates.find((template) => !reference.templateId || template.id === reference.templateId)
         const content = reference.side === 'front' ? template?.front : template?.back
-        const index = localType.fields.findIndex((field) => content?.includes(`{{${field.name}}}`))
-        if (index < 0) throw new Error(`Media ${reference.displayName} cannot be placed in its ${reference.side} template. Add a field to that side before exporting.`)
         const name = names.get(reference.id)!
-        fields[index] += reference.kind === 'image' ? `<img src="${name}">` : `[sound:${name}]`
+        const markup = reference.kind === 'image' ? `<img src="${name}">` : `[sound:${name}]`
+        const fieldValues = Object.fromEntries(localType.fields.map((field, index) => [field.name, fields[index]]))
+        const ordinals = localType.kind === 'cloze' ? [...new Set((cardsByNote.get(note.id) ?? []).map(card => card.clozeOrdinal))] : [undefined]
+        if (!ordinals.length) ordinals.push(undefined)
+        const contexts = ordinals.map(ordinal => ({ kind: localType.kind === 'cloze' ? 'cloze' as const : 'standard' as const, ordinal }))
+        const placements = contexts.map(context => templateMediaFields(content ?? '', fieldValues, context))
+        const index = localType.fields.findIndex((field, index) => placements.every(eligible => eligible.has(field.name)) && contexts.every(context =>
+          templateMediaFields(content ?? '', { ...fieldValues, [field.name]: fields[index] + markup }, context).has(field.name)))
+        if (index < 0) throw new Error(`Media ${reference.displayName} cannot be placed in its ${reference.side} template. Add a field to that side before exporting.`)
+        fields[index] += markup
       }
     }
     exportedDecks.get(note.deckId)!.addNote(new AnkiNote({ notetype: type, fields, tags: note.tags ?? [], guid: guid(note.id) }))
@@ -277,4 +289,3 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
   validateAnkiArchive(bytes)
   return { bytes, filename: `${selectedPath ? 'kiroku-deck' : 'kiroku-collection'}-${new Date().toISOString().slice(0, 10)}.apkg`, notes: notes.length, cards: data.cards.length, media: media.size, reviews: data.revlog.length }
 }
-
