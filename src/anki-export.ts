@@ -169,11 +169,17 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
       for (const reference of attachments) {
         const template = localType.templates.find((template) => !reference.templateId || template.id === reference.templateId)
         const content = reference.side === 'front' ? template?.front : template?.back
-        const placements = templateMediaFields(content ?? '', localType.fields.map(field => field.name))
-        const index = localType.fields.findIndex(field => placements.has(field.name))
-        if (index < 0) throw new Error(`Media ${reference.displayName} cannot be placed in its ${reference.side} template. Add a field to that side before exporting.`)
         const name = names.get(reference.id)!
-        fields[index] += reference.kind === 'image' ? `<img src="${name}">` : `[sound:${name}]`
+        const markup = reference.kind === 'image' ? `<img src="${name}">` : `[sound:${name}]`
+        const fieldValues = Object.fromEntries(localType.fields.map((field, index) => [field.name, fields[index]]))
+        const ordinals = localType.kind === 'cloze' ? [...new Set((cardsByNote.get(note.id) ?? []).map(card => card.clozeOrdinal))] : [undefined]
+        if (!ordinals.length) ordinals.push(undefined)
+        const contexts = ordinals.map(ordinal => ({ kind: localType.kind === 'cloze' ? 'cloze' as const : 'standard' as const, ordinal }))
+        const placements = contexts.map(context => templateMediaFields(content ?? '', fieldValues, context))
+        const index = localType.fields.findIndex((field, index) => placements.every(eligible => eligible.has(field.name)) && contexts.every(context =>
+          templateMediaFields(content ?? '', { ...fieldValues, [field.name]: fields[index] + markup }, context).has(field.name)))
+        if (index < 0) throw new Error(`Media ${reference.displayName} cannot be placed in its ${reference.side} template. Add a field to that side before exporting.`)
+        fields[index] += markup
       }
     }
     exportedDecks.get(note.deckId)!.addNote(new AnkiNote({ notetype: type, fields, tags: note.tags ?? [], guid: guid(note.id) }))

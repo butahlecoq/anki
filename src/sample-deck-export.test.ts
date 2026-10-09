@@ -116,12 +116,55 @@ test.each(['front', 'back', 'css'] as const)('native %s media edits survive reta
   else expect(rendered[placement]?.html).toContain('src="data:image/png;base64,')
 })
 
-test.each(['{{#Front}}Hello{{/Front}}', '{{text:Front}}'])('rejects media placement when the front cannot render it: %s', async front => {
+test.each([
+  { marker: '#', show: '', selected: 'Front', name: 'positive-inactive' },
+  { marker: '^', show: 'yes', selected: 'Front', name: 'inverse-inactive' },
+  { marker: '#', show: 'yes', selected: 'Context', name: 'positive-active' },
+  { marker: '^', show: '', selected: 'Context', name: 'inverse-active' },
+])('attachments use a visible substitution in $name conditionals', async ({ marker, show, selected, name }) => {
+  const source = createCollection(crypto.randomUUID())
+  databases.push(source)
+  const type = await source.createNoteType({ name: 'Conditional media', kind: 'standard', fields: [{ name: 'Context' }, { name: 'Show' }, { name: 'Front' }], templates: [{ name: 'Card', front: `{{${marker}Show}}{{furigana:Context}}{{/Show}}{{Front}}`, back: '{{Front}}', css: '' }] })
+  const deck = await source.createDeck('日本語')
+  const values = { Context: '猫[ねこ]', Show: show, Front: 'visible fallback' }
+  const note = await source.createNote(deck.id, type.id, Object.fromEntries(type.fields.map(field => [field.id, values[field.name as keyof typeof values]])))
+  await source.attachMedia(note.id, { file: new File([Uint8Array.from(await readFile('public/sample-deck/garden.png'))], 'garden.png', { type: 'image/png' }), side: 'front' })
+  const exported = await exportAnkiPackage(source, { ...all, SQL })
+  await captureNativePackage(`conditional-${name}`, exported.bytes)
+  const native = AnkiCollection.open(exported.bytes, SQL)
+  const fields = native.data.notes[0].flds.split('\u001f')
+  expect(native.data.media).toHaveLength(1)
+  for (const [index, field] of type.fields.entries()) {
+    expect(fields[index]).toBe(values[field.name as keyof typeof values] + (field.name === selected ? `<img src="${native.data.media[0].name}">` : ''))
+  }
+})
+
+test('a front attachment remains visible for both cloze ordinal conditions', async () => {
+  const source = createCollection(crypto.randomUUID())
+  databases.push(source)
+  const type = await source.createNoteType({ name: 'Conditional cloze media', kind: 'cloze', fields: [{ name: 'Context' }, { name: 'Text' }], templates: [{ name: 'Cloze', front: '{{#c1}}{{furigana:Context}}{{/c1}}{{cloze:Text}}', back: '{{cloze:Text}}', css: '' }] })
+  const deck = await source.createDeck('日本語')
+  const text = '{{c1::猫}}と{{c2::犬}}'
+  const note = await source.createNote(deck.id, type.id, { [type.fields[0].id]: '猫[ねこ]', [type.fields[1].id]: text })
+  await source.attachMedia(note.id, { file: new File([Uint8Array.from(await readFile('public/sample-deck/garden.png'))], 'garden.png', { type: 'image/png' }), side: 'front' })
+  const exported = await exportAnkiPackage(source, { ...all, SQL })
+  await captureNativePackage('conditional-cloze-both', exported.bytes)
+  const native = AnkiCollection.open(exported.bytes, SQL)
+  expect(native.data.cards).toHaveLength(2)
+  expect(native.data.notes[0].flds.split('\u001f')).toEqual(['猫[ねこ]', `${text}<img src="${native.data.media[0].name}">`])
+})
+
+test.each([
+  { front: '{{#Front}}Hello{{/Front}}', frontValue: '猫', backValue: 'cat' },
+  { front: '{{text:Front}}', frontValue: '猫', backValue: 'cat' },
+  { front: '{{#Back}}{{furigana:Front}}{{/Back}}{{text:Front}}', frontValue: '猫', backValue: '' },
+  { front: '{{^Front}}{{furigana:Front}}{{/Front}}{{text:Back}}', frontValue: '', backValue: 'cat' },
+])('rejects media placement when the front cannot render it: $front', async ({ front, frontValue, backValue }) => {
   const source = createCollection(crypto.randomUUID())
   databases.push(source)
   const type = await source.createNoteType({ name: 'No media slot', kind: 'standard', fields: [{ name: 'Front' }, { name: 'Back' }], templates: [{ name: 'Card', front, back: '{{Back}}', css: '' }] })
   const deck = await source.createDeck('日本語')
-  const note = await source.createNote(deck.id, type.id, { [type.fields[0].id]: '猫', [type.fields[1].id]: 'cat' })
+  const note = await source.createNote(deck.id, type.id, { [type.fields[0].id]: frontValue, [type.fields[1].id]: backValue })
   await source.attachMedia(note.id, { file: new File([Uint8Array.from(await readFile('public/sample-deck/garden.png'))], 'garden.png', { type: 'image/png' }), side: 'front' })
   await expect(exportAnkiPackage(source, { ...all, SQL })).rejects.toThrow('Media garden.png cannot be placed in its front template.')
 })
