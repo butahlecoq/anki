@@ -1,4 +1,4 @@
-import { expect, type BrowserContext, type Page, type Route } from '@playwright/test'
+import { expect, type BrowserContext, type Page, type Route, type TestInfo } from '@playwright/test'
 import { execFileSync } from 'node:child_process'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -45,18 +45,60 @@ async function navigate(page: Page, name: string) {
   await page.getByRole('link', { name, exact: true }).filter({ visible: true }).first().click()
 }
 
-async function exportPackage(page: Page) {
+async function exportPackage(page: Page, info: TestInfo, phase: string) {
   await navigate(page, 'Decks')
   await openCollectionTools(page)
-  await page.getByRole('button', { name: 'Export Anki package', exact: true }).click()
+  const opener = page.getByRole('button', { name: 'Export Anki package', exact: true })
+  // Windows WebKit can scroll between pointer-down and pointer-up.
+  // Center the public control before its ordinary native click.
+  await opener.evaluate(element => element.scrollIntoView({ behavior: 'instant', block: 'center' }))
+  await opener.click()
   const dialog = page.getByRole('dialog', { name: 'Export Anki package' })
-  const downloading = page.waitForEvent('download')
-  await dialog.getByRole('button', { name: 'Download package', exact: true }).click()
-  const path = await (await downloading).path()
-  expect(path).not.toBeNull()
-  const bytes = await readFile(path!)
-  await dialog.getByRole('button', { name: 'Close export' }).click()
-  return bytes
+  const started = Date.now()
+  const record = (event: string, detail: Record<string, unknown> = {}) => {
+    console.log(`release-export ${JSON.stringify({ project: info.project.name, phase, event, timestamp: new Date().toISOString(), elapsedMs: Date.now() - started, ...detail })}`)
+  }
+  record('started')
+  try {
+    // Observe native delivery before clicking, and require the public result
+    // independently. A missing event alone cannot identify preparation failure.
+    await expect(dialog).toBeVisible()
+    const [download] = await Promise.all([
+      page.waitForEvent('download').then(value => {
+        record('download-created', { filename: value.suggestedFilename() })
+        return value
+      }),
+      (async () => {
+        await dialog.getByRole('button', { name: 'Download package', exact: true }).click()
+        await expect(dialog.getByRole('status')).toContainText('Package ready:')
+        record('package-ready', { message: await dialog.getByRole('status').innerText() })
+      })(),
+    ])
+    const path = await download.path()
+    expect(path).not.toBeNull()
+    const bytes = await readFile(path!)
+    record('download-read', { bytes: bytes.length, sha256: sha256(bytes) })
+    await info.attach(`release-export-${phase}.apkg`, { body: bytes, contentType: 'application/octet-stream' })
+    await dialog.getByRole('button', { name: 'Close export' }).click()
+    return bytes
+  } catch (error) {
+    const state = await page.evaluate(() => {
+      // A missing dialog must be observed without waiting for it to reappear.
+      const element = document.querySelector('.export-dialog[role="dialog"]')
+      const button = [...(element?.querySelectorAll('button') ?? [])].find(candidate => ['Download package', 'Preparing package…'].includes(candidate.textContent?.trim() ?? ''))
+      return {
+        present: element !== null,
+        busy: button?.disabled ?? null,
+        button: button?.textContent?.trim() ?? null,
+        status: element?.querySelector('[role="status"]')?.textContent ?? null,
+        alerts: [...(element?.querySelectorAll('[role="alert"]') ?? [])].map(alert => alert.textContent ?? ''),
+      }
+    }).catch(observationError => ({ unavailable: String(observationError), pageClosed: page.isClosed() }))
+    // A closed/ended page may prevent this secondary observation. Preserve
+    // that limit in the log and always rethrow the original export failure.
+    record('failed', { error: String(error), dialog: state })
+    throw error
+  }
 }
 
 test('production release collection survives two offline reopenings and converges after restoration', async ({ browser, browserName, viewport, isMobile, deviceScaleFactor, hasTouch, userAgent }, info) => {
@@ -130,7 +172,7 @@ test('production release collection survives two offline reopenings and converge
   const openJapanese = async (page: Page) => {
     await navigate(page, 'Decks')
     await page.getByRole('button', { name: 'Open 日本語', exact: true }).click()
-    await expect(page.getByRole('heading', { name: '日本語', exact: true })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '日本語', exact: true, level: 1 })).toBeVisible()
   }
   const search = async (page: Page, query: string) => {
     await navigate(page, 'Browse')
@@ -205,7 +247,7 @@ test('production release collection survives two offline reopenings and converge
     await expect(page.getByText('Offline shell ready', { exact: true })).toBeVisible()
     // Warm the actual export module before WebKit's supported warm offline stage;
     // Chromium also verifies these bytes again after its second cold reopening.
-    const beforeOffline = await releaseInventory(await exportPackage(page))
+    const beforeOffline = await releaseInventory(await exportPackage(page, info, 'online-warm-up'))
     expect(beforeOffline.media.map(media => media.digest).sort()).toEqual(fixture.mediaDigests)
     await openJapanese(page)
     if (browserName === 'chromium') await page.evaluate(async () => { await navigator.serviceWorker.ready })
@@ -224,7 +266,10 @@ test('production release collection survives two offline reopenings and converge
       // icon blobs; every application/media failure remains a fatal diagnostic.
       await active.route(networkRequests, rejectNetwork)
     }
-    await expect(page.getByText('NEW 2', { exact: true })).toBeVisible()
+    const japaneseDeckCounts = page.getByRole('heading', { name: '日本語', exact: true, level: 1 })
+      .locator('xpath=..')
+      .getByRole('group', { name: 'Deck counts' })
+    await expect(japaneseDeckCounts.getByText('NEW 2', { exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'Study now', exact: true }).click()
     for (let index = 0; index < 2; index++) {
       await releaseMedia(page, browserName)
@@ -254,7 +299,7 @@ test('production release collection survives two offline reopenings and converge
     await expect(answers).toHaveText('4')
     await answers.scrollIntoViewIfNeeded()
     await checkpoint(page, '07-offline-statistics', true)
-    const offlineInventory = await releaseInventory(await exportPackage(page))
+    const offlineInventory = await releaseInventory(await exportPackage(page, info, 'offline-first-reopening'))
     expect(offlineInventory.reviews).toHaveLength(4)
     expect(offlineInventory.media.map(media => media.digest).sort()).toEqual(fixture.mediaDigests)
     if (browserName === 'chromium') {
@@ -281,7 +326,7 @@ test('production release collection survives two offline reopenings and converge
       await page.getByRole('button', { name: 'End session', exact: true }).click()
       await page.getByRole('button', { name: 'Delete Second reopening media', exact: true }).click()
       await page.getByRole('button', { name: 'Confirm delete', exact: true }).click()
-      expect(await releaseInventory(await exportPackage(page))).toEqual(offlineInventory)
+      expect(await releaseInventory(await exportPackage(page, info, 'offline-second-reopening'))).toEqual(offlineInventory)
     }
     diagnostics.phase('reconnect')
     expect((await service.start()).build).toEqual(health.build)
@@ -293,7 +338,7 @@ test('production release collection survives two offline reopenings and converge
     await diagnostics.retainNativeFrames(second.page)
     await search(second.page, '"offline edit"')
     await expect(second.page.getByRole('button', { name: '猫', exact: true })).toBeVisible()
-    const exported = await exportPackage(page)
+    const exported = await exportPackage(page, info, 'reconnected-primary')
     const expected = await releaseInventory(exported)
     expect(expected).toEqual(offlineInventory)
     expect(expected.notes).toHaveLength(4)
@@ -301,7 +346,7 @@ test('production release collection survives two offline reopenings and converge
     expect(expected.reviews).toHaveLength(4)
     expect(expected.decks.map(deck => deck.name.replaceAll('\u001f', '::'))).toEqual(expect.arrayContaining(['Release', 'Release::日本語', '手作り']))
     expect(expected.media.map(media => media.digest).sort()).toEqual(fixture.mediaDigests)
-    expect(await releaseInventory(await exportPackage(second.page))).toEqual(expected)
+    expect(await releaseInventory(await exportPackage(second.page, info, 'reconnected-second-client'))).toEqual(expected)
     await second.page.getByRole('button', { name: 'Open 日本語', exact: true }).scrollIntoViewIfNeeded()
     await checkpoint(second.page, '09-converged-receiver')
     const restored = await createClient()
@@ -312,7 +357,7 @@ test('production release collection survives two offline reopenings and converge
     await diagnostics.retainNativeFrames(restored.page)
     await search(restored.page, '"offline edit"')
     await expect(restored.page.getByRole('button', { name: '猫', exact: true })).toBeVisible()
-    expect(await releaseInventory(await exportPackage(restored.page))).toEqual(expected)
+    expect(await releaseInventory(await exportPackage(restored.page, info, 'restored-clean-client'))).toEqual(expected)
     await restored.page.getByRole('button', { name: 'Open 日本語', exact: true }).scrollIntoViewIfNeeded()
     await checkpoint(restored.page, '10-exported-restored')
     await info.attach('release-inventory', { body: JSON.stringify(expected, null, 2), contentType: 'application/json' })

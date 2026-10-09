@@ -246,6 +246,9 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
   const card = useLiveQuery(async () => cardId ? await readCard(collection, cardId) ?? null : undefined, [cardId])
   const note = useLiveQuery(async () => card ? await readNote(collection, card.noteId) ?? null : undefined, [card?.noteId])
   const noteType = useLiveQuery(async () => note ? await readNoteType(collection, note.typeId) ?? null : undefined, [note?.typeId])
+  // Live queries retain their previous result while new dependencies resolve.
+  // Never expose an answerable card assembled from different note identities.
+  const promptReady = card?.id === cardId && note?.id === card?.noteId && noteType?.id === note?.typeId
   const mediaQuery = useLiveQuery(() => card ? collection.mediaForNote(card.noteId) : [], [card?.noteId])
   // A live query returns a new array identity on ordinary reviewer renders. Stable
   // identities keep the review timer effect and prepared media sources from restarting.
@@ -293,7 +296,7 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
   useEffect(() => {
     if (activeTime.current.cardId !== cardId) activeTime.current = { cardId, elapsed: 0, started: null }
     const timer = activeTime.current
-    const blocked = editingNote || movingNote || editingTags || deletingNote || showCardInfo || unavailable || !note || mediaBlocked
+    const blocked = editingNote || movingNote || editingTags || deletingNote || showCardInfo || unavailable || !promptReady || !note || mediaBlocked
     const update = () => {
       if (timer.started !== null) timer.elapsed += performance.now() - timer.started
       timer.started = !blocked && document.visibilityState === 'visible' ? performance.now() : null
@@ -305,16 +308,16 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
       if (timer.started !== null) timer.elapsed += performance.now() - timer.started
       timer.started = null
     }
-  }, [cardId, editingNote, movingNote, editingTags, deletingNote, showCardInfo, unavailable, note, mediaBlocked])
+  }, [cardId, editingNote, movingNote, editingTags, deletingNote, showCardInfo, unavailable, promptReady, note, mediaBlocked])
 
   const answerCurrent = useCallback(async (targetCardId: string, rating: Grade) => {
-    if (isAnswering || (targetCardId === cardId && mediaBlocked)) return false
+    if (isAnswering || (targetCardId === cardId && (mediaBlocked || (activity?.cardScope === 'current' && !promptReady)))) return false
     if (currentActivityPrompt) setLastActivityPrompt(currentActivityPrompt)
     const duration = targetCardId === cardId
       ? activeTime.current.elapsed + (activeTime.current.started === null ? 0 : performance.now() - activeTime.current.started)
       : 0
     return answer(targetCardId, rating, duration)
-  }, [cardId, isAnswering, mediaBlocked, answer, currentActivityPrompt])
+  }, [cardId, isAnswering, activity?.cardScope, promptReady, mediaBlocked, answer, currentActivityPrompt])
 
   const skipCurrentCard = useCallback(() => {
     setActivityInteractionRevision((revision) => revision + 1)
@@ -383,7 +386,7 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (isAnswering || editingNote || movingNote || editingTags || deletingNote || showCardInfo) return
+      if (isAnswering || (cardId && !promptReady) || editingNote || movingNote || editingTags || deletingNote || showCardInfo) return
       if (isShortcutBlocked(event)) return
       const key = event.key.toLowerCase()
       if ((key === 'u' || key === 'v' || key === 'x') && pendingUndo) { event.preventDefault(); void undoLastAction(); return }
@@ -401,7 +404,7 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [cardId, card?.flag, note, isAnswering, editingNote, movingNote, editingTags, deletingNote, showCardInfo, media, replayAudio, updateCurrentCard, pendingUndo, undoLastAction])
+  }, [cardId, card?.flag, note, isAnswering, promptReady, editingNote, movingNote, editingTags, deletingNote, showCardInfo, media, replayAudio, updateCurrentCard, pendingUndo, undoLastAction])
 
   /*
    * Card actions move the card out of view without moving focus, so a learner
@@ -419,7 +422,7 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
 
   const ActivityView = activity.View
 
-  if (queue === undefined || (cardId && (card === undefined || note === undefined || noteType === undefined || unavailable))) return <div className="loading-state" role="status">Preparing review…</div>
+  if (queue === undefined || (cardId && ((activity.cardScope === 'current' && !promptReady) || card === undefined || note === undefined || noteType === undefined || unavailable))) return <div className="loading-state" role="status">Preparing review…</div>
   if (!cardId || !card || !note || !noteType || !template) {
     if (activity.completion === 'activity' && lastActivityPrompt) return <>
       <section className="review-session">

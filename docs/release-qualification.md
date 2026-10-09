@@ -125,6 +125,30 @@ independent Standards/Spec review. Record the exact commands, start/end/duration
 commit, counts, and artifact paths on the issue and PR. Browser source preparation
 or a focused pass cannot establish the complete software gate.
 
+The export helper centers the public Export button with an instant scroll before
+its ordinary native click, then requires the export dialog to be visible before
+registering the native download waiter. A retained Windows WebKit failure recorded
+pointer-down on Export, a 142-pixel document scroll before pointer-up on the heading,
+and a click on the main region; the dialog never opened. The centered-scroll full
+control preserved every original inventory assertion and deadline. This supports
+the public geometry control without proving the historical hosted timeout shared
+that cause. Export failure inspection reads the parent document immediately even
+when the dialog is absent, preserving the original exception. Each delivered
+synthetic package's actual bytes are attached before its browser context closes.
+
+Each public export also records its named phase, package-ready message, native
+download event and read-file byte count/digest as `release-export` JSON in the
+job log. Package readiness and native delivery are both required; a ready message
+alone cannot replace the download or semantic inventory checks. This distinguishes
+the observed application and browser boundaries when a download wait fails.
+Failure records retain the visible Preparing/disabled state, public result and
+alerts, plus the original exception and an absolute timestamp. If the page has
+ended, an unavailable observation is recorded without replacing that exception.
+The existing classified network/console observations also appear as
+individual `release-diagnostics` JSON records in job logs; an empty list explicitly
+records no observations. Native frame-audit verdict/counts accompany each event,
+with full audits retained in the artifact attachment. Classification and fatal-error
+assertions remain unchanged.
 An exploratory production-browser pass remains a separate required observation:
 inspect the retained onboarding, editor/decks, question/answer, offline, sync,
 Browse, Statistics, and restored screenshots; exercise narrow/wide layout,
