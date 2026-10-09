@@ -145,6 +145,19 @@ function replacement(raw: string, known: ReadonlySet<string>): Replacement {
   throw new Error(`Unsupported template filter: ${parts.slice(0, -1).join(':')}`)
 }
 
+/** Fields whose substitutions retain appended image/audio markup. */
+export function templateMediaFields(template: string, fieldNames: readonly string[]): ReadonlySet<string> {
+  const known = new Set(fieldNames)
+  const fields = new Set<string>()
+  for (const [, marker, rawName] of template.matchAll(token)) {
+    if (marker) continue
+    const { field, filter } = replacement(rawName, known)
+    // Text strips HTML; answer inputs and hints do not display attached media.
+    if (known.has(field) && !['text', 'type', 'type-cloze', 'hint'].includes(filter ?? '')) fields.add(field)
+  }
+  return fields
+}
+
 /** Validate the deliberately small template language before storing a template. */
 export function validateTemplate(template: string, fieldNames: readonly string[], side: 'front' | 'back', kind: 'standard' | 'cloze' = 'standard'): void {
   const known = new Set(fieldNames)
