@@ -2,12 +2,14 @@ import 'fake-indexeddb/auto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { afterEach, beforeAll, expect, test, vi } from 'vitest'
 import initSqlJs, { type SqlJsStatic } from 'sql.js'
-import { Collection as AnkiCollection } from 'ankipack'
+import { Collection as AnkiCollection, Deck, Note as AnkiNote, Notetype, Package } from 'ankipack'
 import { collection, createCollection, Rating, type Collection } from './collection'
 import { loadSampleDeck } from './sample-deck'
 import { exportAnkiPackage } from './anki-export'
 import { prepareAnkiImport } from './anki-import'
 import { readAnkiExportSnapshot } from './collection-queries'
+import { renderNoteCard } from './card-rendering'
+import { prepareReviewMedia } from './review-media'
 
 let SQL: SqlJsStatic
 const databases: Collection[] = []
@@ -77,6 +79,41 @@ test('a cloze-only template exports an actual image without changing the cloze e
   expect(native.data.media).toHaveLength(1)
   expect(native.data.notes[0].flds).toContain('{{c1::猫}}')
   expect(native.data.notes[0].flds).toContain('<img src=')
+})
+
+test.each(['front', 'back', 'css'] as const)('native %s media edits survive retained attachment metadata', async placement => {
+  const source = createCollection(crypto.randomUUID())
+  const target = createCollection(crypto.randomUUID())
+  databases.push(source, target)
+  const type = await source.createNoteType({ name: 'Native media edit', kind: 'standard', fields: [{ name: 'Front' }, { name: 'Back' }], templates: [{ name: 'Card', front: '{{Front}}', back: '{{Back}}', css: '' }] })
+  const deck = await source.createDeck('日本語')
+  const note = await source.createNote(deck.id, type.id, { [type.fields[0].id]: '猫', [type.fields[1].id]: 'cat' })
+  await source.attachMedia(note.id, { file: new File([Uint8Array.from(await readFile('public/sample-deck/garden.png'))], 'garden.png', { type: 'image/png' }), side: 'front' })
+  const exported = await exportAnkiPackage(source, { ...all, SQL })
+  const native = AnkiCollection.open(exported.bytes, SQL)
+  const name = native.data.media[0].name
+  // Change only native template/CSS configuration, keeping the exported note data.
+  const editedType = new Notetype({ id: native.data.notes[0].mid, name: type.name, fields: [{ name: 'Front' }, { name: 'Back' }], templates: [{ name: 'Card', questionFormat: `{{Front}}${placement === 'front' ? `<img src="${name}">` : ''}`, answerFormat: `{{Back}}${placement === 'back' ? `<img src="${name}">` : ''}` }], css: placement === 'css' ? `.card { background-image: url("${name}"); }` : '' })
+  const editedDeck = new Deck({ name: 'Template configuration' })
+  editedDeck.addNote(new AnkiNote({ notetype: editedType, fields: ['猫', 'cat'] }))
+  const configuration = new Package()
+  configuration.addDeck(editedDeck)
+  const edited = await configuration.toCollection()
+  native.data.templates[0].config = edited.templates[0].config
+  native.data.notetypes[0].config = edited.notetypes[0].config
+  const bytes = await native.toUint8Array(SQL)
+  const prepared = await prepareAnkiImport(new File([bytes.slice().buffer], 'native-edited.apkg'), target, { SQL })
+  expect(prepared.issues.filter(issue => issue.severity === 'error')).toEqual([])
+  await prepared.commit()
+  const restored = await readAnkiExportSnapshot(target)
+  expect(restored.references.filter(reference => !reference.inline)).toEqual([expect.objectContaining({ displayName: 'garden.png', side: 'front' })])
+  const sides = placement === 'css' ? ['back', 'front'] : [placement]
+  expect(restored.references.filter(reference => reference.inline).map(({ displayName, side }) => ({ displayName, side })).sort((a, b) => a.side.localeCompare(b.side))).toEqual(sides.map(side => ({ displayName: name, side })))
+  const media = await prepareReviewMedia(restored.references, new AbortController().signal, digest => target.verifiedMediaBytes(digest))
+  const restoredType = restored.types.find(candidate => candidate.id === restored.notes[0].typeId)!
+  const rendered = renderNoteCard(restoredType, restoredType.templates[0], restored.notes[0].fields, undefined, media.byName)
+  if (placement === 'css') expect(rendered.css).toContain('data:image/png;base64,')
+  else expect(rendered[placement]?.html).toContain('src="data:image/png;base64,')
 })
 
 test.each(['{{#Front}}Hello{{/Front}}', '{{text:Front}}'])('rejects media placement when the front cannot render it: %s', async front => {

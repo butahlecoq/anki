@@ -899,6 +899,7 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
         }
       }
     }
+    const fieldReferences = new Set(referencesByNoteId.get(noteId) ?? [])
     const staticPlacements = new Map<string, { name: string; side: MediaSide; templateId: string }>()
     for (const template of sourceType.templates) {
       for (const name of rewrittenTemplateMediaNames(template.front)) staticPlacements.set(`${template.id}:front:${name}`, { name, side: 'front', templateId: template.id })
@@ -954,6 +955,7 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
           if (typeof value.name !== 'string' || typeof value.displayName !== 'string' || !value.displayName || (value.inline && /[<>[\]\r\n]/.test(value.displayName)) || !['front', 'back'].includes(String(value.side)) || typeof value.inline !== 'boolean' || !['manual', 'automatic'].includes(String(value.playback)) || !(value.templateOrd === null || (typeof value.templateOrd === 'number' && Number.isInteger(value.templateOrd) && value.templateOrd >= 0 && value.templateOrd < sourceType.templates.length))) throw new Error('Invalid exported media placement')
           for (const reference of noteReferences) {
             if (reference.displayName !== value.name || reference.side !== value.side || (value.templateOrd !== null && reference.templateId !== sourceType.templates[value.templateOrd as number]?.id)) continue
+            if (!value.inline && !fieldReferences.has(reference)) continue
             reference.displayName = value.displayName
             reference.inline = value.inline
             reference.playback = value.playback as 'manual' | 'automatic'
@@ -965,7 +967,7 @@ async function prepareAnkiImportInternal(file: File | undefined, collection: Col
         // An attachment is stored in a native field that may also occur on the
         // other side. Its explicit placement restores the source attachment;
         // those additional inferred inline placements are not extra attachments.
-        for (const reference of noteReferences) {
+        for (const reference of fieldReferences) {
           if (attachmentNames.has(reference.displayName) && !restoredAttachments.has(reference)) discardedExportReferences.add(reference)
         }
         referencesByNoteId.set(noteId, noteReferences.filter(reference => !discardedExportReferences.has(reference)))
