@@ -48,7 +48,11 @@ async function navigate(page: Page, name: string) {
 async function exportPackage(page: Page, info: TestInfo, phase: string) {
   await navigate(page, 'Decks')
   await openCollectionTools(page)
-  await page.getByRole('button', { name: 'Export Anki package', exact: true }).click()
+  const opener = page.getByRole('button', { name: 'Export Anki package', exact: true })
+  // Windows WebKit can scroll between pointer-down and pointer-up.
+  // Center the public control before its ordinary native click.
+  await opener.evaluate(element => element.scrollIntoView({ behavior: 'instant', block: 'center' }))
+  await opener.click()
   const dialog = page.getByRole('dialog', { name: 'Export Anki package' })
   const started = Date.now()
   const record = (event: string, detail: Record<string, unknown> = {}) => {
@@ -58,6 +62,7 @@ async function exportPackage(page: Page, info: TestInfo, phase: string) {
   try {
     // Observe native delivery before clicking, and require the public result
     // independently. A missing event alone cannot identify preparation failure.
+    await expect(dialog).toBeVisible()
     const [download] = await Promise.all([
       page.waitForEvent('download').then(value => {
         record('download-created', { filename: value.suggestedFilename() })
@@ -73,16 +78,20 @@ async function exportPackage(page: Page, info: TestInfo, phase: string) {
     expect(path).not.toBeNull()
     const bytes = await readFile(path!)
     record('download-read', { bytes: bytes.length, sha256: sha256(bytes) })
+    await info.attach(`release-export-${phase}.apkg`, { body: bytes, contentType: 'application/octet-stream' })
     await dialog.getByRole('button', { name: 'Close export' }).click()
     return bytes
   } catch (error) {
-    const state = await dialog.evaluate(element => {
-      const button = [...element.querySelectorAll('button')].find(candidate => ['Download package', 'Preparing package…'].includes(candidate.textContent?.trim() ?? ''))
+    const state = await page.evaluate(() => {
+      // A missing dialog must be observed without waiting for it to reappear.
+      const element = document.querySelector('.export-dialog[role="dialog"]')
+      const button = [...(element?.querySelectorAll('button') ?? [])].find(candidate => ['Download package', 'Preparing package…'].includes(candidate.textContent?.trim() ?? ''))
       return {
+        present: element !== null,
         busy: button?.disabled ?? null,
         button: button?.textContent?.trim() ?? null,
-        status: element.querySelector('[role="status"]')?.textContent ?? null,
-        alerts: [...element.querySelectorAll('[role="alert"]')].map(alert => alert.textContent ?? ''),
+        status: element?.querySelector('[role="status"]')?.textContent ?? null,
+        alerts: [...(element?.querySelectorAll('[role="alert"]') ?? [])].map(alert => alert.textContent ?? ''),
       }
     }).catch(observationError => ({ unavailable: String(observationError), pageClosed: page.isClosed() }))
     // A closed/ended page may prevent this secondary observation. Preserve
