@@ -15,9 +15,12 @@ for (const unsafe of [false, true]) test(`release native frame lifecycle: unsafe
   const blocked = "Blocked script execution in 'about:srcdoc' because the document's frame is sandboxed and the 'allow-scripts' permission is not set."
   let removed: Promise<void> | undefined
   page.on('console', message => {
-    if (message.text() === blocked && !removed) removed = page.evaluate(() => {
+    // Native audio controls load image blobs while emitting this signature.
+    // Let those requests settle before removal so cancellation is not confused
+    // with the authored-script safety boundary this control verifies.
+    if (message.text() === blocked && !removed) removed = page.waitForLoadState('networkidle').then(() => page.evaluate(() => {
       document.querySelectorAll('iframe').forEach(frame => frame.remove())
-    })
+    }))
   })
   const diagnostics = releaseDiagnostics('http://127.0.0.1:1')
   diagnostics.observe(page)
