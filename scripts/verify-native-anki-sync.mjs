@@ -151,11 +151,11 @@ try {
     if (route === 'sync/meta' && stallBody) return new Response(new ReadableStream({ cancel() { bodyCancelled = true } }))
     const response = await fetch(`${endpoint}${route}`, { method: 'POST', body, signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]) })
     if (route === 'sync/upload') fullUploads++
-    if (route === 'sync/upload' && loseFullUpload) { loseFullUpload = false; await response.arrayBuffer(); throw Error('Generated lost full upload response') }
+    if (route === 'sync/upload' && loseFullUpload) { await response.arrayBuffer(); loseFullUpload = false; throw Error('Generated lost full upload response') }
     if (route === 'sync/chunk' && cancelOnChunk) { const controller = cancelOnChunk; cancelOnChunk = undefined; controller.abort() }
     if (route === 'msync/uploadChanges') mediaUploads++
-    if (route === 'sync/finish' && loseFinish) { loseFinish = false; await response.arrayBuffer(); throw Error('Generated lost finish response') }
-    if (route === 'msync/uploadChanges' && loseMediaUpload) { loseMediaUpload = false; await response.arrayBuffer(); throw Error('Generated lost media upload response') }
+    if (route === 'sync/finish' && loseFinish) { await response.arrayBuffer(); loseFinish = false; throw Error('Generated lost finish response') }
+    if (route === 'msync/uploadChanges' && loseMediaUpload) { await response.arrayBuffer(); loseMediaUpload = false; throw Error('Generated lost media upload response') }
     if (route === 'msync/downloadFiles' && truncateMediaDownload) { truncateMediaDownload = false; const bytes = new Uint8Array(await response.arrayBuffer()); return new Response(bytes.subarray(0, bytes.length - 10)) }
     return response
   }, 'kiroku-oracle', 'generated-local-only')
@@ -210,7 +210,11 @@ try {
     assert.equal(new TextDecoder().decode((await media.files.get('official-日本語.bin')).bytes), 'generated official replacement')
     await media.setFile('recovery-日本語.bin', new TextEncoder().encode('generated recovery media'))
     loseMediaUpload = true
-    await assert.rejects(media.synchronize(client), /lost media upload response/)
+    await assert.rejects(media.synchronize(client), {
+      name: 'NativeSyncError', code: 'transfer',
+      requestFailure: { route: 'msync/uploadChanges', source: 'unknown', phase: 'before-response' },
+    })
+    assert.equal(loseMediaUpload, false, 'official media response consumed before generated loss')
     assert.equal((await media.files.get('recovery-日本語.bin')).pending, true)
     await media.close()
     await media.open()
@@ -221,7 +225,11 @@ try {
   mutate((db) => { db.run('UPDATE notes SET tags=?,mod=?,usn=-1 WHERE id=(SELECT min(id) FROM notes)', [' native-recovery ', Math.floor(Date.now() / 1000)]); db.run('UPDATE col SET mod=?', [Date.now()]) })
   const beforeFailure = snapshot.slice()
   loseFinish = true
-  await assert.rejects(sync, /lost finish response/)
+  await assert.rejects(sync, {
+    name: 'NativeSyncError', code: 'transfer',
+    requestFailure: { route: 'sync/finish', source: 'unknown', phase: 'before-response' },
+  })
+  assert.equal(loseFinish, false, 'official finish response consumed before generated loss')
   assert.deepEqual(snapshot, beforeFailure, 'failed finish retains original local snapshot')
   assert.equal(await sync(), 'synced')
   oracle('delete')
@@ -260,7 +268,11 @@ try {
     await state.replace(snapshot, (await state.checkpoint()).revision)
     const beforeFullFailure = (await state.checkpoint()).collection.slice()
     loseFullUpload = true
-    await assert.rejects(state.fullSynchronize(client, SQL, { ...await state.previewFullSync(client, SQL), direction: 'upload' }), /lost full upload response/)
+    await assert.rejects(state.fullSynchronize(client, SQL, { ...await state.previewFullSync(client, SQL), direction: 'upload' }), {
+      name: 'NativeSyncError', code: 'transfer',
+      requestFailure: { route: 'sync/upload', source: 'unknown', phase: 'before-response' },
+    })
+    assert.equal(loseFullUpload, false, 'official full upload response consumed before generated loss')
     assert.deepEqual((await state.checkpoint()).collection, beforeFullFailure)
     await assert.rejects(state.restoreBackup(originalBackup.id, (await state.checkpoint()).revision), /another operation/)
     state.close(); await state.open()
