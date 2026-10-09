@@ -61,8 +61,11 @@ async function localPcService(syncURL: string) {
       }
       if (route === 'msync/mediaSanity') return Response.json({ data: 'OK' })
       if (route === 'msync/uploadChanges') return Response.json({ data: [0, changes.length] })
+      const request = new Request(`${syncURL}${route}`, init)
+      // The owned official-server control reset a reused Node connection after
+      // a download. Close fixture connections before the next metadata request.
+      request.headers.set('connection', 'close')
       if (route === 'sync/meta') {
-        const request = new Request(`${syncURL}${route}`, init)
         const form = await request.clone().formData()
         const payload = JSON.parse(String(form.get('data'))) as { cv: string }
         // Production rejects an unrecognized client family; the official
@@ -74,7 +77,7 @@ async function localPcService(syncURL: string) {
         }
         return fetch(request)
       }
-      return fetch(`${syncURL}${route}`, init)
+      return fetch(request)
     },
   }))
   await new Promise<void>((resolve, reject) => http.listen(0, '127.0.0.1', () => resolve()).once('error', reject))
