@@ -16,7 +16,7 @@
     "typecheck": "tsc -b",
     "lint": "eslint .",
     "test": "vitest run",
-    "test:status": "node --test scripts/status-report.test.mjs scripts/acceptance-evidence.test.mjs",
+    "test:status": "node --test scripts/status-report.test.mjs scripts/acceptance-evidence.test.mjs scripts/premerge-acceptance.test.mjs",
     "test:notices": "node --experimental-strip-types --test scripts/dependency-notices.test.mjs",
     "premerge": "node scripts/premerge-acceptance.mjs",
     "status:check": "node scripts/status-report.mjs --check",

@@ -6,8 +6,9 @@ function ghJson(args) {
   return JSON.parse(output)
 }
 
-export function issueNumberForPullRequest(pr) {
-  return /\b(?:closes|fixes|resolves)\s+#(\d+)/i.exec(pr.body ?? '')?.[1] ?? null
+export function issueNumbersForPullRequest(pr) {
+  const matches = (pr.body ?? '').matchAll(/\b(?:closes|fixes|resolves)\s+#(\d+)/gi)
+  return [...new Set(Array.from(matches, match => match[1]))]
 }
 
 if (process.argv[1]?.endsWith('premerge-acceptance.mjs')) {
@@ -21,19 +22,23 @@ if (process.argv[1]?.endsWith('premerge-acceptance.mjs')) {
       console.error(`PR #${number} is ${pr.state.toLowerCase()}, not open.`)
       process.exitCode = 1
     } else {
-      const issueNumber = issueNumberForPullRequest(pr)
-      if (!issueNumber) {
+      const issueNumbers = issueNumbersForPullRequest(pr)
+      if (!issueNumbers.length) {
         console.error(`PR #${number} does not declare a closing issue with "Closes #<number>".`)
         process.exitCode = 1
       } else {
-        const issue = ghJson(['issue', 'view', issueNumber, '--json', 'number,title,body,comments'])
-        const blockers = acceptanceMergeBlockers(issue.body, issue.comments ?? [])
-        if (blockers.length) {
-          console.error(`PR #${number} is blocked by incomplete acceptance on #${issueNumber}:`)
-          for (const blocker of blockers) console.error(`- ${blocker}`)
+        for (const issueNumber of issueNumbers) {
+          const issue = ghJson(['issue', 'view', issueNumber, '--json', 'number,title,body,comments'])
+          const blockers = acceptanceMergeBlockers(issue.body, issue.comments ?? [])
+          if (blockers.length) {
+            console.error(`PR #${number} is blocked by incomplete acceptance on #${issueNumber}:`)
+            for (const blocker of blockers) console.error(`- ${blocker}`)
+            process.exitCode = 1
+          }
+        }
+        if (process.exitCode) {
           console.error('Record named evidence by ticking completed criteria, or add an issue comment under "## Deferred acceptance" with an AC ID and a reason for each remaining item.')
-          process.exitCode = 1
-        } else console.log(`PR #${number} passes the acceptance evidence pre-merge check for #${issueNumber}.`)
+        } else console.log(`PR #${number} passes the acceptance evidence pre-merge check for ${issueNumbers.map(issueNumber => `#${issueNumber}`).join(', ')}.`)
       }
     }
   }
