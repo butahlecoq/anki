@@ -179,7 +179,7 @@ export function NoteTagsDialog({ note, onClose }: { note: Note; onClose: () => v
   </section></div>
 }
 
-export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEARNING_ACTIVITY_ID, onBack, onExport, onTextTransfer }: { deckId?: string; sessionId?: string; activityId?: string; onBack: () => void; onExport?: () => void; onTextTransfer?: () => void }) {
+export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEARNING_ACTIVITY_ID, onBack, onExport }: { deckId?: string; sessionId?: string; activityId?: string; onBack: () => void; onExport?: () => void }) {
   const activity = learningActivity(activityId)
   const [activityInteractionRevision, setActivityInteractionRevision] = useState(0)
   const [lastActivityPrompt, setLastActivityPrompt] = useState<StudyActivityPrompt | undefined>()
@@ -486,7 +486,6 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
     <button className="text-button" type="button" disabled={isAnswering} onClick={() => void updateCurrentCard((id) => collection.buryCard(id), 'Card buried.')}>Bury card</button>
     <button className="text-button" type="button" disabled={isAnswering} onClick={() => setDeletingNote(true)}>Delete note</button>
     {onExport && <button className="text-button" type="button" onClick={onExport}>Export Anki package</button>}
-    {onTextTransfer && <button className="text-button" type="button" onClick={onTextTransfer}>Import / export text</button>}
     </div>
     </details>
     <button className="text-button" type="button" onClick={onBack}>End session</button>
