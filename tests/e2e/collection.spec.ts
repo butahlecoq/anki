@@ -459,7 +459,9 @@ test('learner organizes a child deck and persists a shared daily study limit', a
   await expect(hierarchy.getByText('Reading')).toBeVisible()
 })
 
-test('learner saves scheduling policies and manages a card lifecycle', async ({ page }) => {
+nativeCanvasTest()('learner saves scheduling policies and manages a card lifecycle', async ({ page }, testInfo) => {
+  const configuredViewport = testInfo.project.use.viewport!
+  await expect.poll(() => page.evaluate(() => ({ width: innerWidth, height: innerHeight }))).toEqual(configuredViewport)
   await createDeck(page, 'Policy controls')
   await page.getByRole('button', { name: 'Open Policy controls' }).click()
   await page.getByRole('button', { name: 'Scheduling options' }).click()
