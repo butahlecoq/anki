@@ -137,7 +137,9 @@ type Replacement = { field: string; filter?: 'text' | 'furigana' | 'kana' | 'kan
 function replacement(raw: string, known: ReadonlySet<string>): Replacement {
   const name = raw.trim()
   if (known.has(name)) return { field: name }
-  const parts = name.split(':')
+  // Anki ignores empty filters, e.g. the extra separator in cloze::Text.
+  // Keep the final field slot so an empty field remains invalid.
+  const parts = name.split(':').filter((part, index, all) => part || index === all.length - 1)
   if (parts.length === 1) return { field: name }
   const [filter, second, third] = parts
   if (filter === 'type' && second === 'cloze' && third && parts.length === 3) return { field: third, filter: 'type-cloze' }
@@ -150,24 +152,31 @@ function templateConditionValue(name: string, fields: Readonly<Record<string, st
     ? options.ordinal === Number(name.slice(1)) : Boolean(fields[name]?.trim())
 }
 
+type TemplateSection = { name: string; enabled: boolean }
+
+function updateTemplateSections(sections: TemplateSection[], marker: string, name: string, value: boolean) {
+  if (marker === '/') {
+    if (sections.at(-1)?.name !== name) throw new Error(`Unmatched template conditional: ${name}`)
+    sections.pop()
+  } else {
+    const parentEnabled = sections.at(-1)?.enabled ?? true
+    sections.push({ name, enabled: parentEnabled && (marker === '#' ? value : !value) })
+  }
+}
+
 /** Visible substitutions that retain appended image/audio markup. */
 export function templateMediaFields(template: string, fields: Readonly<Record<string, string>>, options: Pick<RenderOptions, 'kind' | 'ordinal'> = {}): ReadonlySet<string> {
   const known = new Set(Object.keys(fields))
   const eligible = new Set<string>()
-  let enabled = true
+  const sections: TemplateSection[] = []
   for (const [, marker, rawName] of template.matchAll(token)) {
     const { field, filter } = replacement(rawName, known)
     if (marker) {
-      // Validated templates support one conditional level.
-      if (marker === '/') enabled = true
-      else {
-        const value = templateConditionValue(field, fields, options)
-        enabled = marker === '#' ? value : !value
-      }
+      updateTemplateSections(sections, marker, field, templateConditionValue(field, fields, options))
       continue
     }
     // Text strips HTML; answer inputs and hints do not display attached media.
-    if (enabled && known.has(field) && !['text', 'type', 'type-cloze', 'hint'].includes(filter ?? '')) eligible.add(field)
+    if ((sections.at(-1)?.enabled ?? true) && known.has(field) && !['text', 'type', 'type-cloze', 'hint'].includes(filter ?? '')) eligible.add(field)
   }
   return eligible
 }
@@ -175,7 +184,7 @@ export function templateMediaFields(template: string, fields: Readonly<Record<st
 /** Validate the deliberately small template language before storing a template. */
 export function validateTemplate(template: string, fieldNames: readonly string[], side: 'front' | 'back', kind: 'standard' | 'cloze' = 'standard'): void {
   const known = new Set(fieldNames)
-  let section: string | undefined
+  const sections: TemplateSection[] = []
   let cursor = 0
   for (const match of template.matchAll(token)) {
     if (/{{|}}/.test(template.slice(cursor, match.index))) throw new Error('Unmatched template delimiter')
@@ -184,8 +193,7 @@ export function validateTemplate(template: string, fieldNames: readonly string[]
     const parsed = replacement(rawName, known)
     const name = parsed.field
     if (marker === '/') {
-      if (section !== name) throw new Error(`Unmatched template conditional: ${name}`)
-      section = undefined
+      updateTemplateSections(sections, marker, name, true)
       continue
     }
     if (name === 'FrontSide') {
@@ -197,12 +205,11 @@ export function validateTemplate(template: string, fieldNames: readonly string[]
     }
     if (marker) {
       if (parsed.filter) throw new Error('Template conditionals cannot use filters')
-      if (section) throw new Error('Nested template conditionals are not supported')
-      section = name
+      updateTemplateSections(sections, marker, name, true)
     }
   }
   if (/{{|}}/.test(template.slice(cursor))) throw new Error('Unmatched template delimiter')
-  if (section) throw new Error(`Unclosed template conditional: ${section}`)
+  if (sections.length) throw new Error(`Unclosed template conditional: ${sections.at(-1)!.name}`)
 }
 
 /** Replace fields without evaluating template text or field contents as code. */
@@ -217,7 +224,7 @@ export function renderTemplate(template: string, fields: Record<string, string>,
   const known = new Set(Object.keys(fields))
   let html = ''
   let cursor = 0
-  let section: { name: string; enabled: boolean } | undefined
+  const sections: TemplateSection[] = []
   let visibleField = navigation.hasContent || templateMedia.used
   let typedAnswer: string | undefined
   let hintIndex = 0
@@ -225,17 +232,13 @@ export function renderTemplate(template: string, fields: Record<string, string>,
     const position = match.index
     const [source, marker, rawName] = match
     const { field: name, filter } = replacement(rawName, known)
-    if (!section || section.enabled) html += template.slice(cursor, position)
+    if (sections.at(-1)?.enabled ?? true) html += template.slice(cursor, position)
     cursor = position + source.length
     const ordinal = options.ordinal ?? (filter === 'cloze' || filter === 'type-cloze' ? clozeOrdinals(fields[name] ?? '')[0] : undefined)
     const conditionValue = templateConditionValue(name, fields, options)
-    if (marker === '#' || marker === '^') {
-      if (section) throw new Error('Nested template conditionals are not supported')
-      section = { name, enabled: marker === '#' ? conditionValue : !conditionValue }
-    } else if (marker === '/') {
-      if (!section || section.name !== name) throw new Error(`Unmatched template conditional: ${name}`)
-      section = undefined
-    } else if (!section || section.enabled) {
+    if (marker) {
+      updateTemplateSections(sections, marker, name, conditionValue)
+    } else if (sections.at(-1)?.enabled ?? true) {
       const value = name === 'FrontSide' ? (front ?? '') : (fields[name] ?? '')
       if (filter === 'type' || filter === 'type-cloze') {
         if (typedAnswer !== undefined) throw new Error('Only one typed answer is supported per card')
@@ -250,7 +253,7 @@ export function renderTemplate(template: string, fields: Record<string, string>,
       }
     }
   }
-  if (section) throw new Error(`Unclosed template conditional: ${section.name}`)
+  if (sections.length) throw new Error(`Unclosed template conditional: ${sections.at(-1)!.name}`)
   html += template.slice(cursor)
   return { html, isEmpty: !visibleField, ...(typedAnswer !== undefined ? { typedAnswer } : {}) }
 }

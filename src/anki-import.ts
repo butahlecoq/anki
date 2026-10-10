@@ -258,6 +258,14 @@ function decodeTypes(data: CollectionData, fallback: Date, issues: AnkiImportIss
       if (!fields.length || !templates.length) throw new Error('note type has no fields or templates')
       if (kind === 'cloze' && templates.length !== 1) throw new Error('cloze note type does not have exactly one template')
       for (const template of templates) {
+        const withoutScripts = (markup: string) => markup.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, '')
+        const front = withoutScripts(template.front)
+        const back = withoutScripts(template.back)
+        if (front !== template.front || back !== template.back) {
+          issues.push({ severity: 'warning', code: 'template-scripts-removed', subject: `${row.name} · ${template.name}`, detail: 'Template scripts were removed and are not executed or retained in exported templates. Static card content is imported; scripted layout, hints and answer transformations may differ from Anki.' })
+          template.front = front
+          template.back = back
+        }
         validateTemplate(template.front, fields.map((field) => field.name), 'front', kind)
         validateTemplate(template.back, fields.map((field) => field.name), 'back', kind)
         validateSupportedTemplateMarkup(template.front, template.back, template.css, media)

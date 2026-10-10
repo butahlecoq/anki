@@ -7,6 +7,7 @@ import { DEFAULT_DECK_OPTION_GROUP_ID, createCollection, tryRenderNoteTemplate, 
 import { prepareAnkiDataImport, prepareAnkiImport, validateMediaBytes } from './anki-import'
 import { exportAnkiPackage } from './anki-export'
 import { renderNoteCard } from './card-rendering'
+import { renderTemplate } from './template-renderer'
 import { prepareReviewMedia } from './review-media'
 import { digestMedia } from './media'
 import { zipSync } from 'fflate'
@@ -1062,12 +1063,23 @@ describe('Anki package import', () => {
     }))
   })
 
-  test('blocks executable templates and malformed media from creating partial note aggregates', async () => {
+  test('imports static card content with an explicit warning and removes template scripts before storing', async () => {
     collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
     const executable = await prepareAnkiImport(await executableTemplatePackage(), collection, { SQL })
-    expect(executable.plan.blocksImport).toBe(true)
-    expect(executable.issues).toEqual(expect.arrayContaining([expect.objectContaining({ severity: 'error', code: 'unsupported-note-type', subject: 'Executable template', detail: expect.stringMatching(/executable/i) })]))
-    await expect(executable.commit()).rejects.toThrow(/resolve package errors/i)
+    expect(executable.plan.blocksImport).toBe(false)
+    expect(executable.issues).toContainEqual(expect.objectContaining({ severity: 'warning', code: 'template-scripts-removed', detail: expect.stringMatching(/not executed/i) }))
+    await executable.commit()
+    const snapshot = await readAnkiExportSnapshot(collection)
+    expect(snapshot.notes).toHaveLength(1)
+    expect(snapshot.cards).toHaveLength(1)
+    const template = snapshot.types.find(type => type.name === 'Executable template')!.templates[0]
+    expect(template.front).toBe('{{Front}}')
+    expect(template.back).toBe('{{Back}}')
+    expect(renderTemplate(template.front, { Front: 'question', Back: 'answer' }).html).toBe('question')
+  })
+
+  test('blocks malformed media from creating partial note aggregates', async () => {
+    collection = createCollection(`kiroku-import-${crypto.randomUUID()}`)
     const malformed = await prepareAnkiImport(await malformedMediaPackage(), collection, { SQL })
     expect(malformed.plan.blocksImport).toBe(true)
     expect(malformed.plan.canImportRepresentable).toBe(false)
