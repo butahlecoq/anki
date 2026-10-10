@@ -34,7 +34,12 @@ test('study hides links while authoring retains safe navigation and clean packag
   const cardURL = page.url()
   // Chromium also verifies card-anchor interception; the trusted actions are
   // available for touch/keyboard on both engines independently of frame events.
-  if (browserName === 'chromium') await authoring.getByRole('link', { name: 'Dictionary', exact: true }).click()
+  if (browserName === 'chromium') {
+    const dictionary = authoring.getByRole('link', { name: 'Dictionary', exact: true })
+    // Wait for parent-installed interception before clicking in the scriptless frame.
+    await expect(dictionary).toBeEnabled()
+    await dictionary.click()
+  }
   else await page.getByRole('region', { name: 'External card links' }).getByRole('button', { name: 'Dictionary · example.org', exact: true }).click()
   const confirmation = page.getByRole('dialog', { name: 'Open an external page' })
   await expect(confirmation).toContainText('https://example.org/dictionary?term=%E7%8C%AB')
