@@ -44,7 +44,7 @@ test('keyboard creates, edits, cancels, and deletes a deck with safe focus resto
   await expect(page.getByRole('button', { name: 'Open Keyboard deck updated', exact: true })).toHaveCount(0)
 })
 
-test('keyboard completes review, exports a package, and imports it into a clean collection', async ({ page, browser }, testInfo) => {
+test('keyboard ends review, exports a package, and imports it into a clean collection', async ({ page, browser }, testInfo) => {
   test.setTimeout(90000)
   await page.goto('/')
   const create = page.getByRole('button', { name: 'New deck', exact: true })
@@ -66,8 +66,7 @@ test('keyboard completes review, exports a package, and imports it into a clean 
   await activate(study)
   await activate(page.getByRole('button', { name: 'Show answer', exact: true }))
   await activate(page.getByRole('button', { name: /^Good ·/ }))
-  await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
-  await activate(page.getByRole('button', { name: 'Back to deck', exact: true }))
+  await activate(page.getByRole('button', { name: 'End session', exact: true }))
 
   await expect(page.getByText('Offline shell ready', { exact: true })).toBeVisible()
   await openCollectionTools(page)

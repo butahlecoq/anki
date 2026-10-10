@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
 import { useTemplateNavigation } from './use-template-navigation'
 import { renderedNavigationActions } from './template-navigation'
+import { studyCardHtml } from './study-card-presentation'
 import { isRenderedCardDisplayable, type RenderedCard } from './card-rendering'
 import { applyThemeAttribute, applyCardColors, resolveAppearance, readAppearance, readCardColors, watchCardColors, watchResolvedTheme } from './appearance'
 
@@ -10,9 +11,10 @@ interface TemplatePreviewProps {
   title?: string
   templateOrdinal?: number
   reviewColors?: boolean
+  study?: boolean
 }
 
-export function TemplatePreview({ rendering, side, title = 'Card preview', templateOrdinal = 1, reviewColors = false }: TemplatePreviewProps) {
+export function TemplatePreview({ rendering, side, title = 'Card preview', templateOrdinal = 1, reviewColors = false, study = false }: TemplatePreviewProps) {
   const frame = useRef<HTMLIFrameElement | null>(null)
   const frameRef = useRef<HTMLIFrameElement>(null)
   const { frameRef: navigationFrameRef, dialog: navigationDialog, choose: chooseNavigation } = useTemplateNavigation(`${side}:${title}:${rendering.front?.html}:${rendering.back?.html}:${templateOrdinal}`)
@@ -25,7 +27,8 @@ export function TemplatePreview({ rendering, side, title = 'Card preview', templ
   // question is still worth showing. The answer side reports its own failure.
   const sideError = (side === 'front' ? rendering.error : rendering.backError) ?? ''
   const error = sideError
-  const html = (side === 'front' ? rendering.front : rendering.back)?.html ?? ''
+  const originalHtml = (side === 'front' ? rendering.front : rendering.back)?.html ?? ''
+  const html = study ? studyCardHtml(originalHtml) : originalHtml
   // The card document is themed by custom property, not by a themed selector on
   // `body`. A `:root[data-theme='light'] body { ... }` rule would out-specify a
   // deck's own `body { background: ... }` and silently override the import;
@@ -42,8 +45,8 @@ export function TemplatePreview({ rendering, side, title = 'Card preview', templ
   //
   // src/design-tokens.test.ts checks both pairings against WCAG AA, and pins the
   // half-specified case this cannot fix on its own.
-  const srcDoc = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:"><style>:root{--kiroku-card-surface:#101317;--kiroku-card-ink:#e9ede3;--kiroku-card-link:#8ab4f8}:root[data-theme='light']{--kiroku-card-surface:#ffffff;--kiroku-card-ink:#1c2118;--kiroku-card-link:#175fa6}body{font-family:system-ui,sans-serif;color:var(--kiroku-card-ink);background:var(--kiroku-card-surface);padding:24px;overflow-wrap:anywhere}.card-image{display:block;max-width:100%;max-height:290px;object-fit:contain}.card-audio{width:min(100%,400px)}a[data-kiroku-href]{color:var(--kiroku-card-link);text-decoration:underline;cursor:pointer}.card-hint{display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:center}.card-hint-toggle{width:20px;height:20px;margin:0}.card-hint label{cursor:pointer}.card-hint-content{grid-column:1 / -1}.card-hint-toggle:not(:checked) + label + .card-hint-content{display:none}${rendering.css}</style></head><body class="card card${templateOrdinal}">${html}</body></html>`
-  const navigationActions = renderedNavigationActions(html)
+  const srcDoc = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:"><style>:root{--kiroku-card-surface:#101317;--kiroku-card-ink:#e9ede3;--kiroku-card-link:#8ab4f8}:root[data-theme='light']{--kiroku-card-surface:#ffffff;--kiroku-card-ink:#1c2118;--kiroku-card-link:#175fa6}body{font-family:system-ui,sans-serif;color:var(--kiroku-card-ink);background:var(--kiroku-card-surface);padding:24px;overflow-wrap:anywhere}.card-image{display:block;max-width:100%;max-height:290px;object-fit:contain}.card-audio{width:min(100%,400px)}a[data-kiroku-href]{color:var(--kiroku-card-link);text-decoration:underline;cursor:pointer}.card-hint{display:grid;grid-template-columns:auto 1fr;gap:8px;align-items:center}.card-hint-toggle{width:20px;height:20px;margin:0}.card-hint label{cursor:pointer}.card-hint-content{grid-column:1 / -1}.card-hint-toggle:not(:checked) + label + .card-hint-content{display:none}.kiroku-translation{display:inline-block;max-width:100%;vertical-align:middle;font-family:system-ui,sans-serif!important;font-size:clamp(18px,4.8vw,22px)!important;letter-spacing:normal!important;line-height:1.55;text-transform:none;white-space:normal}${rendering.css}</style></head><body class="card card${templateOrdinal}">${html}</body></html>`
+  const navigationActions = study ? [] : renderedNavigationActions(html)
   // The frame is a separate document with no access to this one's storage or
   // media query, so the resolved theme is delivered to it explicitly. Setting an
   // attribute repaints without rebuilding srcDoc, which would otherwise reload

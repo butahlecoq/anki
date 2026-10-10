@@ -1,9 +1,9 @@
 import type { CardRecord, Collection, Grade } from './collection'
 import { isRenderedCardDisplayable, renderNoteCard } from './card-rendering'
-import { collectionSearchRows, compileCollectionSearch, type SearchRow } from './collection-search'
+import { collectionDeckPaths, collectionSearchRows, compileCollectionSearch, type SearchRow } from './collection-search'
 import { customStudyKey, customStudySessions, type CustomStudySession } from './custom-study-state'
 import { runCustomStudyAnswer, runCustomStudyUndo, runCustomStudyWrite } from './collection-mutations'
-import { readCustomStudyQueueSnapshot, readCustomStudySnapshot } from './collection-queries'
+import { readDeckList, readCustomStudyQueueSnapshot, readCustomStudySnapshot } from './collection-queries'
 import { eligibleForQueue } from './scheduler'
 
 export type CustomStudyDefinition = Pick<CustomStudySession, 'name' | 'search' | 'limit' | 'order' | 'reschedule'>
@@ -50,6 +50,28 @@ export async function createCustomStudy(db: Collection, definition: CustomStudyD
     return session
   })
 }
+/** Build another practice pass using existing temporary membership and undo. */
+export async function createDeckPractice(db: Collection, deckId: string, now = new Date()) {
+  const decks = await readDeckList(db)
+  const deck = decks.find(deck => deck.id === deckId)
+  if (!deck) throw new Error('This deck is no longer available.')
+  const paths = collectionDeckPaths(decks)
+  const path = paths.get(deckId)!
+  const ids = decks.filter(deck => paths.get(deck.id) === path || paths.get(deck.id)!.startsWith(`${path}::`)).map(deck => deck.id)
+  const session = await createCustomStudy(db, {
+    name: `Practice ${deck.name.slice(0, 60)} ${crypto.randomUUID().slice(0, 8)}`,
+    search: ids.map(id => `deck:"${id}"`).join(' OR '),
+    limit: 5000,
+    order: 'due',
+    reschedule: false,
+  }, now)
+  if (!session.cardIds.length) {
+    await changeCustomStudy(db, session.id, 'delete', now)
+    throw new Error('No cards are available for practice. Cards may be suspended, buried, empty, or reserved for another session.')
+  }
+  return session
+}
+
 export async function changeCustomStudy(db: Collection, id: string, action: 'rebuild' | 'empty' | 'delete', now = new Date()) {
   return runCustomStudyWrite(db, async () => {
     const sessions = await customStudySessions(db)

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import type { CardRecord, Deck, DeckOptionGroup, Note, ReviewEntry } from './collection'
 import { Rating, State } from './scheduler'
-import { answerWithSchedule, eligibleForQueue, eligibleForStudy, intervalLabel, isBuried, isInterdayLearning, isLearningCard, isSuspended, nextStudyBoundary, reviewChoices, selectDueCards, studyDayWindow, templateSuspended, unavailableReason, validateSteps } from './scheduler'
+import { answerWithSchedule, eligibleForLearningAhead, eligibleForQueue, eligibleForStudy, intervalLabel, isBuried, isInterdayLearning, isLearningCard, isSuspended, nextStudyBoundary, reviewChoices, selectDueCards, selectLearningAheadCards, studyDayWindow, templateSuspended, unavailableReason, validateSteps } from './scheduler'
 
 const now = new Date('2026-10-03T12:00:00.000Z')
 
@@ -26,6 +26,24 @@ const options: DeckOptionGroup = {
 }
 
 describe('pure scheduling rules', () => {
+  test('learn-ahead selects only available intraday steps within twenty minutes in due order', () => {
+    const minutes = (value: number) => new Date(now.getTime() + value * 60_000).toISOString()
+    const candidates = [
+      card('later', State.Learning, { scheduledDays: 0, due: minutes(20) }),
+      card('sooner', State.Relearning, { scheduledDays: 0, due: minutes(1) }),
+      card('too-late', State.Learning, { scheduledDays: 0, due: minutes(20.01) }),
+      card('review', State.Review, { due: minutes(1) }),
+      card('interday', State.Learning, { scheduledDays: 1, due: minutes(1) }),
+      card('suspended', State.Learning, { scheduledDays: 0, manualSuspended: true, due: minutes(1) }),
+      card('buried', State.Learning, { scheduledDays: 0, buriedUntil: minutes(5), due: minutes(1) }),
+      card('reserved', State.Learning, { scheduledDays: 0, due: minutes(1) }),
+      card('already-due', State.Learning, { scheduledDays: 0, due: now.toISOString() }),
+    ]
+    expect(selectLearningAheadCards(candidates, now, new Set(['reserved'])).map(card => card.id)).toEqual(['sooner', 'later'])
+    const beforeRollover = new Date(studyDayWindow(now).end - 30_000)
+    expect(eligibleForLearningAhead(card('next-day', State.Learning, { scheduledDays: 0, due: new Date(beforeRollover.getTime() + 60_000).toISOString() }), beforeRollover)).toBe(false)
+  })
+
   test('queue eligibility handles suspension, burial, due times, and new cards consistently', () => {
     expect(eligibleForQueue(card('active', State.Review), now)).toBe(true)
     expect(eligibleForStudy(card('future', State.Review, { due: '2026-10-04T12:00:00.000Z' }), now)).toBe(false)

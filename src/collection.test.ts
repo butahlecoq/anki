@@ -478,6 +478,46 @@ describe('local collection', () => {
     }
   })
 
+  test('Hard learning cards return after other due work and can be rated again within the session', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Learning repetition')
+    const now = new Date('2026-10-01T12:00:00.000Z')
+    const first = await collection.createBasicNote(deck.id, { front: 'first', back: 'answer' })
+    const second = await collection.createBasicNote(deck.id, { front: 'second', back: 'answer' })
+    const [firstCard] = await readCardsForNote(collection, first.id)
+    const [secondCard] = await readCardsForNote(collection, second.id)
+    await collection.answer(firstCard.id, Rating.Hard, now)
+    const learning = (await readCard(collection, firstCard.id))!
+    expect(Date.parse(learning.due)).toBeGreaterThan(now.getTime())
+    expect((await collection.reviewQueue(deck.id, now)).map(card => card.id)).toEqual([secondCard.id])
+    await collection.answer(secondCard.id, Rating.Easy, now)
+    expect((await collection.reviewQueue(deck.id, now)).map(card => card.id)).toEqual([firstCard.id])
+    expect((await collection.reviewChoices(firstCard.id, now)).map(choice => choice.label)).toEqual(['Again', 'Hard', 'Good', 'Easy'])
+    await collection.answer(firstCard.id, Rating.Good, now)
+    expect((await readCard(collection, firstCard.id))!.reps).toBe(2)
+    expect(await readCardReviewHistory(collection, firstCard.id)).toHaveLength(2)
+  })
+
+  test('empty due fronts do not hide learning fallback and other decks stay outside its queue', async () => {
+    collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    const deck = await collection.createDeck('Selected learning')
+    const other = await collection.createDeck('Other learning')
+    const now = new Date('2026-10-01T12:00:00.000Z')
+    const empty = { ...directNote('empty-front', deck.id), fields: { front: '', back: 'empty front' } }
+    await applyRemoteFixtures(collection, 'note', [empty])
+    await applyRemoteFixtures(collection, 'card', [directCard('empty-front-card', deck.id, empty.id, State.New, now.toISOString())])
+    const learning = await collection.createBasicNote(deck.id, { front: 'learning', back: 'answer' })
+    const outside = await collection.createBasicNote(other.id, { front: 'outside', back: 'answer' })
+    const [learningCard] = await readCardsForNote(collection, learning.id)
+    const [outsideCard] = await readCardsForNote(collection, outside.id)
+    await collection.answer(learningCard.id, Rating.Hard, now)
+    await collection.answer(outsideCard.id, Rating.Hard, now)
+    // Older imported collections can retain a card whose front now renders empty.
+    await overwriteIndexedDbLegacyCard(collection.databaseName, directCard('empty-front-card', deck.id, empty.id, State.New, now.toISOString()))
+    expect((await collection.reviewQueue(deck.id, now)).map(card => card.id)).toEqual([learningCard.id])
+    expect((await readCardsForNote(collection, empty.id))).toHaveLength(1)
+  })
+
   test('stores pre-answer Anki values and the resulting schedule for each card state transition', async () => {
     collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
     const deck = await collection.createDeck('Review history meanings')

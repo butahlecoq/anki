@@ -47,7 +47,7 @@ export function ReviewActivity({ session }: StudyActivityViewProps) {
       <div className="review-card-content">
       {mediaBlocked ? <p role="status">Preparing card media…</p> : noteType.kind === 'image-occlusion'
         ? <ImageOcclusionReview note={note} card={card} showAnswer={answerShown} imageUrl={imageOcclusionImage} />
-        : <TemplatePreview title="Review card" reviewColors key={card.id} rendering={rendering} templateOrdinal={Math.max(1, noteType.templates.findIndex((candidate) => candidate.id === template.id) + 1)} side={answerShown ? 'back' : 'front'} />}
+        : <TemplatePreview title="Review card" study reviewColors key={card.id} rendering={rendering} templateOrdinal={Math.max(1, noteType.templates.findIndex((candidate) => candidate.id === template.id) + 1)} side={answerShown ? 'back' : 'front'} />}
       {mediaError && <p className="form-error" role="alert">Some attachments could not be shown: {mediaError}</p>}
       {!mediaBlocked && noteType.kind !== 'image-occlusion' && attachments.filter((description) => description.side === 'front').map((description) => <MediaRenderer key={description.id} description={description} />)}
       {!mediaBlocked && noteType.kind !== 'image-occlusion' && answerShown && attachments.filter((description) => description.side === 'back').map((description) => <MediaRenderer key={description.id} description={description} />)}

@@ -58,13 +58,13 @@ test('load, review, and remove the Japanese sample deck without changing other d
     }
   }
 
-  await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Show answer' })).toBeVisible()
   expect(sawFurigana).toBe(true)
   expect(sawCloze).toBe(true)
   expect(sawAudio).toBe(true)
   expect(sawImage).toBe(true)
 
-  await page.getByRole('button', { name: 'Back to deck' }).click()
+  await page.getByRole('button', { name: 'End session', exact: true }).click()
   const allDecksButton = page.getByRole('button', { name: /All decks/ })
   await expect(allDecksButton).toBeVisible()
   await allDecksButton.click()

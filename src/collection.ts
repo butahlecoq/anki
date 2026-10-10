@@ -4,7 +4,7 @@ import { relatedEntities, recoverDeletionProvenance, inheritedDeletionBarrier, c
 import { cardTemplateOwnerIds, cardWaitsForPendingNote, decideCardGenerationDependency, decideReviewGenerationDependency, occlusionSourceReady, validateOcclusionSource } from './sync-dependency-rules'
 import { customStudyKey, customStudyMembership, customStudySessions, type CustomStudySession } from './custom-study-state'
 import { createEmptyCard } from 'ts-fsrs'
-import { answerWithSchedule, deserializeCard, eligibleForQueue, eligibleForStudy, isBuried, isInterdayLearning, isLearningCard, nextStudyBoundary, Rating, reviewChoices as previewReviewChoices, selectDueCards, serializeCard, State, templateSuspended, validateSteps, type Grade } from './scheduler'
+import { answerWithSchedule, deserializeCard, eligibleForQueue, eligibleForReview, isBuried, isInterdayLearning, isLearningCard, nextStudyBoundary, Rating, reviewChoices as previewReviewChoices, selectDueCards, selectLearningAheadCards, serializeCard, State, templateSuspended, validateSteps, type Grade } from './scheduler'
 import { SUPPORTED_MEDIA_TYPES } from '../anki-interchange'
 import { digestMedia, validateMedia, type AudioPlayback, type MediaKind, type MediaSide } from './media'
 import { clozeOrdinals, tryRenderTemplate, validateTemplate } from './template-renderer'
@@ -1933,7 +1933,7 @@ class DexieCollection extends Dexie {
    * reviewer's poll into an error. */
   async reviewChoices(cardId: string, now = new Date(), allowEarly = false): Promise<ReviewChoice[]> {
     const card = await this.cards.get(cardId)
-    if (!card || !(allowEarly ? eligibleForQueue(card, now) : eligibleForStudy(card, now))) return []
+    if (!card || !(allowEarly ? eligibleForQueue(card, now) : eligibleForReview(card, now))) return []
     const deck = await this.decks.get(card.deckId)
     const group = deck ? await this.deckOptionGroups.get(deck.optionGroupId) : undefined
     if (!deck || !group) throw new Error('Deck option group not found')
@@ -1944,20 +1944,30 @@ class DexieCollection extends Dexie {
   async reviewQueue(deckId: string, now = new Date()): Promise<CardRecord[]> {
     return this.transaction('r', [this.decks, this.deckOptionGroups, this.cards, this.notes, this.noteTypes, this.reviewEntries, this.settings], async () => {
       const scheduled = await this.dueCards(deckId, now)
+      const subtree = await this.deckSubtree(deckId)
+      if (!subtree.length) return []
+      const sessionCards = await customStudyMembership(this)
+      const learningAhead = selectLearningAheadCards(
+        await this.cards.where('deckId').anyOf(subtree.map(deck => deck.id)).toArray(), now, new Set(sessionCards.keys()),
+      )
+      const candidates = [...scheduled, ...learningAhead]
       const [notes, types, stored] = await Promise.all([
-        this.notes.bulkGet(scheduled.map((card) => card.noteId)), this.noteTypes.toArray(), this.cards.bulkGet(scheduled.map((card) => card.id)),
+        this.notes.bulkGet(candidates.map((card) => card.noteId)), this.noteTypes.toArray(), this.cards.bulkGet(candidates.map((card) => card.id)),
       ])
       const notesById = new Map(notes.filter((note): note is Note => Boolean(note)).map((note) => [note.id, note]))
       const typesById = new Map(types.map((type) => [type.id, type]))
-      return stored.filter((card): card is CardRecord => Boolean(card)).filter((card) => {
+      const displayable = stored.filter((card): card is CardRecord => Boolean(card)).filter((card) => {
         const note = notesById.get(card.noteId)
         const type = note && typesById.get(note.typeId)
         const template = type?.templates.find((candidate) => candidate.id === card.templateId)
-        if (!note || !type || !template || !eligibleForStudy(card, now)) return false
+        if (!note || !type || !template || !eligibleForReview(card, now)) return false
         if (type.kind === 'image-occlusion') return true
         const front = tryRenderNoteTemplate(template.front, type, note.fields, undefined, card.clozeOrdinal, 'front')
         return !front.ok || !front.value.isEmpty
       })
+      const dueIds = new Set(scheduled.map(card => card.id))
+      const due = displayable.filter(card => dueIds.has(card.id))
+      return due.length ? due : displayable
     })
   }
 
@@ -1966,7 +1976,7 @@ class DexieCollection extends Dexie {
       const existing = await this.cards.get(cardId)
       if (!existing) throw new Error('Card not found')
       if (!eligibleForQueue(existing, now)) throw new Error('Card is unavailable because it is suspended or buried')
-      if (!options?.allowEarly && !eligibleForStudy(existing, now)) throw new Error('Card is not due')
+      if (!options?.allowEarly && !eligibleForReview(existing, now)) throw new Error('Card is not due')
       const deck = await this.decks.get(existing.deckId)
       const group = deck ? await this.deckOptionGroups.get(deck.optionGroupId) : undefined
       if (!deck || !group) throw new Error('Deck option group not found')

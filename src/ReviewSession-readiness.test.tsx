@@ -42,11 +42,14 @@ test('does not offer a new card with the previous note while its note query refr
     const nextGood = await screen.findByRole('button', { name: /^Good ·/ })
     await waitFor(() => expect(nextGood).toBeEnabled())
     fireEvent.click(nextGood)
-    expect(await screen.findByRole('heading', { name: 'Session complete' })).toBeVisible()
-    expect(screen.getByText('2 reviews recorded')).toBeVisible()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Show answer' })).toBeEnabled())
+    expect(screen.queryByRole('heading', { name: 'Session complete' })).not.toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('2 rated this session')
+    const repeatedNote = queue[0].noteId === first.id ? first : second
+    await waitFor(() => expect(screen.getByTitle('Review card')).toHaveAttribute('srcdoc', expect.stringContaining(repeatedNote.fields.front)))
     fireEvent.keyDown(window, { key: 'u' })
     await waitFor(() => expect(screen.getByRole('button', { name: 'Show answer' })).toBeEnabled())
-    expect(screen.getByTitle('Review card')).toHaveAttribute('srcdoc', expect.stringContaining(nextNote.fields.front))
+    await waitFor(() => expect(screen.getByTitle('Review card')).toHaveAttribute('srcdoc', expect.stringContaining(nextNote.fields.front)))
   } finally {
     releaseNote()
     cleanup()

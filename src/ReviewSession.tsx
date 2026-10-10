@@ -1,12 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { BASIC_NOTE_TYPE_ID, IMAGE_OCCLUSION_NOTE_TYPE_ID, collection, type Grade, type Note, type NoteMediaReference } from './collection'
-import { replayAudioElements } from './audio-playback'
 import { ImageOcclusionEditor } from './ImageOcclusion'
 import { useReviewMedia } from './use-review-media'
 import { validateMedia } from './media'
 import { clozeOrdinals } from './template-renderer'
-import { CardHistory } from './Statistics'
 import { unavailableReason } from './scheduler'
 import { describeCardMedia, isRenderedCardDisplayable, renderNoteCard } from './card-rendering'
 import { undoAnnouncement, undoLabel } from './undo'
@@ -15,7 +13,7 @@ import { isShortcutBlocked } from './keyboard-shortcuts'
 import { useDialogKeyboard } from './use-dialog-keyboard'
 import { useDialogSubmit } from './use-dialog-submit'
 import { userFacingStorageError } from './offline-storage'
-import { readCard, readCardReviewHistory, readDeckList, readNote, readNoteType, readNoteTypeList, readStudyActivityRows } from './collection-queries'
+import { readCard, readDeckList, readNote, readNoteType, readNoteTypeList, readStudyActivityRows } from './collection-queries'
 import { DEFAULT_LEARNING_ACTIVITY_ID, learningActivity, type StudyActivityCandidate, type StudyActivityPrompt } from './learning-activities'
 import { useStudyLifecycle } from './study-lifecycle'
 import { chooseCardColors, readCardColors, watchCardColors } from './appearance'
@@ -179,7 +177,7 @@ export function NoteTagsDialog({ note, onClose }: { note: Note; onClose: () => v
   </section></div>
 }
 
-export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEARNING_ACTIVITY_ID, onBack, onExport, onTextTransfer }: { deckId?: string; sessionId?: string; activityId?: string; onBack: () => void; onExport?: () => void; onTextTransfer?: () => void }) {
+export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEARNING_ACTIVITY_ID, onBack, onExport }: { deckId?: string; sessionId?: string; activityId?: string; onBack: () => void; onExport?: () => void }) {
   const activity = learningActivity(activityId)
   const [activityInteractionRevision, setActivityInteractionRevision] = useState(0)
   const [lastActivityPrompt, setLastActivityPrompt] = useState<StudyActivityPrompt | undefined>()
@@ -188,11 +186,6 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
    * driving the reviewer from the keyboard or a screen reader gets no sign
    * that anything happened. Every outcome of a card action is announced here.
    */
-  const [editingNote, setEditingNote] = useState(false)
-  const [movingNote, setMovingNote] = useState(false)
-  const [editingTags, setEditingTags] = useState(false)
-  const [deletingNote, setDeletingNote] = useState(false)
-  const [showCardInfo, setShowCardInfo] = useState(false)
   const [cardColors, setCardColors] = useState(readCardColors)
   useEffect(() => watchCardColors(setCardColors), [])
   const actionMenu = useRef<HTMLDetailsElement>(null)
@@ -208,9 +201,6 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
     document.addEventListener('pointerdown', dismiss)
     return () => document.removeEventListener('pointerdown', dismiss)
   }, [])
-  const deleteDialogKeyboard = useDialogKeyboard(() => setDeletingNote(false), deletingNote)
-  const cardInfoDialogKeyboard = useDialogKeyboard(() => setShowCardInfo(false), showCardInfo)
-  const [audioMessage, setAudioMessage] = useState('')
   const reviewCardRef = useRef<HTMLElement>(null)
   const {
     customSession, queue, cardId, choices, reviewsRecorded, setReviewsRecorded,
@@ -253,7 +243,6 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
   // A live query returns a new array identity on ordinary reviewer renders. Stable
   // identities keep the review timer effect and prepared media sources from restarting.
   const media = useMemo(() => mediaQuery ?? [], [mediaQuery])
-  const reviewCount = useLiveQuery(async () => card ? (await readCardReviewHistory(collection, card.id)).length : 0, [card?.id], 0)
   // One subscription for one undo. A review belonging to another custom session
   // is not this session's to offer.
   const pendingUndo = useLiveQuery(async () => {
@@ -296,7 +285,7 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
   useEffect(() => {
     if (activeTime.current.cardId !== cardId) activeTime.current = { cardId, elapsed: 0, started: null }
     const timer = activeTime.current
-    const blocked = editingNote || movingNote || editingTags || deletingNote || showCardInfo || unavailable || !promptReady || !note || mediaBlocked
+    const blocked = unavailable || !promptReady || !note || mediaBlocked
     const update = () => {
       if (timer.started !== null) timer.elapsed += performance.now() - timer.started
       timer.started = !blocked && document.visibilityState === 'visible' ? performance.now() : null
@@ -308,7 +297,7 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
       if (timer.started !== null) timer.elapsed += performance.now() - timer.started
       timer.started = null
     }
-  }, [cardId, editingNote, movingNote, editingTags, deletingNote, showCardInfo, unavailable, promptReady, note, mediaBlocked])
+  }, [cardId, activityInteractionRevision, unavailable, promptReady, note, mediaBlocked])
 
   const answerCurrent = useCallback(async (targetCardId: string, rating: Grade) => {
     if (isAnswering || (targetCardId === cardId && (mediaBlocked || (activity?.cardScope === 'current' && !promptReady)))) return false
@@ -316,55 +305,18 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
     const duration = targetCardId === cardId
       ? activeTime.current.elapsed + (activeTime.current.started === null ? 0 : performance.now() - activeTime.current.started)
       : 0
-    return answer(targetCardId, rating, duration)
+    const recorded = await answer(targetCardId, rating, duration)
+    if (recorded && activity?.cardScope === 'current') {
+      activeTime.current = { cardId: targetCardId, elapsed: 0, started: null }
+      setActivityInteractionRevision(revision => revision + 1)
+    }
+    return recorded
   }, [cardId, isAnswering, activity?.cardScope, promptReady, mediaBlocked, answer, currentActivityPrompt])
 
   const skipCurrentCard = useCallback(() => {
     setActivityInteractionRevision((revision) => revision + 1)
     skipCard()
   }, [skipCard])
-
-  const updateCurrentCard = useCallback(async (action: (id: string) => Promise<void>, message: string) => {
-    if (!cardId || isAnswering) return
-    setIsAnswering(true)
-    setActionError('')
-    try {
-      await action(cardId)
-      setReviewAnnouncement(message)
-      setActivityInteractionRevision((revision) => revision + 1)
-    } catch (reason) {
-      setActionError(userFacingStorageError(reason, 'Unable to update card'))
-    } finally {
-      setIsAnswering(false)
-    }
-  }, [cardId, isAnswering, setIsAnswering, setActionError, setReviewAnnouncement])
-
-  const replayAudio = useCallback(async () => {
-    const surface = reviewCardRef.current
-    if (!surface) return
-    const audio = [
-      ...surface.querySelectorAll('audio'),
-      ...[...surface.querySelectorAll('iframe')].flatMap((frame) => [...(frame.contentDocument?.querySelectorAll('audio') ?? [])]),
-    ]
-    if (!audio.length) { setAudioMessage('Audio is still loading. Try again in a moment.'); return }
-    setAudioMessage(await replayAudioElements(audio) ? 'Audio replayed.' : 'Audio could not play on this device.')
-  }, [])
-
-  const deleteCurrentNote = useCallback(async () => {
-    if (!note || isAnswering) return
-    setIsAnswering(true)
-    setActionError('')
-    try {
-      await collection.deleteNote(note.id)
-      setReviewAnnouncement('Note and its cards deleted.')
-      setDeletingNote(false)
-      setActivityInteractionRevision((revision) => revision + 1)
-    } catch (reason) {
-      setActionError(userFacingStorageError(reason, 'Unable to delete note'))
-    } finally {
-      setIsAnswering(false)
-    }
-  }, [note, isAnswering, setIsAnswering, setActionError, setReviewAnnouncement])
 
   /** One affordance for the one undo record, whatever produced it. */
   const undoLastAction = useCallback(async () => {
@@ -386,25 +338,15 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (isAnswering || (cardId && !promptReady) || editingNote || movingNote || editingTags || deletingNote || showCardInfo) return
+      if (isAnswering || (cardId && !promptReady)) return
       if (isShortcutBlocked(event)) return
       const key = event.key.toLowerCase()
-      if ((key === 'u' || key === 'v' || key === 'x') && pendingUndo) { event.preventDefault(); void undoLastAction(); return }
-      if (!cardId) return
-      if (key === 'e') { event.preventDefault(); setEditingNote(true) }
-      else if (key === 'm') { event.preventDefault(); setMovingNote(true) }
-      else if (key === 't') { event.preventDefault(); setEditingTags(true) }
-      else if (key === 'k' && note) { event.preventDefault(); void updateCurrentCard(async () => collection.updateNoteTags(note.id, note.tags?.includes('marked') ? (note.tags ?? []).filter((tag) => tag !== 'marked') : [...(note.tags ?? []), 'marked']), note.tags?.includes('marked') ? 'Mark removed.' : 'Marked.') }
-      else if (key === 'd') { event.preventDefault(); setDeletingNote(true) }
-      else if (key === 'i') { event.preventDefault(); setShowCardInfo(true) }
-      else if (key === 'r' && media.some((reference) => reference.kind === 'audio')) { event.preventDefault(); void replayAudio() }
-      else if (key === 's') { event.preventDefault(); void updateCurrentCard((id) => collection.suspendCard(id), 'Card suspended.') }
-      else if (key === 'b') { event.preventDefault(); void updateCurrentCard((id) => collection.buryCard(id), 'Card buried.') }
-      else if (key === 'f') { event.preventDefault(); void updateCurrentCard(async (id) => { const current = await readCard(collection, id); await collection.setCardFlag(id, ((current?.flag ?? 0) + 1) % 8) }, 'Card flag advanced.') }
+      if (key === 'u' && pendingUndo) { event.preventDefault(); void undoLastAction(); return }
+
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [cardId, card?.flag, note, isAnswering, promptReady, editingNote, movingNote, editingTags, deletingNote, showCardInfo, media, replayAudio, updateCurrentCard, pendingUndo, undoLastAction])
+  }, [cardId, isAnswering, promptReady, pendingUndo, undoLastAction])
 
   /*
    * Card actions move the card out of view without moving focus, so a learner
@@ -430,7 +372,6 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
         <div className="review-progress"><span>ACTIVITY // COMPLETE</span><div className="review-session-actions">{pendingUndo && <button className="text-button" type="button" disabled={isAnswering} onClick={() => void undoLastAction()}>{undoLabel(pendingUndo)}</button>}<button className="text-button" type="button" onClick={onBack}>End session</button></div></div>
         {actionError && <p className="form-error" role="alert">{actionError}</p>}
         {announcementRegion}
-        {audioMessage && <p className="review-feedback" role="status">{audioMessage}</p>}
         <ActivityView key={activityInteractionRevision} session={{
           prompt: lastActivityPrompt,
           candidates: activityCandidates,
@@ -471,43 +412,13 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
     <div className="review-session-actions" onClick={(event) => {
       if (event.target instanceof Element && event.target.closest('button')) closeActionMenu()
     }}>
-    <button className="text-button" type="button" disabled={isAnswering} onClick={() => setEditingNote(true)}>Edit note</button>
-    <button className="text-button" type="button" disabled={isAnswering} onClick={() => setMovingNote(true)}>Move note</button>
-    <button className="text-button" type="button" disabled={isAnswering} onClick={() => setEditingTags(true)}>Edit tags</button>
-    <button className="text-button" type="button" disabled={isAnswering} onClick={() => void updateCurrentCard(async () => collection.updateNoteTags(note.id, note.tags?.includes('marked') ? (note.tags ?? []).filter((tag) => tag !== 'marked') : [...(note.tags ?? []), 'marked']), note.tags?.includes('marked') ? 'Mark removed.' : 'Marked.')}>{note.tags?.includes('marked') ? 'Unmark note' : 'Mark note'}</button>
-    <button className="text-button" type="button" onClick={() => setShowCardInfo(true)}>Card info</button>
     <label className="review-flag-control">Card colors <select aria-label="Card colors" value={cardColors} onChange={event => chooseCardColors(event.target.value === 'deck' ? 'deck' : 'app')}><option value="app">App theme</option><option value="deck">Original deck</option></select></label>
     {pendingUndo && <button className="text-button" type="button" disabled={isAnswering} onClick={() => void undoLastAction()}>{undoLabel(pendingUndo)}</button>}
-    <label className="review-flag-control">Flag <select aria-label="Card flag" value={card.flag ?? 0} disabled={isAnswering} onChange={(event) => void updateCurrentCard((id) => collection.setCardFlag(id, Number(event.target.value)), `Flag set to ${event.target.value}.`)}>
-      <option value={0}>None</option><option value={1}>Red</option><option value={2}>Orange</option><option value={3}>Green</option><option value={4}>Blue</option><option value={5}>Pink</option><option value={6}>Turquoise</option><option value={7}>Purple</option>
-    </select></label>
-    {media.some((reference) => reference.kind === 'audio') && <button className="text-button" type="button" onClick={() => void replayAudio()}>Replay audio</button>}
-    <button className="text-button" type="button" disabled={isAnswering} onClick={() => void updateCurrentCard((id) => collection.suspendCard(id), 'Card suspended.')}>Suspend card</button>
-    <button className="text-button" type="button" disabled={isAnswering} onClick={() => void updateCurrentCard((id) => collection.buryCard(id), 'Card buried.')}>Bury card</button>
-    <button className="text-button" type="button" disabled={isAnswering} onClick={() => setDeletingNote(true)}>Delete note</button>
     {onExport && <button className="text-button" type="button" onClick={onExport}>Export Anki package</button>}
-    {onTextTransfer && <button className="text-button" type="button" onClick={onTextTransfer}>Import / export text</button>}
     </div>
     </details>
     <button className="text-button" type="button" onClick={onBack}>End session</button>
   </div>
-  const reviewerDialogs = <>
-    {editingNote && <NoteDialog key={note.id} deckId={note.deckId} note={note} onClose={() => setEditingNote(false)} />}
-    {movingNote && <MoveNoteDialog note={note} onClose={() => setMovingNote(false)} />}
-    {editingTags && <NoteTagsDialog key={note.id} note={note} onClose={() => setEditingTags(false)} />}
-    {deletingNote && <div className="dialog-backdrop"><section {...deleteDialogKeyboard} className="dialog" role="dialog" aria-modal="true" aria-labelledby="review-delete-note-title">
-      <span className="section-code">NOTE // DELETE</span><h2 id="review-delete-note-title">Delete note</h2>
-      <p>This removes the note and all its cards, review history, and media references. You can undo it until the next sync attempt.</p>
-      {actionError && <p className="form-error" role="alert">{actionError}</p>}
-      <div className="dialog-actions"><button className="text-button" data-dialog-initial-focus type="button" onClick={() => setDeletingNote(false)}>Cancel</button><button className="primary-action" type="button" disabled={isAnswering} onClick={() => void deleteCurrentNote()}>Delete note and cards</button></div>
-    </section></div>}
-    {showCardInfo && <div className="dialog-backdrop"><section {...cardInfoDialogKeyboard} className="dialog" role="dialog" aria-modal="true" aria-labelledby="review-card-info-title">
-      <span className="section-code">CARD // DETAILS</span><h2 id="review-card-info-title">Card info</h2>
-      <dl className="review-card-info"><div><dt>Note type</dt><dd>{noteType.name}</dd></div><div><dt>Card template</dt><dd>{template.name}</dd></div><div><dt>Due</dt><dd>{new Date(card.due).toLocaleString()}</dd></div><div><dt>Reviews</dt><dd>{reviewCount}</dd></div><div><dt>Lapses</dt><dd>{card.lapses}</dd></div><div><dt>Flag</dt><dd>{['None', 'Red', 'Orange', 'Green', 'Blue', 'Pink', 'Turquoise', 'Purple'][card.flag ?? 0]}</dd></div><div><dt>Tags</dt><dd>{note.tags?.join(', ') || 'None'}</dd></div></dl>
-      <CardHistory key={card.id} card={card} />
-      <div className="dialog-actions"><button className="primary-action" type="button" onClick={() => setShowCardInfo(false)}>Done</button></div>
-    </section></div>}
-  </>
 
   if (renderError) return <><section className="review-session">
     {sessionId && <p className="custom-review-mode">{customSession?.name ?? 'Custom session'} · {customSession?.reschedule ? 'Ratings reschedule the home card' : 'Practice: original schedule stays unchanged'}. Each rated card returns to its home deck.</p>}
@@ -516,17 +427,16 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
     {announcementRegion}
     <article className="review-card"><p className="form-error" role="alert">Unable to render card: {renderError}</p></article>
     <button className="primary-action" type="button" onClick={skipCurrentCard}>Skip card</button>
-  </section>{reviewerDialogs}</>
+  </section></>
 
   return (
     <>
     <section className="review-session">
       {sessionId && <p className="custom-review-mode">{customSession?.name ?? 'Custom session'} · {customSession?.reschedule ? 'Ratings reschedule the home card' : 'Practice: original schedule stays unchanged'}. Each rated card returns to its home deck.</p>}
     <div className="review-progress"><span>REVIEW // {String(reviewsRecorded + 1).padStart(2, '0')}</span>{reviewActions}</div>
-      <p className="review-shortcuts">Space reveal · 1–4 rate · E edit · M move · T tags · K mark · I info · F flag · R replay · S suspend · B bury · D delete · U undo review · V undo card action · X undo deletion. Undo is available until the next sync attempt or affected edit.</p>
+      <p className="review-shortcuts">Space reveal · 1–4 rate · U undo. Undo is available until the next sync attempt or affected edit.</p>
       {actionError && <p className="form-error" role="alert">{actionError}</p>}
       {announcementRegion}
-      {audioMessage && <p className="review-feedback" role="status">{audioMessage}</p>}
       <ActivityView key={activityInteractionRevision} session={{
         prompt: currentActivityPrompt!,
         candidates: activityCandidates,
@@ -541,7 +451,7 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
         cardSurface: reviewCardRef,
       }} />
     </section>
-    {reviewerDialogs}
+
     </>
   )
 }

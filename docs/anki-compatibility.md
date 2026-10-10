@@ -38,7 +38,7 @@ fail. The current tests do not establish an oldest supported version.
 | Images and audio | Partial | The 26.09.3 corpus verifies generated WAV bytes, digest, two references to one deduplicated blob, audio rendering and Chromium playback, then export/re-import digest equality. Broader codec and real-world media coverage is unverified. |
 | Image occlusion | Partial | Rectangular native subset is covered by a hand-authored fixture and import/export tests. Other shapes are reported unsupported. |
 | Filtered decks | Partial, explicit flattening | The 26.09.3 collection package places all four cards in a filtered deck. Import restores them to the original source deck and preserves card/note meaning through study and round trip. The filtered search definition and native filtered-deck scheduling behavior are not retained; this is not filtered-deck parity. |
-| Review history / scheduling | Partial | Package tests cover scheduling and review records; scheduler parity tests are synthetic and limited to named behaviors. |
+| Review history / scheduling | Partial | Package tests cover scheduling and review records; scheduler parity tests are synthetic and limited to named behaviors. Default 20-minute intraday learn-ahead returns Learning/Relearning cards when displayable due work is exhausted; future review and interday cards remain excluded. `scripts/verify-learning-queue-oracle.py` compares queue repetition against official Anki 26.9.3. |
 | Unsafe markup, schemes, unsupported template features | Supported rejection behavior | Tests exercise safe rejection and explicit unsupported-feature errors; warning stability across a corpus is not established. |
 
 ## Explicit boundaries

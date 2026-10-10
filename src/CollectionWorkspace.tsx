@@ -16,8 +16,8 @@ import { CollectionBrowser } from './CollectionBrowser'
 import { unavailableReason } from './scheduler'
 import { ExportDialog } from './ExportDialog'
 import { CustomStudy } from './CustomStudy'
+import { createDeckPractice } from './custom-study'
 import { isShortcutBlocked } from './keyboard-shortcuts'
-import { TextCollectionDialog } from './TextCollectionDialog'
 import { SyncConflicts } from './SyncConflicts'
 import { loadSampleDeck, removeSampleDeck, SAMPLE_DECK_NAME } from './sample-deck'
 import { useRoute } from './route'
@@ -367,13 +367,13 @@ function CardManagementDialog({ note, onClose }: { note: Note; onClose: () => vo
   </section></div>
 }
 
-function DeckDetail({ deckId, onBack, onStudy, onChooseActivity }: { deckId: string; onBack: () => void; onStudy: () => void; onChooseActivity: () => void }) {
+function DeckDetail({ deckId, onBack, onStudy, onPractice, onChooseActivity }: { deckId: string; onBack: () => void; onStudy: () => void; onPractice: (sessionId: string) => void; onChooseActivity: () => void }) {
   const workspace = useLiveQuery(() => readDeckWorkspaceSnapshot(collection, deckId), [deckId])
   const deck = workspace?.deck
   const notes = workspace?.notes ?? []
   const noteTypes = workspace?.noteTypes ?? []
   const summary = useLiveQuery(async () => (await collection.summaries()).find((item) => item.id === deckId), [deckId])
-  const due = useLiveQuery(() => collection.dueCards(deckId, new Date()), [deckId], [])
+  const due = useLiveQuery(() => collection.reviewQueue(deckId, new Date()), [deckId])
   const offlineReadiness = useLiveQuery(async () => {
     const { references, blobs } = await readDeckMediaSnapshot(collection, deckId)
     const digests = [...new Set(references.map((reference) => reference.digest))]
@@ -392,11 +392,21 @@ function DeckDetail({ deckId, onBack, onStudy, onChooseActivity }: { deckId: str
   const [noteDialog, setNoteDialog] = useState<{ note?: Note } | null>(null)
   const [preparingOffline, setPreparingOffline] = useState(false)
   const [offlineMessage, setOfflineMessage] = useState('')
+  const [startingPractice, setStartingPractice] = useState(false)
+  const [practiceError, setPracticeError] = useState('')
 
-  if (deck === undefined || summary === undefined) return <div className="loading-state" role="status">Loading local deck…</div>
+  if (deck === undefined || summary === undefined || due === undefined) return <div className="loading-state" role="status">Loading local deck…</div>
   if (!deck || !summary) return <div className="loading-state"><h1>Deck not found</h1><button className="text-button" onClick={onBack}>Back to decks</button></div>
 
   const hasDueCards = due.length > 0
+
+  async function practiceAgain() {
+    setStartingPractice(true)
+    setPracticeError('')
+    try { onPractice((await createDeckPractice(collection, deckId)).id) }
+    catch (reason) { setPracticeError(userFacingStorageError(reason, 'Unable to start practice')) }
+    finally { setStartingPractice(false) }
+  }
 
   async function prepareDeckOffline() {
     if (!offlineReadiness) return
@@ -440,6 +450,7 @@ function DeckDetail({ deckId, onBack, onStudy, onChooseActivity }: { deckId: str
           <button className="text-button" type="button" disabled={preparingOffline || !offlineReadiness} onClick={() => void prepareDeckOffline()}>{preparingOffline ? 'Preparing offline…' : 'Prepare this deck for offline use'}</button>
           <button className="primary-action" type="button" onClick={() => setNoteDialog({})}>Add note</button>
           <button className="primary-action study-action" type="button" disabled={!hasDueCards} onClick={onStudy}>Study now</button>
+          {!hasDueCards && <button className="primary-action" type="button" disabled={startingPractice} onClick={() => void practiceAgain()}>{startingPractice ? 'Preparing practice…' : 'Practice again'}</button>}
           <button className="text-button" type="button" disabled={!hasDueCards} onClick={onChooseActivity}>Choose activity</button>
           <button className="text-button" type="button" onClick={() => setChildDialog(true)}>Create child deck</button>
           <button className="text-button" type="button" onClick={() => setMoveDialog(true)}>Move deck</button>
@@ -447,6 +458,8 @@ function DeckDetail({ deckId, onBack, onStudy, onChooseActivity }: { deckId: str
           <button className="text-button" type="button" onClick={() => setDeckDialog(true)}>Rename deck</button>
           <button className="text-button danger" type="button" onClick={() => setDeleteDialog(true)}>{deck.name === SAMPLE_DECK_NAME ? 'Remove sample deck' : 'Delete deck'}</button>
         </div>
+        {!hasDueCards && <p className="temporary-membership">Practice again reviews up to 5,000 available cards without changing their scheduled review dates.</p>}
+        {practiceError && <p className="form-error" role="alert">{practiceError}</p>}
         {offlineReadiness && <p className="temporary-membership" aria-live="polite">{offlineMessage || (offlineReadiness.missing === 0 ? `Offline ready · ${offlineReadiness.required} referenced media file${offlineReadiness.required === 1 ? '' : 's'} available.` : `${offlineReadiness.missing} of ${offlineReadiness.required} referenced media files need to be downloaded.`)}</p>}
       </section>
       <section className="note-list" aria-label="Notes">
@@ -480,7 +493,6 @@ export function CollectionWorkspace({ offlineSyncAvailable = true }: { offlineSy
   const [newDeck, setNewDeck] = useState(false)
   const [importing, setImporting] = useState(false)
   const [exporting, setExporting] = useState(false)
-  const [textTransfer, setTextTransfer] = useState(false)
 
   // The deck panel advertises N beside its heading, so the key has to work.
   useEffect(() => {
@@ -501,14 +513,15 @@ export function CollectionWorkspace({ offlineSyncAvailable = true }: { offlineSy
         ? { view: 'review', deckId: route.target.deckId, activityId }
         : { view: 'custom-review', sessionId: route.target.sessionId, activityId })}
     />
-    if (route.view === 'review') return <ReviewSession activityId={route.activityId} deckId={route.deckId} onBack={() => navigate({ view: 'deck', deckId: route.deckId })} onExport={() => setExporting(true)} onTextTransfer={() => setTextTransfer(true)} />
+    if (route.view === 'review') return <ReviewSession activityId={route.activityId} deckId={route.deckId} onBack={() => navigate({ view: 'deck', deckId: route.deckId })} onExport={() => setExporting(true)} />
     if (route.view === 'deck') return <DeckDetail
       deckId={route.deckId}
       onBack={() => navigate({ view: 'decks' })}
       onStudy={() => navigate({ view: 'review', deckId: route.deckId, activityId: DEFAULT_LEARNING_ACTIVITY_ID })}
+      onPractice={(sessionId) => navigate({ view: 'custom-review', sessionId, activityId: DEFAULT_LEARNING_ACTIVITY_ID })}
       onChooseActivity={() => navigate({ view: 'activity-selection', target: { kind: 'deck', deckId: route.deckId } })}
     />
-    if (route.view === 'custom-review') return <ReviewSession activityId={route.activityId} sessionId={route.sessionId} onBack={() => navigate({ view: 'study' })} onExport={() => setExporting(true)} onTextTransfer={() => setTextTransfer(true)} />
+    if (route.view === 'custom-review') return <ReviewSession activityId={route.activityId} sessionId={route.sessionId} onBack={() => navigate({ view: 'study' })} onExport={() => setExporting(true)} />
     if (route.view === 'study') return <CustomStudy
       onStudy={(sessionId) => navigate({ view: 'custom-review', sessionId, activityId: DEFAULT_LEARNING_ACTIVITY_ID })}
       onChooseActivity={(sessionId) => navigate({ view: 'activity-selection', target: { kind: 'session', sessionId } })}
@@ -524,14 +537,12 @@ export function CollectionWorkspace({ offlineSyncAvailable = true }: { offlineSy
     <>
       <SyncControls offlineSyncAvailable={offlineSyncAvailable} collectionActions={<>
         <button className="text-button" onClick={() => setExporting(true)}>Export Anki package</button>
-        <button className="text-button" onClick={() => setTextTransfer(true)}>Import / export text</button>
       </>} />
       <SyncConflicts />
       {content}
       {newDeck && <DeckDialog onClose={() => setNewDeck(false)} />}
       {importing && <ImportDialog onClose={() => setImporting(false)} />}
       {exporting && <ExportDialog onClose={() => setExporting(false)} />}
-      {textTransfer && <TextCollectionDialog onClose={() => setTextTransfer(false)} />}
     </>
   )
 }

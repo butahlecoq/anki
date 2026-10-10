@@ -42,8 +42,7 @@ test('studied-card links name both templates and retain the correct histories on
     await page.getByRole('button', { name: isRecognition ? /^Good ·/ : /^Easy ·/ }).click()
     if (card === 0) await expect(review).toHaveText(isRecognition ? 'cat' : expression)
   }
-  await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
-  await page.getByRole('button', { name: 'Back to deck', exact: true }).click()
+  await page.getByRole('button', { name: 'End session', exact: true }).click()
   await page.getByRole('navigation', { name: 'Mobile navigation' }).getByRole('link', { name: 'Statistics', exact: true }).click()
   const studied = page.getByRole('heading', { name: 'Cards studied in this period', exact: true }).locator('..')
   await expect(studied.getByRole('button')).toHaveCount(2)

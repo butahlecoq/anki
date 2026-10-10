@@ -188,7 +188,7 @@
       "VERSION_ID=\"24.04\"",
       "VERSION=\"24.04.4 LTS (Noble Numbat)\""
     ],
-    "sourceCommit": "731dc02b0658c5c67710a959d79b3c93f175b9bf",
+    "sourceCommit": "f689b103831e447ebb21caee53ceed2521449d28",
     "lockfileSha256": "5584b0a066f115e62c025b4b03260583bbf695f482fd8844422164ecb5b18276",
     "configuredViewport": {
       "width": 1280,

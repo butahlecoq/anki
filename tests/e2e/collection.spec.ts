@@ -285,10 +285,8 @@ for (const reopen of [false, true]) {
     await expect.poll(() => offlineImage.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true)
     const offlineAudio = offlineReview.locator('audio')
     await expectAudioReady(offlineAudio, browserName)
-    await page.getByText('More actions', { exact: true }).click()
-    await page.getByRole('button', { name: 'Replay audio' }).click()
-    const lacksAudioBackend = browserName === 'webkit' && process.platform === 'win32'
-    await expect(page.getByText(lacksAudioBackend ? 'Audio could not play on this device.' : 'Audio replayed.', { exact: true })).toBeVisible()
+    await expect(offlineAudio).toHaveAttribute('controls', '')
+    await expect(page.getByRole('button', { name: 'Replay audio' })).toHaveCount(0)
     await expect(page.getByText('Offline shell active')).toBeVisible()
   })
 }
@@ -461,7 +459,9 @@ test('learner organizes a child deck and persists a shared daily study limit', a
   await expect(hierarchy.getByText('Reading')).toBeVisible()
 })
 
-test('learner saves scheduling policies and manages a card lifecycle', async ({ page }) => {
+nativeCanvasTest()('learner saves scheduling policies and manages a card lifecycle', async ({ page }, testInfo) => {
+  const configuredViewport = testInfo.project.use.viewport!
+  await expect.poll(() => page.evaluate(() => ({ width: innerWidth, height: innerHeight }))).toEqual(configuredViewport)
   await createDeck(page, 'Policy controls')
   await page.getByRole('button', { name: 'Open Policy controls' }).click()
   await page.getByRole('button', { name: 'Scheduling options' }).click()
@@ -510,54 +510,26 @@ test('learner saves scheduling policies and manages a card lifecycle', async ({ 
   await expect(cards).toBeHidden()
 })
 
-nativeCanvasTest()('learner maintains and undoes the current card without leaving review', async ({ page }, testInfo) => {
+nativeCanvasTest()('review omits maintenance controls and preserves rating and undo', async ({ page }, testInfo) => {
   const configuredViewport = testInfo.project.use.viewport!
   await expect.poll(() => page.evaluate(() => ({ width: innerWidth, height: innerHeight }))).toEqual(configuredViewport)
-  await createDeck(page, 'Reviewer maintenance')
-  await page.getByRole('button', { name: 'Open Reviewer maintenance' }).click()
+  await createDeck(page, 'Simple reviewer')
+  await page.getByRole('button', { name: 'Open Simple reviewer' }).click()
   await page.getByRole('button', { name: 'Add note' }).click()
-  await page.getByLabel('Front').fill('古い')
-  await page.getByLabel('Back').fill('old')
+  await page.getByLabel('Front').fill('猫')
+  await page.getByLabel('Back').fill('cat')
   await page.getByRole('button', { name: 'Save note' }).click()
   await page.getByRole('button', { name: 'Study now' }).click()
+  await expect(page.getByRole('button', { name: 'Show answer' })).toBeVisible()
   await page.getByText('More actions', { exact: true }).click()
-  await page.getByRole('button', { name: 'Edit note' }).click()
-  const editor = page.getByRole('dialog', { name: 'Edit Basic note' })
-  await editor.getByLabel('Front').fill('新しい')
-  await editor.getByRole('button', { name: 'Save changes' }).click()
-  await expect(editor).toBeHidden()
-  await expect(page.frameLocator('iframe[title="Review card"]').getByText('新しい')).toBeVisible()
-  await page.getByText('More actions', { exact: true }).click()
-  await page.getByRole('combobox', { name: 'Card flag' }).selectOption('1')
-  await expect(page.getByRole('combobox', { name: 'Card flag' })).toHaveValue('1')
-  await page.getByRole('button', { name: 'Mark note' }).click()
-  await page.getByText('More actions', { exact: true }).click()
-  await expect(page.getByRole('button', { name: 'Unmark note' })).toBeVisible()
-  await page.getByRole('button', { name: 'Card info' }).click()
-  const info = page.getByRole('dialog', { name: 'Card info' })
-  await expect(info.getByText('Red', { exact: true })).toBeVisible()
-  await expect(info.getByText('marked', { exact: true })).toBeVisible()
-  await info.getByRole('button', { name: 'Done' }).click()
-
-  await page.getByText('More actions', { exact: true }).click()
-  await page.getByRole('button', { name: 'Suspend card' }).click()
-  await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
-  await page.getByRole('button', { name: 'Undo card action' }).click()
+  for (const name of ['Edit note', 'Move note', 'Edit tags', 'Mark note', 'Card info', 'Replay audio', 'Suspend card', 'Bury card', 'Delete note']) await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0)
+  await expect(page.getByRole('combobox', { name: 'Card flag' })).toHaveCount(0)
+  await page.keyboard.press('Escape')
   await page.getByRole('button', { name: 'Show answer' }).click()
-  await page.getByRole('button', { name: /^Good · / }).click()
+  await page.getByRole('button', { name: /^Easy · / }).click()
   await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
   await page.getByRole('button', { name: 'Undo last review' }).click()
-  await expect(page.getByRole('button', { name: 'Show answer' })).toBeVisible()
-
-  await page.getByText('More actions', { exact: true }).click()
-  await page.getByRole('button', { name: 'Delete note' }).click()
-  await page.getByRole('dialog', { name: 'Delete note' }).getByRole('button', { name: 'Delete note and cards' }).click()
-  await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
-  await page.getByRole('button', { name: 'Undo note deletion' }).click()
-  await expect(page.frameLocator('iframe[title="Review card"]').getByText('新しい')).toBeVisible()
-  await page.getByText('More actions', { exact: true }).click()
-  await expect(page.getByRole('combobox', { name: 'Card flag' })).toHaveValue('1')
-  await expect(page.getByRole('button', { name: 'Unmark note' })).toBeVisible()
+  await expect(page.frameLocator('iframe[title="Review card"]').getByText('猫')).toBeVisible()
 })
 
 test('review uses each generated template, isolates its CSS, and skips an empty template', async ({ page }) => {
@@ -619,8 +591,14 @@ test('review uses each generated template, isolates its CSS, and skips an empty 
     await page.getByRole('button', { name: /^Good · / }).click()
     if (index === 0) await expect(review.locator('body')).toHaveCSS('background-color', wordFirst ? 'rgb(0, 0, 255)' : 'rgb(255, 0, 0)')
   }
+  await expect(page.getByRole('button', { name: 'Show answer' })).toBeVisible()
+  await expect(page.getByRole('status').filter({ hasText: 'Recorded Good.' })).toHaveText('Recorded Good. 2 rated this session.')
+  for (let index = 0; index < 2; index += 1) {
+    await page.getByRole('button', { name: 'Show answer' }).click()
+    await page.getByRole('button', { name: /^Good · / }).click()
+  }
   await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
-  await expect(page.getByText('2 reviews recorded')).toBeVisible()
+  await expect(page.getByText('4 reviews recorded')).toBeVisible()
 })
 
 test('a card emptied during review leaves the session and cannot reenter until restored', async ({ context, page }) => {
@@ -762,9 +740,10 @@ for (const reopen of [false, true]) {
     await expect(page.getByRole('button', { name: /^Easy · / })).toBeVisible()
     await page.getByRole('button', { name: /^Good · / }).click()
 
-    await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
-    await expect(page.getByText('1 review recorded')).toBeVisible()
-    await page.getByRole('button', { name: 'Back to deck' }).click()
+    await expect(page.getByRole('button', { name: 'Show answer' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Session complete' })).toBeHidden()
+    await expect(page.getByRole('status').filter({ hasText: 'Recorded Good.' })).toHaveText('Recorded Good. 1 rated this session.')
+    await page.getByRole('button', { name: 'End session', exact: true }).click()
     await expect(page.getByText('NEW 0')).toBeVisible()
     await expect(page.getByText('LEARNING 1')).toBeVisible()
     await expect(page.getByText('REVIEWS 1')).toBeVisible()
@@ -833,8 +812,13 @@ test('persistent profile reopens offline and continues a remaining Japanese revi
     await reopenedPage.getByRole('button', { name: 'Show answer' }).click()
     await expect(reopenedPage.getByRole('button', { name: /^Good · / })).toBeVisible()
     await reopenedPage.getByRole('button', { name: /^Good · / }).click()
+    await expect(reopenedPage.getByRole('heading', { name: 'Session complete' })).toBeHidden()
+    for (let index = 0; index < 2; index += 1) {
+      await reopenedPage.getByRole('button', { name: 'Show answer' }).click()
+      await reopenedPage.getByRole('button', { name: /^Good · / }).click()
+    }
     await expect(reopenedPage.getByRole('heading', { name: 'Session complete' })).toBeVisible()
-    await expect(reopenedPage.getByText('1 review recorded')).toBeVisible()
+    await expect(reopenedPage.getByText('3 reviews recorded')).toBeVisible()
   } finally {
     await firstContext?.close()
     await reopenedContext?.close()
@@ -885,8 +869,9 @@ test('PC and phone contexts exchange a collection and an FSRS review through the
     await phone.getByRole('button', { name: 'Study now' }).click()
     await phone.getByRole('button', { name: 'Show answer' }).click()
     await phone.getByRole('button', { name: /^Good · / }).click()
-    await expect(phone.getByRole('heading', { name: 'Session complete' })).toBeVisible()
-    await phone.getByRole('button', { name: 'Back to deck', exact: true }).click()
+    await expect(phone.getByRole('button', { name: 'Show answer' })).toBeVisible()
+    await expect(phone.getByRole('heading', { name: 'Session complete' })).toBeHidden()
+    await phone.getByRole('button', { name: 'End session', exact: true }).click()
     await openCollectionTools(phone)
     await phone.getByRole('button', { name: 'Sync now' }).click()
     await expect(phone.getByRole('region', { name: 'PC sync' }).getByText(/complete\./i)).toBeVisible({ timeout: 15_000 })

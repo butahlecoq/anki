@@ -75,8 +75,13 @@ test('Anki 26.09.3 package renders reversed cards and retains audio through a co
   const renderedSession = questions.join('\n')
   for (const value of ['猫', 'ねこ', '犬', 'いぬ']) expect(renderedSession).toContain(value)
   expect(audioCards).toBe(2)
+  await expect(page.getByRole('heading', { name: 'Session complete' })).toBeHidden()
+  for (let index = 0; index < 4; index += 1) {
+    await page.getByRole('button', { name: 'Show answer', exact: true }).click()
+    await page.getByRole('button', { name: /^Good · / }).click()
+  }
   await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
-  await expect(page.getByText('4 reviews recorded')).toBeVisible()
+  await expect(page.getByText('8 reviews recorded')).toBeVisible()
 })
 
 test('Anki 26.09.3 package WAV media loads metadata and replays during review', async ({ page, browserName }, testInfo) => {
@@ -96,9 +101,8 @@ test('Anki 26.09.3 package WAV media loads metadata and replays during review', 
     if (await audio.count()) {
       await expect(audio).toHaveAttribute('src', /^data:audio\/wav;base64,/)
       await expect.poll(() => audio.evaluate((element: HTMLAudioElement) => element.readyState >= HTMLMediaElement.HAVE_METADATA)).toBe(true)
-      await page.getByText('More actions', { exact: true }).click()
-      await page.getByRole('button', { name: 'Replay audio' }).click()
-      await expect(page.getByText('Audio replayed.', { exact: true })).toBeVisible()
+      await expect(audio).toHaveAttribute('controls', '')
+      await audio.evaluate(async (element: HTMLAudioElement) => { await element.play(); element.pause() })
       replayed = true
       break
     }

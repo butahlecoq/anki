@@ -117,7 +117,8 @@ test('a second browser downloads and studies a child whose parent is beyond the 
     await receiver.getByRole('button', { name: 'Show answer', exact: true }).click()
     await expect(review.locator('body')).toContainText('to eat')
     await receiver.getByRole('button', { name: /^Good ·/ }).click()
-    await expect(receiver.getByRole('heading', { name: 'Session complete' })).toBeVisible()
+    await expect(receiver.getByRole('button', { name: 'Show answer' })).toBeVisible()
+    await receiver.getByRole('button', { name: 'End session', exact: true }).click()
     expect(errors).toEqual([])
   } finally {
     await receiverContext.close()
