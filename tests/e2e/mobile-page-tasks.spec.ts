@@ -81,7 +81,8 @@ test('Collection tools expose utilities with keyboard access and safe focus retu
     await expect(storage.locator('..')).not.toHaveAttribute('open', '')
     await storage.scrollIntoViewIfNeeded()
     await page.screenshot({ path: testInfo.outputPath(`collection-tools-${width}.png`) })
-    for (const name of ['Connect a PC', 'Export Anki package', 'Import / export text']) {
+    await expect(page.getByRole('button', { name: 'Import / export text', exact: true })).toHaveCount(0)
+    for (const name of ['Connect a PC', 'Export Anki package']) {
       const button = page.getByRole('button', { name, exact: true })
       const box = await button.boundingBox()
       expect(box!.width).toBeGreaterThanOrEqual(43.99)

@@ -19,7 +19,8 @@ test('workspace utility and deck actions meet the minimum touch size', async ({ 
   await page.goto('/')
   await page.getByRole('button', { name: 'Load sample deck' }).click()
   await openCollectionTools(page)
-  for (const name of ['Connect a PC', 'Export Anki package', 'Import / export text', 'Open Sample — Japanese Starter']) {
+  await expect(page.getByRole('button', { name: 'Import / export text', exact: true })).toHaveCount(0)
+  for (const name of ['Connect a PC', 'Export Anki package', 'Open Sample — Japanese Starter']) {
     const action = page.getByRole('button', { name, exact: true })
     await expect(action).toBeVisible()
     const box = await action.boundingBox()
