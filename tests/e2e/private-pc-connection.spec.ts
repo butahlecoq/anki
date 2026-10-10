@@ -20,6 +20,11 @@ async function close(server: Server) {
   await new Promise<void>((done, reject) => server.close(error => error ? reject(error) : done()))
 }
 
+async function removeFixture(directory: string) {
+  if (dirname(resolve(directory)) !== resolve(tmpdir()) || !directory.startsWith(join(tmpdir(), 'kiroku-private-browser-'))) throw new Error('Unexpected fixture path')
+  await rm(directory, { recursive: true, force: true })
+}
+
 // This proxy supplies only synthetic authenticated transport identity. Every
 // application/API response comes from the built app or the real SQLite service.
 async function privateFixture(webOrigin: string) {
@@ -55,8 +60,7 @@ async function privateFixture(webOrigin: string) {
       await close(proxy)
       await close(backend)
       service.close()
-      if (dirname(resolve(directory)) !== resolve(tmpdir()) || !directory.startsWith(join(tmpdir(), 'kiroku-private-browser-'))) throw new Error('Unexpected fixture path')
-      await rm(directory, { recursive: true, force: true })
+      await removeFixture(directory)
     },
   }
 }
@@ -83,8 +87,7 @@ test('the ordinary app preview cannot forward a spoofed private owner identity',
     if (app) await close(app.httpServer)
     await close(backend)
     service.close()
-    if (dirname(resolve(directory)) !== resolve(tmpdir()) || !directory.startsWith(join(tmpdir(), 'kiroku-private-browser-'))) throw new Error('Unexpected fixture path')
-    await rm(directory, { recursive: true, force: true })
+    await removeFixture(directory)
   }
 })
 
