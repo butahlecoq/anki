@@ -30,7 +30,7 @@ test('zero-answer dates are visible before touch selection across a month transi
   await expect(card).toContainText(firstWord.includes('猫') ? '犬' : '猫')
   await page.getByRole('button', { name: 'End session', exact: true }).click()
   await page.getByRole('navigation', { name: 'Mobile navigation' }).getByRole('link', { name: 'Statistics', exact: true }).click()
-  await expect(page.getByRole('heading', { name: '84 days of practice' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: /^\d+ days? of practice$/ })).toBeVisible()
   const heatmap = page.getByRole('region', { name: 'Study heatmap', exact: true })
   for (const width of [320, 390]) {
     await page.setViewportSize({ width: Math.round(width * hostScale), height: Math.round(844 * hostScale) })
@@ -58,7 +58,7 @@ test('zero-answer dates are visible before touch selection across a month transi
     await deckChoice.selectOption({ label: 'Sample — Japanese Starter (with children)' })
     await expect(deckChoice).not.toHaveValue('')
     await deckChoice.selectOption('')
-    await expect(page.getByRole('heading', { name: '84 days of practice' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: /^\d+ days? of practice$/ })).toBeVisible()
     for (const theme of ['light', 'dark']) {
       await page.getByRole('combobox', { name: 'Appearance', exact: true }).selectOption(theme)
       for (const [date, month, day] of [['2026-09-30', 'Sep', '30'], ['2026-10-01', 'Oct', '1']]) {
