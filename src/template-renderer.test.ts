@@ -163,6 +163,8 @@ describe('renderTemplate', () => {
     expect(renderTemplate(template, { A: 'a', B: 'b' }).html).toBe('outerbtailend')
     expect(renderTemplate(template, { A: '', B: 'b' }).html).toBe('end')
     expect(renderTemplate(template, { A: 'a', B: '' }).html).toBe('outertailend')
+    expect(renderTemplate('{{#A}}{{^B}}missing{{/B}}{{/A}}', { A: 'a', B: '' }).html).toBe('missing')
+    expect(renderTemplate('{{#A}}{{^B}}missing{{/B}}{{/A}}', { A: '', B: '' }).html).toBe('')
     expect([...templateMediaFields(template, { A: '', B: 'image' })]).toEqual([])
     expect([...templateMediaFields(template, { A: 'a', B: 'image' })]).toEqual(['B'])
     expect(() => validateTemplate('{{#A}}{{#B}}{{/A}}{{/B}}', ['A', 'B'], 'front')).toThrow(/Unmatched template conditional/)

@@ -258,7 +258,7 @@ function decodeTypes(data: CollectionData, fallback: Date, issues: AnkiImportIss
       if (!fields.length || !templates.length) throw new Error('note type has no fields or templates')
       if (kind === 'cloze' && templates.length !== 1) throw new Error('cloze note type does not have exactly one template')
       for (const template of templates) {
-        const withoutScripts = (markup: string) => markup.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, '')
+        const withoutScripts = (markup: string) => markup.replace(/<script\b([^>]*)>[\s\S]*?<\/script\s*>/gi, (script: string, attributes: string) => /\bsrc\s*=/i.test(attributes) ? script : '')
         const front = withoutScripts(template.front)
         const back = withoutScripts(template.back)
         if (front !== template.front || back !== template.back) {
