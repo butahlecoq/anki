@@ -3,6 +3,15 @@ import { clozeOrdinals, renderTemplate, templateMediaFields, tryRenderTemplate, 
 import { sanitizeFieldHtml } from './field-html'
 
 describe('renderTemplate', () => {
+  test.each([':Question', '::Question'])('empty-only filters resolve the field in %s', (token) => {
+    const template = `{{${token}}}`
+    const fields = { Question: 'content' }
+    expect(() => validateTemplate(template, ['Question'], 'front')).not.toThrow()
+    expect(renderTemplate(template, fields).html).toBe('content')
+    expect([...templateMediaFields(template, fields)]).toEqual(['Question'])
+    expect(renderTemplate(template, { [token]: 'exact field', Question: 'content' }).html).toBe('exact field')
+  })
+
   test('empty filter separators retain Anki cloze question and answer behavior', () => {
     const fields = { Question: 'A {{c1::synthetic answer::hint}} B' }
     expect(() => validateTemplate('{{cloze::Question}}', ['Question'], 'front', 'cloze')).not.toThrow()

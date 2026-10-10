@@ -140,7 +140,7 @@ function replacement(raw: string, known: ReadonlySet<string>): Replacement {
   // Anki ignores empty filters, e.g. the extra separator in cloze::Text.
   // Keep the final field slot so an empty field remains invalid.
   const parts = name.split(':').filter((part, index, all) => part || index === all.length - 1)
-  if (parts.length === 1) return { field: name }
+  if (parts.length === 1) return { field: parts[0] }
   const [filter, second, third] = parts
   if (filter === 'type' && second === 'cloze' && third && parts.length === 3) return { field: third, filter: 'type-cloze' }
   if (['text', 'furigana', 'kana', 'kanji', 'cloze', 'type', 'hint'].includes(filter) && second && parts.length === 2) return { field: second, filter: filter as Replacement['filter'] }
