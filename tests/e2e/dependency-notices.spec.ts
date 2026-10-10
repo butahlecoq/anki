@@ -9,7 +9,7 @@ test('release dependency notices preserve exact served and cached publisher text
   await page.evaluate(async () => { await navigator.serviceWorker.ready })
   await page.reload()
   await expect.poll(() => page.evaluate(() => Boolean(navigator.serviceWorker.controller))).toBe(true)
-  await page.getByText('Support', { exact: true }).click()
+  await page.getByLabel('Support', { exact: true }).click()
   await page.getByRole('link', { name: 'Dependency notices', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Kiroku dependency notices', level: 1 })).toBeVisible()
   for (const dependency of source.dependencies) await expect(page.getByRole('heading', { name: `${dependency.name} — ${dependency.version}`, exact: true, level: 2 })).toBeVisible()
