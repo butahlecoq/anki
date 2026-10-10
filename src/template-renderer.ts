@@ -118,7 +118,22 @@ function renderCloze(value: string, ordinal: number, side: 'front' | 'back'): st
   }).join('')
 }
 
-function renderReading(value: string, filter: 'furigana' | 'kana' | 'kanji'): string {
+function renderReading(value: string, filter: 'furigana' | 'kana' | 'kanji', rich = false): string {
+  if (rich) {
+    const fragment = document.createElement('template')
+    fragment.innerHTML = sanitizeFieldHtml(value).html
+    const formatText = (parent: ParentNode) => {
+      for (const child of [...parent.childNodes]) {
+        if (child.nodeType === Node.TEXT_NODE) {
+          const reading = document.createElement('template')
+          reading.innerHTML = renderReading(child.textContent ?? '', filter)
+          child.replaceWith(reading.content)
+        } else if (child instanceof Element) formatText(child)
+      }
+    }
+    formatText(fragment.content)
+    return fragment.innerHTML
+  }
   const annotation = /(\p{Script=Han}+(?:[\p{Script=Hiragana}\p{Script=Katakana}]+)?)\[([^[\]<>]+)\]/gu
   let html = ''
   let cursor = 0
@@ -130,6 +145,13 @@ function renderReading(value: string, filter: 'furigana' | 'kana' | 'kanji'): st
     cursor = match.index + match[0].length
   }
   return html + escapeHtml(value.slice(cursor))
+}
+
+function renderText(value: string, rich = false) {
+  if (!rich) return escapeHtml(value)
+  const fragment = document.createElement('template')
+  fragment.innerHTML = sanitizeFieldHtml(value).html
+  return escapeHtml(fragment.content.textContent ?? '')
 }
 
 type Replacement = { field: string; filter?: 'text' | 'furigana' | 'kana' | 'kanji' | 'cloze' | 'type' | 'type-cloze' | 'hint' }
@@ -243,9 +265,9 @@ export function renderTemplate(template: string, fields: Record<string, string>,
         if (typedAnswer.trim()) visibleField = true
       } else {
         if (value.trim() && name !== 'FrontSide') visibleField = true
-        html += filter === 'text' ? escapeHtml(value) : filter === 'hint' ? (value.trim() ? (() => { const id = `kiroku-hint-${hintIndex++}`; return `<div class="card-hint"><input class="card-hint-toggle" type="checkbox" id="${id}"><label for="${id}">Show ${escapeHtml(name)}</label><div class="card-hint-content">${renderField(value, options.media, options.htmlFields?.has(name))}</div></div>` })() : '') : name === 'FrontSide' ? value : filter === 'cloze'
+        html += filter === 'text' ? renderText(value, options.htmlFields?.has(name)) : filter === 'hint' ? (value.trim() ? (() => { const id = `kiroku-hint-${hintIndex++}`; return `<div class="card-hint"><input class="card-hint-toggle" type="checkbox" id="${id}"><label for="${id}">Show ${escapeHtml(name)}</label><div class="card-hint-content">${renderField(value, options.media, options.htmlFields?.has(name))}</div></div>` })() : '') : name === 'FrontSide' ? value : filter === 'cloze'
           ? renderCloze(value, ordinal ?? 0, side)
-          : filter === 'furigana' || filter === 'kana' || filter === 'kanji' ? renderReading(value, filter)
+          : filter === 'furigana' || filter === 'kana' || filter === 'kanji' ? renderReading(value, filter, options.htmlFields?.has(name))
             : renderField(value, options.media, options.htmlFields?.has(name))
       }
     }

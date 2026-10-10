@@ -10,6 +10,18 @@ function preview(front: string, back: string, fields: Record<string, string>, op
 
 afterEach(cleanup)
 
+test('study presentation removes link clutter and formats translations without mutating the rendered card', () => {
+  const rendering = preview('{{Front}}<p style="font-size:70%">Support <a href="https://example.com">here</a></p>', '{{Back}}', { Front: '猫 · кот', Back: 'cat' })
+  const original = structuredClone(rendering)
+  render(<TemplatePreview rendering={rendering} side="front" study />)
+  const document = screen.getByTitle('Card preview').getAttribute('srcdoc') ?? ''
+  expect(document).not.toContain('Support ')
+  expect(document).toContain('class="kiroku-translation">кот</span>')
+  expect(screen.queryByRole('region', { name: 'External card links' })).not.toBeInTheDocument()
+  expect(new DOMParser().parseFromString(document, 'text/html').body.querySelector('[data-kiroku-href]')).toBeNull()
+  expect(rendering).toEqual(original)
+})
+
 test('uses the chosen cloze ordinal on the front and reveals it on the back', () => {
   const rendering = preview('{{cloze:Text}}', '{{FrontSide}}<hr>{{cloze:Text}}', { Text: '{{c1::東京}}と{{c2::大阪}}' }, { kind: 'cloze', ordinal: 2 })
   const { rerender } = render(<TemplatePreview rendering={rendering} side="front" />)
