@@ -12,8 +12,16 @@ export function useStudyLifecycle(source: Collection, { deckId, sessionId, cardS
   const [isAnswering, setIsAnswering] = useState(false)
   const [actionError, setActionError] = useState('')
   const [reviewAnnouncement, setReviewAnnouncement] = useState('')
+  const [answerRevision, setAnswerRevision] = useState(0)
   const customSession = useLiveQuery(async () => sessionId ? (await customStudySessions(source)).find((session) => session.id === sessionId) : undefined, [source, sessionId])
-  const dueQueue = useLiveQuery(() => sessionId ? customStudyQueue(source, sessionId, new Date()) : source.reviewQueue(deckId ?? '', new Date()), [source, deckId, sessionId])
+  const queueResult = useLiveQuery(async () => ({
+    revision: answerRevision,
+    cards: sessionId ? await customStudyQueue(source, sessionId, new Date())
+      : cardScope === 'queue' ? await source.dueCards(deckId ?? '', new Date())
+        : await source.reviewQueue(deckId ?? '', new Date()),
+  }), [source, deckId, sessionId, cardScope, answerRevision])
+  // An answer invalidates the displayed question until its new queue is ready.
+  const dueQueue = queueResult?.revision === answerRevision ? queueResult.cards : undefined
   const queue = dueQueue?.filter((candidate) => !skippedCardIds.has(candidate.id))
   const cardId = queue?.[0]?.id
   const candidateIds = cardScope === 'queue' ? queue?.map((candidate) => candidate.id) ?? [] : cardId ? [cardId] : []
@@ -31,6 +39,7 @@ export function useStudyLifecycle(source: Collection, { deckId, sessionId, cardS
     try {
       if (sessionId) await answerCustomStudy(source, sessionId, targetCardId, rating, new Date(), durationMs)
       else await source.answer(targetCardId, rating, new Date(), durationMs)
+      if (!sessionId && cardScope === 'current') setAnswerRevision(revision => revision + 1)
       setReviewsRecorded((count) => count + 1)
       setReviewAnnouncement(`Recorded ${Rating[rating]}. ${reviewsRecorded + 1} rated this session.`)
       return true
@@ -40,7 +49,7 @@ export function useStudyLifecycle(source: Collection, { deckId, sessionId, cardS
     } finally {
       setIsAnswering(false)
     }
-  }, [source, queue, isAnswering, sessionId, reviewsRecorded])
+  }, [source, queue, isAnswering, sessionId, cardScope, reviewsRecorded])
 
   const skipCard = useCallback(() => {
     if (!cardId) return

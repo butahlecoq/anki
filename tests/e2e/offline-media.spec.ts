@@ -58,8 +58,14 @@ test('new Japanese cards and answer images decode throughout a warm offline revi
   await page.getByRole('button', { name: 'Show answer' }).click()
   await expectDecoded(images, 4)
   await page.getByRole('button', { name: /^Good ·/ }).click()
+  for (let repeat = 0; repeat < 2; repeat += 1) {
+    await expectDecoded(images, 2)
+    await page.getByRole('button', { name: 'Show answer' }).click()
+    await expectDecoded(images, 4)
+    await page.getByRole('button', { name: /^Good ·/ }).click()
+  }
   await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
-  await expect(page.getByText('2 reviews recorded')).toBeVisible()
+  await expect(page.getByText('4 reviews recorded')).toBeVisible()
 })
 
 const uploadedImage = { name: 'uploaded.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL4+QAAAABJRU5ErkJggg==', 'base64') }
@@ -86,6 +92,9 @@ test('uploaded front and back attachments decode when review starts offline', as
   await expectDecoded(page.locator('.review-card .card-image'), 1)
   await page.getByRole('button', { name: 'Show answer' }).click()
   await expectDecoded(page.locator('.review-card .card-image'), 2)
+  await page.getByRole('button', { name: /^Good ·/ }).click()
+  await expectDecoded(page.locator('.review-card .card-image'), 1)
+  await page.getByRole('button', { name: 'Show answer' }).click()
   await page.getByRole('button', { name: /^Good ·/ }).click()
   await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
 })
@@ -124,6 +133,9 @@ test('occlusion source decodes when the first masked card is rendered offline', 
   await page.getByRole('button', { name: 'Show answer' }).click()
   await expect(page.locator('.occlusion-revealed-mask')).toHaveCount(1)
   await page.getByRole('button', { name: /^Good ·/ }).click()
+  await expect(page.locator('.occlusion-mask')).toHaveCount(1)
+  await page.getByRole('button', { name: 'Show answer' }).click()
+  await page.getByRole('button', { name: /^Good ·/ }).click()
   await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
 })
 
@@ -156,6 +168,9 @@ test('same-filename uploaded front and back images retain their own decoded pixe
   await expect(images.nth(1)).toHaveAttribute('src', `data:image/png;base64,${blue}`)
   await expect.poll(() => pixel(images.first())).toEqual([255, 0, 0, 255])
   await expect.poll(() => pixel(images.nth(1))).toEqual([0, 0, 255, 255])
+  await page.getByRole('button', { name: /^Good ·/ }).click()
+  await expectDecoded(page.locator('.review-card .card-image'), 1)
+  await page.getByRole('button', { name: 'Show answer' }).click()
   await page.getByRole('button', { name: /^Good ·/ }).click()
   await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
 })
