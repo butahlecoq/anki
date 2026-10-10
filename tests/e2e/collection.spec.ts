@@ -524,7 +524,7 @@ nativeCanvasTest()('review omits maintenance controls and preserves rating and u
   await expect(page.getByRole('combobox', { name: 'Card flag' })).toHaveCount(0)
   await page.keyboard.press('Escape')
   await page.getByRole('button', { name: 'Show answer' }).click()
-  await page.getByRole('button', { name: /^Easy � / }).click()
+  await page.getByRole('button', { name: /^Easy · / }).click()
   await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
   await page.getByRole('button', { name: 'Undo last review' }).click()
   await expect(page.frameLocator('iframe[title="Review card"]').getByText('猫')).toBeVisible()
