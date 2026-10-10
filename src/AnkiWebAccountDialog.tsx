@@ -164,9 +164,9 @@ export function AnkiWebAccountDialog({ settings, onClose, onSetupPc, active = tr
             <label>AnkiWeb username<input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} required maxLength={256} /></label>
             <label>AnkiWeb password<input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
             {message && <p role="status" aria-live="polite">{message}</p>}
+            {!settings && onSetupPc && <button className="text-button" type="button" onClick={onSetupPc}>Set up PC connection</button>}
             <div className="dialog-actions">
               <button className="text-button" type="button" disabled={busy} onClick={onClose}>Cancel</button>
-              {!settings && onSetupPc && <button className="text-button" type="button" onClick={onSetupPc}>Set up PC connection</button>}
               <button className="primary-action" type="submit" disabled={busy || !settings}>{busy ? 'Connecting…' : 'Connect account'}</button>
             </div>
           </form>

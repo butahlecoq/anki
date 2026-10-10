@@ -12,6 +12,13 @@ test('unpaired AnkiWeb entry opens login and separates one-time PC setup', async
   await expect(page.getByLabel('AnkiWeb password')).toBeVisible()
   await expect(page.getByLabel('PC service address')).toHaveCount(0)
   await expect(account.getByRole('button', { name: 'Connect account', exact: true })).toBeDisabled()
+  const cancelBounds = await account.getByRole('button', { name: 'Cancel', exact: true }).evaluate(button => {
+    const action = button.getBoundingClientRect()
+    const dialog = button.closest('[role="dialog"]')!.getBoundingClientRect()
+    return { left: action.left, right: action.right, dialogLeft: dialog.left, dialogRight: dialog.right }
+  })
+  expect(cancelBounds.left).toBeGreaterThanOrEqual(cancelBounds.dialogLeft)
+  expect(cancelBounds.right).toBeLessThanOrEqual(cancelBounds.dialogRight)
   await account.getByRole('button', { name: 'Set up PC connection', exact: true }).click()
   const pairing = page.getByRole('dialog', { name: 'Connect to your PC', exact: true })
   await expect(page.getByRole('dialog')).toHaveCount(1)
