@@ -48,47 +48,6 @@ test('a learner can choose the review activity before starting a Deck session', 
   }
 })
 
-test('rotates a paired device key from the visible sync controls', async () => {
-  const priorFetch = globalThis.fetch
-  const fetcher = vi.fn((input: RequestInfo | URL) => {
-    const url = String(input)
-    if (url.endsWith('/api/backups')) {
-      return Promise.resolve(Response.json({ backups: [], retention: { maximum: 14, days: 30 } }))
-    }
-    if (url.endsWith('/api/credential/rotate')) {
-      return Promise.resolve(Response.json({ token: 'rotated-device-key' }))
-    }
-    throw new Error(`Unexpected fetch in credential rotation test: ${url}`)
-  })
-  globalThis.fetch = fetcher as typeof fetch
-  await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'old-device-key', cursor: 6 })
-  try {
-    render(<CollectionWorkspace />)
-    fireEvent.click(await screen.findByRole('button', { name: 'Rotate device key' }))
-    await waitFor(async () => expect(await collection.syncSettings()).toEqual({ endpoint: 'https://pc.example.test', token: 'rotated-device-key', cursor: 6 }))
-    expect(await screen.findByText(/previous key can no longer sync this collection/i)).toBeVisible()
-    expect(fetcher).toHaveBeenCalledWith('https://pc.example.test/api/credential/rotate', expect.objectContaining({ method: 'POST' }))
-  } finally {
-    globalThis.fetch = priorFetch
-    await collection.clearSyncConfiguration()
-  }
-})
-
-test('does not claim the old key is unchanged after a lost rotation response', async () => {
-  const priorFetch = globalThis.fetch
-  globalThis.fetch = vi.fn().mockRejectedValue(new TypeError('connection dropped')) as typeof fetch
-  await collection.configureSync({ endpoint: 'https://pc.example.test', token: 'old-device-key', cursor: 6 })
-  try {
-    render(<CollectionWorkspace />)
-    fireEvent.click(await screen.findByRole('button', { name: 'Rotate device key' }))
-    expect(await screen.findByText(/may have rotated this device key, but confirmation was lost/i)).toBeVisible()
-    expect(screen.getByText(/pair this device again before syncing/i)).toBeVisible()
-  } finally {
-    globalThis.fetch = priorFetch
-    await collection.clearSyncConfiguration()
-  }
-})
-
 describe('application shell', () => {
   test('presents the local-first study workspace with accessible primary navigation', () => {
     render(<App />)

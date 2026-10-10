@@ -17,7 +17,6 @@ import { unavailableReason } from './scheduler'
 import { ExportDialog } from './ExportDialog'
 import { CustomStudy } from './CustomStudy'
 import { isShortcutBlocked } from './keyboard-shortcuts'
-import { TextCollectionDialog } from './TextCollectionDialog'
 import { SyncConflicts } from './SyncConflicts'
 import { loadSampleDeck, removeSampleDeck, SAMPLE_DECK_NAME } from './sample-deck'
 import { useRoute } from './route'
@@ -480,7 +479,6 @@ export function CollectionWorkspace({ offlineSyncAvailable = true }: { offlineSy
   const [newDeck, setNewDeck] = useState(false)
   const [importing, setImporting] = useState(false)
   const [exporting, setExporting] = useState(false)
-  const [textTransfer, setTextTransfer] = useState(false)
 
   // The deck panel advertises N beside its heading, so the key has to work.
   useEffect(() => {
@@ -501,14 +499,14 @@ export function CollectionWorkspace({ offlineSyncAvailable = true }: { offlineSy
         ? { view: 'review', deckId: route.target.deckId, activityId }
         : { view: 'custom-review', sessionId: route.target.sessionId, activityId })}
     />
-    if (route.view === 'review') return <ReviewSession activityId={route.activityId} deckId={route.deckId} onBack={() => navigate({ view: 'deck', deckId: route.deckId })} onExport={() => setExporting(true)} onTextTransfer={() => setTextTransfer(true)} />
+    if (route.view === 'review') return <ReviewSession activityId={route.activityId} deckId={route.deckId} onBack={() => navigate({ view: 'deck', deckId: route.deckId })} onExport={() => setExporting(true)} />
     if (route.view === 'deck') return <DeckDetail
       deckId={route.deckId}
       onBack={() => navigate({ view: 'decks' })}
       onStudy={() => navigate({ view: 'review', deckId: route.deckId, activityId: DEFAULT_LEARNING_ACTIVITY_ID })}
       onChooseActivity={() => navigate({ view: 'activity-selection', target: { kind: 'deck', deckId: route.deckId } })}
     />
-    if (route.view === 'custom-review') return <ReviewSession activityId={route.activityId} sessionId={route.sessionId} onBack={() => navigate({ view: 'study' })} onExport={() => setExporting(true)} onTextTransfer={() => setTextTransfer(true)} />
+    if (route.view === 'custom-review') return <ReviewSession activityId={route.activityId} sessionId={route.sessionId} onBack={() => navigate({ view: 'study' })} onExport={() => setExporting(true)} />
     if (route.view === 'study') return <CustomStudy
       onStudy={(sessionId) => navigate({ view: 'custom-review', sessionId, activityId: DEFAULT_LEARNING_ACTIVITY_ID })}
       onChooseActivity={(sessionId) => navigate({ view: 'activity-selection', target: { kind: 'session', sessionId } })}
@@ -524,14 +522,12 @@ export function CollectionWorkspace({ offlineSyncAvailable = true }: { offlineSy
     <>
       <SyncControls offlineSyncAvailable={offlineSyncAvailable} collectionActions={<>
         <button className="text-button" onClick={() => setExporting(true)}>Export Anki package</button>
-        <button className="text-button" onClick={() => setTextTransfer(true)}>Import / export text</button>
       </>} />
       <SyncConflicts />
       {content}
       {newDeck && <DeckDialog onClose={() => setNewDeck(false)} />}
       {importing && <ImportDialog onClose={() => setImporting(false)} />}
       {exporting && <ExportDialog onClose={() => setExporting(false)} />}
-      {textTransfer && <TextCollectionDialog onClose={() => setTextTransfer(false)} />}
     </>
   )
 }

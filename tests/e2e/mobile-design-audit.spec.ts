@@ -196,7 +196,8 @@ test('audit every route and its main dialogs on an iPhone sized screen', async (
   await capture('04-collection')
   await dialog('New deck', '05-new-deck')
   await dialog('Export Anki package', '06-export')
-  await dialog('Import / export text', '07-text-transfer')
+  await expect(page.getByRole('button', { name: 'Import / export text' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Rotate device key' })).toHaveCount(0)
   for (const name of ['Note types', 'Study', 'Browse', 'Statistics']) {
     await destination(name)
     await expect(page.locator('main h1')).toBeVisible()
