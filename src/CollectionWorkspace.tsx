@@ -373,7 +373,7 @@ function DeckDetail({ deckId, onBack, onStudy, onPractice, onChooseActivity }: {
   const notes = workspace?.notes ?? []
   const noteTypes = workspace?.noteTypes ?? []
   const summary = useLiveQuery(async () => (await collection.summaries()).find((item) => item.id === deckId), [deckId])
-  const due = useLiveQuery(() => collection.reviewQueue(deckId, new Date()), [deckId], [])
+  const due = useLiveQuery(() => collection.reviewQueue(deckId, new Date()), [deckId])
   const offlineReadiness = useLiveQuery(async () => {
     const { references, blobs } = await readDeckMediaSnapshot(collection, deckId)
     const digests = [...new Set(references.map((reference) => reference.digest))]
@@ -395,7 +395,7 @@ function DeckDetail({ deckId, onBack, onStudy, onPractice, onChooseActivity }: {
   const [startingPractice, setStartingPractice] = useState(false)
   const [practiceError, setPracticeError] = useState('')
 
-  if (deck === undefined || summary === undefined) return <div className="loading-state" role="status">Loading local deck…</div>
+  if (deck === undefined || summary === undefined || due === undefined) return <div className="loading-state" role="status">Loading local deck…</div>
   if (!deck || !summary) return <div className="loading-state"><h1>Deck not found</h1><button className="text-button" onClick={onBack}>Back to decks</button></div>
 
   const hasDueCards = due.length > 0
