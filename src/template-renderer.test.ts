@@ -1,8 +1,26 @@
 import { describe, expect, test } from 'vitest'
-import { clozeOrdinals, renderTemplate, tryRenderTemplate, validateTemplate } from './template-renderer'
+import { clozeOrdinals, renderTemplate, templateMediaFields, tryRenderTemplate, validateTemplate } from './template-renderer'
 import { sanitizeFieldHtml } from './field-html'
 
 describe('renderTemplate', () => {
+  test.each([':Question', '::Question'])('empty-only filters resolve the field in %s', (token) => {
+    const template = `{{${token}}}`
+    const fields = { Question: 'content' }
+    expect(() => validateTemplate(template, ['Question'], 'front')).not.toThrow()
+    expect(renderTemplate(template, fields).html).toBe('content')
+    expect([...templateMediaFields(template, fields)]).toEqual(['Question'])
+    expect(renderTemplate(template, { [token]: 'exact field', Question: 'content' }).html).toBe('exact field')
+  })
+
+  test('empty filter separators retain Anki cloze question and answer behavior', () => {
+    const fields = { Question: 'A {{c1::synthetic answer::hint}} B' }
+    expect(() => validateTemplate('{{cloze::Question}}', ['Question'], 'front', 'cloze')).not.toThrow()
+    expect(renderTemplate('{{cloze::Question}}', fields, undefined, { kind: 'cloze', ordinal: 1, side: 'front' }).html)
+      .toBe('A <span class="cloze">[hint]</span> B')
+    expect(renderTemplate('{{cloze::Question}}', fields, undefined, { kind: 'cloze', ordinal: 1, side: 'back' }).html)
+      .toBe('A <span class="cloze">synthetic answer</span> B')
+    expect(tryRenderTemplate('{{cloze:unknown:Question}}', fields, undefined, { kind: 'cloze', ordinal: 1 }).ok).toBe(false)
+  })
   test('hint fields use an accessible checkbox disclosure without executing field markup', () => {
     const result = renderTemplate('{{Word}} {{hint:Meaning}}', { Word: '猫', Meaning: '<script>alert(1)</script>cat' })
     const body = new DOMParser().parseFromString(result.html, 'text/html').body
@@ -148,9 +166,17 @@ describe('renderTemplate', () => {
     expect(renderTemplate('<div>{{Word}}</div>', { Word: '猫' }).isEmpty).toBe(false)
   })
 
-  test('rejects nested conditionals', () => {
-    expect(() => renderTemplate('{{#A}}{{#B}}{{B}}{{/B}}{{/A}}', { A: 'a', B: 'b' }))
-      .toThrow(/nested/i)
+  test('nested conditionals require every parent and resume siblings after closing', () => {
+    const template = '{{#A}}outer{{#B}}{{B}}{{/B}}tail{{/A}}end'
+    expect(() => validateTemplate(template, ['A', 'B'], 'front')).not.toThrow()
+    expect(renderTemplate(template, { A: 'a', B: 'b' }).html).toBe('outerbtailend')
+    expect(renderTemplate(template, { A: '', B: 'b' }).html).toBe('end')
+    expect(renderTemplate(template, { A: 'a', B: '' }).html).toBe('outertailend')
+    expect(renderTemplate('{{#A}}{{^B}}missing{{/B}}{{/A}}', { A: 'a', B: '' }).html).toBe('missing')
+    expect(renderTemplate('{{#A}}{{^B}}missing{{/B}}{{/A}}', { A: '', B: '' }).html).toBe('')
+    expect([...templateMediaFields(template, { A: '', B: 'image' })]).toEqual([])
+    expect([...templateMediaFields(template, { A: 'a', B: 'image' })]).toEqual(['B'])
+    expect(() => validateTemplate('{{#A}}{{#B}}{{/A}}{{/B}}', ['A', 'B'], 'front')).toThrow(/Unmatched template conditional/)
   })
 
   test('rejects unknown field tokens and conditionals', () => {

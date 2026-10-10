@@ -138,7 +138,7 @@ note.fields = ['<img src="cat.png">猫', '[sound:cat.wav] cat']
 collection.add_note(note, deck)
 unsupported_type = collection.models.copy(collection.models.by_name('Basic'), add=False)
 unsupported_type['name'] = 'Unsupported custom filters'
-unsupported_type['tmpls'][0]['qfmt'] = '<script>ignored()</script>{{Front}}'
+unsupported_type['tmpls'][0]['qfmt'] = '<script src="https://untrusted.invalid/deck.js"></script>{{Front}}'
 collection.models.add(unsupported_type)
 unsupported_note = collection.new_note(unsupported_type)
 unsupported_note.fields = ['unsafe template front', 'answer not imported']
