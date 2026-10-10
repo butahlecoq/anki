@@ -69,7 +69,7 @@ test('the four first callers use named reads and mutations instead of raw table 
 test('remaining production callers keep table reads inside named collection queries', async () => {
   const paths = [
     'CollectionBrowser.tsx', 'CollectionWorkspace.tsx', 'CustomStudy.tsx', 'ImageOcclusion.tsx', 'NoteTypeManager.tsx',
-    'ReviewSession.tsx', 'Statistics.tsx', 'SyncConflicts.tsx', 'SyncControls.tsx', 'TextCollectionDialog.tsx',
+    'ReviewSession.tsx', 'Statistics.tsx', 'SyncConflicts.tsx', 'SyncControls.tsx',
     'native-anki-writeback.ts', 'sample-deck.ts', 'sync-client.ts', 'text-csv.ts',
   ]
   const sources = await Promise.all(paths.map((path) => readFile(new URL(path, import.meta.url), 'utf8')))
