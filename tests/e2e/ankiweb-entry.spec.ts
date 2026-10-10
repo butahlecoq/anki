@@ -26,5 +26,6 @@ test('unpaired AnkiWeb entry guides PC pairing and continues to account login', 
   await expect(page.getByRole('dialog', { name: 'Connect AnkiWeb', exact: true })).toBeVisible()
   await expect(page.getByRole('dialog')).toHaveCount(1)
   await expect(page.getByLabel('AnkiWeb username')).toHaveValue('')
+  await expect(page.getByLabel('AnkiWeb username')).toBeFocused()
   await expect(page.getByLabel('AnkiWeb password')).toHaveValue('')
 })
