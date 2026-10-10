@@ -466,7 +466,8 @@ test('answering a card refreshes queued siblings that the policy buries', async 
   try {
     fireEvent.click(await screen.findByRole('button', { name: 'Show answer' }))
     fireEvent.click((await screen.findAllByRole('button', { name: /^Good ·/ }))[0])
-    expect(await screen.findByRole('heading', { name: 'Session complete' })).toBeVisible()
+    expect(await screen.findByRole('button', { name: 'Show answer' })).toBeVisible()
+    expect(screen.queryByRole('heading', { name: 'Session complete' })).not.toBeInTheDocument()
     await waitFor(async () => expect((await readAnkiExportSnapshot(collection).then(state => state.cards.filter(card => card.deckId === deck.id))).some((card) => card.buriedUntil)).toBe(true))
   } finally {
     await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
@@ -531,7 +532,8 @@ test('review keyboard shortcuts use the same answer and rating actions as touch 
     expect(good).toBeVisible()
     fireEvent.keyDown(good, { key: '3' })
     await waitFor(async () => expect(await readCardReviewHistory(collection, card.id).then(history => history.length)).toBe(1))
-    await screen.findByRole('heading', { name: 'Session complete' })
+    expect(await screen.findByRole('button', { name: 'Show answer' })).toBeVisible()
+    expect(screen.queryByRole('heading', { name: 'Session complete' })).not.toBeInTheDocument()
     const undo = await screen.findByRole('button', { name: 'Undo last review' })
     await waitFor(() => expect(undo).toBeEnabled())
     fireEvent.click(undo)

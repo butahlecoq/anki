@@ -545,7 +545,8 @@ nativeCanvasTest()('learner maintains and undoes the current card without leavin
   await page.getByRole('button', { name: 'Undo card action' }).click()
   await page.getByRole('button', { name: 'Show answer' }).click()
   await page.getByRole('button', { name: /^Good · / }).click()
-  await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Show answer' })).toBeVisible()
+  await page.getByText('More actions', { exact: true }).click()
   await page.getByRole('button', { name: 'Undo last review' }).click()
   await expect(page.getByRole('button', { name: 'Show answer' })).toBeVisible()
 
@@ -619,8 +620,14 @@ test('review uses each generated template, isolates its CSS, and skips an empty 
     await page.getByRole('button', { name: /^Good · / }).click()
     if (index === 0) await expect(review.locator('body')).toHaveCSS('background-color', wordFirst ? 'rgb(0, 0, 255)' : 'rgb(255, 0, 0)')
   }
+  await expect(page.getByRole('button', { name: 'Show answer' })).toBeVisible()
+  await expect(page.getByRole('status').filter({ hasText: 'Recorded Good.' })).toHaveText('Recorded Good. 2 rated this session.')
+  for (let index = 0; index < 2; index += 1) {
+    await page.getByRole('button', { name: 'Show answer' }).click()
+    await page.getByRole('button', { name: /^Good · / }).click()
+  }
   await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
-  await expect(page.getByText('2 reviews recorded')).toBeVisible()
+  await expect(page.getByText('4 reviews recorded')).toBeVisible()
 })
 
 test('a card emptied during review leaves the session and cannot reenter until restored', async ({ context, page }) => {
@@ -762,9 +769,10 @@ for (const reopen of [false, true]) {
     await expect(page.getByRole('button', { name: /^Easy · / })).toBeVisible()
     await page.getByRole('button', { name: /^Good · / }).click()
 
-    await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
-    await expect(page.getByText('1 review recorded')).toBeVisible()
-    await page.getByRole('button', { name: 'Back to deck' }).click()
+    await expect(page.getByRole('button', { name: 'Show answer' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Session complete' })).toBeHidden()
+    await expect(page.getByRole('status').filter({ hasText: 'Recorded Good.' })).toHaveText('Recorded Good. 1 rated this session.')
+    await page.getByRole('button', { name: 'End session', exact: true }).click()
     await expect(page.getByText('NEW 0')).toBeVisible()
     await expect(page.getByText('LEARNING 1')).toBeVisible()
     await expect(page.getByText('REVIEWS 1')).toBeVisible()
@@ -833,8 +841,13 @@ test('persistent profile reopens offline and continues a remaining Japanese revi
     await reopenedPage.getByRole('button', { name: 'Show answer' }).click()
     await expect(reopenedPage.getByRole('button', { name: /^Good · / })).toBeVisible()
     await reopenedPage.getByRole('button', { name: /^Good · / }).click()
+    await expect(reopenedPage.getByRole('heading', { name: 'Session complete' })).toBeHidden()
+    for (let index = 0; index < 2; index += 1) {
+      await reopenedPage.getByRole('button', { name: 'Show answer' }).click()
+      await reopenedPage.getByRole('button', { name: /^Good · / }).click()
+    }
     await expect(reopenedPage.getByRole('heading', { name: 'Session complete' })).toBeVisible()
-    await expect(reopenedPage.getByText('1 review recorded')).toBeVisible()
+    await expect(reopenedPage.getByText('3 reviews recorded')).toBeVisible()
   } finally {
     await firstContext?.close()
     await reopenedContext?.close()
@@ -885,8 +898,9 @@ test('PC and phone contexts exchange a collection and an FSRS review through the
     await phone.getByRole('button', { name: 'Study now' }).click()
     await phone.getByRole('button', { name: 'Show answer' }).click()
     await phone.getByRole('button', { name: /^Good · / }).click()
-    await expect(phone.getByRole('heading', { name: 'Session complete' })).toBeVisible()
-    await phone.getByRole('button', { name: 'Back to deck', exact: true }).click()
+    await expect(phone.getByRole('button', { name: 'Show answer' })).toBeVisible()
+    await expect(phone.getByRole('heading', { name: 'Session complete' })).toBeHidden()
+    await phone.getByRole('button', { name: 'End session', exact: true }).click()
     await openCollectionTools(phone)
     await phone.getByRole('button', { name: 'Sync now' }).click()
     await expect(phone.getByRole('region', { name: 'PC sync' }).getByText(/complete\./i)).toBeVisible({ timeout: 15_000 })
