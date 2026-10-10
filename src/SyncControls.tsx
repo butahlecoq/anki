@@ -201,11 +201,12 @@ export function SyncControls({ offlineSyncAvailable, collectionActions }: { offl
   }
 
   const idleMessage = offlineInventory?.incomingPending ? incomingDependencyMessage(offlineInventory.incomingPending) : privatePc.state === 'paired' ? 'Connected to your PC.' : message
-  const statusMessage = !settings && automaticPc ? pcConnectionMessage : settings && !offlineSyncAvailable ? 'Sync is paused until Kiroku confirms its offline app shell is ready.' : message === SYNC_LOCAL_ONLY ? idleMessage : message
+  const privatePcStatus = privatePc.state === 'authentication-required' ? 'Connect your private network, then retry.' : privatePc.state === 'unreachable' || privatePc.state === 'address-error' ? 'Your PC is unavailable. Retry the connection.' : pcConnectionMessage
+  const statusMessage = !settings && automaticPc ? privatePcStatus : settings && !offlineSyncAvailable ? 'Sync is paused until Kiroku confirms its offline app shell is ready.' : message === SYNC_LOCAL_ONLY ? idleMessage : message
 
   return (
     <section className="sync-controls" aria-label="PC sync">
-      <div><span className="section-code">SYNC // {settings ? 'PAIRED' : 'LOCAL ONLY'}</span><p className={!automaticPc && message === SYNC_LOCAL_ONLY && !offlineInventory?.incomingPending && (!settings || offlineSyncAvailable) ? 'sync-idle-message' : undefined} aria-live="polite">{statusMessage}</p></div>
+      <div><span className="section-code">SYNC // {settings ? 'PAIRED' : 'LOCAL ONLY'}</span><p className="sync-connection-message" aria-live="polite">{statusMessage}</p></div>
       <details ref={tools} className="collection-tools" open={toolsOpen} onToggle={event => setToolsOpen(event.currentTarget.open)} onKeyDown={event => {
         if (event.key === 'Escape' && window.matchMedia?.('(max-width: 680px)').matches) {
           event.preventDefault()
@@ -230,11 +231,10 @@ export function SyncControls({ offlineSyncAvailable, collectionActions }: { offl
         {settings && <button className="text-button" type="button" disabled={busy} onClick={() => void backupPcCollection()}>{busy ? 'Working…' : 'Download PC backup'}</button>}
         {!settings && automaticPc && <button className="primary-action" type="button" disabled={busy || pcConnecting} onClick={() => void privatePc.retry()}>{pcConnecting ? 'Connecting to PC…' : 'Retry PC connection'}</button>}
       </div>
-      {!automaticPc && <details className="sync-help" open>
-        <summary>Advanced PC connection</summary>
-        <p>Use manual pairing only when connecting to a separately hosted PC service.</p>
+      {!automaticPc && <div className="advanced-pc-connection" role="group" aria-label="Advanced PC connection">
+        <span className="section-code">Advanced PC connection</span>
         <button className="primary-action" type="button" disabled={busy} onClick={() => openPairing()}>{settings ? 'Pair another device' : 'Connect a PC'}</button>
-      </details>}
+      </div>}
       {settings && backups[0] && <p className="sync-help">Latest backup currently listed by the PC: {new Date(backups[0].createdAt).toLocaleString()} · {backups[0].changeCount} sync changes · {backups[0].media.length} media files · {backups[0].reason === 'manual' ? 'manual' : 'before sync'}.</p>}
       {settings && backups[0] && <div className="sync-help"><button className="text-button" type="button" disabled={busy} onClick={() => void previewPcRestore(backups[0])}>Preview latest backup</button>{restorePreview && <><p role="status">{restorePreview.summary}</p>{restorePreview.available && <><label>Type RESTORE to replace the active PC collection<input value={restoreConfirmation} onChange={(event) => setRestoreConfirmation(event.target.value)} autoComplete="off" /></label><button className="text-button" type="button" disabled={busy || restoreConfirmation !== 'RESTORE'} onClick={() => void restorePcCollection()}>Restore this PC collection</button></>}</>}</div>}
       {collectionActions && <div className="collection-export-actions">{collectionActions}</div>}

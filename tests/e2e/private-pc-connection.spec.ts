@@ -27,13 +27,15 @@ async function removeFixture(directory: string) {
 
 // This proxy supplies only synthetic authenticated transport identity. Every
 // application/API response comes from the built app or the real SQLite service.
-async function privateFixture(webOrigin: string) {
+async function privateFixture(webOrigin: string, { manual = false, holdDiscovery = false } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'kiroku-private-browser-'))
   const service = createSyncService({ databasePath: join(directory, 'collection.sqlite') })
   let backendOrigin = ''
   let authorized = true
   let connectionPosts = 0
   const apiRequests: string[] = []
+  let releaseDiscovery = () => {}
+  const discovery = new Promise<void>(resolve => { releaseDiscovery = resolve })
   const proxy = createServer((incoming, response) => {
     const api = incoming.url?.startsWith('/api/') ?? false
     if (api) apiRequests.push(incoming.url!)
@@ -43,26 +45,55 @@ async function privateFixture(webOrigin: string) {
     delete headers['tailscale-user-login']
     if (api && authorized) headers['tailscale-user-login'] = 'synthetic-owner@example.test'
     const forwarded = proxyRequest(upstream, { method: incoming.method, headers }, result => {
-      response.writeHead(result.statusCode ?? 502, result.headers)
-      result.pipe(response)
+      const reply = () => {
+        response.writeHead(result.statusCode ?? 502, result.headers)
+        result.pipe(response)
+      }
+      if (holdDiscovery && incoming.url === '/api/connection' && incoming.method === 'GET') void discovery.then(reply)
+      else reply()
     })
     forwarded.on('error', () => { response.writeHead(502); response.end() })
     incoming.pipe(forwarded)
   })
   const origin = await listen(proxy)
-  const backend = createServer(createSyncHttpHandler(service, { allowedOrigin: origin, trustedProxyUser: 'synthetic-owner@example.test' }))
+  const backend = createServer(createSyncHttpHandler(service, { allowedOrigin: origin, trustedProxyUser: manual ? undefined : 'synthetic-owner@example.test' }))
   backendOrigin = await listen(backend)
   return {
-    origin, service, apiRequests,
+    origin, service, apiRequests, releaseDiscovery,
     posts: () => connectionPosts,
     authorize: (value: boolean) => { authorized = value },
     async close() {
+      releaseDiscovery()
       await close(proxy)
       await close(backend)
       service.close()
       await removeFixture(directory)
     },
   }
+}
+
+for (const manual of [true, false]) {
+test(`connection discovery keeps the import action in place during a native click (${manual ? 'manual' : 'private'})`, async ({ page, baseURL }) => {
+  const fixture = await privateFixture(baseURL!, { manual, holdDiscovery: true })
+  try {
+    await page.goto(fixture.origin)
+    await expect(page.getByText('Connecting to your PC…', { exact: true })).toBeVisible()
+    await expect.poll(() => fixture.apiRequests.filter(path => path === '/api/connection').length).toBe(1)
+    const action = page.getByRole('button', { name: 'Import Anki package', exact: true })
+    await action.scrollIntoViewIfNeeded()
+    const before = await action.evaluate(element => element.getBoundingClientRect().top + scrollY)
+    await page.exposeFunction('releasePcDiscovery', () => fixture.releaseDiscovery())
+    await action.evaluate(element => element.addEventListener('pointerdown', () => {
+      void (window as unknown as { releasePcDiscovery: () => Promise<void> }).releasePcDiscovery()
+    }, { once: true }))
+    await action.click({ delay: 300 })
+    if (manual) await expect(page.getByText('Advanced PC connection', { exact: true })).toHaveCount(1)
+    else await expect(page.getByText('Connected to your PC.', { exact: true })).toBeVisible()
+    const after = await action.evaluate(element => element.getBoundingClientRect().top + scrollY)
+    expect(after, 'connection discovery must not move the pressed import action').toBe(before)
+    await expect(page.getByRole('dialog', { name: 'Import Anki package', exact: true })).toBeVisible()
+  } finally { await fixture.close() }
+})
 }
 
 test('the ordinary app preview cannot forward a spoofed private owner identity', async () => {
@@ -126,7 +157,7 @@ test('private identity failure retries without losing local work or AnkiWeb fiel
   fixture.authorize(false)
   try {
     await page.goto(fixture.origin)
-    await expect(page.getByText(/Your private PC connection could not be confirmed/)).toBeVisible()
+    await expect(page.getByText('Connect your private network, then retry.', { exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'New deck', exact: true }).click()
     await page.getByLabel('Deck name').fill('Local words')
     await page.getByRole('button', { name: 'Create deck', exact: true }).click()
@@ -140,6 +171,7 @@ test('private identity failure retries without losing local work or AnkiWeb fiel
     await expect(page.locator('.offline-storage-status')).toContainText(/[1-9]\d* changes waiting to sync/)
     const pending = (await page.locator('.offline-storage-status').textContent())!.match(/\d+ changes waiting to sync/)![0]
     await page.getByRole('button', { name: 'Connect AnkiWeb account', exact: true }).click()
+    await expect(page.getByRole('dialog').getByText(/Your private PC connection could not be confirmed/)).toBeVisible()
     await page.getByLabel('AnkiWeb username').fill('synthetic-account')
     await page.getByLabel('AnkiWeb password').fill('synthetic-password')
     await expect(page.getByRole('button', { name: 'Connect account', exact: true })).toBeDisabled()

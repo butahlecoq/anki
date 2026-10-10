@@ -295,6 +295,9 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .sync-controls p { max-width: 610px; margin: 0; color: var(--text-muted); font-family: var(--font-jp); font-size: 10px; line-height: 1.6; overflow-wrap: anywhere; }
 .sync-actions { display: flex; flex: none; gap: 9px; }
 .sync-actions .primary-action { min-width: 140px; justify-content: center; }
+.advanced-pc-connection { display: flex; align-items: center; gap: 9px; min-width: 0; max-width: 100%; }
+.advanced-pc-connection .section-code { max-width: 95px; margin: 0; }
+.advanced-pc-connection .primary-action { min-width: 140px; justify-content: center; }
 .sync-help { padding: 12px; border-left: 2px solid var(--accent-strong); background: var(--surface-sunken); }
 .sync-help code { color: var(--accent); font-family: inherit; }
 .compact-hero { min-height: 238px; padding: 52px 2px 38px; display: flex; align-items: flex-end; justify-content: space-between; gap: 30px; border-bottom: 1px solid var(--border-subtle); }
@@ -801,7 +804,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   .topbar .connection { position: absolute; left: 0; bottom: 8px; max-width: 100%; overflow: visible; font-size: 9px; letter-spacing: normal; text-transform: none; }
   .sync-controls { min-height: 0; padding: 12px 0; gap: 8px; }
   .sync-controls .section-code { margin-bottom: 0; }
-  .sync-controls .sync-idle-message { display: none; }
+  .sync-controls .sync-connection-message { min-height: 32px; }
   .collection-tools > summary { display: flex; min-height: 44px; padding: 0 12px; align-items: center; justify-content: space-between; border: 1px solid var(--border-default); color: var(--text-primary); cursor: pointer; }
   .collection-tools > summary::after { content: '+'; }
   .collection-tools[open] > summary::after { content: '−'; }
