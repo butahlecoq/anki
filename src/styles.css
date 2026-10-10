@@ -803,7 +803,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   .topbar-controls { padding-top: 8px; }
   .topbar .connection { position: absolute; left: 0; bottom: 8px; max-width: 100%; overflow: visible; font-size: 9px; letter-spacing: normal; text-transform: none; }
   /* Fit the visible status row within the former mobile header footprint. */
-  .sync-controls { min-height: 0; padding: 4px 0; gap: 8px; }
+  .sync-controls { min-height: 0; padding: 0; gap: 4px; }
   .sync-controls .section-code { margin-bottom: 0; }
   .sync-controls .sync-connection-message { min-height: 16px; }
   .collection-tools > summary { display: flex; min-height: 44px; padding: 0 12px; align-items: center; justify-content: space-between; border: 1px solid var(--border-default); color: var(--text-primary); cursor: pointer; }
