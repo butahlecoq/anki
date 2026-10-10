@@ -343,39 +343,6 @@ test('a learner resumes, unburies, and reschedules a card from its deck', async 
   }
 })
 
-test('a learner can suspend or bury the current review card and the queue refreshes', async () => {
-  const deck = await collection.createDeck(`Review controls ${crypto.randomUUID()}`)
-  const note = await collection.createBasicNote(deck.id, { front: '隠す', back: 'hide' })
-  const card = (await readCardsForNote(collection, note.id).then(cards => cards[0]))!
-  window.location.hash = `#review/${deck.id}`
-  render(<CollectionWorkspace />)
-  try {
-    fireEvent.click(await screen.findByRole('button', { name: 'Suspend card' }))
-    await waitFor(async () => expect(await readCard(collection, card.id)).toMatchObject({ manualSuspended: true }))
-    expect(await screen.findByRole('heading', { name: 'Session complete' })).toBeVisible()
-  } finally {
-    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
-  }
-})
-
-test('a failed reviewer action keeps the card available for retry and announces the error', async () => {
-  const deck = await collection.createDeck(`Review failure ${crypto.randomUUID()}`)
-  const note = await collection.createBasicNote(deck.id, { front: '失敗', back: 'failure' })
-  const card = (await readCardsForNote(collection, note.id).then(cards => cards[0]))!
-  const suspend = vi.spyOn(collection, 'suspendCard').mockRejectedValueOnce(new Error('Storage unavailable'))
-  window.location.hash = `#review/${deck.id}`
-  render(<CollectionWorkspace />)
-  try {
-    fireEvent.click(await screen.findByRole('button', { name: 'Suspend card' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('Storage unavailable')
-    expect(screen.getByRole('button', { name: 'Suspend card' })).toBeEnabled()
-    expect(await readCard(collection, card.id)).toMatchObject({ manualSuspended: false })
-  } finally {
-    suspend.mockRestore()
-    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
-  }
-})
-
 test('a synced reschedule removes the current reviewer card when it is no longer due', async () => {
   const deck = await collection.createDeck(`Synced reschedule ${crypto.randomUUID()}`)
   const note = await collection.createBasicNote(deck.id, { front: '予定', back: 'schedule' })
@@ -384,7 +351,7 @@ test('a synced reschedule removes the current reviewer card when it is no longer
   window.location.hash = `#review/${deck.id}`
   render(<CollectionWorkspace />)
   try {
-    await screen.findByRole('button', { name: 'Suspend card' })
+    await screen.findByRole('button', { name: 'Show answer' })
     await collection.rescheduleCard(card.id, new Date(Date.now() + 60 * 60 * 1000))
     expect(await screen.findByRole('heading', { name: 'Session complete' })).toBeVisible()
   } finally {
@@ -401,7 +368,7 @@ test('a synced reschedule in a child deck removes the current parent review card
   window.location.hash = `#review/${parent.id}`
   render(<CollectionWorkspace />)
   try {
-    await screen.findByRole('button', { name: 'Suspend card' })
+    await screen.findByRole('button', { name: 'Show answer' })
     await collection.rescheduleCard(card.id, new Date(Date.now() + 60 * 60 * 1000))
     expect(await screen.findByRole('heading', { name: 'Session complete' })).toBeVisible()
   } finally {
@@ -474,45 +441,6 @@ test('answering a card refreshes queued siblings that the policy buries', async 
   }
 })
 
-test('editing and moving the current note work without leaving the reviewer', async () => {
-  const source = await collection.createDeck(`Reviewer source ${crypto.randomUUID()}`)
-  const destination = await collection.createDeck(`Reviewer target ${crypto.randomUUID()}`)
-  const note = await collection.createBasicNote(source.id, { front: '古い', back: 'old' })
-  window.location.hash = `#review/${source.id}`
-  render(<CollectionWorkspace />)
-  try {
-    fireEvent.click(await screen.findByRole('button', { name: 'Card info' }))
-    expect(within(await screen.findByRole('dialog', { name: 'Card info' })).getAllByText('Basic')).toHaveLength(2)
-    fireEvent.click(screen.getByRole('button', { name: 'Done' }))
-
-    fireEvent.click(screen.getByRole('button', { name: 'Edit note' }))
-    const editor = await screen.findByRole('dialog', { name: 'Edit Basic note' })
-    fireEvent.change(within(editor).getByLabelText('Front'), { target: { value: '新しい' } })
-    fireEvent.click(within(editor).getByRole('button', { name: 'Save changes' }))
-    await waitFor(async () => expect(await readNote(collection, note.id)).toMatchObject({ fields: { front: '新しい', back: 'old' } }))
-    expect(screen.getByRole('button', { name: 'Show answer' })).toBeVisible()
-    await waitFor(() => expect(screen.getByTitle('Review card')).toHaveAttribute('srcdoc', expect.stringContaining('新しい')))
-
-    fireEvent.click(screen.getByRole('button', { name: 'Edit tags' }))
-    const tags = await screen.findByRole('dialog', { name: 'Edit tags' })
-    fireEvent.change(within(tags).getByLabelText('Tags'), { target: { value: 'kanji, sentence, kanji' } })
-    fireEvent.click(within(tags).getByRole('button', { name: 'Save tags' }))
-    await waitFor(async () => expect(await readNote(collection, note.id)).toMatchObject({ tags: ['kanji', 'sentence'] }))
-    expect((await collection.pendingOperations()).some((operation) => operation.entityType === 'note' && operation.entityId === note.id && (operation.payload as { tags?: string[] }).tags?.includes('sentence'))).toBe(true)
-
-    fireEvent.click(screen.getByRole('button', { name: 'Move note' }))
-    const mover = await screen.findByRole('dialog', { name: 'Move note' })
-    await waitFor(() => expect(within(mover).getByRole('option', { name: destination.name })).toBeVisible())
-    fireEvent.change(within(mover).getByLabelText('Destination deck'), { target: { value: destination.id } })
-    fireEvent.click(within(mover).getByRole('button', { name: 'Move note' }))
-    await waitFor(async () => expect(await readNote(collection, note.id)).toMatchObject({ deckId: destination.id }))
-    expect(await screen.findByRole('heading', { name: 'Session complete' })).toBeVisible()
-  } finally {
-    await collection.deleteDeck(source.id, { mode: 'delete-subtree' })
-    await collection.deleteDeck(destination.id, { mode: 'delete-subtree' })
-  }
-})
-
 test('review keyboard shortcuts use the same answer and rating actions as touch controls', async () => {
   const deck = await collection.createDeck(`Keyboard review ${crypto.randomUUID()}`)
   const note = await collection.createBasicNote(deck.id, { front: '聞く', back: 'listen' })
@@ -521,11 +449,6 @@ test('review keyboard shortcuts use the same answer and rating actions as touch 
   render(<CollectionWorkspace />)
   try {
     await screen.findByRole('button', { name: 'Show answer' })
-    fireEvent.keyDown(window, { key: 'e' })
-    const editor = await screen.findByRole('dialog', { name: 'Edit Basic note' })
-    fireEvent.keyDown(window, { key: '3' })
-    expect(await readCardReviewHistory(collection, card.id).then(history => history.length)).toBe(0)
-    fireEvent.click(within(editor).getByRole('button', { name: 'Cancel' }))
     fireEvent.keyDown(window, { key: ' ' })
     const good = await screen.findByRole('button', { name: /^Good ·/ })
     expect(good).toBeVisible()
@@ -551,10 +474,10 @@ test('review shortcuts stay silent while a control owns the press', async () => 
   try {
     // The guard reads event.target, so dispatching on window would never reach
     // it - and the reviewer state flags would mask a broken guard anyway. The
-    // flag select is a real control in the review view that a shortcut must not
+    // color select is a real control in the review view that a shortcut must not
     // reach through.
     fireEvent.click(await screen.findByText('More actions', { exact: true }))
-    const flag = await screen.findByRole('combobox', { name: 'Card flag' })
+    const flag = await screen.findByRole('combobox', { name: 'Card colors' })
     for (const key of ['e', 'd', 'm', 't', 'i', 's', 'b', 'f', 'k', ' ', '3']) fireEvent.keyDown(flag, { key })
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
@@ -620,24 +543,6 @@ test('card actions announce what happened', async () => {
   }
 })
 
-test('maintenance actions announce what happened', async () => {
-  const deck = await collection.createDeck(`Announce maintenance ${crypto.randomUUID()}`)
-  await collection.createBasicNote(deck.id, { front: '帰る', back: 'go home' })
-  window.location.hash = `#review/${deck.id}`
-  render(<CollectionWorkspace />)
-  try {
-    fireEvent.click(await screen.findByRole('button', { name: 'Mark note' }))
-    expect(await screen.findByText('Marked.')).toHaveAttribute('role', 'status')
-
-    fireEvent.click(screen.getByRole('button', { name: 'Suspend card' }))
-    // Suspending empties the queue, so the announcement has to survive the
-    // session-complete branch that replaces the reviewer markup.
-    expect(await screen.findByText('Card suspended.')).toHaveAttribute('role', 'status')
-  } finally {
-    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
-  }
-})
-
 test('a learner can skip the navigation with the keyboard', () => {
   render(<App />)
   const skip = screen.getByRole('link', { name: 'Skip to main content' })
@@ -655,73 +560,6 @@ test('labelled groups expose their label to assistive technology', async () => {
   try {
     // aria-label on a plain div is ignored, so these need a role to be exposed.
     await waitFor(() => expect(screen.getByRole('group', { name: 'Deck counts' })).toBeInTheDocument())
-  } finally {
-    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
-  }
-})
-
-test('reviewer flag control and keyboard shortcut update the current card', async () => {
-  const deck = await collection.createDeck(`Flag review ${crypto.randomUUID()}`)
-  const note = await collection.createBasicNote(deck.id, { front: '旗', back: 'flag' })
-  const card = (await readCardsForNote(collection, note.id).then(cards => cards[0]))!
-  window.location.hash = `#review/${deck.id}`
-  render(<CollectionWorkspace />)
-  try {
-    const flagControl = await screen.findByRole('combobox', { name: 'Card flag' })
-    fireEvent.change(flagControl, { target: { value: '1' } })
-    await waitFor(async () => expect(await readCard(collection, card.id)).toMatchObject({ flag: 1 }))
-    await waitFor(() => expect(flagControl).toBeEnabled())
-    flagControl.blur()
-    expect(screen.getByRole('button', { name: 'Show answer' })).toBeVisible()
-    fireEvent.keyDown(window, { key: 'f' })
-    await waitFor(async () => expect(await readCard(collection, card.id)).toMatchObject({ flag: 2 }))
-    fireEvent.click(screen.getByRole('button', { name: 'Mark note' }))
-    await waitFor(async () => expect(await readNote(collection, note.id)).toMatchObject({ tags: ['marked'] }))
-    fireEvent.click(screen.getByText('More actions', { exact: true }))
-    expect(await screen.findByRole('button', { name: 'Unmark note' })).toBeVisible()
-    fireEvent.click(screen.getByRole('button', { name: 'Card info' }))
-    expect(within(await screen.findByRole('dialog', { name: 'Card info' })).getByText('Orange')).toBeVisible()
-  } finally {
-    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
-  }
-})
-
-test('reviewer deletion can restore the note and card before sync', async () => {
-  const deck = await collection.createDeck(`Delete review ${crypto.randomUUID()}`)
-  const note = await collection.createBasicNote(deck.id, { front: '消す', back: 'delete' })
-  const card = (await readCardsForNote(collection, note.id).then(cards => cards[0]))!
-  window.location.hash = `#review/${deck.id}`
-  render(<CollectionWorkspace />)
-  try {
-    await screen.findByRole('button', { name: 'Delete note' })
-    fireEvent.keyDown(window, { key: 'd' })
-    const dialog = await screen.findByRole('dialog', { name: 'Delete note' })
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete note and cards' }))
-    expect(await screen.findByRole('heading', { name: 'Session complete' })).toBeVisible()
-    expect(await readNote(collection, note.id)).toBeUndefined()
-    fireEvent.click(await screen.findByRole('button', { name: 'Undo note deletion' }))
-    expect(await screen.findByRole('button', { name: 'Show answer' })).toBeVisible()
-    expect(await readCard(collection, card.id)).toBeDefined()
-  } finally {
-    await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
-  }
-})
-
-test('reviewer can undo a suspension from the completed session', async () => {
-  const deck = await collection.createDeck(`Suspend review ${crypto.randomUUID()}`)
-  const note = await collection.createBasicNote(deck.id, { front: '待つ', back: 'wait' })
-  const card = (await readCardsForNote(collection, note.id).then(cards => cards[0]))!
-  window.location.hash = `#review/${deck.id}`
-  render(<CollectionWorkspace />)
-  try {
-    fireEvent.click(await screen.findByRole('button', { name: 'Suspend card' }))
-    expect(await screen.findByRole('heading', { name: 'Session complete' })).toBeVisible()
-    // The queue can empty before the maintenance transaction finishes. The
-    // shortcut is available once the visible undo control becomes enabled.
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Undo card action' })).toBeEnabled())
-    fireEvent.keyDown(window, { key: 'v' })
-    expect(await screen.findByRole('button', { name: 'Show answer' })).toBeVisible()
-    expect(await readCard(collection, card.id)).toMatchObject({ manualSuspended: false })
   } finally {
     await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
   }

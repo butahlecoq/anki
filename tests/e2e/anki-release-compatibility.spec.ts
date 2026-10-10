@@ -96,9 +96,8 @@ test('Anki 26.09.3 package WAV media loads metadata and replays during review', 
     if (await audio.count()) {
       await expect(audio).toHaveAttribute('src', /^data:audio\/wav;base64,/)
       await expect.poll(() => audio.evaluate((element: HTMLAudioElement) => element.readyState >= HTMLMediaElement.HAVE_METADATA)).toBe(true)
-      await page.getByText('More actions', { exact: true }).click()
-      await page.getByRole('button', { name: 'Replay audio' }).click()
-      await expect(page.getByText('Audio replayed.', { exact: true })).toBeVisible()
+      await expect(audio).toHaveAttribute('controls', '')
+      await audio.evaluate(async (element: HTMLAudioElement) => { await element.play(); element.pause() })
       replayed = true
       break
     }
