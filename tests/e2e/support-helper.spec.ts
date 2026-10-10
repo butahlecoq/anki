@@ -15,12 +15,12 @@ test('Support helper matches the theme selector and opens build details on phone
     const sizes = await page.evaluate(() => {
       const support = document.querySelector('.build-identity summary')!.getBoundingClientRect()
       const theme = document.querySelector('.appearance-control select')!.getBoundingClientRect()
-      return { support: support.height, theme: theme.height, width: support.width, overflow: document.documentElement.scrollWidth > innerWidth }
+      return { support: support.height, theme: theme.height, width: support.width, overflow: document.documentElement.scrollWidth > Math.ceil(document.documentElement.getBoundingClientRect().width) }
     })
     expect(sizes.support).toBe(sizes.theme)
     expect(sizes.support).toBeGreaterThanOrEqual(44)
     expect(sizes.width).toBeGreaterThanOrEqual(44)
-    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false)
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth > Math.ceil(document.documentElement.getBoundingClientRect().width))).toBe(false)
     await helper.press('Enter')
     await expect(page.getByText('Version', { exact: true })).toBeVisible()
     await expect(page.getByText('Commit', { exact: true })).toBeVisible()
