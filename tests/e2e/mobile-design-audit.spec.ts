@@ -95,7 +95,7 @@ test('populated Statistics filters fit and remain usable on small screens', asyn
   await expect(card).toContainText(firstWord.includes('猫') ? '犬' : '猫')
   await page.getByRole('button', { name: 'End session', exact: true }).click()
   await page.getByRole('navigation', { name: 'Mobile navigation' }).getByRole('link', { name: 'Statistics', exact: true }).click()
-  await expect(page.getByRole('heading', { name: '84 days of practice' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: /^\d+ days? of practice$/ })).toBeVisible()
   for (const width of [320, 390]) {
     await page.setViewportSize({ width: Math.round(width * hostScale), height: Math.round(844 * hostScale) })
     const geometry = await page.evaluate(() => ({ width: innerWidth, root: document.documentElement.getBoundingClientRect().width, scroll: document.documentElement.scrollWidth }))
@@ -105,7 +105,7 @@ test('populated Statistics filters fit and remain usable on small screens', asyn
     await deck.selectOption({ label: 'Sample — Japanese Starter (with children)' })
     await expect(deck).not.toHaveValue('')
     await deck.selectOption('')
-    await expect(page.getByRole('heading', { name: '84 days of practice' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: /^\d+ days? of practice$/ })).toBeVisible()
     await deck.evaluate(element => element.scrollIntoView({ block: 'center', behavior: 'instant' }))
     await expect(deck).toBeInViewport()
     await page.screenshot({ path: testInfo.outputPath(`populated-statistics-${width}.png`) })

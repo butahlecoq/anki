@@ -9,6 +9,32 @@ import { deleteIndexedDbFixtureRow } from '../tests/helpers/damage-indexeddb-med
 
 afterEach(() => { cleanup(); window.location.hash = '' })
 
+test('practice days count answered dates in the displayed window and selected deck', async () => {
+  const now = new Date()
+  const old = new Date(now); old.setDate(old.getDate() - 90)
+  const deck = await collection.createDeck(`Practice ${crypto.randomUUID()}`, old)
+  const empty = await collection.createDeck(`Unstudied ${crypto.randomUUID()}`, now)
+  try {
+    const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' }, old)
+    const [card] = await readCardsForNote(collection, note.id)
+    await collection.answer(card.id, Rating.Good, old)
+    render(<Statistics />)
+    await screen.findByRole('heading', { name: 'Every answer adds up' })
+    fireEvent.change(screen.getByLabelText('Statistics deck'), { target: { value: deck.id } })
+    expect(screen.getByRole('heading', { name: '0 days of practice' })).toBeVisible()
+    await collection.answer(card.id, Rating.Good, now)
+    const secondNote = await collection.createBasicNote(deck.id, { front: '犬', back: 'dog' }, now)
+    const [secondCard] = await readCardsForNote(collection, secondNote.id)
+    await collection.answer(secondCard.id, Rating.Good, now)
+    await screen.findByRole('button', { name: `${localDayKey(now)}: 2 answers` })
+    expect(screen.getByRole('heading', { name: '1 day of practice' })).toBeVisible()
+    fireEvent.change(screen.getByLabelText('Statistics deck'), { target: { value: empty.id } })
+    expect(screen.getByRole('heading', { name: '0 days of practice' })).toBeVisible()
+    fireEvent.change(screen.getByLabelText('Statistics deck'), { target: { value: deck.id } })
+    expect(screen.getByRole('heading', { name: '1 day of practice' })).toBeVisible()
+  } finally { cleanup(); await collection.deleteDeck(deck.id, { mode: 'delete-subtree' }); await collection.deleteDeck(empty.id, { mode: 'delete-subtree' }) }
+})
+
 test('statistics navigation is active and the empty collection explains missing data', async () => {
   window.location.hash = '#statistics'
   render(<App />)
@@ -18,6 +44,7 @@ test('statistics navigation is active and the empty collection explains missing 
   expect(within(navigation).getByRole('link', { name: 'Decks' })).not.toHaveAttribute('aria-current')
   expect(screen.getByText('No timed answers in this period')).toBeVisible()
   expect(screen.getByText(/No answers in this period/)).toBeVisible()
+  expect(screen.getByRole('heading', { name: '0 days of practice' })).toBeVisible()
 })
 
 test('live offline answers and undo update totals, heatmap selection, and chronological card history', async () => {
@@ -34,11 +61,13 @@ test('live offline answers and undo update totals, heatmap selection, and chrono
     const firstAnswer = await collection.answer(card.id, Rating.Good, earlier, 5000)
     const secondAnswer = await collection.answer(card.id, Rating.Good, now, 7000)
     await waitFor(() => expect(screen.getByText('ANSWERS').parentElement).toHaveTextContent('2'))
+    expect(screen.getByRole('heading', { name: '2 days of practice' })).toBeVisible()
     expect(screen.getByText('REVIEW TIME').parentElement).toHaveTextContent('0.2 min')
     fireEvent.click(screen.getByRole('button', { name: `${localDayKey(earlier)}: 1 answers` }))
     expect(screen.getByLabelText('Period')).toHaveValue('day')
     expect(screen.getByLabelText('Date')).toHaveValue(localDayKey(earlier))
     expect(screen.getByText('ANSWERS').parentElement).toHaveTextContent('1')
+    expect(screen.getByRole('heading', { name: '2 days of practice' })).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: '猫 · Basic' }))
     const dialog = screen.getByRole('dialog', { name: 'Card progress' })
     const history = within(dialog).getByRole('region', { name: 'Card review history' })
@@ -53,6 +82,7 @@ test('live offline answers and undo update totals, heatmap selection, and chrono
     await waitFor(() => expect(screen.getByText('ANSWERS').parentElement).toHaveTextContent('1'))
     await collection.undo()
     await waitFor(() => expect(screen.getByText('ANSWERS').parentElement).toHaveTextContent('0'))
+    expect(screen.getByRole('heading', { name: '1 day of practice' })).toBeVisible()
   } finally { cleanup(); await collection.deleteDeck(deck.id, { mode: 'delete-subtree' }) }
 })
 
