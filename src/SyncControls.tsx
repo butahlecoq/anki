@@ -70,7 +70,6 @@ export function SyncControls({ offlineSyncAvailable, collectionActions }: { offl
 
   function closePairing() {
     setPairing(false)
-    setAnkiWebOpen(false)
   }
 
   function openPairing(forAnkiWeb = false) {
@@ -217,7 +216,7 @@ export function SyncControls({ offlineSyncAvailable, collectionActions }: { offl
         <p className="sync-help" data-testid="backup-receipt">{offlineInventory?.backup ? `Last PC backup received and verified on this device: ${new Date(offlineInventory.backup.verifiedAt).toLocaleString()} · ${offlineInventory.backup.changeCount} sync changes · ${offlineInventory.backup.mediaFiles} media files (${formatStorageBytes(offlineInventory.backup.mediaBytes)}).` : 'No PC backup has been received and verified on this device yet.'}</p>
       </details>
       <div className="sync-actions">
-        <button className="text-button" type="button" disabled={busy} onClick={() => settings ? setAnkiWebOpen(true) : openPairing(true)}>Connect AnkiWeb account</button>
+        <button className="text-button" type="button" disabled={busy} onClick={() => setAnkiWebOpen(true)}>Connect AnkiWeb account</button>
         {settings && <button className="text-button" type="button" disabled={busy || !offlineSyncAvailable || !offlineShellSupported} onClick={() => void sync()}>{busy ? 'Syncing…' : 'Sync now'}</button>}
         {settings && <button className="text-button" type="button" disabled={busy} onClick={() => void backupPcCollection()}>{busy ? 'Working…' : 'Download PC backup'}</button>}
         <button className="primary-action" type="button" disabled={busy} onClick={() => openPairing()}>{settings ? 'Pair another device' : 'Connect a PC'}</button>
@@ -227,13 +226,13 @@ export function SyncControls({ offlineSyncAvailable, collectionActions }: { offl
       {collectionActions && <div className="collection-export-actions">{collectionActions}</div>}
       </div>
       </details>
-      {ankiWebOpen && settings && !pairing && <AnkiWebAccountDialog settings={settings} onClose={() => setAnkiWebOpen(false)} />}
+      {ankiWebOpen && <AnkiWebAccountDialog settings={settings} active={!pairing} onSetupPc={() => openPairing(true)} onClose={() => setAnkiWebOpen(false)} />}
       {pairing && (
         <div className="dialog-backdrop">
           <section {...pairingKeyboard} className="dialog" role="dialog" aria-modal="true" aria-labelledby="sync-dialog-title">
             <span className="section-code">SYNC // PAIR DEVICE</span>
-            <h2 id="sync-dialog-title">{ankiWebOpen ? 'Connect AnkiWeb account' : 'Connect to your PC'}</h2>
-            {ankiWebOpen && <p>Your PC relays the AnkiWeb connection. Connect this window to it first; your local cards stay here. Account login opens after pairing.</p>}
+            <h2 id="sync-dialog-title">Connect to your PC</h2>
+            {ankiWebOpen && <p>Your PC relays the AnkiWeb connection. Set up this connection once; your local cards stay here. Then return to AnkiWeb account login.</p>}
             <form onSubmit={pair}>
               <label>
                 PC service address

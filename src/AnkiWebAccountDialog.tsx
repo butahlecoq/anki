@@ -23,7 +23,7 @@ function AccountMediaVersion({ label, name, bytes }: { label: string; name: stri
     : <span ref={host}>{label}: <audio controls preload="metadata">{name}</audio></span>
 }
 
-export function AnkiWebAccountDialog({ settings, onClose }: { settings: SyncSettings; onClose: () => void }) {
+export function AnkiWebAccountDialog({ settings, onClose, onSetupPc, active = true }: { settings?: SyncSettings; onClose: () => void; onSetupPc?: () => void; active?: boolean }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [session, setSession] = useState<NativeAnkiAccountSession>()
@@ -37,7 +37,7 @@ export function AnkiWebAccountDialog({ settings, onClose }: { settings: SyncSett
   const sessionRef = useRef<NativeAnkiAccountSession | undefined>(undefined)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
-  const dialogKeyboard = useDialogKeyboard(onClose, true)
+  const dialogKeyboard = useDialogKeyboard(onClose, active)
 
   async function refreshAccountMedia(account: NativeAnkiAccountSession) {
     const [files, cursor, attempt, conflicts] = await Promise.all([
@@ -59,6 +59,7 @@ export function AnkiWebAccountDialog({ settings, onClose }: { settings: SyncSett
 
   async function connect(event: FormEvent) {
     event.preventDefault()
+    if (!settings) return
     if (!isSafeServiceEndpoint(settings.endpoint)) {
       setMessage('The paired PC address is not a safe private-service URL. No AnkiWeb request was sent.')
       return
@@ -152,19 +153,21 @@ export function AnkiWebAccountDialog({ settings, onClose }: { settings: SyncSett
   }
 
   return (
-    <div className="dialog-backdrop">
+    <div className="dialog-backdrop" style={active ? undefined : { display: 'none' }}>
       <section {...dialogKeyboard} className="dialog ankiweb-account-dialog" role="dialog" aria-modal="true" aria-labelledby="ankiweb-dialog-title">
         <span className="section-code">ACCOUNT // ANKIWEB</span>
         <h2 id="ankiweb-dialog-title">Connect AnkiWeb</h2>
         <p>AnkiWeb credentials are held in memory only and sent through your paired PC service. Account data is kept in a separate local store and is not part of Kiroku exports or PC backups.</p>
         {!session ? (
           <form onSubmit={(event) => void connect(event)}>
+            {!settings && <p className="sync-help">Set up your PC connection once to enable AnkiWeb sign-in. Your PC relays account requests; your local collection stays on this device.</p>}
             <label>AnkiWeb username<input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} required maxLength={256} /></label>
             <label>AnkiWeb password<input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
             {message && <p role="status" aria-live="polite">{message}</p>}
+            {!settings && onSetupPc && <button className="text-button" type="button" onClick={onSetupPc}>Set up PC connection</button>}
             <div className="dialog-actions">
               <button className="text-button" type="button" disabled={busy} onClick={onClose}>Cancel</button>
-              <button className="primary-action" type="submit" disabled={busy}>{busy ? 'Connecting…' : 'Connect account'}</button>
+              <button className="primary-action" type="submit" disabled={busy || !settings}>{busy ? 'Connecting…' : 'Connect account'}</button>
             </div>
           </form>
         ) : (

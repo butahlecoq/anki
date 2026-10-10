@@ -26,6 +26,12 @@ export function useDialogKeyboard(onClose: () => void, open = true) {
       queueMicrotask(() => {
         // React Strict Mode replays effects while the same dialog stays mounted.
         if (dialog.isConnected) return
+        // A replacement modal owns focus; closing its predecessor must not steal it.
+        if (document.activeElement instanceof HTMLElement && document.activeElement.closest('[role="dialog"]')) {
+          opener.current = null
+          openerCaptured.current = false
+          return
+        }
         if (previous?.isConnected && !previous.hidden && previous.getAttribute('aria-hidden') !== 'true') previous.focus()
         else {
           const fallback = document.querySelector<HTMLElement>('main button:not([disabled]), [role="main"] button:not([disabled]), main a[href], [role="main"] a[href], main, [role="main"]')
