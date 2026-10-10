@@ -11,11 +11,11 @@ function preview(front: string, back: string, fields: Record<string, string>, op
 afterEach(cleanup)
 
 test('study presentation removes link clutter and formats translations without mutating the rendered card', () => {
-  const rendering = preview('{{Front}}<p style="font-size:70%">Support <a href="https://example.com">here</a></p>', '{{Back}}', { Front: '猫 · кот', Back: 'cat' })
+  const rendering = preview('{{Front}}<p style="font-size:70%">You can support jlab on <a href="https://example.com">Patreon</a></p>', '{{Back}}', { Front: '猫 · кот', Back: 'cat' })
   const original = structuredClone(rendering)
   render(<TemplatePreview rendering={rendering} side="front" study />)
   const document = screen.getByTitle('Card preview').getAttribute('srcdoc') ?? ''
-  expect(document).not.toContain('Support ')
+  expect(document).not.toContain('You can support jlab')
   expect(document).toContain('class="kiroku-translation">кот</span>')
   expect(screen.queryByRole('region', { name: 'External card links' })).not.toBeInTheDocument()
   expect(new DOMParser().parseFromString(document, 'text/html').body.querySelector('[data-kiroku-href]')).toBeNull()

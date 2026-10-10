@@ -26,3 +26,11 @@ test('Russian runs receive readable presentation without changing Japanese ruby 
   expect([...fragment.content.querySelectorAll('.kiroku-translation')].map(element => element.textContent).join(' ')).toContain('ужасный; сильный')
   expect(fragment.content.textContent).toBe('猫ねこЖестокий; ужасный; сильный')
 })
+
+test('small linked learning notes and footer media remain available', () => {
+  const html = studyCardHtml('<p style="font-size:70%">This verb takes an object; <a data-kiroku-href="https://example.com/examples">see examples</a>.</p><div class="bottomlink"><a data-kiroku-href="https://example.com/report">Report a mistake</a><img src="blob:image"><audio controls src="blob:audio"></audio></div>')
+  expect(html).toContain('This verb takes an object; see examples.')
+  expect(html).toContain('<img src="blob:image">')
+  expect(html).toContain('<audio controls="" src="blob:audio"></audio>')
+  expect(html).not.toMatch(/<a\b|Report a mistake/)
+})
