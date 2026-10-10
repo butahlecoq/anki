@@ -308,7 +308,7 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
       if (timer.started !== null) timer.elapsed += performance.now() - timer.started
       timer.started = null
     }
-  }, [cardId, editingNote, movingNote, editingTags, deletingNote, showCardInfo, unavailable, promptReady, note, mediaBlocked])
+  }, [cardId, activityInteractionRevision, editingNote, movingNote, editingTags, deletingNote, showCardInfo, unavailable, promptReady, note, mediaBlocked])
 
   const answerCurrent = useCallback(async (targetCardId: string, rating: Grade) => {
     if (isAnswering || (targetCardId === cardId && (mediaBlocked || (activity?.cardScope === 'current' && !promptReady)))) return false
@@ -316,7 +316,12 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
     const duration = targetCardId === cardId
       ? activeTime.current.elapsed + (activeTime.current.started === null ? 0 : performance.now() - activeTime.current.started)
       : 0
-    return answer(targetCardId, rating, duration)
+    const recorded = await answer(targetCardId, rating, duration)
+    if (recorded && activity?.cardScope === 'current') {
+      activeTime.current = { cardId: targetCardId, elapsed: 0, started: null }
+      setActivityInteractionRevision(revision => revision + 1)
+    }
+    return recorded
   }, [cardId, isAnswering, activity?.cardScope, promptReady, mediaBlocked, answer, currentActivityPrompt])
 
   const skipCurrentCard = useCallback(() => {

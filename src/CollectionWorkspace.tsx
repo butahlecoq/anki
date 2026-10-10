@@ -373,7 +373,7 @@ function DeckDetail({ deckId, onBack, onStudy, onChooseActivity }: { deckId: str
   const notes = workspace?.notes ?? []
   const noteTypes = workspace?.noteTypes ?? []
   const summary = useLiveQuery(async () => (await collection.summaries()).find((item) => item.id === deckId), [deckId])
-  const due = useLiveQuery(() => collection.dueCards(deckId, new Date()), [deckId], [])
+  const due = useLiveQuery(() => collection.reviewQueue(deckId, new Date()), [deckId], [])
   const offlineReadiness = useLiveQuery(async () => {
     const { references, blobs } = await readDeckMediaSnapshot(collection, deckId)
     const digests = [...new Set(references.map((reference) => reference.digest))]

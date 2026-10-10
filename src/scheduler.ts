@@ -63,6 +63,24 @@ export function isInterdayLearning(card: CardRecord) {
   return isLearningCard(card) && card.scheduledDays >= 1
 }
 
+/** Anki's default learn-ahead only pulls intraday steps forward, never reviews. */
+export function eligibleForLearningAhead(card: CardRecord, now: Date) {
+  const due = Date.parse(card.due)
+  return eligibleForQueue(card, now) && isLearningCard(card) && !isInterdayLearning(card)
+    && due > now.getTime() && due <= now.getTime() + 20 * 60_000
+    && due < studyDayWindow(now).end
+}
+
+export function eligibleForReview(card: CardRecord, now: Date) {
+  return eligibleForStudy(card, now) || eligibleForLearningAhead(card, now)
+}
+
+/** The adapter supplies the selected subtree; custom-study reservations stay out. */
+export function selectLearningAheadCards(cards: readonly CardRecord[], now: Date, sessionCardIds: ReadonlySet<string>) {
+  return cards.filter(card => !sessionCardIds.has(card.id) && eligibleForLearningAhead(card, now))
+    .sort((left, right) => left.due.localeCompare(right.due) || left.id.localeCompare(right.id))
+}
+
 export function studyDayWindow(value: Date) {
   const { start, end } = localStudyDayWindow(value)
   return { start: start.getTime(), end: end.getTime() }
@@ -278,7 +296,7 @@ function nextSchedule(scheduler: ReturnType<typeof schedulerFor>, card: FsrsCard
 }
 
 export function reviewChoices(card: CardRecord, group: DeckOptionGroup, now: Date, allowEarly = false): ReviewChoice[] {
-  if (!(allowEarly ? eligibleForQueue(card, now) : eligibleForStudy(card, now))) return []
+  if (!(allowEarly ? eligibleForQueue(card, now) : eligibleForReview(card, now))) return []
   const choices: Array<[Grade, ReviewChoice['label']]> = [
     [Rating.Again, 'Again'], [Rating.Hard, 'Hard'], [Rating.Good, 'Good'], [Rating.Easy, 'Easy'],
   ]
