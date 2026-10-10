@@ -1,11 +1,65 @@
 import { expect, test, vi } from 'vitest'
-import { createAndDownloadPcBackup, foregroundSync, pairCollection, preflightSync, rotateCredential, syncCollection, type SyncProgress } from './sync-client'
+import { connectPrivatePc, createAndDownloadPcBackup, foregroundSync, pairCollection, preflightSync, rotateCredential, syncCollection, type SyncProgress } from './sync-client'
 import { createCollection, DEFAULT_DECK_OPTION_GROUP_ID, Rating } from './collection'
 import { digestMedia } from './media'
 import { readCardReviewHistory, readCardsForNote, readDeck, readNoteMediaReference } from './collection-queries'
 import { CLIENT_COLLECTION_SCHEMA_VERSION, SYNC_OPERATION_BATCH_SIZE, SYNC_REQUESTS_PER_ATTEMPT } from '../sync-capabilities.js'
 
 const health = (collectionSchemaVersion = CLIENT_COLLECTION_SCHEMA_VERSION, maximumCollectionSchemaVersion = CLIENT_COLLECTION_SCHEMA_VERSION) => new Response(JSON.stringify({ ready: true, schemaVersion: 1, protocolVersion: 2, collectionSchemaVersion, maximumCollectionSchemaVersion, collectionGeneration: '11111111-1111-4111-8111-111111111111', requiresCollectionGeneration: false, store: 'sqlite' }), { status: 200 })
+
+test('automatic private PC connection keeps local work and reuses its saved credential without codes or collection exchange', async () => {
+  const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+  const deck = await collection.createDeck('Local words')
+  await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
+  const pending = await collection.pendingOperations()
+  const fetcher = vi.fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify({ automatic: true })))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ token: 'private-device-token', collectionGeneration: '11111111-1111-4111-8111-111111111111' }), { status: 201 }))
+  await expect(connectPrivatePc(collection, 'https://owner.example.test', fetcher)).resolves.toEqual({ state: 'paired' })
+  expect(fetcher.mock.calls.map(call => call[0])).toEqual(['https://owner.example.test/api/connection', 'https://owner.example.test/api/connection'])
+  expect(JSON.parse(fetcher.mock.calls[1][1].body)).toEqual({ deviceId: expect.any(String) })
+  expect(await collection.syncSettings()).toMatchObject({ endpoint: 'https://owner.example.test', token: 'private-device-token', cursor: 0 })
+  expect(await collection.pendingOperations()).toEqual(pending)
+  await expect(connectPrivatePc(collection, 'https://owner.example.test', fetcher)).resolves.toEqual({ state: 'paired' })
+  expect(fetcher).toHaveBeenCalledTimes(2)
+  await collection.removeLocalCollection()
+})
+
+test.each([
+  ['private identity rejected', 403, undefined, 'authentication-required'],
+  ['PC unavailable', 503, undefined, 'unreachable'],
+  ['manual deployment', 200, { automatic: false }, 'manual'],
+  ['unexpected discovery', 200, {}, 'unreachable'],
+] as const)('automatic connection preserves local work when %s', async (_case, status, payload, state) => {
+  const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+  try {
+    const deck = await collection.createDeck('Offline work')
+    const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
+    await collection.attachMedia(note.id, { file: new File(['local media'], 'cat.png', { type: 'image/png' }), side: 'front' })
+    const pending = await collection.pendingOperations()
+    const media = await collection.missingReferencedMedia()
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), { status }))
+    await expect(connectPrivatePc(collection, 'https://owner.example.test', fetcher)).resolves.toEqual({ state })
+    expect(await collection.syncSettings()).toBeUndefined()
+    expect(await collection.pendingOperations()).toEqual(pending)
+    expect(await collection.missingReferencedMedia()).toEqual(media)
+    expect(fetcher).toHaveBeenCalledTimes(1)
+  } finally { await collection.removeLocalCollection() }
+})
+
+test.each([403, 503])('failed automatic credential issuance (%s) leaves local changes queued', async status => {
+  const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+  try {
+    await collection.createDeck('Keep me')
+    const pending = await collection.pendingOperations()
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ automatic: true })))
+      .mockResolvedValueOnce(new Response('', { status }))
+    await expect(connectPrivatePc(collection, 'https://owner.example.test', fetcher)).resolves.toEqual({ state: status === 403 ? 'authentication-required' : 'unreachable' })
+    expect(await collection.syncSettings()).toBeUndefined()
+    expect(await collection.pendingOperations()).toEqual(pending)
+  } finally { await collection.removeLocalCollection() }
+})
 
 test('sends pending operations with the local pairing credential', async () => {
   const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ accepted: 2, cursor: 2, changes: [] }), { status: 200 }))

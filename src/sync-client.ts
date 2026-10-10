@@ -16,6 +16,7 @@ type UpgradeRequired = { state: 'upgrade-required'; target: 'this-device' | 'pc-
 type SyncResult = Complete | UpgradeRequired | BackupFailed | { state: 'collection-generation-required'; message: string } | { state: 'authentication-required' } | { state: 'unreachable' } | { state: 'incomplete'; accepted: number; cursor: number; pendingOperations: number; remoteChangesPending: boolean; pendingIncomingOperations?: number; dependencyProblem?: 'deck-cycle' }
 type PreflightResult = { state: 'ready' } | Exclude<SyncResult, Complete>
 export type PairingResult = { state: 'paired' } | { state: 'address-error' } | { state: 'pairing-error' } | { state: 'unreachable' } | { state: 'collection-generation-required' }
+export type PrivatePcConnectionResult = PairingResult | { state: 'manual' } | { state: 'authentication-required' }
 export type PcBackup = { format: string; formatVersion: number; id: string; createdAt: string; reason: 'manual' | 'before-sync' | 'before-restore'; collectionGeneration?: string; collectionSchemaVersion: number; changeCount: number; latestCursor: number; databaseBytes: number; databaseSha256: string; media: Array<{ digest: string; byteLength: number; mimeType: string }>; archiveSha256: string; archiveBytes: number }
 
 export async function listPcBackups(settings: SyncSettings, fetcher: Fetcher = fetch) {
@@ -124,6 +125,32 @@ export async function preflightSync(settings: SyncSettings, fetcher: Fetcher = f
       ? 'The PC collection was replaced from a backup. This device’s offline collection remains unchanged; export it before recovering or resetting it explicitly.'
       : 'The PC collection was replaced from a backup. Your offline collection and queued changes remain on this device; export this device’s collection, then recover or reset it explicitly before pairing again.' }
     return { state: 'ready' }
+  } catch {
+    return { state: 'unreachable' }
+  }
+}
+
+export async function connectPrivatePc(collection: Collection, origin: string, fetcher: Fetcher = fetch): Promise<PrivatePcConnectionResult> {
+  try {
+    if (await collection.syncSettings()) return { state: 'paired' }
+    if (!isSafeServiceEndpoint(origin)) return { state: 'address-error' }
+    const capability = await fetcher(`${origin}/api/connection`)
+    if (capability.status === 403) return { state: 'authentication-required' }
+    if (!capability.ok) return { state: 'unreachable' }
+    const supported = await capability.json() as { automatic?: unknown }
+    if (supported.automatic === false) return { state: 'manual' }
+    if (supported.automatic !== true) return { state: 'unreachable' }
+    const response = await fetcher(`${origin}/api/connection`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ deviceId: crypto.randomUUID() }),
+    })
+    if (response.status === 403) return { state: 'authentication-required' }
+    if (!response.ok) return { state: 'unreachable' }
+    const credential = await response.json() as { token?: unknown; collectionGeneration?: unknown }
+    if (typeof credential.token !== 'string' || !credential.token || typeof credential.collectionGeneration !== 'string' || !credential.collectionGeneration) return { state: 'unreachable' }
+    // Another entry point may have established a connection during discovery.
+    if (!await collection.syncSettings()) await collection.configureSync({ endpoint: origin, token: credential.token, cursor: 0, collectionGeneration: credential.collectionGeneration })
+    return { state: 'paired' }
   } catch {
     return { state: 'unreachable' }
   }

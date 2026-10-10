@@ -23,7 +23,7 @@ function AccountMediaVersion({ label, name, bytes }: { label: string; name: stri
     : <span ref={host}>{label}: <audio controls preload="metadata">{name}</audio></span>
 }
 
-export function AnkiWebAccountDialog({ settings, onClose, onSetupPc, active = true }: { settings?: SyncSettings; onClose: () => void; onSetupPc?: () => void; active?: boolean }) {
+export function AnkiWebAccountDialog({ settings, onClose, onSetupPc, active = true, pcConnectionMessage, pcConnecting = false }: { settings?: SyncSettings; onClose: () => void; onSetupPc?: () => void; active?: boolean; pcConnectionMessage?: string; pcConnecting?: boolean }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [session, setSession] = useState<NativeAnkiAccountSession>()
@@ -160,11 +160,11 @@ export function AnkiWebAccountDialog({ settings, onClose, onSetupPc, active = tr
         <p>AnkiWeb credentials are held in memory only and sent through your paired PC service. Account data is kept in a separate local store and is not part of Kiroku exports or PC backups.</p>
         {!session ? (
           <form onSubmit={(event) => void connect(event)}>
-            {!settings && <p className="sync-help">Set up your PC connection once to enable AnkiWeb sign-in. Your PC relays account requests; your local collection stays on this device.</p>}
+            {!settings && <p className="sync-help" role="status">{pcConnectionMessage ?? 'Set up your PC connection once to enable AnkiWeb sign-in. Your PC relays account requests; your local collection stays on this device.'}</p>}
             <label>AnkiWeb username<input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} required maxLength={256} /></label>
             <label>AnkiWeb password<input type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required /></label>
             {message && <p role="status" aria-live="polite">{message}</p>}
-            {!settings && onSetupPc && <button className="text-button" type="button" onClick={onSetupPc}>Set up PC connection</button>}
+            {!settings && onSetupPc && <button className="text-button" type="button" disabled={pcConnecting} onClick={onSetupPc}>{pcConnectionMessage ? pcConnecting ? 'Connecting to PC…' : 'Retry PC connection' : 'Set up PC connection'}</button>}
             <div className="dialog-actions">
               <button className="text-button" type="button" disabled={busy} onClick={onClose}>Cancel</button>
               <button className="primary-action" type="submit" disabled={busy || !settings}>{busy ? 'Connecting…' : 'Connect account'}</button>

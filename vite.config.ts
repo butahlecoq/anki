@@ -7,6 +7,7 @@ import { dependencyNotices } from './scripts/dependency-notices.ts'
 
 const version = (JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string }).version
 const previewAllowedHost = process.env.KIROKU_PREVIEW_ALLOWED_HOST
+const syncTarget = `http://127.0.0.1:${process.env.KIROKU_SYNC_PORT ?? '4174'}`
 let commit = 'unknown'
 try { commit = execFileSync('git', ['rev-parse', '--short=12', 'HEAD'], { encoding: 'utf8' }).trim() } catch { /* source archives may not include .git */ }
 
@@ -16,7 +17,8 @@ export default defineConfig(({ command }) => ({
     'import.meta.env.VITE_KIROKU_BUILD_COMMIT': JSON.stringify(commit),
     'import.meta.env.PROD': JSON.stringify(command === 'build'),
   },
-  ...(previewAllowedHost ? { preview: { allowedHosts: [previewAllowedHost] } } : {}),
+  server: { proxy: { '/api': { target: syncTarget } } },
+  preview: { proxy: { '/api': { target: syncTarget } }, ...(previewAllowedHost ? { allowedHosts: [previewAllowedHost] } : {}) },
   plugins: [
     react(),
     dependencyNotices(),

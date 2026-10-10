@@ -8,6 +8,7 @@ import { useDialogKeyboard } from './use-dialog-keyboard'
 import { AnkiWebAccountDialog } from './AnkiWebAccountDialog'
 import { incomingDependencyMessage, pairOutcomeMessage, pairingClosesOn, SYNC_LOCAL_ONLY, syncOutcomeMessage } from './sync-messages'
 import { readSyncProgressCounts, readSyncStatusSnapshot } from './collection-queries'
+import { usePrivatePcConnection } from './use-private-pc-connection'
 export function SyncControls({ offlineSyncAvailable, collectionActions }: { offlineSyncAvailable: boolean; collectionActions?: ReactNode }) {
   const tools = useRef<HTMLDetailsElement>(null)
   const [toolsOpen, setToolsOpen] = useState(() => window.matchMedia?.('(min-width: 681px)').matches ?? true)
@@ -51,6 +52,10 @@ export function SyncControls({ offlineSyncAvailable, collectionActions }: { offl
   const [ankiWebOpen, setAnkiWebOpen] = useState(false)
   const [persistence, setPersistence] = useState<PersistenceResult>('unsupported')
   const [storageEstimate, setStorageEstimate] = useState<{ usage?: number; quota?: number }>()
+  const privatePc = usePrivatePcConnection()
+  const pcConnecting = privatePc.state === 'connecting'
+  const automaticPc = privatePc.state !== 'manual'
+  const pcConnectionMessage = pcConnecting ? 'Connecting to your PC…' : privatePc.state === 'authentication-required' ? 'Your private PC connection could not be confirmed. Check that your private network is connected, then retry.' : privatePc.state === 'paired' ? 'Connected to your PC.' : 'Your PC is unavailable. Keep your local work here and retry when it is running.'
 
   useEffect(() => {
     let active = true
@@ -109,7 +114,8 @@ export function SyncControls({ offlineSyncAvailable, collectionActions }: { offl
     }
     // With no pairing yet, "Sync now" means "connect a PC".
     if (!settings) {
-      openPairing()
+      if (automaticPc) void privatePc.retry()
+      else openPairing()
       return
     }
     setBusy(true)
@@ -194,9 +200,12 @@ export function SyncControls({ offlineSyncAvailable, collectionActions }: { offl
     } finally { setBusy(false) }
   }
 
+  const idleMessage = offlineInventory?.incomingPending ? incomingDependencyMessage(offlineInventory.incomingPending) : privatePc.state === 'paired' ? 'Connected to your PC.' : message
+  const statusMessage = !settings && automaticPc ? pcConnectionMessage : settings && !offlineSyncAvailable ? 'Sync is paused until Kiroku confirms its offline app shell is ready.' : message === SYNC_LOCAL_ONLY ? idleMessage : message
+
   return (
     <section className="sync-controls" aria-label="PC sync">
-      <div><span className="section-code">SYNC // {settings ? 'PAIRED' : 'LOCAL ONLY'}</span><p className={message === SYNC_LOCAL_ONLY && !offlineInventory?.incomingPending && (!settings || offlineSyncAvailable) ? 'sync-idle-message' : undefined} aria-live="polite">{settings && !offlineSyncAvailable ? 'Sync is paused until Kiroku confirms its offline app shell is ready.' : message === SYNC_LOCAL_ONLY && offlineInventory?.incomingPending ? incomingDependencyMessage(offlineInventory.incomingPending) : message}</p></div>
+      <div><span className="section-code">SYNC // {settings ? 'PAIRED' : 'LOCAL ONLY'}</span><p className={!automaticPc && message === SYNC_LOCAL_ONLY && !offlineInventory?.incomingPending && (!settings || offlineSyncAvailable) ? 'sync-idle-message' : undefined} aria-live="polite">{statusMessage}</p></div>
       <details ref={tools} className="collection-tools" open={toolsOpen} onToggle={event => setToolsOpen(event.currentTarget.open)} onKeyDown={event => {
         if (event.key === 'Escape' && window.matchMedia?.('(max-width: 680px)').matches) {
           event.preventDefault()
@@ -219,14 +228,19 @@ export function SyncControls({ offlineSyncAvailable, collectionActions }: { offl
         <button className="text-button" type="button" disabled={busy} onClick={() => setAnkiWebOpen(true)}>Connect AnkiWeb account</button>
         {settings && <button className="text-button" type="button" disabled={busy || !offlineSyncAvailable || !offlineShellSupported} onClick={() => void sync()}>{busy ? 'Syncing…' : 'Sync now'}</button>}
         {settings && <button className="text-button" type="button" disabled={busy} onClick={() => void backupPcCollection()}>{busy ? 'Working…' : 'Download PC backup'}</button>}
-        <button className="primary-action" type="button" disabled={busy} onClick={() => openPairing()}>{settings ? 'Pair another device' : 'Connect a PC'}</button>
+        {!settings && automaticPc && <button className="primary-action" type="button" disabled={busy || pcConnecting} onClick={() => void privatePc.retry()}>{pcConnecting ? 'Connecting to PC…' : 'Retry PC connection'}</button>}
       </div>
+      {!automaticPc && <details className="sync-help" open>
+        <summary>Advanced PC connection</summary>
+        <p>Use manual pairing only when connecting to a separately hosted PC service.</p>
+        <button className="primary-action" type="button" disabled={busy} onClick={() => openPairing()}>{settings ? 'Pair another device' : 'Connect a PC'}</button>
+      </details>}
       {settings && backups[0] && <p className="sync-help">Latest backup currently listed by the PC: {new Date(backups[0].createdAt).toLocaleString()} · {backups[0].changeCount} sync changes · {backups[0].media.length} media files · {backups[0].reason === 'manual' ? 'manual' : 'before sync'}.</p>}
       {settings && backups[0] && <div className="sync-help"><button className="text-button" type="button" disabled={busy} onClick={() => void previewPcRestore(backups[0])}>Preview latest backup</button>{restorePreview && <><p role="status">{restorePreview.summary}</p>{restorePreview.available && <><label>Type RESTORE to replace the active PC collection<input value={restoreConfirmation} onChange={(event) => setRestoreConfirmation(event.target.value)} autoComplete="off" /></label><button className="text-button" type="button" disabled={busy || restoreConfirmation !== 'RESTORE'} onClick={() => void restorePcCollection()}>Restore this PC collection</button></>}</>}</div>}
       {collectionActions && <div className="collection-export-actions">{collectionActions}</div>}
       </div>
       </details>
-      {ankiWebOpen && <AnkiWebAccountDialog settings={settings} active={!pairing} onSetupPc={() => openPairing(true)} onClose={() => setAnkiWebOpen(false)} />}
+      {ankiWebOpen && <AnkiWebAccountDialog settings={settings} active={!pairing} pcConnectionMessage={automaticPc ? pcConnectionMessage : undefined} pcConnecting={pcConnecting} onSetupPc={() => automaticPc ? void privatePc.retry() : openPairing(true)} onClose={() => setAnkiWebOpen(false)} />}
       {pairing && (
         <div className="dialog-backdrop">
           <section {...pairingKeyboard} className="dialog" role="dialog" aria-modal="true" aria-labelledby="sync-dialog-title">
