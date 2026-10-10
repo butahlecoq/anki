@@ -63,7 +63,8 @@ describe('application shell', () => {
     expect(screen.getByLabelText('Support')).toBeVisible()
     expect(screen.getByText('Development build (not a release)')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /new deck/i })).toBeEnabled()
-    expect(screen.getByRole('button', { name: 'Connect a PC' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Connect AnkiWeb account' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Connecting to PC…' })).toBeDisabled()
   })
 
   test('activates a waiting service worker when the learner accepts an update', async () => {
@@ -113,7 +114,7 @@ test('explains the Lockdown Mode offline limit and disables sync when service wo
     expect(screen.getByTestId('offline-shell-warning')).toHaveTextContent(/installed Home Screen app/)
     expect(screen.getByTestId('offline-shell-warning')).toHaveTextContent(/iOS Lockdown Mode can disable it/)
     expect(await screen.findByRole('button', { name: 'Sync now' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Pair another device' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Connect AnkiWeb account' })).toBeEnabled()
   } finally {
     await collection.clearSyncConfiguration()
   }

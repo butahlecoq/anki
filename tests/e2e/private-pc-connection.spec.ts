@@ -3,6 +3,7 @@ import { createServer, request as proxyRequest, type Server } from 'node:http'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
+import { preview } from 'vite'
 import { createSyncService } from '../../server/sync-service'
 import { createSyncHttpHandler } from '../../server/sync-http'
 import { openCollectionTools } from './collection-tools'
@@ -59,6 +60,33 @@ async function privateFixture(webOrigin: string) {
     },
   }
 }
+
+test('the ordinary app preview cannot forward a spoofed private owner identity', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'kiroku-private-browser-'))
+  const service = createSyncService({ databasePath: join(directory, 'collection.sqlite') })
+  const backend = createServer(createSyncHttpHandler(service, { allowedOrigin: 'https://owner.example.test', trustedProxyUser: 'synthetic-owner@example.test' }))
+  const origin = await listen(backend)
+  const previousPort = process.env.KIROKU_SYNC_PORT
+  let app: Awaited<ReturnType<typeof preview>> | undefined
+  try {
+    process.env.KIROKU_SYNC_PORT = new URL(origin).port
+    app = await preview({ configFile: 'vite.config.ts', preview: { host: '127.0.0.1', port: 0, strictPort: true } })
+    const address = app.httpServer.address()
+    if (!address || typeof address === 'string') throw new Error('Preview did not bind')
+    const headers = { 'tailscale-user-login': 'synthetic-owner@example.test' }
+    expect((await fetch(`${origin}/api/connection`, { headers })).status).toBe(200)
+    expect((await fetch(`http://127.0.0.1:${address.port}/api/connection`, { headers })).status).toBe(403)
+    expect(service.listDevices()).toEqual([])
+  } finally {
+    if (previousPort === undefined) delete process.env.KIROKU_SYNC_PORT
+    else process.env.KIROKU_SYNC_PORT = previousPort
+    if (app) await close(app.httpServer)
+    await close(backend)
+    service.close()
+    if (dirname(resolve(directory)) !== resolve(tmpdir()) || !directory.startsWith(join(tmpdir(), 'kiroku-private-browser-'))) throw new Error('Unexpected fixture path')
+    await rm(directory, { recursive: true, force: true })
+  }
+})
 
 test('private app connects and reopens without any address or code, then opens AnkiWeb login', async ({ page, context, baseURL }, info) => {
   const fixture = await privateFixture(baseURL!)
