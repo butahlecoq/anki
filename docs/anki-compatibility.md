@@ -30,6 +30,8 @@ fail. The current tests do not establish an oldest supported version.
 | Reversed cards | Verified in 26.09.3 corpus | Two official-engine card templates are imported, rendered in both directions, studied, exported, and re-imported with note/card meaning retained. |
 | Multiple templates | Partial | Native IDs and note relationships tested across export (`anki-export.test.ts`); full real-package study journey not established. |
 | Cloze | Partial | Rendering and ordinal behavior tested (`template-renderer.test.ts`); export relationships/ordinals tested (`anki-export.test.ts`). |
+| Template conditionals and empty filters | Partial | Nested positive/negative conditions preserve inactive parents and media selection; empty filter separators such as `cloze::Text` match a synthetic official Anki 26.9.3 question/answer probe. Unknown filters remain rejected. |
+| Inline template scripts | Static content only | Import removes inline scripts before storage and warns in the Import Plan that scripted layout, hints and answer transformations may differ. Scripts are not executed or retained in exports. External scripts, event handlers and embedded executable content remain rejected. |
 | Furigana / Japanese reading filters | Partial | Synthetic renderer test covers supported reading filters; this does not establish every Anki filter variant. |
 | Typed answers | Partial | Typed-answer metadata is tested; answer-entry grading/input parity is not established. |
 | Template CSS | Partial | CSS is included in generated navigation packages, but standalone CSS fidelity coverage is limited. |
