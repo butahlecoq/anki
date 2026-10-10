@@ -5,6 +5,8 @@ import { Deck, Note, Notetype, Package } from 'ankipack'
 const PACKAGE_PREVIEW_TIMEOUT = 10_000 // Windows WebKit SQL/WASM preview measured at ~5.2s; Chromium remains sub-second.
 
 async function search(page: Page, query: string) {
+  // Finish bulk operations before typing into the page behind their dialogs.
+  await expect(page.getByRole('dialog')).toHaveCount(0)
   const input = page.getByLabel('Collection search', { exact: true })
   await input.fill(query)
   await expect(input).toHaveValue(query)
