@@ -3,8 +3,9 @@ import { expect, test, vi } from 'vitest'
 import { collection } from './collection'
 import * as queries from './collection-queries'
 import { ReviewSession } from './ReviewSession'
+import { atReviewNoon } from '../tests/helpers/review-clock'
 
-test('does not offer a new card with the previous note while its note query refreshes', async () => {
+test('does not offer a new card with the previous note while its note query refreshes', () => atReviewNoon(async () => {
   const deck = await collection.createDeck(`Review readiness ${crypto.randomUUID()}`)
   const first = await collection.createBasicNote(deck.id, { front: '猫', back: 'ねこ' })
   const second = await collection.createBasicNote(deck.id, { front: '犬', back: 'いぬ' })
@@ -56,4 +57,4 @@ test('does not offer a new card with the previous note while its note query refr
     read.mockRestore()
     await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
   }
-})
+}))

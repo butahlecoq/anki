@@ -7,6 +7,7 @@ import { setActivateWaitingWorker } from './service-worker-update'
 import { announceUpdateReady, clearUpdateWaiting } from './appEvents'
 import { readAnkiExportSnapshot, readCachedMediaBlob, readCard, readCardsForNote, readDeck, readDeckOptionGroup, readNote, readCardReviewHistory } from './collection-queries'
 import { damageIndexedDbMediaBlob, overwriteIndexedDbLegacyNoteType } from '../tests/helpers/damage-indexeddb-media'
+import { atReviewNoon } from '../tests/helpers/review-clock'
 
 const serviceWorkerDescriptor = Object.getOwnPropertyDescriptor(navigator, 'serviceWorker')
 
@@ -374,7 +375,7 @@ test('card management gives every control a distinct card and template name', as
   }
 })
 
-test('answering a card refreshes queued siblings that the policy buries', async () => {
+test('answering a card refreshes queued siblings that the policy buries', () => atReviewNoon(async () => {
   const deck = await collection.createDeck(`Sibling refresh ${crypto.randomUUID()}`)
   const type = await collection.createNoteType({
     name: `Two cards ${crypto.randomUUID()}`,
@@ -400,9 +401,9 @@ test('answering a card refreshes queued siblings that the policy buries', async 
     await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
     await collection.deleteNoteType(type.id)
   }
-})
+}))
 
-test('review keyboard shortcuts use the same answer and rating actions as touch controls', async () => {
+test('review keyboard shortcuts use the same answer and rating actions as touch controls', () => atReviewNoon(async () => {
   const deck = await collection.createDeck(`Keyboard review ${crypto.randomUUID()}`)
   const note = await collection.createBasicNote(deck.id, { front: '聞く', back: 'listen' })
   const card = (await readCardsForNote(collection, note.id).then(cards => cards[0]))!
@@ -425,7 +426,7 @@ test('review keyboard shortcuts use the same answer and rating actions as touch 
   } finally {
     await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
   }
-})
+}))
 
 test('review shortcuts stay silent while a control owns the press', async () => {
   const deck = await collection.createDeck(`Typing review ${crypto.randomUUID()}`)
