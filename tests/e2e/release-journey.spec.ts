@@ -7,6 +7,7 @@ import initSqlJs from 'sql.js'
 import { Deck, Note, Notetype, Package } from 'ankipack'
 import { nativeCanvasTest } from './phone-canvas'
 import { openCollectionTools } from './collection-tools'
+import { closeExportDialog } from './export-dialog'
 import { openOfflineProfileDocument, WEBKIT_COLD_OFFLINE_LIMITATION } from './offline-navigation'
 import { releaseService } from './release-service'
 import { releaseDiagnostics, releaseInventory, releaseLayout, releaseMedia, sha256 } from './release-oracles'
@@ -79,7 +80,7 @@ async function exportPackage(page: Page, info: TestInfo, phase: string) {
     const bytes = await readFile(path!)
     record('download-read', { bytes: bytes.length, sha256: sha256(bytes) })
     await info.attach(`release-export-${phase}.apkg`, { body: bytes, contentType: 'application/octet-stream' })
-    await dialog.getByRole('button', { name: 'Close export' }).click()
+    await closeExportDialog(dialog)
     return bytes
   } catch (error) {
     const state = await page.evaluate(() => {
