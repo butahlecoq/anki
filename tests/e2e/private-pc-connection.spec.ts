@@ -152,6 +152,36 @@ test('private app connects and reopens without any address or code, then opens A
   } finally { await fixture.close() }
 })
 
+test('manual deployment keeps Advanced pairing after a paired client reopens', async ({ page, context, baseURL }) => {
+  const fixture = await privateFixture(baseURL!, { manual: true })
+  try {
+    await page.goto(fixture.origin)
+    await page.getByRole('button', { name: 'New deck', exact: true }).click()
+    await page.getByLabel('Deck name').fill('Keep local work')
+    await page.getByRole('button', { name: 'Create deck', exact: true }).click()
+    await openCollectionTools(page)
+    const advanced = page.getByRole('group', { name: 'Advanced PC connection', exact: true })
+    await advanced.getByRole('button', { name: 'Connect a PC', exact: true }).click()
+    await page.getByLabel('PC service address').fill(fixture.origin)
+    await page.getByLabel('One-time pairing code').fill(fixture.service.createPairingCode())
+    await page.getByRole('button', { name: 'Connect device', exact: true }).click()
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+    await expect(advanced.getByRole('button', { name: 'Pair another device', exact: true })).toBeVisible()
+    expect(fixture.service.listDevices()).toHaveLength(1)
+    const reopened = await context.newPage()
+    try {
+      await reopened.goto(fixture.origin)
+      await expect(reopened.getByRole('button', { name: 'Open Keep local work', exact: true })).toBeVisible()
+      await openCollectionTools(reopened)
+      await reopened.getByRole('group', { name: 'Advanced PC connection', exact: true }).getByRole('button', { name: 'Pair another device', exact: true }).click()
+      await expect(reopened.getByRole('dialog', { name: 'Connect to your PC', exact: true })).toBeVisible()
+      expect(fixture.service.listDevices()).toHaveLength(1)
+      expect(fixture.posts()).toBe(0)
+      expect(fixture.apiRequests).not.toContain('/api/sync')
+    } finally { await reopened.close() }
+  } finally { await fixture.close() }
+})
+
 test('private identity failure retries without losing local work or AnkiWeb fields', async ({ page, baseURL }) => {
   const fixture = await privateFixture(baseURL!)
   fixture.authorize(false)

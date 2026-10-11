@@ -20,9 +20,43 @@ test('automatic private PC connection keeps local work and reuses its saved cred
   expect(JSON.parse(fetcher.mock.calls[1][1].body)).toEqual({ deviceId: expect.any(String) })
   expect(await collection.syncSettings()).toMatchObject({ endpoint: 'https://owner.example.test', token: 'private-device-token', cursor: 0 })
   expect(await collection.pendingOperations()).toEqual(pending)
+  fetcher.mockResolvedValueOnce(new Response(JSON.stringify({ automatic: true })))
   await expect(connectPrivatePc(collection, 'https://owner.example.test', fetcher)).resolves.toEqual({ state: 'paired' })
-  expect(fetcher).toHaveBeenCalledTimes(2)
+  expect(fetcher).toHaveBeenCalledTimes(3)
+  expect(fetcher.mock.calls[2]).toEqual(['https://owner.example.test/api/connection'])
   await collection.removeLocalCollection()
+})
+
+test('saved manual pairing retains Advanced deployment capability without replacing credentials or local work', async () => {
+  const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+  try {
+    await collection.createDeck('Offline work')
+    const settings = { endpoint: 'https://manual.example.test', token: 'existing-device-token', cursor: 7 }
+    await collection.configureSync(settings)
+    const pending = await collection.pendingOperations()
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ automatic: false })))
+    await expect(connectPrivatePc(collection, 'https://app.example.test', fetcher)).resolves.toEqual({ state: 'manual' })
+    expect(fetcher).toHaveBeenCalledExactlyOnceWith('https://app.example.test/api/connection')
+    expect(await collection.syncSettings()).toEqual(settings)
+    expect(await collection.pendingOperations()).toEqual(pending)
+  } finally { await collection.removeLocalCollection() }
+})
+
+test.each(['unavailable', 'rejected', 'malformed', 'offline'])('saved connection survives %s deployment discovery without issuing another credential', async failure => {
+  const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+  try {
+    await collection.createDeck('Keep offline work')
+    const settings = { endpoint: 'https://owner.example.test', token: 'existing-device-token', cursor: 7 }
+    await collection.configureSync(settings)
+    const pending = await collection.pendingOperations()
+    const fetcher = failure === 'offline'
+      ? vi.fn().mockRejectedValue(new TypeError('Offline'))
+      : vi.fn().mockResolvedValue(new Response(failure === 'malformed' ? 'not JSON' : '', { status: failure === 'unavailable' ? 503 : failure === 'rejected' ? 403 : 200 }))
+    await expect(connectPrivatePc(collection, 'https://owner.example.test', fetcher)).resolves.toEqual({ state: 'paired' })
+    expect(fetcher).toHaveBeenCalledExactlyOnceWith('https://owner.example.test/api/connection')
+    expect(await collection.syncSettings()).toEqual(settings)
+    expect(await collection.pendingOperations()).toEqual(pending)
+  } finally { await collection.removeLocalCollection() }
 })
 
 test.each([

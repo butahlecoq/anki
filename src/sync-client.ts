@@ -131,15 +131,18 @@ export async function preflightSync(settings: SyncSettings, fetcher: Fetcher = f
 }
 
 export async function connectPrivatePc(collection: Collection, origin: string, fetcher: Fetcher = fetch): Promise<PrivatePcConnectionResult> {
+  let hasSavedConnection = false
   try {
-    if (await collection.syncSettings()) return { state: 'paired' }
+    hasSavedConnection = Boolean(await collection.syncSettings())
     if (!isSafeServiceEndpoint(origin)) return { state: 'address-error' }
     const capability = await fetcher(`${origin}/api/connection`)
+    const supported = capability.ok ? await capability.json() as { automatic?: unknown } : undefined
+    if (supported?.automatic === false) return { state: 'manual' }
+    // Deployment capability is independent of reusing an existing credential.
+    if (hasSavedConnection) return { state: 'paired' }
     if (capability.status === 403) return { state: 'authentication-required' }
     if (!capability.ok) return { state: 'unreachable' }
-    const supported = await capability.json() as { automatic?: unknown }
-    if (supported.automatic === false) return { state: 'manual' }
-    if (supported.automatic !== true) return { state: 'unreachable' }
+    if (supported?.automatic !== true) return { state: 'unreachable' }
     const response = await fetcher(`${origin}/api/connection`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ deviceId: crypto.randomUUID() }),
@@ -152,7 +155,8 @@ export async function connectPrivatePc(collection: Collection, origin: string, f
     if (!await collection.syncSettings()) await collection.configureSync({ endpoint: origin, token: credential.token, cursor: 0, collectionGeneration: credential.collectionGeneration })
     return { state: 'paired' }
   } catch {
-    return { state: 'unreachable' }
+    // Discovery failure never invalidates the connection used for offline work.
+    return { state: hasSavedConnection ? 'paired' : 'unreachable' }
   }
 }
 
