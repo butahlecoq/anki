@@ -1,5 +1,8 @@
 import { expect, test } from '@playwright/test'
 import { createServer } from 'node:http'
+import { createConnection, type Socket } from 'node:net'
+import { once } from 'node:events'
+import { closeOwnedHttpServer } from './owned-http-server'
 import initSqlJs from 'sql.js'
 import { Collection as AnkiCollection, Deck, Note, Notetype, Package, type CollectionData } from 'ankipack'
 import { releaseDiagnostics, releaseInventory, releaseLayout, releaseMedia } from './release-oracles'
@@ -29,39 +32,49 @@ test('release diagnostics reject uncaught exceptions independently', async ({ pa
   await diagnostics.attach(info)
 })
 
-test('release diagnostics reject required HTTP and network failures and accept a healthy document', async ({ page }, info) => {
-  const server = createServer((request, response) => {
-    response.writeHead(request.url === '/missing' ? 404 : 200, { 'content-type': 'text/html' })
-    response.end('<main><h1>Owned transport negative control</h1></main>')
+for (const unusedConnection of [false, true]) {
+  test(`release diagnostics reject required HTTP and network failures and accept a healthy document${unusedConnection ? ' with an unused connection' : ''}`, async ({ page }, info) => {
+    const server = createServer((request, response) => {
+      response.writeHead(request.url === '/missing' ? 404 : 200, { 'content-type': 'text/html' })
+      response.end('<main><h1>Owned transport negative control</h1></main>')
+    })
+    await new Promise<void>((resolve, reject) => server.once('error', reject).listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('No negative-control address')
+    const url = `http://127.0.0.1:${address.port}`
+    let stopped = false
+    let client: Socket | undefined
+    try {
+      const healthy = releaseDiagnostics('http://127.0.0.1:1')
+      healthy.observe(page)
+      await page.goto(url)
+      await healthy.assertClean()
+      const failedHTTP = releaseDiagnostics('http://127.0.0.1:1')
+      failedHTTP.observe(page)
+      await page.goto(`${url}/missing`)
+      await expect(failedHTTP.assertClean()).rejects.toThrow()
+      await failedHTTP.attach(info)
+      if (unusedConnection) {
+        const accepted = once(server, 'connection')
+        client = createConnection(address.port, '127.0.0.1')
+        await once(client, 'connect')
+        await accepted
+      }
+      await closeOwnedHttpServer(server)
+      stopped = true
+      const failedNetwork = releaseDiagnostics('http://127.0.0.1:1')
+      failedNetwork.observe(page)
+      const failed = page.waitForEvent('requestfailed')
+      await page.goto(url).catch(() => undefined)
+      await failed
+      await expect(failedNetwork.assertClean()).rejects.toThrow()
+      await failedNetwork.attach(info)
+    } finally {
+      client?.destroy()
+      if (!stopped) await closeOwnedHttpServer(server)
+    }
   })
-  await new Promise<void>((resolve, reject) => server.once('error', reject).listen(0, '127.0.0.1', resolve))
-  const address = server.address()
-  if (!address || typeof address === 'string') throw new Error('No negative-control address')
-  const url = `http://127.0.0.1:${address.port}`
-  let stopped = false
-  try {
-    const healthy = releaseDiagnostics('http://127.0.0.1:1')
-    healthy.observe(page)
-    await page.goto(url)
-    await healthy.assertClean()
-    const failedHTTP = releaseDiagnostics('http://127.0.0.1:1')
-    failedHTTP.observe(page)
-    await page.goto(`${url}/missing`)
-    await expect(failedHTTP.assertClean()).rejects.toThrow()
-    await failedHTTP.attach(info)
-    await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
-    stopped = true
-    const failedNetwork = releaseDiagnostics('http://127.0.0.1:1')
-    failedNetwork.observe(page)
-    const failed = page.waitForEvent('requestfailed')
-    await page.goto(url).catch(() => undefined)
-    await failed
-    await expect(failedNetwork.assertClean()).rejects.toThrow()
-    await failedNetwork.attach(info)
-  } finally {
-    if (!stopped) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
-  }
-})
+}
 
 test('a fresh release diagnostic observer accepts the repaired synthetic document', async ({ page }) => {
   const diagnostics = releaseDiagnostics('http://127.0.0.1:1')
