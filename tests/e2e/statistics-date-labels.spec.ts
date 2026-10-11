@@ -1,4 +1,5 @@
 import { expect, test as base } from '@playwright/test'
+import { assertDateGeometry } from './mobile-readiness'
 
 const test = base.extend<{ hostScale: number }>({
   hasTouch: true,
@@ -32,6 +33,7 @@ test('zero-answer dates are visible before touch selection across a month transi
   await page.getByRole('navigation', { name: 'Mobile navigation' }).getByRole('link', { name: 'Statistics', exact: true }).click()
   await expect(page.getByRole('heading', { name: /^\d+ days? of practice$/ })).toBeVisible()
   const heatmap = page.getByRole('region', { name: 'Study heatmap', exact: true })
+  const expectedDates = Array.from({ length: 84 }, (_, index) => new Date(Date.UTC(2026, 6, 16 + index)).toISOString().slice(0, 10))
   for (const width of [320, 390]) {
     await page.setViewportSize({ width: Math.round(width * hostScale), height: Math.round(844 * hostScale) })
     const viewport = await page.evaluate(() => ({
@@ -46,11 +48,7 @@ test('zero-answer dates are visible before touch selection across a month transi
         grid: getComputedStyle(element).gridTemplateColumns,
       })),
     }))
-    for (const button of await heatmap.getByRole('button').all()) {
-      const box = await button.boundingBox()
-      expect(box!.width).toBeGreaterThanOrEqual(43.99)
-      expect(box!.height).toBeGreaterThanOrEqual(43.99)
-    }
+    await assertDateGeometry(heatmap.getByRole('button', { includeHidden: true }), expectedDates)
     await expect(heatmap.getByRole('region', { name: 'Study dates', exact: true })).toHaveCSS('overflow-x', 'auto')
     expect(viewport.width, JSON.stringify(viewport)).toBe(width)
     expect(viewport.scrollWidth, JSON.stringify(viewport)).toBeLessThanOrEqual(Math.ceil(viewport.rootWidth))
