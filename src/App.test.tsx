@@ -7,6 +7,7 @@ import { setActivateWaitingWorker } from './service-worker-update'
 import { announceUpdateReady, clearUpdateWaiting } from './appEvents'
 import { readAnkiExportSnapshot, readCachedMediaBlob, readCard, readCardsForNote, readDeck, readDeckOptionGroup, readNote, readCardReviewHistory } from './collection-queries'
 import { damageIndexedDbMediaBlob, overwriteIndexedDbLegacyNoteType } from '../tests/helpers/damage-indexeddb-media'
+import { atReviewNoon } from '../tests/helpers/review-clock'
 
 const serviceWorkerDescriptor = Object.getOwnPropertyDescriptor(navigator, 'serviceWorker')
 
@@ -63,7 +64,8 @@ describe('application shell', () => {
     expect(screen.getByLabelText('Support')).toBeVisible()
     expect(screen.getByText('Development build (not a release)')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /new deck/i })).toBeEnabled()
-    expect(screen.getByRole('button', { name: 'Connect a PC' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Connect AnkiWeb account' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Connecting to PC…' })).toBeDisabled()
   })
 
   test('activates a waiting service worker when the learner accepts an update', async () => {
@@ -113,7 +115,7 @@ test('explains the Lockdown Mode offline limit and disables sync when service wo
     expect(screen.getByTestId('offline-shell-warning')).toHaveTextContent(/installed Home Screen app/)
     expect(screen.getByTestId('offline-shell-warning')).toHaveTextContent(/iOS Lockdown Mode can disable it/)
     expect(await screen.findByRole('button', { name: 'Sync now' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Pair another device' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'Connect AnkiWeb account' })).toBeEnabled()
   } finally {
     await collection.clearSyncConfiguration()
   }
@@ -373,7 +375,7 @@ test('card management gives every control a distinct card and template name', as
   }
 })
 
-test('answering a card refreshes queued siblings that the policy buries', async () => {
+test('answering a card refreshes queued siblings that the policy buries', () => atReviewNoon(async () => {
   const deck = await collection.createDeck(`Sibling refresh ${crypto.randomUUID()}`)
   const type = await collection.createNoteType({
     name: `Two cards ${crypto.randomUUID()}`,
@@ -399,9 +401,9 @@ test('answering a card refreshes queued siblings that the policy buries', async 
     await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
     await collection.deleteNoteType(type.id)
   }
-})
+}))
 
-test('review keyboard shortcuts use the same answer and rating actions as touch controls', async () => {
+test('review keyboard shortcuts use the same answer and rating actions as touch controls', () => atReviewNoon(async () => {
   const deck = await collection.createDeck(`Keyboard review ${crypto.randomUUID()}`)
   const note = await collection.createBasicNote(deck.id, { front: '聞く', back: 'listen' })
   const card = (await readCardsForNote(collection, note.id).then(cards => cards[0]))!
@@ -424,7 +426,7 @@ test('review keyboard shortcuts use the same answer and rating actions as touch 
   } finally {
     await collection.deleteDeck(deck.id, { mode: 'delete-subtree' })
   }
-})
+}))
 
 test('review shortcuts stay silent while a control owns the press', async () => {
   const deck = await collection.createDeck(`Typing review ${crypto.randomUUID()}`)

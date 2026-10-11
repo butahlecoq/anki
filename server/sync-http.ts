@@ -2,12 +2,13 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { Readable } from 'node:stream'
 import { SyncBackupError, SyncCompatibilityError, type createSyncService } from './sync-service.js'
 import { handlePairedAnkiWebRelay } from './ankiweb-gateway.js'
+import { privateConnectionAuthorized } from './private-connection.js'
 
 type Service = ReturnType<typeof createSyncService>
 
 const DEFAULT_JSON_BODY_LIMIT_BYTES = 32 * 1024 * 1024
 const MAX_TRACKED_PAIRING_PEERS = 10_000
-type HttpOptions = { allowedOrigin?: string; jsonBodyLimitBytes?: number; pairingBodyLimitBytes?: number; pairingAttemptLimit?: number; pairingWindowMs?: number; ankiWebUpstream?: typeof fetch }
+type HttpOptions = { allowedOrigin?: string; trustedProxyUser?: string; jsonBodyLimitBytes?: number; pairingBodyLimitBytes?: number; pairingAttemptLimit?: number; pairingWindowMs?: number; ankiWebUpstream?: typeof fetch }
 
 const corsHeaders = (origin: string | undefined, allowedOrigin: string | undefined): Record<string, string> => origin && allowedOrigin === origin ? {
   'access-control-allow-origin': allowedOrigin,
@@ -77,7 +78,7 @@ async function relayAnkiWeb(request: IncomingMessage, response: ServerResponse, 
   Readable.fromWeb(relayResponse.body as never).on('error', () => response.destroy()).pipe(response)
 }
 
-export function createSyncHttpHandler(service: Service, { allowedOrigin, jsonBodyLimitBytes = DEFAULT_JSON_BODY_LIMIT_BYTES, pairingBodyLimitBytes = 4096, pairingAttemptLimit = 10, pairingWindowMs = 60_000, ankiWebUpstream = fetch }: HttpOptions = {}) {
+export function createSyncHttpHandler(service: Service, { allowedOrigin, trustedProxyUser, jsonBodyLimitBytes = DEFAULT_JSON_BODY_LIMIT_BYTES, pairingBodyLimitBytes = 4096, pairingAttemptLimit = 10, pairingWindowMs = 60_000, ankiWebUpstream = fetch }: HttpOptions = {}) {
   const pairingFailures = new Map<string, { startedAt: number; attempts: number }>()
   return async (request: IncomingMessage, response: ServerResponse) => {
     const headers = corsHeaders(request.headers.origin, allowedOrigin)
@@ -90,6 +91,15 @@ export function createSyncHttpHandler(service: Service, { allowedOrigin, jsonBod
         return
       }
       if (request.method === 'GET' && request.url === '/api/health') return reply(200, service.health())
+      if (request.url === '/api/connection') {
+        if (!trustedProxyUser || !allowedOrigin) return request.method === 'GET' ? reply(200, { automatic: false }) : reply(403, { error: 'Automatic connection is unavailable.' })
+        if (!privateConnectionAuthorized(request, allowedOrigin, trustedProxyUser)) return reply(403, { error: 'Private owner authentication required.' })
+        if (request.method === 'GET') return reply(200, { automatic: true })
+        if (request.method !== 'POST') return reply(405, { error: 'Method not allowed.' })
+        const payload = await body(request, Math.min(jsonBodyLimitBytes, pairingBodyLimitBytes)) as { deviceId?: unknown }
+        if (typeof payload.deviceId !== 'string' || !payload.deviceId || payload.deviceId.length > 128 || [...payload.deviceId].some(character => character.charCodeAt(0) <= 0x1f || character.charCodeAt(0) === 0x7f)) return reply(400, { error: 'Device ID is invalid.' })
+        return reply(201, service.connectTrustedDevice(payload.deviceId))
+      }
       if (request.method === 'POST' && request.url === '/api/pair') {
         const payload = await body(request, Math.min(jsonBodyLimitBytes, pairingBodyLimitBytes)) as { code?: unknown; deviceId?: unknown }
         if (typeof payload.code !== 'string' || typeof payload.deviceId !== 'string' || !payload.code || !payload.deviceId) return reply(400, { error: 'Pairing code and device ID are required.' })

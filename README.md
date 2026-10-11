@@ -51,7 +51,20 @@ The measured learner path from source checkout through private iPhone setup and 
 
 ## Run the sync service
 
-For local desktop verification, start the durable SQLite-backed service and print a one-time pairing code in a second terminal:
+For the private Tailscale Serve deployment, configure the existing Tailscale owner's login and the app's HTTPS origin in the sync-service session:
+
+```powershell
+$env:KIROKU_HOST = '127.0.0.1'
+$env:KIROKU_ALLOWED_ORIGIN = 'https://desktop-name.tailnet-name.ts.net'
+$env:KIROKU_TRUSTED_PROXY_USER = 'your-existing-Tailscale-login'
+npm run server:start
+```
+
+Keep Serve's `/` route pointing to the loopback app and `/api` pointing to the loopback sync service. Open the private app address while connected to Tailscale: the app connects to the PC automatically, without an address or pairing code. **Connect AnkiWeb account** opens username and password. Connection alone leaves the local collection and pending work unchanged; use **Sync now** when ready to exchange changes. If the PC is off or the private network cannot confirm your identity, retry after restoring the connection. No reinstall or local storage reset is needed.
+
+Automatic connection is disabled unless both owner and origin are explicitly configured; the backend must bind to loopback. Only the exact configured owner's authenticated `Tailscale-User-Login` header can authorize a connection. [Tailscale Serve strips spoofed identity headers](https://tailscale.com/docs/features/tailscale-serve#identity-headers); do not enable this option behind a proxy that accepts user-supplied identity headers or exposes the backend directly. The ordinary app development/preview proxy strips this identity header too; use Serve's dedicated `/api` route for authenticated automatic connection. Funnel does not supply this identity. Later requests use revocable device credentials, not the proxy header. For a lost device, revoke both its Kiroku credential and its Tailscale access: an authorized owner device can establish a new connection. See [ADR 0007](docs/adr/0007-private-proxy-establishes-device-connection.md).
+
+For separately hosted services or local desktop verification without this private proxy, **Advanced PC connection** retains manual pairing. The local app forwards `/api` to the loopback sync service (port 4174 by default, or `KIROKU_SYNC_PORT`). Start the durable SQLite-backed service and print a one-time pairing code in a second terminal:
 
 ```powershell
 npm run server:start
@@ -72,7 +85,7 @@ $env:KIROKU_ALLOWED_ORIGIN = 'https://study.example.net'
 npm run server:start
 ```
 
-Enter the service’s `https://` address and the one-time code in **Connect a PC**. The paired-device credential is retained in that browser’s local collection settings and is never included in the web build. AnkiWeb username and password are used only by **Connect AnkiWeb account** and remain in memory while connected; see [the account-sync notes](docs/ankiweb-account-sync.md).
+Enter the service’s `https://` address and the one-time code in **Advanced PC connection → Connect a PC**. The paired-device credential is retained in that browser’s local collection settings and is never included in the web build. AnkiWeb username and password are used only by **Connect AnkiWeb account** and remain in memory while connected; see [the account-sync notes](docs/ankiweb-account-sync.md).
 
 After pairing, use **Download PC backup** to create and download a verified snapshot of the PC sync history and media. The service retains up to 14 automatic and manual backups for 30 days. See [PC service backups and recovery](docs/server-backups.md) for contents, verification, and restore limits.
 

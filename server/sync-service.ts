@@ -183,6 +183,21 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
     if ((requiresCollectionGeneration(database) || generation !== undefined) && generation !== current) throw compatibilityError('collection-generation-required', 'The PC collection was replaced from a backup. This device was not changed; export its offline collection and recover or reset it explicitly before syncing.', { collectionGeneration: current })
   }
 
+  const issueDeviceCredential = (deviceId: string, code?: string, now = new Date()) => {
+    const issuedToken = token()
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      if (code) database.prepare('UPDATE pairing_codes SET consumed_at = ? WHERE hash = ? AND consumed_at IS NULL').run(now.toISOString(), hash(code))
+      database.prepare('INSERT OR IGNORE INTO devices (id) VALUES (?)').run(deviceId)
+      database.prepare('INSERT INTO tokens (hash, device_id) VALUES (?, ?)').run(hash(issuedToken), deviceId)
+      database.exec('COMMIT')
+    } catch (error) {
+      database.exec('ROLLBACK')
+      throw error
+    }
+    return { deviceId, token: issuedToken, collectionGeneration: getCollectionGeneration(database) }
+  }
+
   const service = {
     authenticateDevice(accessToken: string) {
       return Boolean(authenticatedDevice(accessToken))
@@ -263,18 +278,13 @@ export function createSyncService({ databasePath, mediaDirectory: configuredMedi
     pair({ code, deviceId }: PairRequest, now = new Date()) {
       const pairing = database.prepare('SELECT expires_at, consumed_at FROM pairing_codes WHERE hash = ?').get(hash(code)) as { expires_at: string; consumed_at: string | null } | undefined
       if (!pairing || pairing.consumed_at || pairing.expires_at <= now.toISOString()) throw new Error('Pairing code is invalid or expired.')
-      const issuedToken = token()
-      database.exec('BEGIN IMMEDIATE')
-      try {
-        database.prepare('UPDATE pairing_codes SET consumed_at = ? WHERE hash = ? AND consumed_at IS NULL').run(now.toISOString(), hash(code))
-        database.prepare('INSERT OR IGNORE INTO devices (id) VALUES (?)').run(deviceId)
-        database.prepare('INSERT INTO tokens (hash, device_id) VALUES (?, ?)').run(hash(issuedToken), deviceId)
-        database.exec('COMMIT')
-      } catch (error) {
-        database.exec('ROLLBACK')
-        throw error
-      }
-      return { deviceId, token: issuedToken, collectionGeneration: getCollectionGeneration(database) }
+      return issueDeviceCredential(deviceId, code, now)
+    },
+
+    connectTrustedDevice(deviceId: string) {
+      const device = database.prepare('SELECT revoked_at FROM devices WHERE id = ?').get(deviceId) as { revoked_at: string | null } | undefined
+      if (device?.revoked_at) throw new Error('Authentication required.')
+      return issueDeviceCredential(deviceId)
     },
 
     rotateCredential(accessToken: string) {

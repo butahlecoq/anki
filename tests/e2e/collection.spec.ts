@@ -1073,7 +1073,7 @@ nativeCanvasTest()('cloze editor previews ordinals and reviewer shows furigana a
   await expect(page.getByRole('textbox', { name: 'Type your answer' })).toHaveValue('')
 })
 
-test('a typed-only front creates a card and announces the comparison after Enter', async ({ page }) => {
+nativeCanvasTest()('a typed-only front creates a card and announces the comparison after Enter', async ({ page }, testInfo) => {
   await page.getByRole('link', { name: 'Note types' }).click()
   await page.getByRole('button', { name: 'Create note type' }).click()
   await page.getByLabel('Note type name').fill('Type the word')
@@ -1088,6 +1088,7 @@ test('a typed-only front creates a card and announces the comparison after Enter
   await page.getByRole('textbox', { name: 'Word', exact: true }).fill('猫')
   await expect(page.getByText('1 card will be created.')).toBeVisible()
   await page.getByRole('button', { name: 'Save note' }).click()
+  expect(await page.evaluate(() => ({ width: innerWidth, height: innerHeight }))).toEqual(testInfo.project.use.viewport)
   await page.getByRole('button', { name: 'Study now' }).click()
   const input = page.getByRole('textbox', { name: 'Type your answer' })
   await expect(input).toBeVisible()

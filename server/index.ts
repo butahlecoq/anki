@@ -36,15 +36,16 @@ export async function revokePairedDevice({ runtimeDirectory, deviceId }: { runti
 }
 
 type TlsOptions = { keyPath: string; certificatePath: string }
-type StartOptions = { runtimeDirectory: string; host: string; port: number; allowedOrigin?: string; tls?: TlsOptions }
+type StartOptions = { runtimeDirectory: string; host: string; port: number; allowedOrigin?: string; trustedProxyUser?: string; tls?: TlsOptions }
 
 const isLoopback = (host: string) => ['127.0.0.1', '::1', 'localhost'].includes(host)
 
-export async function startSyncServer({ runtimeDirectory, host, port, allowedOrigin, tls }: StartOptions) {
+export async function startSyncServer({ runtimeDirectory, host, port, allowedOrigin, trustedProxyUser, tls }: StartOptions) {
+  if (trustedProxyUser && (!isLoopback(host) || !allowedOrigin)) throw new Error('Automatic connection requires a loopback backend and configured app origin.')
   if (!isLoopback(host) && !tls) throw new Error('TLS key and certificate paths are required before binding the sync service to a network interface.')
   await mkdir(runtimeDirectory, { recursive: true })
   const service = createSyncService({ databasePath: join(runtimeDirectory, 'kiroku-sync.sqlite'), mediaDirectory: join(runtimeDirectory, 'media') })
-  const handler = createSyncHttpHandler(service, { allowedOrigin })
+  const handler = createSyncHttpHandler(service, { allowedOrigin, trustedProxyUser })
   const server = tls
     ? createSecureServer({ key: await readFile(tls.keyPath), cert: await readFile(tls.certificatePath) }, handler)
     : createServer(handler)
@@ -83,7 +84,7 @@ async function runCommand() {
   const keyPath = process.env.KIROKU_TLS_KEY_PATH
   const certificatePath = process.env.KIROKU_TLS_CERT_PATH
   if (Boolean(keyPath) !== Boolean(certificatePath)) throw new Error('Set both KIROKU_TLS_KEY_PATH and KIROKU_TLS_CERT_PATH to enable TLS.')
-  await startSyncServer({ runtimeDirectory, host: process.env.KIROKU_HOST ?? '127.0.0.1', port, allowedOrigin: process.env.KIROKU_ALLOWED_ORIGIN, tls: keyPath && certificatePath ? { keyPath, certificatePath } : undefined }).then(({ port: boundPort }) => {
+  await startSyncServer({ runtimeDirectory, host: process.env.KIROKU_HOST ?? '127.0.0.1', port, allowedOrigin: process.env.KIROKU_ALLOWED_ORIGIN, trustedProxyUser: process.env.KIROKU_TRUSTED_PROXY_USER, tls: keyPath && certificatePath ? { keyPath, certificatePath } : undefined }).then(({ port: boundPort }) => {
     process.stdout.write(`Kiroku sync service listening on ${boundPort}\n`)
   })
 }

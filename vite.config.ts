@@ -1,12 +1,21 @@
 import react from '@vitejs/plugin-react'
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
-import { defineConfig, type UserConfig } from 'vite'
+import { defineConfig, type ProxyOptions, type UserConfig } from 'vite'
 import { VitePWA, type ManifestOptions } from 'vite-plugin-pwa'
 import { dependencyNotices } from './scripts/dependency-notices.ts'
 
 const version = (JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as { version: string }).version
 const previewAllowedHost = process.env.KIROKU_PREVIEW_ALLOWED_HOST
+const syncTarget = `http://127.0.0.1:${process.env.KIROKU_SYNC_PORT ?? '4174'}`
+const localApiProxy: ProxyOptions = {
+  target: syncTarget,
+  configure(proxy) {
+    // Only the dedicated authenticated Serve route may supply owner identity.
+    // The ordinary dev/preview server can also listen on an untrusted network.
+    proxy.on('proxyReq', request => request.removeHeader('tailscale-user-login'))
+  },
+}
 let commit = 'unknown'
 try { commit = execFileSync('git', ['rev-parse', '--short=12', 'HEAD'], { encoding: 'utf8' }).trim() } catch { /* source archives may not include .git */ }
 
@@ -16,7 +25,8 @@ export default defineConfig(({ command }) => ({
     'import.meta.env.VITE_KIROKU_BUILD_COMMIT': JSON.stringify(commit),
     'import.meta.env.PROD': JSON.stringify(command === 'build'),
   },
-  ...(previewAllowedHost ? { preview: { allowedHosts: [previewAllowedHost] } } : {}),
+  server: { proxy: { '/api': localApiProxy } },
+  preview: { proxy: { '/api': localApiProxy }, ...(previewAllowedHost ? { allowedHosts: [previewAllowedHost] } : {}) },
   plugins: [
     react(),
     dependencyNotices(),
