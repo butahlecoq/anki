@@ -1,5 +1,5 @@
 import { expect, test as base, type Page } from '@playwright/test'
-import { createServer, type Server } from 'node:http'
+import { createServer } from 'node:http'
 import { createConnection } from 'node:net'
 import { once } from 'node:events'
 import { mkdtemp, rm, readFile } from 'node:fs/promises'
@@ -11,6 +11,7 @@ import { createHash } from 'node:crypto'
 import { createSyncService } from '../../server/sync-service'
 import { createSyncHttpHandler } from '../../server/sync-http'
 import { openCollectionTools } from './collection-tools'
+import { closeOwnedHttpServer } from './owned-http-server'
 
 const test = base.extend<{ hostScale: number }>({
   hostScale: async ({ browser, browserName }, provide) => {
@@ -90,14 +91,6 @@ async function inventory(bytes: Buffer) {
   }
 }
 
-function closeOwnedServer(server: Server) {
-  const stopped = new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
-  // Browser preconnections have no HTTP request for close() to reap. Stop
-  // accepting connections first, then release only this fixture's sockets.
-  server.closeAllConnections()
-  return stopped
-}
-
 test('restoration fixture cleanup closes an unused TCP connection', async () => {
   const server = createServer((_request, response) => response.end('Owned fixture'))
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
@@ -108,7 +101,7 @@ test('restoration fixture cleanup closes an unused TCP connection', async () => 
   await once(client, 'connect')
   await accepted
   let closed = false
-  const stopped = closeOwnedServer(server).then(() => { closed = true })
+  const stopped = closeOwnedHttpServer(server).then(() => { closed = true })
   try {
     await expect.poll(() => closed, { timeout: 1000 }).toBe(true)
     expect(server.listening).toBe(false)
@@ -207,7 +200,7 @@ test('a deleted nested deck can be imported again and studied on a second device
   } finally {
     await receiverContext.close()
     await roundtripContext.close()
-    await closeOwnedServer(server)
+    await closeOwnedHttpServer(server)
     service.close()
     await rm(runtime, { recursive: true, force: true })
   }
