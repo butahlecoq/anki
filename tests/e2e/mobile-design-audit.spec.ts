@@ -2,6 +2,7 @@ import { expect, test as base } from '@playwright/test'
 import { writeFile } from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
 import { openCollectionTools } from './collection-tools'
+import { clickReachable } from './mobile-readiness'
 
 // The Windows WebKit embedder applies host display scaling to its viewport.
 // This audit uses touch and the Safari UA, with desktop viewport interpretation
@@ -85,8 +86,10 @@ test('Study controls and preview avoid horizontal overflow on small screens', as
 test('populated Statistics filters fit and remain usable on small screens', async ({ page, hostScale }, testInfo) => {
   await page.goto('/')
   await page.getByRole('button', { name: 'Load sample deck' }).click()
-  await page.getByRole('button', { name: 'Open Sample — Japanese Starter', exact: true }).click()
-  await page.getByRole('button', { name: 'Study now', exact: true }).click()
+  await clickReachable(page.getByRole('button', { name: 'Open Sample — Japanese Starter', exact: true }))
+  await expect(page.getByRole('heading', { name: 'Sample — Japanese Starter', exact: true })).toBeVisible()
+  await clickReachable(page.getByRole('button', { name: 'Study now', exact: true }))
+  await expect(page.getByRole('button', { name: 'Show answer', exact: true })).toBeVisible()
   const card = page.frameLocator('iframe[title="Review card"]').locator('ruby')
   await expect(card).toContainText(/猫|犬/)
   const firstWord = await card.innerText()
@@ -127,7 +130,7 @@ test('audit every route and its main dialogs on an iPhone sized screen', async (
     await page.evaluate(async () => {
       for (let frame = 0; frame < 5; frame++) await new Promise(requestAnimationFrame)
     })
-    observations.push({ name, configuredViewport: page.viewportSize(), ...await page.evaluate(() => {
+    const observation = await page.evaluate(() => {
       const root = document.documentElement.getBoundingClientRect()
       const controls = [...document.querySelectorAll<HTMLElement>('button, a, summary, select, input, textarea')]
         .filter(element => element.getClientRects().length && !element.closest('.sidebar, .visually-hidden'))
@@ -136,35 +139,39 @@ test('audit every route and its main dialogs on an iPhone sized screen', async (
           return { label: element.getAttribute('aria-label') || element.textContent?.trim().slice(0, 80) || element.getAttribute('type'), x: box.x, y: box.y, width: box.width, height: box.height }
         })
       return { actualViewport: { innerWidth, innerHeight, devicePixelRatio, visualWidth: visualViewport?.width, visualHeight: visualViewport?.height }, rootWidth: root.width, scrollWidth: document.documentElement.scrollWidth, controls }
-    }) })
+    })
+    observations.push({ name, configuredViewport: page.viewportSize(), ...observation })
     await writeFile(testInfo.outputPath('mobile-design-observations.json'), JSON.stringify(observations, null, 2))
-    const documentWidth = await page.evaluate(() => ({ root: document.documentElement.getBoundingClientRect().width, scroll: document.documentElement.scrollWidth }))
-    expect(documentWidth.scroll, `${name} has no page-level horizontal overflow`).toBeLessThanOrEqual(Math.ceil(documentWidth.root))
+    expect(observation.scrollWidth, `${name} has no page-level horizontal overflow`).toBeLessThanOrEqual(Math.ceil(observation.rootWidth))
     console.log(`Measured ${name}; taking screenshot`)
     await page.screenshot({ path: testInfo.outputPath(`${name}.png`), animations: 'disabled', timeout: 10_000 })
     if (/^08-|^10-|^21-|^26-/.test(name)) {
       // The Windows WebKit fullPage capture crops the right side under display
       // scaling. Capture ordinary viewports at overlapping scroll positions.
-      const originalScroll = await page.evaluate(() => scrollY)
-      const maximumScroll = await page.evaluate(() => Math.max(0, document.documentElement.scrollHeight - innerHeight))
-      const step = Math.floor((await page.evaluate(() => innerHeight)) * .75)
+      const { originalScroll, maximumScroll, step } = await page.evaluate(() => ({
+        originalScroll: scrollY,
+        maximumScroll: Math.max(0, document.documentElement.scrollHeight - innerHeight),
+        step: Math.floor(innerHeight * .75),
+      }))
       let segment = 0
       for (let y = 0; y <= maximumScroll; y = Math.min(y + step, maximumScroll)) {
-        await page.evaluate(async position => {
+        const settledScroll = await page.evaluate(async position => {
           scrollTo({ top: position, behavior: 'instant' })
           await new Promise(requestAnimationFrame)
           await new Promise(requestAnimationFrame)
+          return scrollY
         }, y)
-        expect(Math.abs((await page.evaluate(() => scrollY)) - y), `${name} screenshot scroll position is settled`).toBeLessThanOrEqual(1)
+        expect(Math.abs(settledScroll - y), `${name} screenshot scroll position is settled`).toBeLessThanOrEqual(1)
         await page.screenshot({ path: testInfo.outputPath(`${name}-scroll-${segment++}.png`), animations: 'disabled', timeout: 10_000 })
         if (y === maximumScroll) break
       }
-      await page.evaluate(async position => {
+      const restoredScroll = await page.evaluate(async position => {
         scrollTo({ top: position, behavior: 'instant' })
         await new Promise(requestAnimationFrame)
         await new Promise(requestAnimationFrame)
+        return scrollY
       }, originalScroll)
-      expect(Math.abs((await page.evaluate(() => scrollY)) - originalScroll), `${name} restores the scroll position before interacting`).toBeLessThanOrEqual(1)
+      expect(Math.abs(restoredScroll - originalScroll), `${name} restores the scroll position before interacting`).toBeLessThanOrEqual(1)
     }
   }
   async function dialog(button: string, name: string) {
@@ -270,7 +277,7 @@ test('audit every route and its main dialogs on an iPhone sized screen', async (
   await expect(page.getByRole('button', { name: 'Create session', exact: true })).toBeEnabled()
   await capture('27-custom-study-preview')
   await page.getByRole('button', { name: 'Create session', exact: true }).click()
-  await page.getByRole('button', { name: 'Study Mobile design practice', exact: true }).click()
+  await clickReachable(page.getByRole('button', { name: 'Study Mobile design practice', exact: true }))
   await expect(page.getByRole('button', { name: 'Show answer' })).toBeVisible()
   await capture('28-custom-review')
   await destination('Decks')

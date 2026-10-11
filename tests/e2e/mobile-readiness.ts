@@ -1,5 +1,18 @@
 import { expect, type Locator } from '@playwright/test'
 
+export async function clickReachable(control: Locator): Promise<void> {
+  await expect(control).toBeVisible()
+  await control.evaluate(element => element.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }))
+  await expect.poll(() => control.evaluate(element => {
+    const box = element.getBoundingClientRect()
+    const x = box.x + box.width / 2
+    const y = box.y + box.height / 2
+    const hit = document.elementFromPoint(x, y)
+    return box.width > 0 && box.height > 0 && x >= 0 && x < innerWidth && y >= 0 && y < innerHeight && hit !== null && element.contains(hit)
+  }), { message: 'The intended control center receives pointer events' }).toBe(true)
+  await control.click()
+}
+
 export interface DateGeometry {
   label: string | null
   date: string | null

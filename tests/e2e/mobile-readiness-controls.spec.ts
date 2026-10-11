@@ -1,8 +1,22 @@
 import { expect } from '@playwright/test'
 import { phoneCanvasTest } from './phone-canvas'
-import { assertDateGeometry, readDateGeometry } from './mobile-readiness'
+import { assertDateGeometry, clickReachable, readDateGeometry } from './mobile-readiness'
 
 const test = phoneCanvasTest({ width: 390, height: 844 })
+
+test('pointer readiness rejects fixed navigation covering the intended center', async ({ page }, info) => {
+  await page.setContent(`<meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0}button{position:fixed;top:50%;left:20px;width:200px;height:44px}nav{position:fixed;inset:0;z-index:2}</style><button onclick="this.dataset.clicks=String(Number(this.dataset.clicks||0)+1)">Intended action</button><nav aria-label="Covering navigation"></nav>`)
+  const control = page.getByRole('button', { name: 'Intended action' })
+  await expect(clickReachable(control)).rejects.toThrow()
+  await expect(control).not.toHaveAttribute('data-clicks')
+  await info.attach('covered-pointer', { body: JSON.stringify(await control.evaluate(element => {
+    const box = element.getBoundingClientRect()
+    return { bounds: box.toJSON(), hitTarget: document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)?.outerHTML }
+  })), contentType: 'application/json' })
+  await page.getByRole('navigation', { name: 'Covering navigation' }).evaluate(element => element.remove())
+  await clickReachable(control)
+  await expect(control).toHaveAttribute('data-clicks', '1')
+})
 const dates = Array.from({ length: 84 }, (_, index) => new Date(Date.UTC(2026, 6, 16 + index)).toISOString().slice(0, 10))
 const fixture = `<meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0}main{display:grid;grid-template-columns:repeat(7,44px)}button{box-sizing:border-box;width:44px;height:44px;padding:0}</style><main>${dates.map(date => `<button aria-label="${date}: 0 answers"><time datetime="${date}">${date.slice(-2)}</time></button>`).join('')}</main>`
 
