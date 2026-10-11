@@ -134,6 +134,7 @@ export async function connectPrivatePc(collection: Collection, origin: string, f
   let hasSavedConnection = false
   try {
     hasSavedConnection = Boolean(await collection.syncSettings())
+    if (hasSavedConnection && typeof navigator !== 'undefined' && navigator.onLine === false) return { state: 'paired' }
     if (!isSafeServiceEndpoint(origin)) return { state: 'address-error' }
     const capability = await fetcher(`${origin}/api/connection`)
     const supported = capability.ok ? await capability.json() as { automatic?: unknown } : undefined

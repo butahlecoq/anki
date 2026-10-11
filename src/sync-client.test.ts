@@ -42,6 +42,22 @@ test('saved manual pairing retains Advanced deployment capability without replac
   } finally { await collection.removeLocalCollection() }
 })
 
+test('offline reopening reuses the saved connection without attempting deployment discovery', async () => {
+  const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+  const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
+  try {
+    await collection.createDeck('Keep offline work')
+    const settings = { endpoint: 'https://owner.example.test', token: 'existing-device-token', cursor: 7 }
+    await collection.configureSync(settings)
+    const pending = await collection.pendingOperations()
+    const fetcher = vi.fn().mockRejectedValue(new TypeError('Offline'))
+    await expect(connectPrivatePc(collection, 'https://owner.example.test', fetcher)).resolves.toEqual({ state: 'paired' })
+    expect(fetcher).not.toHaveBeenCalled()
+    expect(await collection.syncSettings()).toEqual(settings)
+    expect(await collection.pendingOperations()).toEqual(pending)
+  } finally { online.mockRestore(); await collection.removeLocalCollection() }
+})
+
 test.each(['unavailable', 'rejected', 'malformed', 'offline'])('saved connection survives %s deployment discovery without issuing another credential', async failure => {
   const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
   try {
