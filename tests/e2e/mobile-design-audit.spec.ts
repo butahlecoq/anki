@@ -130,6 +130,7 @@ test('audit every route and its main dialogs on an iPhone sized screen', async (
     await page.evaluate(async () => {
       for (let frame = 0; frame < 5; frame++) await new Promise(requestAnimationFrame)
     })
+    if (name === '10-deck-detail') await expect(page.getByRole('button', { name: 'Study now', exact: true })).toBeVisible()
     const observation = await page.evaluate(() => {
       const root = document.documentElement.getBoundingClientRect()
       const controls = [...document.querySelectorAll<HTMLElement>('button, a, summary, select, input, textarea')]
@@ -142,6 +143,7 @@ test('audit every route and its main dialogs on an iPhone sized screen', async (
     })
     observations.push({ name, configuredViewport: page.viewportSize(), ...observation })
     await writeFile(testInfo.outputPath('mobile-design-observations.json'), JSON.stringify(observations, null, 2))
+    if (name === '10-deck-detail') expect(observation.controls.map(control => control.label), 'Deck detail capture includes its Study control').toContain('Study now')
     expect(observation.scrollWidth, `${name} has no page-level horizontal overflow`).toBeLessThanOrEqual(Math.ceil(observation.rootWidth))
     console.log(`Measured ${name}; taking screenshot`)
     await page.screenshot({ path: testInfo.outputPath(`${name}.png`), animations: 'disabled', timeout: 10_000 })
