@@ -42,6 +42,38 @@ test('saved manual pairing retains Advanced deployment capability without replac
   } finally { await collection.removeLocalCollection() }
 })
 
+for (const saved of [false, true]) {
+  test.each(['missing route', 'HTML fallback'])(`separately hosted app retains manual pairing with %s and saved connection ${saved}`, async responseKind => {
+    const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+    try {
+      await collection.createDeck('Keep local work')
+      const settings = { endpoint: 'https://pc.example.test', token: 'existing-device-token', cursor: 7 }
+      if (saved) await collection.configureSync(settings)
+      const pending = await collection.pendingOperations()
+      const fetcher = vi.fn().mockResolvedValue(responseKind === 'missing route'
+        ? new Response('', { status: 404 })
+        : new Response('<!doctype html><main>Static app</main>', { headers: { 'content-type': 'text/html; charset=utf-8' } }))
+      await expect(connectPrivatePc(collection, 'https://app.example.test', fetcher)).resolves.toEqual({ state: 'manual' })
+      expect(fetcher).toHaveBeenCalledExactlyOnceWith('https://app.example.test/api/connection')
+      expect(await collection.syncSettings()).toEqual(saved ? settings : undefined)
+      expect(await collection.pendingOperations()).toEqual(pending)
+    } finally { await collection.removeLocalCollection() }
+  })
+}
+
+test.each([403, 503])('private deployment HTML failure %s keeps automatic retry and local work', async status => {
+  const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
+  try {
+    await collection.createDeck('Keep local work')
+    const pending = await collection.pendingOperations()
+    const fetcher = vi.fn().mockResolvedValue(new Response('<!doctype html><main>Unavailable</main>', { status, headers: { 'content-type': 'text/html' } }))
+    await expect(connectPrivatePc(collection, 'https://owner.example.test', fetcher)).resolves.toEqual({ state: status === 403 ? 'authentication-required' : 'unreachable' })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(await collection.syncSettings()).toBeUndefined()
+    expect(await collection.pendingOperations()).toEqual(pending)
+  } finally { await collection.removeLocalCollection() }
+})
+
 test('offline reopening reuses the saved connection without attempting deployment discovery', async () => {
   const collection = createCollection(`kiroku-test-${crypto.randomUUID()}`)
   const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)

@@ -137,6 +137,8 @@ export async function connectPrivatePc(collection: Collection, origin: string, f
     if (hasSavedConnection && typeof navigator !== 'undefined' && navigator.onLine === false) return { state: 'paired' }
     if (!isSafeServiceEndpoint(origin)) return { state: 'address-error' }
     const capability = await fetcher(`${origin}/api/connection`)
+    // Static app hosts have no PC API, or return their HTML application fallback.
+    if (capability.status === 404 || (capability.ok && /^text\/html\b/i.test(capability.headers.get('content-type') ?? ''))) return { state: 'manual' }
     const supported = capability.ok ? await capability.json() as { automatic?: unknown } : undefined
     if (supported?.automatic === false) return { state: 'manual' }
     // Deployment capability is independent of reusing an existing credential.

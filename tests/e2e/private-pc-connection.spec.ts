@@ -27,18 +27,24 @@ async function removeFixture(directory: string) {
 
 // This proxy supplies only synthetic authenticated transport identity. Every
 // application/API response comes from the built app or the real SQLite service.
-async function privateFixture(webOrigin: string, { manual = false, holdDiscovery = false } = {}) {
+async function privateFixture(webOrigin: string, { manual = false, holdDiscovery = false, staticHosting }: { manual?: boolean; holdDiscovery?: boolean; staticHosting?: 'missing' | 'html' } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'kiroku-private-browser-'))
   const service = createSyncService({ databasePath: join(directory, 'collection.sqlite') })
   let backendOrigin = ''
   let authorized = true
   let connectionPosts = 0
   const apiRequests: string[] = []
+  const backendRequests: string[] = []
   let releaseDiscovery = () => {}
   const discovery = new Promise<void>(resolve => { releaseDiscovery = resolve })
   const proxy = createServer((incoming, response) => {
     const api = incoming.url?.startsWith('/api/') ?? false
     if (api) apiRequests.push(incoming.url!)
+    if (api && staticHosting) {
+      response.writeHead(staticHosting === 'missing' ? 404 : 200, { 'content-type': 'text/html' })
+      response.end('<!doctype html><main>Static application fallback</main>')
+      return
+    }
     if (incoming.url === '/api/connection' && incoming.method === 'POST') connectionPosts++
     const upstream = new URL(incoming.url ?? '/', api ? backendOrigin : webOrigin)
     const headers = { ...incoming.headers, host: upstream.host }
@@ -56,10 +62,14 @@ async function privateFixture(webOrigin: string, { manual = false, holdDiscovery
     incoming.pipe(forwarded)
   })
   const origin = await listen(proxy)
-  const backend = createServer(createSyncHttpHandler(service, { allowedOrigin: origin, trustedProxyUser: manual ? undefined : 'synthetic-owner@example.test' }))
+  const handler = createSyncHttpHandler(service, { allowedOrigin: origin, trustedProxyUser: manual ? undefined : 'synthetic-owner@example.test' })
+  const backend = createServer((request, response) => {
+    backendRequests.push(request.url ?? '/')
+    handler(request, response)
+  })
   backendOrigin = await listen(backend)
   return {
-    origin, service, apiRequests, releaseDiscovery,
+    origin, serviceOrigin: backendOrigin, service, apiRequests, backendRequests, releaseDiscovery,
     posts: () => connectionPosts,
     authorize: (value: boolean) => { authorized = value },
     async close() {
@@ -152,8 +162,9 @@ test('private app connects and reopens without any address or code, then opens A
   } finally { await fixture.close() }
 })
 
-test('manual deployment keeps Advanced pairing after a paired client reopens', async ({ page, context, baseURL }) => {
-  const fixture = await privateFixture(baseURL!, { manual: true })
+for (const staticHosting of [undefined, 'missing', 'html'] as const) {
+test(`manual deployment keeps Advanced pairing after a paired client reopens (${staticHosting ?? 'same-origin'})`, async ({ page, context, baseURL }) => {
+  const fixture = await privateFixture(baseURL!, { manual: true, staticHosting })
   try {
     await page.goto(fixture.origin)
     await page.getByRole('button', { name: 'New deck', exact: true }).click()
@@ -162,7 +173,7 @@ test('manual deployment keeps Advanced pairing after a paired client reopens', a
     await openCollectionTools(page)
     const advanced = page.getByRole('group', { name: 'Advanced PC connection', exact: true })
     await advanced.getByRole('button', { name: 'Connect a PC', exact: true }).click()
-    await page.getByLabel('PC service address').fill(fixture.origin)
+    await page.getByLabel('PC service address').fill(staticHosting ? fixture.serviceOrigin : fixture.origin)
     await page.getByLabel('One-time pairing code').fill(fixture.service.createPairingCode())
     await page.getByRole('button', { name: 'Connect device', exact: true }).click()
     await expect(page.getByRole('dialog')).toHaveCount(0)
@@ -178,9 +189,11 @@ test('manual deployment keeps Advanced pairing after a paired client reopens', a
       expect(fixture.service.listDevices()).toHaveLength(1)
       expect(fixture.posts()).toBe(0)
       expect(fixture.apiRequests).not.toContain('/api/sync')
+      expect(fixture.backendRequests).not.toContain('/api/sync')
     } finally { await reopened.close() }
   } finally { await fixture.close() }
 })
+}
 
 test('private identity failure retries without losing local work or AnkiWeb fields', async ({ page, baseURL }) => {
   const fixture = await privateFixture(baseURL!)
