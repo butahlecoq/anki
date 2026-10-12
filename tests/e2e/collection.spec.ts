@@ -248,6 +248,8 @@ for (const reopen of [false, true]) {
     await expect(dialog.getByText(/Preserved nested deck path Imported::Japanese/)).toBeVisible()
     await page.getByRole('button', { name: 'Import package' }).click()
 
+    // The imported package nests Japanese under Imported, which starts collapsed.
+    await page.getByRole('button', { name: 'Show 1 child deck', exact: true }).click()
     await page.getByRole('button', { name: 'Open Japanese' }).click()
     await expect(page.getByText('猫', { exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'Study now' }).click()
@@ -311,6 +313,7 @@ for (const reopen of [false, true]) {
       await expect(pc.getByText(/2 uploaded and \d+ downloaded/)).toBeVisible()
       await openCollectionTools(phone)
       await phone.getByRole('button', { name: 'Sync now' }).click()
+      await phone.getByRole('button', { name: 'Show 1 child deck', exact: true }).click()
       await phone.getByRole('button', { name: 'Open Japanese' }).click()
       await phone.getByRole('button', { name: 'Study now' }).click()
 

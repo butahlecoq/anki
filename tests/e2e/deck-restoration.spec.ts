@@ -170,6 +170,7 @@ test('a deleted nested deck can be imported again and studied on a second device
     await receiver.goto('/')
     await pair(receiver)
     await sync(receiver)
+    await receiver.getByRole('button', { name: 'Show 1 child deck', exact: true }).click()
     await receiver.getByRole('button', { name: 'Open Japanese', exact: true }).click()
     await receiver.getByRole('button', { name: 'Study now', exact: true }).click()
     const review = receiver.frameLocator('iframe[title="Review card"]')
