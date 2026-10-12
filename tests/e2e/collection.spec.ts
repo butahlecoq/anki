@@ -532,6 +532,11 @@ test('a Deck subtree starts collapsed and opens one level at a time', async ({ p
   await expect(hierarchy.getByRole('heading', { name: 'Verbs', exact: true })).toBeHidden()
   // Closing one Deck closes everything it was revealing.
   await expect(page.getByRole('button', { name: /^Hide \d+ child deck/ })).toHaveCount(0)
+
+  // Reopening starts at one level again rather than restoring hidden deep state.
+  await page.getByRole('button', { name: 'Show 1 child deck', exact: true }).click()
+  await expect(tile('Reading')).toHaveAttribute('aria-expanded', 'false')
+  await expect(hierarchy.getByRole('heading', { name: 'Verbs', exact: true })).toBeHidden()
 })
 
 nativeCanvasTest()('learner saves scheduling policies and manages a card lifecycle', async ({ page }, testInfo) => {

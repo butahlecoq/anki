@@ -592,6 +592,12 @@ test('the deck list collapses a Deck subtree until the learner opens it', async 
     expect(heading('Reading')).not.toBeInTheDocument()
     expect(heading('Verbs')).not.toBeInTheDocument()
 
+    // Reopening the parent starts at one level again rather than restoring a
+    // previously expanded hidden descendant.
+    fireEvent.click(within(parentTile).getByRole('button', { name: 'Show 1 child deck' }))
+    expect(tile('Reading')).toHaveAttribute('aria-expanded', 'false')
+    expect(heading('Verbs')).not.toBeInTheDocument()
+
     fireEvent.click(within(parentTile).getByRole('button', { name: `Open ${parent.name}` }))
     expect(window.location.hash).toBe(`#deck/${parent.id}`)
   } finally {

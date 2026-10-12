@@ -138,7 +138,19 @@ function DeckList({ decks, onNewDeck, onImport, onOpen }: { decks: DeckSummary[]
   visit(null, 1)
   const toggle = (deckId: string) => setExpanded((current) => {
     const next = new Set(current)
-    if (!next.delete(deckId)) next.add(deckId)
+    if (!next.delete(deckId)) {
+      next.add(deckId)
+    } else {
+      // Closing a parent also closes its descendants, so reopening it always
+      // reveals exactly one level rather than restoring a hidden deep state.
+      const descendants = (parentId: string) => {
+        for (const child of children.get(parentId) ?? []) {
+          next.delete(child.id)
+          descendants(child.id)
+        }
+      }
+      descendants(deckId)
+    }
     return next
   })
   return (
