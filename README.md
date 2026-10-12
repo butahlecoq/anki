@@ -221,6 +221,17 @@ The browser suite builds the production app, starts it locally, then verifies de
 
 Offline review after closing or restarting requires the installed Home Screen app and a browser configuration that supports Service Workers. iOS Lockdown Mode disables Service Workers and Web Locks; Kiroku does not sniff for Lockdown Mode, but reports unavailable offline-shell support and pauses collection sync until the shell is ready. Native Anki account/media synchronization also stops with a typed error when Web Locks are missing, preserving its local checkpoint. Do not rely on cold offline use while Lockdown Mode is enabled.
 
+## Brand and heritage
+
+The header carries a small four-point star as a quiet acknowledgement that Kiroku
+stands on Anki's shoulders. It is an **original drawing**, not Anki's logo: Anki's
+star is Ankitects' trademark, so Kiroku redraws the form in its own accent colour
+rather than reproducing that artwork. Kiroku's own brand mark is unchanged and
+remains the 記 tile in the sidebar. The star turns only while the app is genuinely
+working — preparing the offline shell or applying an update — so motion keeps
+carrying meaning, and it is still once the session settles. It is decorative: it
+is hidden from assistive technology and never announced.
+
 ## Privacy
 
 Imported packages, Anki databases, media, runtime data, backups, environment secrets, and generated certificates are ignored by Git. Do not commit a real collection or identity-bearing fixture.

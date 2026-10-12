@@ -68,6 +68,40 @@ describe('application shell', () => {
     expect(screen.getByRole('button', { name: 'Connecting to PC…' })).toBeDisabled()
   })
 
+  test('shows Anki heritage in the header without replacing the Kiroku brand', () => {
+    render(<App />)
+
+    // The Kiroku brand is untouched: the heritage mark sits beside it.
+    expect(screen.getByLabelText('Kiroku home')).toBeVisible()
+    expect(document.querySelector('.brand-mark')).toHaveTextContent('記')
+
+    const star = document.querySelector('.heritage-star')
+    expect(star).not.toBeNull()
+    // The artwork is a CSS mask rather than an <img>, because `currentColor`
+    // does not cross the image boundary; the colour itself is proved in the
+    // browser suite, where the stylesheet actually resolves.
+    expect(star).toHaveAttribute('aria-hidden', 'true')
+    expect(star!.querySelector('img')).toBeNull()
+  })
+
+  test('turns the heritage star only while the app is working', async () => {
+    const activate = vi.fn().mockResolvedValue(undefined)
+    setActivateWaitingWorker(activate)
+    render(<App />)
+
+    // A settled shell leaves the mark still.
+    expect(document.querySelector('.heritage-star')).not.toHaveClass('is-turning')
+
+    // An update merely waiting for the learner is not work, so it stays still.
+    announceUpdateReady()
+    await screen.findByRole('button', { name: 'Update app' })
+    expect(document.querySelector('.heritage-star')).not.toHaveClass('is-turning')
+
+    // Accepting it is work, so the star turns until the app settles.
+    fireEvent.click(screen.getByRole('button', { name: 'Update app' }))
+    await waitFor(() => expect(document.querySelector('.heritage-star')).toHaveClass('is-turning'))
+  })
+
   test('activates a waiting service worker when the learner accepts an update', async () => {
     const activate = vi.fn().mockResolvedValue(undefined)
     setActivateWaitingWorker(activate)

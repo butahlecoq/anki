@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!--
+    An original four-pointed star drawn for Kiroku. Anki's own star is
+    Ankitects' trademark, so this is deliberately not a copy of it: the geometry
+    is a plain four-point sparkle with concave sides. It is applied as a CSS mask
+    (see .heritage-star in src/styles.css), so the fill is only a silhouette and
+    the theme's accent tokens decide the colour.
+  -->
+  <path d="M32 3c1.6 12.4 5.6 21.2 12.1 25.1C50.6 31 56 32.6 62 32c-6 1.6-11.4 4.6-17.9 3.9C37.6 37.6 33.6 46.4 32 61c-1.6-14.6-5.6-23.4-12.1-25.1C13.4 32.6 8 31 2 32c6-1.6 11.4-4.6 17.9-3.9C26.4 24.2 30.4 15.4 32 3Z" />
+</svg>
