@@ -619,7 +619,6 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   .review-shortcuts { text-align: left; }
   .rating-grid { grid-template-columns: 1fr 1fr; }
   .is-reviewing .main { padding-bottom: calc(var(--mobile-nav-height) + 12px); }
-  .is-reviewing .topbar { position: relative; }
   .is-reviewing .eyebrow { align-self: flex-start; margin-top: 16px; }
   .is-reviewing .topbar .connection { position: absolute; left: 0; bottom: 5px; max-width: calc(100% - 170px); font-size: 9px; letter-spacing: normal; text-transform: none; }
   .is-reviewing .review-card { min-height: 0; margin: 12px auto; padding: 16px; }
@@ -631,7 +630,10 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .today-workload { padding: 22px; border: 1px solid var(--border-subtle); background: var(--surface-panel); margin: 18px 0; }
 .today-workload .count-strip { margin: 16px 0; flex-wrap: wrap; }
 .today-workload small { display: block; color: var(--text-muted); line-height: 1.8; }
-.today-workload > a { display: inline-flex; margin-top: 12px; }
+/* The link is a flex box so the vertical margin above it applies. Without
+   `align-items` its label stretches to the full 44px touch height and renders
+   against the top border instead of the middle. */
+.today-workload > a { display: inline-flex; align-items: center; margin-top: 12px; }
 .statistics-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 16px; margin-top: 28px; }
 .statistics-controls label { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; color: var(--text-muted); font-size: 11px; min-width: 0; }
 .statistics-controls input, .statistics-controls select { width: 100%; min-width: 0; max-width: 100%; min-height: 44px; padding: 10px; color: var(--text-primary); border: 1px solid var(--border-subtle); background: var(--surface-panel); font: inherit; }
@@ -798,7 +800,13 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .sync-conflict-version dd { margin-inline-start: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 @media (max-width: 680px) {
-  .topbar { position: relative; height: calc(76px + env(safe-area-inset-top, 0px)); align-items: flex-start; }
+  /* An installed iPhone draws its clock and battery over the page, so the
+     header reserves that band and then stays put: content scrolls beneath the
+     header instead of beneath the status bar. Sticky is also a positioned
+     box, so the connection line below still anchors to the header. The page
+     surface is opaque, because the header's job is to hide what passes under
+     it, not to tint it. */
+  .topbar { position: sticky; top: 0; z-index: 11; height: calc(76px + var(--safe-top)); align-items: flex-start; background: var(--surface-page); }
   .topbar .eyebrow { margin-top: 16px; }
   .topbar-controls { padding-top: 8px; }
   .topbar .connection { position: absolute; left: 0; bottom: 8px; max-width: 100%; overflow: visible; font-size: 9px; letter-spacing: normal; text-transform: none; }

@@ -24,6 +24,27 @@ describe('iPhone chrome', () => {
     expect(phone).toMatch(/\.mobile-nav\s*\{[^}]*position:\s*fixed/)
   })
 
+  test('the phone header stays pinned below the status bar the phone draws over the page', () => {
+    // An installed iPhone paints its clock and battery across the top of the
+    // page. A header that scrolls away with the content leaves that band over
+    // whatever is being read, so the header stays put and content passes under
+    // it.
+    expect(phone).toMatch(/\.topbar\s*\{[^}]*position:\s*sticky[^}]*\btop:\s*0\b/)
+    // It has to be opaque, not tinted: the header's job is to hide what passes
+    // under it, and a translucent surface lets the content ghost through.
+    expect(phone).toMatch(/\.topbar\s*\{[^}]*background:\s*var\(--surface-page\)/)
+    // The status-bar band has to come from the one inset token, so that an
+    // injected token and a real device inset reserve the same space. --safe-top
+    // is itself env(safe-area-inset-top, 0px); this is about the phone block
+    // reading the token rather than reaching past it for the environment.
+    expect(phone).toMatch(/\.topbar\s*\{[^}]*height:\s*calc\(76px \+ var\(--safe-top\)\)/)
+    expect(phone).not.toContain('env(safe-area-inset-top')
+    // A more specific review rule that re-declared `position` would silently
+    // outrank the pin above. Review does not scroll the page, so it needs the
+    // sticky header too rather than a competing one.
+    expect(phone).not.toMatch(/\.is-reviewing \.topbar\s*\{[^}]*position:\s*relative/)
+  })
+
   test('the phone breakpoint leaves room for the fixed bottom navigation', () => {
     // Content must not hide behind the fixed navigation bar.
     expect(phone).toMatch(/\.main\s*\{[^}]*padding:\s*0 18px calc\(148px \+ var\(--mobile-nav-height\)\)/)
