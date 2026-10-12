@@ -122,16 +122,25 @@ function EmptyCollection({ onNewDeck, onImport }: { onNewDeck: () => void; onImp
 }
 
 function DeckList({ decks, onNewDeck, onImport, onOpen }: { decks: DeckSummary[]; onNewDeck: () => void; onImport: () => void; onOpen: (id: string) => void }) {
+  // A Deck that owns child Decks starts collapsed, so a learner with a deep
+  // hierarchy sees the top level rather than a screen of tiles.
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set())
   const children = new Map<string | null, DeckSummary[]>()
   for (const deck of decks) children.set(deck.parentId, [...(children.get(deck.parentId) ?? []), deck])
-  const ordered: Array<{ deck: DeckSummary; depth: number }> = []
+  const ordered: Array<{ deck: DeckSummary; depth: number; childCount: number }> = []
   const visit = (parentId: string | null, depth: number) => {
     for (const deck of (children.get(parentId) ?? []).sort((left, right) => left.name.localeCompare(right.name))) {
-      ordered.push({ deck, depth })
-      visit(deck.id, depth + 1)
+      const childDecks = children.get(deck.id) ?? []
+      ordered.push({ deck, depth, childCount: childDecks.length })
+      if (childDecks.length && expanded.has(deck.id)) visit(deck.id, depth + 1)
     }
   }
   visit(null, 1)
+  const toggle = (deckId: string) => setExpanded((current) => {
+    const next = new Set(current)
+    if (!next.delete(deckId)) next.add(deckId)
+    return next
+  })
   return (
     <>
       <section className="compact-hero">
@@ -140,15 +149,19 @@ function DeckList({ decks, onNewDeck, onImport, onOpen }: { decks: DeckSummary[]
       </section>
       <TodayWorkload />
       <section className="deck-grid deck-tree" role="tree" aria-label="Deck hierarchy">
-        {ordered.map(({ deck, depth }) => (
-          <article className="deck-tile" role="treeitem" aria-level={depth} style={{ '--deck-depth': depth - 1 } as CSSProperties} key={deck.id}>
-            <span className="deck-index">{deck.name === SAMPLE_DECK_NAME ? 'SAMPLE DECK' : 'DECK'} // {String(deck.noteCount).padStart(2, '0')} NOTES</span>
-            <h2>{deck.name}</h2>
-            {deck.sessionCount > 0 && <p className="temporary-membership">{deck.sessionCount} home cards temporarily reserved for custom study</p>}
-            <CountStrip counts={deck.counts} reviews={deck.reviewCount} />
-            <button className="tile-action" type="button" aria-label={`Open ${deck.name}`} onClick={() => onOpen(deck.id)}>Open deck <span>→</span></button>
-          </article>
-        ))}
+        {ordered.map(({ deck, depth, childCount }) => {
+          const isExpanded = childCount > 0 && expanded.has(deck.id)
+          return (
+            <article className="deck-tile" role="treeitem" aria-level={depth} aria-expanded={childCount > 0 ? isExpanded : undefined} style={{ '--deck-depth': depth - 1 } as CSSProperties} key={deck.id}>
+              <span className="deck-index">{deck.name === SAMPLE_DECK_NAME ? 'SAMPLE DECK' : 'DECK'} // {String(deck.noteCount).padStart(2, '0')} NOTES</span>
+              <h2>{deck.name}</h2>
+              {deck.sessionCount > 0 && <p className="temporary-membership">{deck.sessionCount} home cards temporarily reserved for custom study</p>}
+              <CountStrip counts={deck.counts} reviews={deck.reviewCount} />
+              {childCount > 0 && <button className="tile-disclosure" type="button" onClick={() => toggle(deck.id)}>{isExpanded ? 'Hide' : 'Show'} {childCount} child deck{childCount === 1 ? '' : 's'} <span aria-hidden="true">{isExpanded ? '▴' : '▾'}</span></button>}
+              <button className="tile-action" type="button" aria-label={`Open ${deck.name}`} onClick={() => onOpen(deck.id)}>Open deck <span>→</span></button>
+            </article>
+          )
+        })}
       </section>
     </>
   )

@@ -313,6 +313,8 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .deck-tile h2 { margin: 21px 0 26px; font-family: var(--font-deck); font-size: 23px; font-weight: 500; letter-spacing: normal; line-height: 1.35; overflow-wrap: anywhere; }
 .deck-tile .count-strip { margin-top: auto; padding-bottom: 20px; }
 .deck-tile .tile-action { margin-top: 0; }
+.tile-disclosure { margin: 0 -25px; min-height: 44px; padding: 0 24px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 0; border-top: 1px solid var(--border-subtle); background: transparent; color: var(--text-muted); cursor: pointer; font-size: 9px; letter-spacing: .1em; text-transform: uppercase; }
+.tile-disclosure:hover { color: var(--accent); background: var(--accent-wash-faint); }
 .tile-action { margin: auto -25px -25px; min-height: 47px; padding: 0 24px; display: flex; align-items: center; justify-content: space-between; border: 0; border-top: 1px solid var(--border-subtle); background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 9px; letter-spacing: .1em; text-transform: uppercase; }
 .tile-action:hover { color: var(--accent); background: var(--accent-wash-faint); }
 
@@ -747,6 +749,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   .nav-item, .mobile-nav a { min-height: 44px; }
   .primary-action, .rating { min-height: 54px; }
   .tile-action { min-height: 52px; }
+  .tile-disclosure { min-height: 52px; }
   .browser-pagination button, .studied-cards button, .browser-bulk-actions button, .occlusion-mask-controls .text-button { min-height: 44px; }
   .review-heatmap button { height: 44px; }
   /* The legend is discoverability for keyboard users, and a touch device has

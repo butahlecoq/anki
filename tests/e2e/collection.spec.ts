@@ -456,7 +456,79 @@ test('learner organizes a child deck and persists a shared daily study limit', a
   await page.getByRole('button', { name: '← All decks' }).click()
   const hierarchy = page.getByRole('tree', { name: 'Deck hierarchy' })
   await expect(hierarchy.getByText('Japanese')).toBeVisible()
+  // The child Deck is only reachable through its parent's disclosure, which is
+  // what proves it persisted rather than merely existing in storage.
+  await expect(hierarchy.getByText('Reading')).toBeHidden()
+  await page.getByRole('button', { name: 'Show 1 child deck' }).click()
   await expect(hierarchy.getByText('Reading')).toBeVisible()
+})
+
+test('a Deck subtree starts collapsed and opens one level at a time', async ({ page }, testInfo) => {
+  test.setTimeout(90_000)
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Load sample deck', exact: true }).click()
+
+  const hierarchy = page.getByRole('tree', { name: 'Deck hierarchy' })
+  const tile = (name: string) => hierarchy.getByRole('treeitem').filter({ has: page.getByRole('heading', { name, exact: true }) })
+  const expand = async (name: string) => {
+    if (await tile(name).getAttribute('aria-expanded') === 'false') {
+      await tile(name).getByRole('button', { name: /^Show \d+ child deck/ }).click()
+    }
+  }
+  /** Walks a Deck Path from the list, opening each level it needs on the way. */
+  const openPath = async (path: string[]) => {
+    await page.getByRole('link', { name: 'Decks', exact: true }).click()
+    for (const step of path) await expand(step)
+    if (path.length) await page.getByRole('button', { name: `Open ${path[path.length - 1]}`, exact: true }).click()
+  }
+
+  await page.getByRole('button', { name: 'New deck', exact: true }).click()
+  await page.getByLabel('Deck name', { exact: true }).fill('Japanese')
+  await page.getByRole('dialog', { name: 'Create a deck' }).getByRole('button', { name: 'Create deck', exact: true }).click()
+  await openPath(['Japanese'])
+  // A three-level hierarchy, created through the visible controls.
+  for (const [parent, child] of [['Japanese', 'Reading'], ['Reading', 'Verbs']]) {
+    await page.getByRole('button', { name: 'Create child deck', exact: true }).click()
+    await page.getByLabel('Deck name', { exact: true }).fill(child)
+    await page.getByRole('dialog', { name: 'Create a child deck' }).getByRole('button', { name: 'Create child deck', exact: true }).click()
+    await expect(page.getByRole('dialog', { name: 'Create a child deck' })).toBeHidden()
+    await openPath(parent === 'Japanese' ? ['Japanese', child] : ['Japanese', 'Reading', child])
+  }
+
+  await openPath([])
+
+  // Nothing below a Deck is rendered until its disclosure is opened, so the
+  // first screen is the top level rather than the whole hierarchy.
+  await expect(tile('Japanese')).toHaveAttribute('aria-expanded', 'false')
+  await expect(hierarchy.getByRole('heading', { name: 'Reading', exact: true })).toBeHidden()
+  await expect(hierarchy.getByRole('heading', { name: 'Verbs', exact: true })).toBeHidden()
+
+  const disclosure = page.getByRole('button', { name: 'Show 1 child deck', exact: true })
+  const box = await disclosure.boundingBox()
+  expect(box).not.toBeNull()
+  expect(box!.height, 'the disclosure is a full touch target').toBeGreaterThanOrEqual(43.99)
+  await testInfo.attach('deck-disclosure-geometry', { body: JSON.stringify(box), contentType: 'application/json' })
+  await page.screenshot({ path: testInfo.outputPath('deck-subtree-collapsed.png') })
+
+  await disclosure.click()
+  await expect(tile('Japanese')).toHaveAttribute('aria-expanded', 'true')
+  await expect(tile('Reading')).toHaveAttribute('aria-level', '2')
+  // One level at a time: the grandchild stays hidden behind its own parent.
+  await expect(hierarchy.getByRole('heading', { name: 'Verbs', exact: true })).toBeHidden()
+
+  await page.getByRole('button', { name: 'Show 1 child deck', exact: true }).click()
+  await expect(tile('Verbs')).toHaveAttribute('aria-level', '3')
+  // A leaf Deck has nothing behind it, so it offers no disclosure.
+  await expect(tile('Verbs')).not.toHaveAttribute('aria-expanded')
+  await expect(page.getByRole('button', { name: /^Hide \d+ child deck/ })).toHaveCount(2)
+  await page.screenshot({ path: testInfo.outputPath('deck-subtree-expanded.png') })
+
+  await tile('Japanese').getByRole('button', { name: 'Hide 1 child deck', exact: true }).click()
+  await expect(tile('Japanese')).toHaveAttribute('aria-expanded', 'false')
+  await expect(hierarchy.getByRole('heading', { name: 'Reading', exact: true })).toBeHidden()
+  await expect(hierarchy.getByRole('heading', { name: 'Verbs', exact: true })).toBeHidden()
+  // Closing one Deck closes everything it was revealing.
+  await expect(page.getByRole('button', { name: /^Hide \d+ child deck/ })).toHaveCount(0)
 })
 
 nativeCanvasTest()('learner saves scheduling policies and manages a card lifecycle', async ({ page }, testInfo) => {
