@@ -32,6 +32,14 @@ async function japaneseFixture() {
   return { bytes: Buffer.from(await pkg.toUint8Array(SQL)), mediaDigests: [sha256(image), sha256(audio)].sort() }
 }
 
+/** The imported Japanese Deck only exists behind its parent's closed disclosure. */
+async function revealJapanese(page: Page) {
+  const release = page.getByRole('treeitem').filter({ has: page.getByRole('heading', { name: 'Release', exact: true }) })
+  if (await release.getAttribute('aria-expanded') === 'false') {
+    await release.getByRole('button', { name: /^Show \d+ child deck/ }).click()
+  }
+}
+
 async function importPackage(page: Page, buffer: Buffer, notes: number) {
   await openCollectionTools(page)
   await page.getByRole('button', { name: 'Import Anki package', exact: true }).click()
@@ -39,6 +47,7 @@ async function importPackage(page: Page, buffer: Buffer, notes: number) {
   await expect(page.getByRole('region', { name: 'Package summary' })).toContainText(`${notes} notes`, { timeout: 15000 })
   await page.getByRole('button', { name: 'Import package', exact: true }).click()
   await expect(page.getByRole('dialog', { name: /Import/ })).toBeHidden()
+  await revealJapanese(page)
   await expect(page.getByRole('button', { name: 'Open 日本語', exact: true })).toBeVisible()
 }
 
@@ -172,6 +181,7 @@ test('production release collection survives two offline reopenings and converge
   }
   const openJapanese = async (page: Page) => {
     await navigate(page, 'Decks')
+    await revealJapanese(page)
     await page.getByRole('button', { name: 'Open 日本語', exact: true }).click()
     await expect(page.getByRole('heading', { name: '日本語', exact: true, level: 1 })).toBeVisible()
   }
@@ -346,6 +356,7 @@ test('production release collection survives two offline reopenings and converge
     expect(expected.decks.map(deck => deck.name.replaceAll('\u001f', '::'))).toEqual(expect.arrayContaining(['Release', 'Release::日本語', '手作り']))
     expect(expected.media.map(media => media.digest).sort()).toEqual(fixture.mediaDigests)
     expect(await releaseInventory(await exportPackage(second.page, info, 'reconnected-second-client'))).toEqual(expected)
+    await revealJapanese(second.page)
     await second.page.getByRole('button', { name: 'Open 日本語', exact: true }).scrollIntoViewIfNeeded()
     await checkpoint(second.page, '09-converged-receiver')
     const restored = await createClient()
@@ -357,6 +368,7 @@ test('production release collection survives two offline reopenings and converge
     await search(restored.page, '"offline edit"')
     await expect(restored.page.getByRole('button', { name: '猫', exact: true })).toBeVisible()
     expect(await releaseInventory(await exportPackage(restored.page, info, 'restored-clean-client'))).toEqual(expected)
+    await revealJapanese(restored.page)
     await restored.page.getByRole('button', { name: 'Open 日本語', exact: true }).scrollIntoViewIfNeeded()
     await checkpoint(restored.page, '10-exported-restored')
     await info.attach('release-inventory', { body: JSON.stringify(expected, null, 2), contentType: 'application/json' })
