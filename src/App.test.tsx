@@ -138,6 +138,7 @@ test('waits for service-worker readiness before claiming the offline shell is re
   render(<App />)
 
   expect(screen.getByRole('status')).toHaveTextContent('Preparing offline shell')
+  expect(document.querySelector('.heritage-star')).toHaveClass('is-turning')
   expect(screen.queryByText('Offline shell ready')).not.toBeInTheDocument()
 })
 

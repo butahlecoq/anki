@@ -49,3 +49,38 @@ test('the heritage star is hidden from assistive technology', async ({ page }) =
   // Decorative artwork must not be reachable as an image or a labelled node.
   await expect(page.getByRole('img', { name: /heritage/i })).toHaveCount(0)
 })
+
+test('the Anki heritage star keeps its five-point outline', async ({ page }) => {
+  await page.goto('/')
+
+  const silhouette = await page.locator('.heritage-star').evaluate(async () => {
+    const image = new Image()
+    image.src = new URL('/anki-heritage-star.svg', window.location.href).href
+    await image.decode()
+
+    const canvas = document.createElement('canvas')
+    canvas.width = 64
+    canvas.height = 64
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error('Canvas is unavailable')
+    context.drawImage(image, 0, 0, 64, 64)
+    const { data } = context.getImageData(0, 0, 64, 64)
+    const alphaAt = (x: number, y: number) => data[(y * 64 + x) * 4 + 3]
+
+    const reachesOuterRing = Array.from({ length: 360 }, (_, degrees) => {
+      const radians = degrees * Math.PI / 180
+      for (let radius = 29; radius >= 24; radius -= 0.5) {
+        const x = Math.round(32 + Math.sin(radians) * radius)
+        const y = Math.round(32 - Math.cos(radians) * radius)
+        if (alphaAt(x, y) > 100) return true
+      }
+      return false
+    })
+    const tips = reachesOuterRing.filter((present, index) => present && !reachesOuterRing[(index + 359) % 360]).length
+
+    return { tips, centerAlpha: alphaAt(32, 32) }
+  })
+
+  expect(silhouette.tips).toBe(5)
+  expect(silhouette.centerAlpha).toBe(0)
+})
