@@ -80,6 +80,10 @@ export function App() {
   const connection = online
     ? offlineStatus === 'ready' ? 'Offline shell ready' : offlineStatus === 'checking' ? 'Preparing offline shell' : 'Offline cache unavailable'
     : offlineStatus === 'ready' ? 'Offline shell active' : 'Offline shell unavailable'
+  // The heritage star turns only while the app is genuinely working. A settled
+  // session - including one merely waiting for the learner to accept an update -
+  // leaves it still, so motion keeps meaning something.
+  const busy = activatingUpdate || offlineStatus === 'checking'
 
   useEffect(() => {
     const show = () => setUpdateReady(true)
@@ -112,6 +116,7 @@ export function App() {
           <div className="eyebrow"><span>COLLECTION</span><span>/</span><span>LOCAL</span></div>
           <div className="topbar-controls">
             <div className={`connection ${online ? 'online' : 'offline'}`} role="status"><span className="pulse" />{connection}</div>
+            <span className={`heritage-star${busy ? ' is-turning' : ''}`} aria-hidden="true" />
             <details className="build-identity"><summary aria-label="Support" title="Support"><span aria-hidden="true">?</span><span className="support-tooltip" role="tooltip">Support</span></summary><div className="build-details"><dl><dt>Version</dt><dd>{buildIdentity.version}</dd><dt>Commit</dt><dd>{buildIdentity.commit}</dd><dt>Channel</dt><dd>{buildIdentity.release ? 'Release build' : 'Development build (not a release)'}</dd></dl>{buildIdentity.release && <a href="notices/index.html">Dependency notices</a>}</div></details>
             <label className="appearance-control">
               <span className="visually-hidden">Appearance</span>

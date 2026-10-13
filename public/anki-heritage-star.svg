@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!--
+    Five-point outlined star drawn from the Anki heritage reference in issue
+    #344. It is applied as a CSS mask (see .heritage-star in src/styles.css), so
+    the stroke is only a silhouette and the theme's accent tokens decide the
+    colour.
+  -->
+  <path d="M36 4 44 17 59 21 48 32 51 47 36 40 21 48 24 33 12 22 28 18Z" fill="none" stroke="#000" stroke-linecap="round" stroke-linejoin="round" stroke-width="5" />
+</svg>
