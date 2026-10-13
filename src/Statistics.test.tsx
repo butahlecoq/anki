@@ -47,6 +47,14 @@ test('statistics navigation is active and the empty collection explains missing 
   expect(screen.getByRole('heading', { name: '0 days of practice' })).toBeVisible()
 })
 
+test('the study heatmap shows 30 recent dates that fit the weekly phone grid', async () => {
+  render(<Statistics />)
+  await screen.findByRole('heading', { name: 'Every answer adds up' })
+  const dates = screen.getByRole('region', { name: 'Study dates' })
+  expect(within(dates).getAllByRole('button')).toHaveLength(30)
+  expect(screen.getByText(/last 30 study days/)).toBeVisible()
+})
+
 test('live offline answers and undo update totals, heatmap selection, and chronological card history', async () => {
   const now = new Date()
   const earlier = new Date(now); earlier.setDate(earlier.getDate() - 1)

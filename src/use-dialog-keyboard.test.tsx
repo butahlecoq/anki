@@ -10,11 +10,11 @@ function DialogHarness() {
   const dialog = useDialogKeyboard(() => setOpen(false), open)
   return <>
     <button onClick={() => setOpen(true)}>Open dialog</button>
-    {open && <section {...dialog} role="dialog" aria-label="Example dialog">
+    {open && <div className="dialog-backdrop"><section {...dialog} role="dialog" aria-label="Example dialog">
       <button>First</button>
       <button data-dialog-initial-focus>Safe cancel</button>
       <button onClick={() => setOpen(false)}>Save and close</button>
-    </section>}
+    </section></div>}
   </>
 }
 
@@ -69,6 +69,17 @@ test('restores focus after a successful action closes the dialog', async () => {
   fireEvent.click(opener)
   fireEvent.click(screen.getByRole('button', { name: 'Save and close' }))
   await waitFor(() => expect(opener).toHaveFocus())
+})
+
+test('clicking the backdrop closes the dialog while clicks inside it do not', () => {
+  render(<DialogHarness />)
+  fireEvent.click(screen.getByRole('button', { name: 'Open dialog' }))
+  const dialog = screen.getByRole('dialog', { name: 'Example dialog' })
+  const backdrop = dialog.parentElement!
+  fireEvent.click(dialog)
+  expect(screen.getByRole('dialog', { name: 'Example dialog' })).toBeVisible()
+  fireEvent.click(backdrop)
+  expect(screen.queryByRole('dialog', { name: 'Example dialog' })).not.toBeInTheDocument()
 })
 
 test('Escape closes only the top dialog and restores focus to the dialog beneath it', async () => {

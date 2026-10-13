@@ -7,6 +7,7 @@ import { connectNativeAnkiAccount, prepareNativeAccountImport, type NativeAnkiAc
 import { ImportSkipReport } from './ImportSkipReport.js'
 import { isSafeServiceEndpoint } from './sync-client.js'
 import { useDialogKeyboard } from './use-dialog-keyboard.js'
+import { accountActionLabel, type AccountAction } from './account-dialog-state.js'
 
 function AccountMediaVersion({ label, name, bytes }: { label: string; name: string; bytes: Uint8Array | null }) {
   const host = useRef<HTMLSpanElement>(null)
@@ -36,10 +37,10 @@ export function AnkiWebAccountDialog({ settings, onClose, onSetupPc, active = tr
   const [importCommitted, setImportCommitted] = useState(false)
   const sessionRef = useRef<NativeAnkiAccountSession | undefined>(undefined)
   const [busy, setBusy] = useState(false)
-  const [busyAction, setBusyAction] = useState<'connect' | 'media' | 'resolve' | 'prepare' | 'import' | null>(null)
+  const [busyAction, setBusyAction] = useState<AccountAction | null>(null)
   const [message, setMessage] = useState('')
   const dialogKeyboard = useDialogKeyboard(onClose, active)
-  const beginAction = (action: NonNullable<typeof busyAction>) => { setBusyAction(action); setBusy(true) }
+  const beginAction = (action: AccountAction) => { setBusyAction(action); setBusy(true) }
   const endAction = () => { setBusyAction(null); setBusy(false) }
 
   async function refreshAccountMedia(account: NativeAnkiAccountSession) {
@@ -181,7 +182,7 @@ export function AnkiWebAccountDialog({ settings, onClose, onSetupPc, active = tr
             <section className="account-media-status" aria-label="Account media">
               <h3>Account media</h3>
               <p>{accountMediaFiles} verified files stored on this device · media revision {accountMediaCursor}.</p>
-              <button className="text-button" type="button" disabled={busy || mediaConflicts.length > 0} onClick={() => void downloadAccountMedia()}>{busyAction === 'media' ? 'Synchronizing media…' : mediaRecoveryRequired ? 'Continue account media sync' : 'Download and verify account media'}</button>
+              <button className="text-button" type="button" disabled={busy || mediaConflicts.length > 0} onClick={() => void downloadAccountMedia()}>{accountActionLabel('media', busyAction, mediaRecoveryRequired ? 'Continue account media sync' : 'Download and verify account media', 'Synchronizing media…')}</button>
               {mediaConflicts.length > 0 && <section className="import-report" aria-label="Account media choices">
                 <h4>Choose which verified version to keep</h4>
                 <ul>{mediaConflicts.map((conflict) => <li key={conflict.name}>
@@ -195,7 +196,7 @@ export function AnkiWebAccountDialog({ settings, onClose, onSetupPc, active = tr
                 </li>)}</ul>
               </section>}
             </section>
-            <button className="text-button" type="button" disabled={busy} onClick={() => void previewAccountCollection()}>{busyAction === 'prepare' ? 'Preparing…' : 'Preview account collection'}</button>
+            <button className="text-button" type="button" disabled={busy} onClick={() => void previewAccountCollection()}>{accountActionLabel('prepare', busyAction, 'Preview account collection', 'Preparing…')}</button>
             {accountPlan && <section className="import-summary" aria-label="Account Import Plan">
               <h3>Account Import Plan · revision {accountPlan.revision}</h3>
               <p>The downloaded snapshot remains the authoritative account copy. This plan copies its representable rows into this device’s separate offline collection; it does not write to AnkiWeb.</p>
