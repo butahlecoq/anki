@@ -7,6 +7,7 @@ import { connectNativeAnkiAccount, prepareNativeAccountImport, type NativeAnkiAc
 import { ImportSkipReport } from './ImportSkipReport.js'
 import { isSafeServiceEndpoint } from './sync-client.js'
 import { useDialogKeyboard } from './use-dialog-keyboard.js'
+import { accountActionLabel, type AccountAction } from './account-dialog-state.js'
 
 function AccountMediaVersion({ label, name, bytes }: { label: string; name: string; bytes: Uint8Array | null }) {
   const host = useRef<HTMLSpanElement>(null)
@@ -36,8 +37,11 @@ export function AnkiWebAccountDialog({ settings, onClose, onSetupPc, active = tr
   const [importCommitted, setImportCommitted] = useState(false)
   const sessionRef = useRef<NativeAnkiAccountSession | undefined>(undefined)
   const [busy, setBusy] = useState(false)
+  const [busyAction, setBusyAction] = useState<AccountAction | null>(null)
   const [message, setMessage] = useState('')
   const dialogKeyboard = useDialogKeyboard(onClose, active)
+  const beginAction = (action: AccountAction) => { setBusyAction(action); setBusy(true) }
+  const endAction = () => { setBusyAction(null); setBusy(false) }
 
   async function refreshAccountMedia(account: NativeAnkiAccountSession) {
     const [files, cursor, attempt, conflicts] = await Promise.all([
@@ -64,7 +68,7 @@ export function AnkiWebAccountDialog({ settings, onClose, onSetupPc, active = tr
       setMessage('The paired PC address is not a safe private-service URL. No AnkiWeb request was sent.')
       return
     }
-    setBusy(true)
+    beginAction('connect')
     setMessage('Connecting through your PC service…')
     try {
       const account = await connectNativeAnkiAccount(settings, username, password)
@@ -76,13 +80,13 @@ export function AnkiWebAccountDialog({ settings, onClose, onSetupPc, active = tr
       setMessage(nativeAnkiAccountErrorMessage(error))
     } finally {
       setPassword('')
-      setBusy(false)
+      endAction()
     }
   }
 
   async function downloadAccountMedia() {
     if (!session) return
-    setBusy(true)
+    beginAction('media')
     setMessage(mediaRecoveryRequired ? 'Resuming account media synchronization…' : 'Downloading and verifying account media…')
     try {
       const recovery = Boolean(await session.media.attempts.get('active'))
@@ -93,19 +97,19 @@ export function AnkiWebAccountDialog({ settings, onClose, onSetupPc, active = tr
     } catch (error) {
       await refreshAccountMedia(session)
       setMessage(error instanceof Error ? error.message : 'Account media could not be verified. Existing verified files remain available.')
-    } finally { setBusy(false) }
+    } finally { endAction() }
   }
 
   async function chooseMediaConflict(name: string, choice: 'local' | 'remote') {
     if (!session) return
-    setBusy(true)
+    beginAction('resolve')
     try {
       await session.media.resolve(name, choice)
       await refreshAccountMedia(session)
       setMessage(`${name}: ${choice === 'local' ? 'device' : 'AnkiWeb'} media version selected. Continue synchronization to converge the account copies.`)
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'The media version could not be selected.')
-    } finally { setBusy(false) }
+    } finally { endAction() }
   }
 
   function disconnect() {
@@ -126,7 +130,7 @@ export function AnkiWebAccountDialog({ settings, onClose, onSetupPc, active = tr
 
   async function previewAccountCollection() {
     if (!session) return
-    setBusy(true)
+    beginAction('prepare')
     setMessage('Preparing an Import Plan from the downloaded account snapshot…')
     try {
       const prepared = await prepareNativeAccountImport(session, collection)
@@ -137,19 +141,19 @@ export function AnkiWebAccountDialog({ settings, onClose, onSetupPc, active = tr
     } catch (error) {
       setAccountPlan(undefined)
       setMessage(error instanceof Error ? error.message : 'The account collection could not be prepared. No local collection rows were changed.')
-    } finally { setBusy(false) }
+    } finally { endAction() }
   }
 
   async function importAccountCollection() {
     if (!accountPlan) return
-    setBusy(true)
+    beginAction('import')
     try {
       await accountPlan.commit({ importRepresentableOnly })
       setImportCommitted(true)
       setMessage('The reviewed account snapshot is now available in this device’s offline collection. The AnkiWeb account remains authoritative; no changes were uploaded.')
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'The account collection was not copied. The local collection was left unchanged.')
-    } finally { setBusy(false) }
+    } finally { endAction() }
   }
 
   return (
@@ -178,7 +182,7 @@ export function AnkiWebAccountDialog({ settings, onClose, onSetupPc, active = tr
             <section className="account-media-status" aria-label="Account media">
               <h3>Account media</h3>
               <p>{accountMediaFiles} verified files stored on this device · media revision {accountMediaCursor}.</p>
-              <button className="text-button" type="button" disabled={busy || mediaConflicts.length > 0} onClick={() => void downloadAccountMedia()}>{busy ? 'Synchronizing media…' : mediaRecoveryRequired ? 'Continue account media sync' : 'Download and verify account media'}</button>
+              <button className="text-button" type="button" disabled={busy || mediaConflicts.length > 0} onClick={() => void downloadAccountMedia()}>{accountActionLabel('media', busyAction, mediaRecoveryRequired ? 'Continue account media sync' : 'Download and verify account media', 'Synchronizing media…')}</button>
               {mediaConflicts.length > 0 && <section className="import-report" aria-label="Account media choices">
                 <h4>Choose which verified version to keep</h4>
                 <ul>{mediaConflicts.map((conflict) => <li key={conflict.name}>
@@ -192,7 +196,7 @@ export function AnkiWebAccountDialog({ settings, onClose, onSetupPc, active = tr
                 </li>)}</ul>
               </section>}
             </section>
-            <button className="text-button" type="button" disabled={busy} onClick={() => void previewAccountCollection()}>{busy && !accountPlan ? 'Preparing…' : 'Preview account collection'}</button>
+            <button className="text-button" type="button" disabled={busy} onClick={() => void previewAccountCollection()}>{accountActionLabel('prepare', busyAction, 'Preview account collection', 'Preparing…')}</button>
             {accountPlan && <section className="import-summary" aria-label="Account Import Plan">
               <h3>Account Import Plan · revision {accountPlan.revision}</h3>
               <p>The downloaded snapshot remains the authoritative account copy. This plan copies its representable rows into this device’s separate offline collection; it does not write to AnkiWeb.</p>
@@ -207,7 +211,7 @@ export function AnkiWebAccountDialog({ settings, onClose, onSetupPc, active = tr
               <p>Snapshot hash: <code>{accountPlan.snapshotHash}</code></p>
               {accountPlan.prepared.issues.length > 0 && <section className="import-report" aria-label="Account import findings"><h4>Import findings</h4><ul>{accountPlan.prepared.issues.map((issue, index) => <li key={`${issue.code}-${issue.subject}-${index}`} className={`import-${issue.severity}`}><strong>{issue.subject}</strong><span>{issue.detail}</span></li>)}</ul></section>}
               <details>
-                <summary>Review all {accountPlan.prepared.plan.decisions.length} planned row changes</summary>
+                <summary className="import-review-toggle">Review all {accountPlan.prepared.plan.decisions.length} planned row changes</summary>
                 <ul>{accountPlan.prepared.plan.decisions.map((decision, index) => <li key={`${decision.entity}:${decision.id}:${index}`}>{decision.entity} · {decision.action} · {decision.id}</li>)}</ul>
               </details>
               {accountPlan.prepared.plan.blocksImport && !accountPlan.prepared.plan.canImportRepresentable && <p className="form-error" role="alert">Some unsupported rows cannot be isolated safely. Nothing will be copied.</p>}

@@ -4,7 +4,7 @@ import { App } from './App'
 import { mediaBlock, rule, stylesheet } from './stylesheet-under-test'
 
 /*
- * iPhone layout contract for issue #23.
+ * iPhone layout contract for issues #23 and #348.
  *
  * jsdom does not lay out or paint, so pixel overflow is not assertable here;
  * those journeys run in CI under Playwright. This suite instead pins the
@@ -38,6 +38,8 @@ describe('iPhone chrome', () => {
     // is itself env(safe-area-inset-top, 0px); this is about the phone block
     // reading the token rather than reaching past it for the environment.
     expect(phone).toMatch(/\.topbar\s*\{[^}]*height:\s*calc\(76px \+ var\(--safe-top\)\)/)
+    expect(phone).toContain('padding-top: max(var(--safe-top), 20px)')
+    expect(phone).toContain('box-sizing: border-box; height: calc(60px + max(var(--safe-top), 20px))')
     expect(phone).not.toContain('env(safe-area-inset-top')
     // A more specific review rule that re-declared `position` would silently
     // outrank the pin above. Review does not scroll the page, so it needs the
@@ -97,6 +99,38 @@ describe('reduced motion', () => {
   test('the ambient connection pulse is not the only animation', () => {
     // The pulse is decorative; it is disabled by the reduced-motion block.
     expect(stylesheet).toContain('@keyframes pulse')
+  })
+})
+
+describe('issue #348 phone layouts', () => {
+  test('the review keeps four answer buttons in a constrained row with distinct answer colors', () => {
+    expect(rule('.review-answer-controls .rating-grid')).toContain('repeat(4, minmax(0, 1fr))')
+    expect(rule('.rating-grid > .rating')).toContain('min-width: 0')
+    for (const [selector, token] of [
+      ['.rating-again', '--status-danger'],
+      ['.rating-hard', '--status-warn'],
+      ['.rating-good', '--accent-strong'],
+      ['.rating-easy', '#69a9e8'],
+    ]) expect(rule(selector)).toContain(token)
+  })
+
+  test('the 30-day heatmap keeps full-size dates inside its scroll region', () => {
+    expect(rule('.statistics-controls input, .statistics-controls select')).toContain('box-sizing: border-box')
+    expect(rule('.review-heatmap')).toContain('repeat(12, minmax(44px, 1fr))')
+    expect(rule('.heatmap-scroll')).toContain('overflow-x: auto')
+    expect(phone).toMatch(/\.review-heatmap\s*\{[^}]*grid-template-columns:\s*repeat\(7, minmax\(44px, 1fr\)\)/)
+    expect(phone).toMatch(/\.statistics-controls\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, 1fr\)/)
+  })
+
+  test('account Deck paths have separators and the import summary is compact with surrounding space', () => {
+    expect(rule('.ankiweb-deck-list li')).toContain('border-bottom: 1px solid var(--border-subtle)')
+    expect(rule('.import-review-toggle')).toContain('font-size: 13px')
+    expect(rule('.import-review-toggle')).toContain('margin: 14px 0 18px')
+  })
+
+  test('completion fireworks use the reduced-motion preference', () => {
+    expect(stylesheet).toContain('@keyframes completion-firework')
+    expect(mediaBlock('prefers-reduced-motion: reduce')).toContain('.completion-fireworks i { animation: none; }')
   })
 })
 

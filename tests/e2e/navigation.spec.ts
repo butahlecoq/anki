@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 import initSqlJs from 'sql.js'
 import { readFile } from 'node:fs/promises'
 import { navigationPackage } from '../fixtures/secure-navigation'
+import { expectOfflineShellReady } from './offline-shell'
 
 test('study hides links while authoring retains safe navigation and clean package reimport', async ({ page, context, browser, browserName }) => {
   test.setTimeout(90_000)
@@ -16,7 +17,7 @@ test('study hides links while authoring retains safe navigation and clean packag
   await expect(page.getByRole('button', { name: 'Import package', exact: true })).toBeEnabled()
   await page.getByRole('button', { name: 'Import package', exact: true }).click()
   await page.getByRole('button', { name: 'Open 日本語 links', exact: true }).click()
-  await expect(page.getByText('Offline shell ready', { exact: true })).toBeVisible()
+  await expectOfflineShellReady(page)
   await context.setOffline(true)
   await page.getByRole('button', { name: 'Study now', exact: true }).click()
   const review = page.frameLocator('iframe[title="Review card"]')

@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import initSqlJs from 'sql.js'
 import { Deck, Note, Notetype, Package } from 'ankipack'
+import { expectOfflineShellReady } from './offline-shell'
 
 const PACKAGE_PREVIEW_TIMEOUT = 10_000 // Windows WebKit SQL/WASM preview measured at ~5.2s; Chromium remains sub-second.
 
@@ -39,7 +40,7 @@ test('browser maintains stable Japanese selections and previews field changes of
   await page.getByRole('button', { name: 'Open 日本語 browser', exact: true }).click()
   await createNote(page, '猫', 'cat')
   await createNote(page, '犬', 'dog')
-  await expect(page.getByText('Offline shell ready', { exact: true })).toBeVisible()
+  await expectOfflineShellReady(page)
   await page.getByRole('link', { name: 'Browse', exact: true }).click()
   await search(page, '猫')
   const selected = page.getByRole('checkbox', { name: /^Select card / })

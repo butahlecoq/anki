@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { BASIC_NOTE_TYPE_ID, IMAGE_OCCLUSION_NOTE_TYPE_ID, collection, type Grade, type Note, type NoteMediaReference } from './collection'
 import { ImageOcclusionEditor } from './ImageOcclusion'
@@ -391,10 +391,10 @@ export function ReviewSession({ deckId = '', sessionId, activityId = DEFAULT_LEA
     return (
       <section className="session-complete">
         <span className="completion-mark">✓</span>
+        <span className="completion-fireworks" aria-hidden="true">{Array.from({ length: 16 }, (_, index) => <i key={index} style={{ '--firework-angle': `${index * 22.5}deg`, '--firework-delay': `${(index % 4) * 70}ms` } as CSSProperties} />)}</span>
         <span className="section-code">SESSION // COMPLETE</span>
         <h1>Session complete</h1>
         <p>{reviewsRecorded} {reviewsRecorded === 1 ? 'review' : 'reviews'} recorded</p>
-        {pendingUndo && <button className="text-button" type="button" disabled={isAnswering} onClick={() => void undoLastAction()}>{undoLabel(pendingUndo)}</button>}
         {actionError && <p className="form-error" role="alert">{actionError}</p>}
         {/* The last action is usually the one that emptied the queue, so its
             announcement has to outlive the card it was about. */}

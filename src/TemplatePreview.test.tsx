@@ -43,6 +43,15 @@ test('applies Anki card and template-ordinal CSS classes', () => {
   expect(screen.getByTitle('Card preview')).toHaveAttribute('srcdoc', expect.stringContaining('<body class="card card2">'))
 })
 
+test('centers a card made only of an image after the imported card stylesheet', () => {
+  const rendering = preview('<img src="flag.png">', '<img src="flag.png">', {}, { css: '.card>img{float:left!important;margin-left:0!important}' })
+  render(<TemplatePreview rendering={rendering} side="front" study />)
+  const document = screen.getByTitle('Card preview').getAttribute('srcdoc') ?? ''
+  const appRule = 'body.card>img:only-child{display:inline-block!important;width:auto!important;max-width:100%;max-height:100%;margin-inline:auto!important;float:none!important}'
+  expect(document).toContain(appRule)
+  expect(document.lastIndexOf(appRule)).toBeGreaterThan(document.indexOf('.card>img{float:left!important'))
+})
+
 test('a card with no background of its own follows the resolved theme', () => {
   const rendering = preview('{{Front}}', '{{FrontSide}}', { Front: 'question' })
   render(<TemplatePreview rendering={rendering} side="front" />)

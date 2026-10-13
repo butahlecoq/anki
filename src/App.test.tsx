@@ -129,7 +129,7 @@ describe('application shell', () => {
   })
 })
 
-test('waits for service-worker readiness before claiming the offline shell is ready', async () => {
+test('waits for service-worker readiness without exposing a ready badge in the interface', async () => {
   let resolveReady!: () => void
   Object.defineProperty(navigator, 'serviceWorker', {
     configurable: true,
@@ -138,13 +138,13 @@ test('waits for service-worker readiness before claiming the offline shell is re
 
   render(<App />)
 
-  expect(screen.getByRole('status')).toHaveTextContent('Preparing offline shell')
+  expect(screen.queryByText(/offline shell (ready|active|unavailable)/i)).not.toBeInTheDocument()
   expect(document.querySelector('.heritage-star')).toHaveClass('is-turning')
   expect(screen.queryByText('Offline shell ready')).not.toBeInTheDocument()
 
   resolveReady()
-  await waitFor(() => expect(screen.getByText('Offline shell ready')).toBeVisible())
-  expect(document.querySelector('.heritage-star')).not.toHaveClass('is-turning')
+  await waitFor(() => expect(document.querySelector('.heritage-star')).not.toHaveClass('is-turning'))
+  expect(screen.queryByText(/offline shell (ready|active|unavailable)/i)).not.toBeInTheDocument()
 })
 
 test('explains the Lockdown Mode offline limit and disables sync when service workers are absent', async () => {

@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import initSqlJs from 'sql.js'
 import { Deck, Note, Notetype, Package } from 'ankipack'
+import { expectOfflineShellReady } from './offline-shell'
 
 /*
  * Issue #23 acceptance evidence for the appearance preference.
@@ -83,7 +84,6 @@ const chromeColor = (page: Page) =>
  */
 const SHARED_CHROME_TEXT = [
   '.eyebrow span:first-child',
-  '.connection',
   '.hero h1',
   '.hero p',
   '.section-code',
@@ -305,7 +305,7 @@ test('Original deck preserves imported card colours in every app theme', async (
   await dialog.getByLabel('Anki package', { exact: true }).setInputFiles({ name: 'themes.apkg', mimeType: 'application/octet-stream', buffer: Buffer.from(await pkg.toUint8Array(SQL)) })
   await dialog.getByRole('button', { name: 'Import package', exact: true }).click()
   await page.getByRole('button', { name: 'Open 日本語 themes', exact: true }).click()
-  await expect(page.getByText('Offline shell ready', { exact: true })).toBeVisible()
+  await expectOfflineShellReady(page)
   await page.getByRole('button', { name: 'Study now', exact: true }).click()
 
   await page.getByText('More actions', { exact: true }).click()
@@ -376,7 +376,7 @@ test('a card that names no background follows the app theme', async ({ page }, t
   await dialog.getByLabel('Anki package', { exact: true }).setInputFiles({ name: 'themed.apkg', mimeType: 'application/octet-stream', buffer: Buffer.from(await pkg.toUint8Array(SQL)) })
   await dialog.getByRole('button', { name: 'Import package', exact: true }).click()
   await page.getByRole('button', { name: 'Open 日本語 themed', exact: true }).click()
-  await expect(page.getByText('Offline shell ready', { exact: true })).toBeVisible()
+  await expectOfflineShellReady(page)
   await page.getByRole('button', { name: 'Study now', exact: true }).click()
 
   const expected = {

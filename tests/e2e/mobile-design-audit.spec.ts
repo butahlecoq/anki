@@ -25,7 +25,7 @@ const test = base.extend<{ hostScale: number }>({
   deviceScaleFactor: async ({ hostScale }, provide) => provide(3 / hostScale),
 })
 
-test('completion actions share dimensions on small screens', async ({ page, hostScale }, testInfo) => {
+test('completion exit remains reachable on small screens', async ({ page, hostScale }, testInfo) => {
   test.setTimeout(60_000)
   await page.goto('/')
   await page.getByRole('button', { name: 'Load sample deck' }).click()
@@ -43,19 +43,13 @@ test('completion actions share dimensions on small screens', async ({ page, host
   for (const width of [320, 390]) {
     await page.setViewportSize({ width: Math.round(width * hostScale), height: Math.round(844 * hostScale) })
     expect(await page.evaluate(() => innerWidth)).toBe(width)
-    const undo = page.getByRole('button', { name: 'Undo last review', exact: true })
     const back = page.getByRole('button', { name: 'Back to deck', exact: true })
-    await expect(undo).toBeInViewport()
+    await expect(page.getByRole('button', { name: 'Undo last review', exact: true })).toHaveCount(0)
     await expect(back).toBeInViewport()
     await page.screenshot({ path: testInfo.outputPath(`completion-actions-${width}.png`) })
-    const undoBox = await undo.boundingBox()
     const backBox = await back.boundingBox()
-    expect(undoBox).not.toBeNull()
     expect(backBox).not.toBeNull()
-    expect(undoBox!.height).toBeGreaterThanOrEqual(43.99)
     expect(backBox!.height).toBeGreaterThanOrEqual(43.99)
-    expect(Math.abs(undoBox!.height - backBox!.height)).toBeLessThanOrEqual(1)
-    expect(Math.abs(undoBox!.width - backBox!.width)).toBeLessThanOrEqual(1)
   }
 })
 

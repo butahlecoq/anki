@@ -33,7 +33,7 @@ test('zero-answer dates are visible before touch selection across a month transi
   await page.getByRole('navigation', { name: 'Mobile navigation' }).getByRole('link', { name: 'Statistics', exact: true }).click()
   await expect(page.getByRole('heading', { name: /^\d+ days? of practice$/ })).toBeVisible()
   const heatmap = page.getByRole('region', { name: 'Study heatmap', exact: true })
-  const expectedDates = Array.from({ length: 84 }, (_, index) => new Date(Date.UTC(2026, 6, 16 + index)).toISOString().slice(0, 10))
+  const expectedDates = Array.from({ length: 30 }, (_, index) => new Date(Date.UTC(2026, 8, 8 + index)).toISOString().slice(0, 10))
   for (const width of [320, 390]) {
     await page.setViewportSize({ width: Math.round(width * hostScale), height: Math.round(844 * hostScale) })
     const viewport = await page.evaluate(() => ({

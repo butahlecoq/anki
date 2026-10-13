@@ -5,6 +5,7 @@ import { unzipSync, zipSync } from 'fflate'
 import { nativeCanvasTest } from './phone-canvas'
 import { openCollectionTools } from './collection-tools'
 import { verifyVisualEnvironment } from './visual-environment'
+import { expectOfflineShellReady } from './offline-shell'
 
 const test = nativeCanvasTest().extend({
   viewport: async ({ viewport, browserName, hostScale }, provide) => {
@@ -162,7 +163,7 @@ test.beforeEach(async ({ page, browser, hostScale }, info) => {
   await page.goto('/')
   await expect(page.getByRole('heading', { name: 'Your Japanese study system', exact: true })).toBeVisible()
   expect(await page.evaluate(() => ({ wall: Date.now(), elapsed: performance.now() })), 'deterministic visual time inputs').toEqual({ wall: fixedTime.getTime(), elapsed: 0 })
-  await expect(page.locator('.connection')).not.toContainText('Preparing offline shell')
+  await expectOfflineShellReady(page)
   const canvas = await page.evaluate(() => ({ width: innerWidth, height: innerHeight, dpr: devicePixelRatio }))
   const expected = info.project.name === 'iphone-webkit' ? { width: 390, height: 844 } : { width: 1280, height: 720 }
   expect({ width: canvas.width, height: canvas.height }, 'measured baseline canvas').toEqual(expected)

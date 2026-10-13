@@ -26,7 +26,7 @@ function centerIsReachable(date: Locator) {
   })
 }
 
-test('all 84 study dates remain usable at narrow phone widths', async ({ page, hostScale }, testInfo) => {
+test('all 30 study dates remain usable at narrow phone widths', async ({ page, hostScale }, testInfo) => {
   test.setTimeout(120_000)
   await page.clock.setFixedTime(new Date('2026-10-07T12:00:00.000Z'))
   await page.goto('/')
@@ -41,7 +41,7 @@ test('all 84 study dates remain usable at narrow phone widths', async ({ page, h
   const dates = heatmap.getByRole('button')
   const answers = page.getByRole('region', { name: 'Period totals', exact: true }).locator('article').first().locator('strong')
   const studiedCards = page.getByRole('heading', { name: 'Cards studied in this period', exact: true }).locator('..')
-  await expect(dates).toHaveCount(84)
+  await expect(dates).toHaveCount(30)
   await expect(dates.last()).toHaveAttribute('aria-label', '2026-10-07: 1 answers')
   for (const width of [390, 320]) {
     await page.setViewportSize({ width: Math.round(width * hostScale), height: Math.round(844 * hostScale) })
@@ -72,7 +72,7 @@ test('all 84 study dates remain usable at narrow phone widths', async ({ page, h
       else await expect(studiedCards).toContainText('Your reviewed cards will appear here.')
     }
     await dates.first().focus()
-    for (let index = 1; index < 84; index++) {
+    for (let index = 1; index < 30; index++) {
       await page.keyboard.press('Tab')
       await expect(dates.nth(index)).toBeFocused()
     }
