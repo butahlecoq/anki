@@ -13,6 +13,7 @@ async function openOfficialPackage(page: Page) {
   await expect(dialog.getByText('2 notes')).toBeVisible()
   await expect(dialog.getByText('4 cards')).toBeVisible()
   await page.getByRole('button', { name: 'Import package', exact: true }).click()
+  await page.getByRole('button', { name: /^Show \d+ child deck/ }).click()
   await page.getByRole('button', { name: 'Open Source', exact: true }).click()
   await page.getByRole('button', { name: 'Study now', exact: true }).click()
 }

@@ -587,18 +587,61 @@ test('a learner moves a deck under a different parent', async () => {
   }
 })
 
-test('the deck list presents nested decks with parent aggregate counts', async () => {
+test('the deck list collapses a Deck subtree until the learner opens it', async () => {
   const parent = await collection.createDeck(`Japanese ${crypto.randomUUID()}`)
   const child = await collection.createDeck('Reading', { parentId: parent.id })
-  await collection.createBasicNote(child.id, { front: '読む', back: 'read' })
+  const grandchild = await collection.createDeck('Verbs', { parentId: child.id })
+  await collection.createBasicNote(grandchild.id, { front: '読む', back: 'read' })
   window.location.hash = '#decks'
   render(<CollectionWorkspace />)
   try {
     const hierarchy = await screen.findByRole('tree', { name: 'Deck hierarchy' })
-    expect(within(hierarchy).getByText(parent.name)).toBeVisible()
-    expect(within(hierarchy).getByText('Reading')).toBeVisible()
-    expect(within(hierarchy).getAllByText('NEW')[0]).toHaveTextContent('1')
+    // A Deck's tile is its own heading's tree item, so a Deck that is collapsed
+    // away has no heading to look up in the first place.
+    const tile = (name: string) => within(hierarchy).getByRole('heading', { name, level: 2 }).closest('[role="treeitem"]') as HTMLElement
+    const heading = (name: string) => within(hierarchy).queryByRole('heading', { name, level: 2 })
+
+    // A Deck that owns child Decks starts collapsed, so a deep hierarchy does
+    // not arrive as a screen of tiles.
+    const parentTile = tile(parent.name)
+    expect(parentTile).toHaveAttribute('aria-level', '1')
+    expect(parentTile).toHaveAttribute('aria-expanded', 'false')
+    expect(within(parentTile).getByRole('button', { name: 'Show 1 child deck' })).toBeVisible()
+    expect(heading('Reading')).not.toBeInTheDocument()
+    expect(heading('Verbs')).not.toBeInTheDocument()
+    // The collapsed Deck still reports the counts its children hold, so what is
+    // inside is legible before it is opened.
+    expect(within(parentTile).getByText('NEW')).toHaveTextContent('1')
+
+    fireEvent.click(within(parentTile).getByRole('button', { name: 'Show 1 child deck' }))
+    const childTile = tile('Reading')
+    expect(parentTile).toHaveAttribute('aria-expanded', 'true')
+    expect(childTile).toHaveAttribute('aria-level', '2')
+    expect(childTile).toHaveAttribute('aria-expanded', 'false')
+    // Opening a Deck opens one level, not its whole subtree.
+    expect(heading('Verbs')).not.toBeInTheDocument()
+
+    fireEvent.click(within(childTile).getByRole('button', { name: 'Show 1 child deck' }))
+    expect(tile('Verbs')).toHaveAttribute('aria-level', '3')
+    // A leaf Deck offers no disclosure, because there is nothing behind it.
+    expect(tile('Verbs')).not.toHaveAttribute('aria-expanded')
+
+    // Collapsing again hides exactly what opening revealed.
+    fireEvent.click(within(parentTile).getByRole('button', { name: 'Hide 1 child deck' }))
+    expect(parentTile).toHaveAttribute('aria-expanded', 'false')
+    expect(heading('Reading')).not.toBeInTheDocument()
+    expect(heading('Verbs')).not.toBeInTheDocument()
+
+    // Reopening the parent starts at one level again rather than restoring a
+    // previously expanded hidden descendant.
+    fireEvent.click(within(parentTile).getByRole('button', { name: 'Show 1 child deck' }))
+    expect(tile('Reading')).toHaveAttribute('aria-expanded', 'false')
+    expect(heading('Verbs')).not.toBeInTheDocument()
+
+    fireEvent.click(within(parentTile).getByRole('button', { name: `Open ${parent.name}` }))
+    expect(window.location.hash).toBe(`#deck/${parent.id}`)
   } finally {
+    cleanup()
     await collection.deleteDeck(parent.id, { mode: 'delete-subtree' })
   }
 })
