@@ -75,7 +75,7 @@ export function Statistics() {
   const entries = data.reviews.filter((entry) => !deckId || deckIds.has(entry.deckId))
   const stats = reviewStatistics(entries, period, anchor)
   const scheduling = schedulingStatistics(cards, now)
-  const heatmap = reviewHeatmap(entries, now)
+  const heatmap = reviewHeatmap(entries, now, 30)
   const practiceDays = heatmap.filter((day) => day.count > 0).length
   const { start, end } = periodWindow(period, anchor)
   const card = data.cards.find((item) => item.id === selectedCard)

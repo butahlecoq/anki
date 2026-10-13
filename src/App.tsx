@@ -52,6 +52,9 @@ export function App() {
   const online = useOnlineStatus()
   const appearance = useAppearance()
   const offlineStatus = useOfflineShellStatus()
+  const offlineMessage = online
+    ? offlineStatus === 'ready' || offlineStatus === 'checking' ? '' : 'Offline cache unavailable'
+    : offlineStatus === 'ready' ? 'Offline shell active' : 'Offline shell unavailable'
   const [updateReady, setUpdateReady] = useState(isUpdateWaiting)
   const [updateError, setUpdateError] = useState('')
   const [activatingUpdate, setActivatingUpdate] = useState(false)
@@ -77,9 +80,6 @@ export function App() {
       setActivatingUpdate(false)
     }
   }
-  const connection = online
-    ? offlineStatus === 'ready' ? 'Offline shell ready' : offlineStatus === 'checking' ? 'Preparing offline shell' : 'Offline cache unavailable'
-    : offlineStatus === 'ready' ? 'Offline shell active' : 'Offline shell unavailable'
   // The heritage star turns only while the app is genuinely working. A settled
   // session - including one merely waiting for the learner to accept an update -
   // leaves it still, so motion keeps meaning something.
@@ -115,7 +115,7 @@ export function App() {
         <header className="topbar">
           <div className="eyebrow"><span>COLLECTION</span><span>/</span><span>LOCAL</span></div>
           <div className="topbar-controls">
-            <div className={`connection ${online ? 'online' : 'offline'}`} role="status"><span className="pulse" />{connection}</div>
+            {offlineMessage && <div className="connection offline" role="status"><span className="pulse" />{offlineMessage}</div>}
             <span className={`heritage-star${busy ? ' is-turning' : ''}`} aria-hidden="true" />
             <details className="build-identity"><summary aria-label="Support" title="Support"><span aria-hidden="true">?</span><span className="support-tooltip" role="tooltip">Support</span></summary><div className="build-details"><dl><dt>Version</dt><dd>{buildIdentity.version}</dd><dt>Commit</dt><dd>{buildIdentity.commit}</dd><dt>Channel</dt><dd>{buildIdentity.release ? 'Release build' : 'Development build (not a release)'}</dd></dl>{buildIdentity.release && <a href="notices/index.html">Dependency notices</a>}</div></details>
             <label className="appearance-control">

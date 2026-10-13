@@ -7,8 +7,11 @@ export function useDialogKeyboard(onClose: () => void, open = true) {
   const [dialog, setDialog] = useState<HTMLElement | null>(null)
   const opener = useRef<HTMLElement | null>(null)
   const openerCaptured = useRef(false)
+  const onCloseRef = useRef(onClose)
 
   const ref = useCallback((element: HTMLElement | null) => setDialog(element), [])
+
+  useLayoutEffect(() => { onCloseRef.current = onClose }, [onClose])
 
   useLayoutEffect(() => {
     if (!open || !dialog) return
@@ -21,7 +24,13 @@ export function useDialogKeyboard(onClose: () => void, open = true) {
       ?? dialog.querySelector<HTMLElement>(FOCUSABLE)
       ?? dialog
     target.focus()
+    const backdrop = dialog.parentElement
+    const dismissOnBackdrop = (event: MouseEvent) => {
+      if (event.target === backdrop) onCloseRef.current()
+    }
+    backdrop?.addEventListener('click', dismissOnBackdrop)
     return () => {
+      backdrop?.removeEventListener('click', dismissOnBackdrop)
       const previous = opener.current
       queueMicrotask(() => {
         // React Strict Mode replays effects while the same dialog stays mounted.
