@@ -58,7 +58,7 @@ async function isolatedSyncService(): Promise<SyncService> {
 }
 
 for (const reopen of [false, true]) {
-test(`statistics follow an offline Japanese review, heatmap selection, and undo${reopen ? ' in a fresh document' : ' in the current session'}`, async ({ page, context, browserName }) => {
+test(`statistics retain an offline Japanese review after session completion${reopen ? ' in a fresh document' : ' in the current session'}`, async ({ page, context, browserName }) => {
   test.skip(reopen && browserName === 'webkit', 'Playwright supports service workers only in Chromium; fresh offline navigation needs physical Safari verification. https://playwright.dev/docs/service-workers')
   await context.setOffline(false)
   await page.clock.setFixedTime(REVIEW_TIME)
@@ -103,9 +103,10 @@ test(`statistics follow an offline Japanese review, heatmap selection, and undo$
     await page.getByRole('link', { name: 'Decks', exact: true }).click()
     await expect(page.getByRole('region', { name: "Today's workload" })).toContainText('STUDIED 1')
     await page.evaluate((url) => { window.location.hash = new URL(url).hash }, reviewURL)
-    await page.getByRole('button', { name: 'Undo last review' }).click()
+    await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Undo last review' })).toHaveCount(0)
     await page.getByRole('link', { name: 'Statistics', exact: true }).click()
-    await expect(page.getByText('ANSWERS', { exact: true }).locator('..').locator('strong')).toHaveText('0')
+    await expect(page.getByText('ANSWERS', { exact: true }).locator('..').locator('strong')).toHaveText('1')
   } finally { await context.setOffline(false) }
 })
 }
@@ -591,7 +592,7 @@ nativeCanvasTest()('learner saves scheduling policies and manages a card lifecyc
   await expect(cards).toBeHidden()
 })
 
-nativeCanvasTest()('review omits maintenance controls and preserves rating and undo', async ({ page }, testInfo) => {
+nativeCanvasTest()('review omits maintenance controls and keeps the completed rating', async ({ page }, testInfo) => {
   const configuredViewport = testInfo.project.use.viewport!
   await expect.poll(() => page.evaluate(() => ({ width: innerWidth, height: innerHeight }))).toEqual(configuredViewport)
   await createDeck(page, 'Simple reviewer')
@@ -609,8 +610,8 @@ nativeCanvasTest()('review omits maintenance controls and preserves rating and u
   await page.getByRole('button', { name: 'Show answer' }).click()
   await page.getByRole('button', { name: /^Easy · / }).click()
   await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
-  await page.getByRole('button', { name: 'Undo last review' }).click()
-  await expect(page.frameLocator('iframe[title="Review card"]').getByText('猫')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Undo last review' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Back to deck', exact: true })).toBeVisible()
 })
 
 test('review uses each generated template, isolates its CSS, and skips an empty template', async ({ page }) => {
