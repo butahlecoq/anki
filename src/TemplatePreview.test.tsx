@@ -54,6 +54,15 @@ test('a card with no background of its own follows the resolved theme', () => {
   expect(srcDoc).not.toMatch(/background:\s*#fff\b/)
 })
 
+test('Kanagawa colors reach the visible card preview', () => {
+  chooseAppearance('kanagawa')
+  const rendering = preview('{{Front}}', '{{FrontSide}}', { Front: 'question' })
+  render(<TemplatePreview rendering={rendering} side="front" />)
+  const srcDoc = screen.getByTitle('Card preview').getAttribute('srcdoc') ?? ''
+
+  expect(srcDoc).toContain(":root[data-theme='kanagawa']{--kiroku-card-surface:#1F1F28;--kiroku-card-ink:#DCD7BA;--kiroku-card-link:#7E9CD8}")
+})
+
 test('an imported deck still overrides the themed card default', () => {
   const rendering = preview('{{Front}}', '{{FrontSide}}', { Front: 'question' }, { css: '.card{background:#123456;color:#fedcba}' })
   render(<TemplatePreview rendering={rendering} side="front" />)

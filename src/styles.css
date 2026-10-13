@@ -92,6 +92,76 @@
   --mobile-nav-height: 66px;
 }
 
+/* Kanagawa Wave palette anchors follow https://github.com/rebelot/kanagawa.nvim#color-palette.
+   UI-role surfaces and status colors are adapted for this app. */
+:root[data-theme='kanagawa'] {
+  color-scheme: dark;
+
+  /* Surfaces – matching Kanagawa Wave: deep almost‑black with blue tint */
+  --surface-page: #1F1F28;
+  --surface-panel: #181820;
+  --surface-sunken: #14161b;
+  --surface-hover: #1A1C22;
+  --surface-nav: rgba(27, 29, 35, .96);
+  --surface-tile-from: #161A1E;
+  --surface-tile-to: #121417;
+  --surface-canvas: #13151A;
+  --surface-toast: #171C21;
+
+  /* Borders */
+  --border-subtle: #252B32;
+  --border-default: #2A2A37;
+  --border-strong: #3A4048;
+
+  /* Text – Kanagawa Wave palette: off‑white with slight warm tint */
+  --text-primary: #DCD7BA;
+  --text-strong: #E5E1D2;
+  --text-secondary: #A5A5A5;
+  --text-muted: #A5A5A5;
+  --text-faint: #8A8980;
+  --text-on-accent: #11150C;
+  --text-tile: #8A8A8A;
+  --text-note: #D0D0D0;
+  --text-answer: #C0C0C0;
+  --text-profile: #B0B0B0;
+
+  /* Accent – Kanagawa Wave accent blue */
+  --accent: #7E9CD8;
+  --accent-strong: #6A8CB8;
+  --accent-ink: #DCD7BA;
+  --accent-wash: rgba(126, 156, 216, .07);
+  --accent-wash-strong: rgba(126, 156, 216, .13);
+  --accent-wash-faint: rgba(126, 156, 216, .035);
+  --accent-wash-edge: rgba(126, 156, 216, .16);
+  --accent-border: #5A6A8A;
+  --accent-shadow: #2A3040;
+  --accent-orbit: rgba(126, 156, 216, .14);
+
+  /* Status */
+  --status-warn: #DCA561;
+  --status-warn-edge: #B89451;
+  --status-warn-glow: rgba(220, 165, 97, .35);
+  --status-danger: #FF6B6B;
+  --status-danger-edge: #A9181B;
+  --status-danger-border: #7A1216;
+
+  /* Answer comparison */
+  --diff-good: #C8E6C9;
+  --diff-bad: #EF9A9A;
+  --diff-missed: #FFE0B2;
+
+  /* Decorative elements */
+  --deco-ink: #252C32;
+  --deco-ink-alt: #586548;
+  --deco-orbit: #252D33;
+  --mask-fill: rgba(14, 19, 24, .93);
+
+  /* Overlays */
+  --scrim: rgba(3, 5, 7, .78);
+  --shadow-toast: 0 15px 40px rgba(0, 0, 0, .35);
+  --shadow-dialog: 0 28px 90px rgba(0, 0, 0, .6);
+}
+
 /*
  * Light theme. Applied only when the learner chooses it, so the default dark
  * chrome and the PWA manifest colors stay consistent.

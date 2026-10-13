@@ -51,6 +51,7 @@ describe('appearance preference', () => {
   test('an explicit choice overrides the operating system', () => {
     expect(resolveAppearance('light', true)).toBe('light')
     expect(resolveAppearance('dark', false)).toBe('dark')
+    expect(resolveAppearance('kanagawa', false)).toBe('kanagawa')
   })
 
   test('applies the light theme to chrome only, leaving the default dark document untouched', () => {
@@ -62,10 +63,21 @@ describe('appearance preference', () => {
     expect(document.documentElement).not.toHaveAttribute('data-theme')
   })
 
+  test('applies the Kanagawa theme', () => {
+    applyAppearance('kanagawa')
+    expect(document.documentElement).toHaveAttribute('data-theme', 'kanagawa')
+  })
+
   test('remembers a choice across a reload', () => {
     storeAppearance('light')
     expect(window.localStorage.getItem(APPEARANCE_STORAGE_KEY)).toBe('light')
     expect(readAppearance()).toBe('light')
+  })
+
+  test('remembers Kanagawa across a reload', () => {
+    storeAppearance('kanagawa')
+    expect(window.localStorage.getItem(APPEARANCE_STORAGE_KEY)).toBe('kanagawa')
+    expect(readAppearance()).toBe('kanagawa')
   })
 
   test('ignores an unrecognised stored value instead of failing to render', () => {
@@ -133,6 +145,8 @@ describe('browser chrome colour', () => {
     expect(themeColorMeta()?.content).toBe(APPEARANCE_FALLBACK_COLORS.dark)
     applyAppearance('light')
     expect(themeColorMeta()?.content).toBe(APPEARANCE_FALLBACK_COLORS.light)
+    applyAppearance('kanagawa')
+    expect(themeColorMeta()?.content).toBe('#1F1F28')
     applyAppearance('dark')
     expect(themeColorMeta()?.content).toBe(APPEARANCE_FALLBACK_COLORS.dark)
   })
@@ -159,6 +173,7 @@ describe('appearance control', () => {
     expect(screen.getByRole('option', { name: 'Auto' })).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'Light' })).toBeInTheDocument()
     expect(screen.getByRole('option', { name: 'Dark' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'Kanagawa' })).toBeInTheDocument()
   })
 
   test('choosing light themes the chrome and persists the choice', () => {
@@ -169,6 +184,15 @@ describe('appearance control', () => {
     expect(document.documentElement).toHaveAttribute('data-theme', 'light')
     expect(readAppearance()).toBe('light')
     expect(screen.getByRole('combobox', { name: 'Appearance' })).toHaveValue('light')
+  })
+
+  test('choosing Kanagawa themes the chrome and persists the choice', () => {
+    render(<App />)
+    fireEvent.change(screen.getByRole('combobox', { name: 'Appearance' }), { target: { value: 'kanagawa' } })
+
+    expect(document.documentElement).toHaveAttribute('data-theme', 'kanagawa')
+    expect(readAppearance()).toBe('kanagawa')
+    expect(screen.getByRole('combobox', { name: 'Appearance' })).toHaveValue('kanagawa')
   })
 
   test('choosing auto hands control back to the operating system', () => {
