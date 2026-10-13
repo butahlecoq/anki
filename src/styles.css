@@ -227,6 +227,17 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .offline .pulse { background: var(--status-warn); box-shadow: 0 0 10px var(--status-warn-glow); }
 @keyframes pulse { 0%,100% { transform: scale(.8); opacity: .25; } 50% { transform: scale(1.2); opacity: .65; } }
 
+/* An original star acknowledging Anki's heritage, kept deliberately quiet so it
+   reads as a mark of respect rather than as Kiroku's own logo. The rotation
+   only runs while the shell is preparing or an update is activating; a settled
+   app leaves it still. Anki's own star is Ankitects' trademark, so this is a
+   different drawing rather than a copy - see public/anki-heritage-star.svg.
+   It is drawn with a mask, not an <img>, because `currentColor` does not cross
+   the image boundary: a mask lets the theme tokens colour the mark directly. */
+.heritage-star { width: 18px; height: 18px; background-color: var(--accent-ink); -webkit-mask: url('/anki-heritage-star.svg') center / contain no-repeat; mask: url('/anki-heritage-star.svg') center / contain no-repeat; }
+.heritage-star.is-turning { animation: heritage-turn 1.6s linear infinite; }
+@keyframes heritage-turn { to { transform: rotate(360deg); } }
+
 .hero { min-height: 305px; padding: 66px 2px 44px; display: grid; grid-template-columns: minmax(0, 1fr) 300px; align-items: center; border-bottom: 1px solid var(--border-subtle); overflow: hidden; }
 .section-code { margin-bottom: 19px; color: var(--accent-strong); font-size: 9px; letter-spacing: .2em; font-weight: 600; }
 .hero h1 { margin: 0; max-width: 720px; color: var(--text-strong); font-family: var(--font-jp); font-size: clamp(36px, 5vw, 64px); line-height: 1.04; letter-spacing: -.045em; font-weight: 600; }
