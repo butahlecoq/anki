@@ -21,6 +21,7 @@ function tokens(source: string): Palette {
 
 const dark = tokens(rule(':root'))
 const light = tokens(rule(":root[data-theme='light']"))
+const kanagawa = tokens(rule(":root[data-theme='kanagawa']"))
 
 function channels(hex: string): [number, number, number] {
   const value = hex.replace('#', '')
@@ -71,7 +72,7 @@ const surfaceTokens = [
   '--surface-canvas',
 ]
 
-for (const [name, palette] of [['dark', dark], ['light', light]] as const) {
+for (const [name, palette] of [['dark', dark], ['light', light], ['kanagawa', kanagawa]] as const) {
   test(`${name} theme text meets WCAG AA against every surface it can sit on`, () => {
     const failures: string[] = []
     for (const text of textTokens) {

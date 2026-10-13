@@ -58,14 +58,15 @@ export function applyCardColors(colors: CardColors, body: HTMLElement): void {
  * `--surface-page` yet. src/design-tokens.test.ts pins these to the token so
  * the two cannot drift apart.
  */
-export const APPEARANCE_FALLBACK_COLORS = { dark: '#0b0d10', light: '#f7f8f6' } as const
+export const APPEARANCE_FALLBACK_COLORS = { dark: '#0b0d10', light: '#f7f8f6', kanagawa: '#1F1F28' } as const
 
-export type Appearance = 'system' | 'light' | 'dark'
+export type Appearance = 'system' | 'light' | 'dark' | 'kanagawa'
+export type ResolvedAppearance = 'light' | 'dark' | 'kanagawa'
 
 export function readAppearance(storage: Storage | undefined = safeStorage()): Appearance {
   try {
     const value = storage?.getItem(APPEARANCE_STORAGE_KEY)
-    return value === 'light' || value === 'dark' || value === 'system' ? value : 'system'
+    return value === 'light' || value === 'dark' || value === 'kanagawa' || value === 'system' ? value : 'system'
   } catch {
     // A blocked or full storage must not prevent the shell from rendering.
     return 'system'
@@ -73,12 +74,12 @@ export function readAppearance(storage: Storage | undefined = safeStorage()): Ap
 }
 
 /** Resolves a stored preference against the current OS setting. */
-export function resolveAppearance(preference: Appearance, prefersDark: boolean): 'light' | 'dark' {
+export function resolveAppearance(preference: Appearance, prefersDark: boolean): ResolvedAppearance {
   if (preference === 'system') return prefersDark ? 'dark' : 'light'
   return preference
 }
 
-export function applyAppearance(theme: 'light' | 'dark', root: HTMLElement = document.documentElement): void {
+export function applyAppearance(theme: ResolvedAppearance, root: HTMLElement = document.documentElement): void {
   applyThemeAttribute(theme, root)
   applyThemeColor(theme, root)
 }
@@ -91,7 +92,7 @@ export function applyAppearance(theme: 'light' | 'dark', root: HTMLElement = doc
  * same convention or the two documents disagree about which block of custom
  * properties applies. See src/TemplatePreview.tsx.
  */
-export function applyThemeAttribute(theme: 'light' | 'dark', root: HTMLElement): void {
+export function applyThemeAttribute(theme: ResolvedAppearance, root: HTMLElement): void {
   if (theme === 'dark') root.removeAttribute('data-theme')
   else root.setAttribute('data-theme', theme)
 }
@@ -108,7 +109,7 @@ export function applyThemeAttribute(theme: 'light' | 'dark', root: HTMLElement):
  * describes the install prompt and the splash screen, which stay dark, and
  * tests/e2e/shell.spec.ts asserts that.
  */
-export function applyThemeColor(theme: 'light' | 'dark', root: HTMLElement = document.documentElement): void {
+export function applyThemeColor(theme: ResolvedAppearance, root: HTMLElement = document.documentElement): void {
   const meta = root.ownerDocument.querySelector<HTMLMetaElement>('meta[name="theme-color"]')
   if (!meta) return
   const token = window.getComputedStyle(root).getPropertyValue('--surface-page').trim()
@@ -138,7 +139,7 @@ function safeStorage(): Storage | undefined {
  * The listeners, and the reason storage is re-read on every notification rather
  * than captured once, are stated here so neither caller restates them.
  */
-function subscribeToResolvedTheme(publish: (theme: 'light' | 'dark') => void): () => void {
+function subscribeToResolvedTheme(publish: (theme: ResolvedAppearance) => void): () => void {
   const query = window.matchMedia?.('(prefers-color-scheme: dark)')
   // Always re-read storage so a choice made in another tab, or a storage write
   // that happened before this effect ran, is not ignored.
@@ -163,7 +164,7 @@ function subscribeToResolvedTheme(publish: (theme: 'light' | 'dark') => void): (
  * Subscribes to appearance changes and keeps the document attribute in sync
  * with both the stored preference and the OS setting.
  */
-export function watchAppearance(onChange?: (theme: 'light' | 'dark') => void): () => void {
+export function watchAppearance(onChange?: (theme: ResolvedAppearance) => void): () => void {
   return subscribeToResolvedTheme((theme) => {
     applyAppearance(theme)
     onChange?.(theme)
@@ -178,7 +179,7 @@ export function watchAppearance(onChange?: (theme: 'light' | 'dark') => void): (
  * leaves the host document alone, which is what a subscriber that only paints
  * something else needs; `watchAppearance` is the one that owns the host.
  */
-export function watchResolvedTheme(onChange: (theme: 'light' | 'dark') => void): () => void {
+export function watchResolvedTheme(onChange: (theme: ResolvedAppearance) => void): () => void {
   return subscribeToResolvedTheme(onChange)
 }
 

@@ -124,6 +124,7 @@ export function App() {
                 <option value="system">Auto</option>
                 <option value="light">Light</option>
                 <option value="dark">Dark</option>
+                <option value="kanagawa">Kanagawa</option>
               </select>
             </label>
           </div>
