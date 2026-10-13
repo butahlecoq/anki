@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { expectOfflineShellReady } from './offline-shell'
 test('custom practice works offline and returns unchanged home cards after rebuilding and deleting', async ({ page, context }) => {
   await page.goto('/')
   await page.getByRole('button', { name: 'New deck', exact: true }).click()
@@ -9,7 +10,7 @@ test('custom practice works offline and returns unchanged home cards after rebui
   await page.getByLabel('Front', { exact: true }).fill('猫')
   await page.getByLabel('Back', { exact: true }).fill('cat')
   await page.getByRole('button', { name: 'Save note', exact: true }).click()
-  await expect(page.getByText('Offline shell ready', { exact: true })).toBeVisible()
+  await expectOfflineShellReady(page)
   await context.setOffline(true)
   await page.getByRole('link', { name: 'Study', exact: true }).click()
   await page.getByLabel('Session name', { exact: true }).fill('猫 practice')

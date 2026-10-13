@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { navigateOfflineDocument, WEBKIT_COLD_OFFLINE_LIMITATION } from './offline-navigation'
+import { expectNoOfflineStatus, expectOfflineShellReady } from './offline-shell'
 
 test('production preview accepts its configured Tailscale hostname only', async ({ request }) => {
   const allowedHost = process.env.KIROKU_PREVIEW_ALLOWED_HOST ?? 'kiroku-test.tailnet.ts.net'
@@ -37,7 +38,7 @@ test('learner can open the production study workspace', async ({ page }, testInf
 
   await expect(page).toHaveTitle(/Kiroku/)
   await expect(page.getByRole('heading', { name: 'Your Japanese study system' })).toBeVisible()
-  await expect(page.getByText('Offline shell ready')).toBeVisible()
+  await expectOfflineShellReady(page)
   await expect(page.getByRole('navigation', { name: navigationLabel })).toBeVisible()
   await expect(page.getByRole('link', { name: 'Decks' })).toBeVisible()
   await expect(page.getByRole('link', { name: 'Study' })).toBeVisible()
@@ -112,7 +113,7 @@ test(`shell works without a network${reopen ? ' in a fresh document' : ' in the 
   if (reopen) await navigateOfflineDocument(page)
 
   await expect(page.getByRole('heading', { name: 'Your Japanese study system' })).toBeVisible()
-  await expect(page.getByText('Offline shell active')).toBeVisible()
+  await expectNoOfflineStatus(page)
 })
 
 }

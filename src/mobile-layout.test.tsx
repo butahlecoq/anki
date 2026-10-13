@@ -114,9 +114,11 @@ describe('issue #348 phone layouts', () => {
     ]) expect(rule(selector)).toContain(token)
   })
 
-  test('statistics controls and the 30-day heatmap stay within their available width', () => {
+  test('the 30-day heatmap keeps full-size dates inside its scroll region', () => {
     expect(rule('.statistics-controls input, .statistics-controls select')).toContain('box-sizing: border-box')
-    expect(rule('.review-heatmap')).toContain('repeat(7, minmax(0, 1fr))')
+    expect(rule('.review-heatmap')).toContain('repeat(12, minmax(44px, 1fr))')
+    expect(rule('.heatmap-scroll')).toContain('overflow-x: auto')
+    expect(phone).toMatch(/\.review-heatmap\s*\{[^}]*grid-template-columns:\s*repeat\(7, minmax\(44px, 1fr\)\)/)
     expect(phone).toMatch(/\.statistics-controls\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, 1fr\)/)
   })
 

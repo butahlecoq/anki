@@ -2,6 +2,7 @@ import { openCollectionTools } from './collection-tools'
 import { expect } from '@playwright/test'
 import { phoneCanvasTest } from './phone-canvas'
 import { readFile } from 'node:fs/promises'
+import { expectOfflineShellReady } from './offline-shell'
 
 const test = phoneCanvasTest({ width: 390, height: 664 })
 
@@ -19,7 +20,7 @@ test('save a user-owned Japanese package offline and import it into an independe
   await page.getByRole('button', { name: 'Save note', exact: true }).click()
   // Warm the export WASM before taking connectivity away, as an installed PWA
   // gets this asset from its precache on subsequent starts.
-  await expect(page.getByText('Offline shell ready', { exact: true })).toBeVisible()
+  await expectOfflineShellReady(page)
   await openCollectionTools(page)
   await page.getByRole('button', { name: 'Export Anki package', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Export Anki package' })

@@ -1,5 +1,6 @@
 import { openCollectionTools } from './collection-tools'
 import { expect, test } from '@playwright/test'
+import { expectOfflineShellReady } from './offline-shell'
 
 async function activate(locator: import('@playwright/test').Locator) {
   await locator.press('Enter')
@@ -68,7 +69,7 @@ test('keyboard ends review, exports a package, and imports it into a clean colle
   await activate(page.getByRole('button', { name: /^Good ·/ }))
   await activate(page.getByRole('button', { name: 'End session', exact: true }))
 
-  await expect(page.getByText('Offline shell ready', { exact: true })).toBeVisible()
+  await expectOfflineShellReady(page)
   await openCollectionTools(page)
   await activate(page.getByRole('button', { name: 'Export Anki package', exact: true }))
   const exportDialog = page.getByRole('dialog', { name: 'Export Anki package' })

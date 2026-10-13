@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openOfflineProfileDocument } from './offline-navigation'
+import { expectNoOfflineStatus } from './offline-shell'
 
 const webURL = process.env.KIROKU_TEST_URL ?? `http://127.0.0.1:${process.env.KIROKU_WEB_PORT ?? '4173'}`
 
@@ -69,7 +70,7 @@ test('a populated prior-schema collection migrates before offline use and cold-o
 
     if (browserName === 'webkit') {
       await firstContext.setOffline(true)
-      await expect(first.getByText('Offline shell active')).toBeVisible()
+      await expectNoOfflineStatus(first)
       await first.getByRole('button', { name: 'Show answer' }).click()
       await first.getByRole('button', { name: /^Good · / }).click()
       await expect(first.getByRole('heading', { name: 'Session complete' })).toBeVisible()

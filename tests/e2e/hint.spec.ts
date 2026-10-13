@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 import initSqlJs from 'sql.js'
 import { Deck, Note, Notetype, Package } from 'ankipack'
+import { expectOfflineShellReady } from './offline-shell'
 
 test('Japanese hint reveals by native control and keyboard offline inside the script-free card sandbox', async ({ page, context }) => {
   const SQL = await initSqlJs({ locateFile: () => './node_modules/sql.js/dist/sql-wasm.wasm' })
@@ -15,7 +16,7 @@ test('Japanese hint reveals by native control and keyboard offline inside the sc
   await expect(dialog.getByText('1 note', { exact: true })).toBeVisible()
   await dialog.getByRole('button', { name: 'Import package', exact: true }).click()
   await page.getByRole('button', { name: 'Open 日本語 hints', exact: true }).click()
-  await expect(page.getByText('Offline shell ready', { exact: true })).toBeVisible()
+  await expectOfflineShellReady(page)
   await context.setOffline(true)
   try {
     await page.getByRole('button', { name: 'Study now', exact: true }).click()

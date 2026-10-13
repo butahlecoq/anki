@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import initSqlJs from 'sql.js'
 import { Deck, Note, Notetype, Package } from 'ankipack'
 import { nativeCanvasTest } from './phone-canvas'
+import { expectOfflineShellReady } from './offline-shell'
 import { openCollectionTools } from './collection-tools'
 import { closeExportDialog } from './export-dialog'
 import { openOfflineProfileDocument, WEBKIT_COLD_OFFLINE_LIMITATION } from './offline-navigation'
@@ -254,7 +255,7 @@ test('production release collection survives two offline reopenings and converge
     await sync(page)
     await sync(second.page)
     await openJapanese(page)
-    await expect(page.getByText('Offline shell ready', { exact: true })).toBeVisible()
+    await expectOfflineShellReady(page)
     // Warm the actual export module before WebKit's supported warm offline stage;
     // Chromium also verifies these bytes again after its second cold reopening.
     const beforeOffline = await releaseInventory(await exportPackage(page, info, 'online-warm-up'))

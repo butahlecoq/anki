@@ -53,6 +53,7 @@ test('the study heatmap shows 30 recent dates that fit the weekly phone grid', a
   const dates = screen.getByRole('region', { name: 'Study dates' })
   expect(within(dates).getAllByRole('button')).toHaveLength(30)
   expect(screen.getByText(/last 30 study days/)).toBeVisible()
+  expect(screen.getByText(/last 30 local calendar days/)).toBeVisible()
 })
 
 test('live offline answers and undo update totals, heatmap selection, and chronological card history', async () => {

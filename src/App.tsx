@@ -54,7 +54,7 @@ export function App() {
   const offlineStatus = useOfflineShellStatus()
   const offlineMessage = online
     ? offlineStatus === 'ready' || offlineStatus === 'checking' ? '' : 'Offline cache unavailable'
-    : offlineStatus === 'ready' ? 'Offline shell active' : 'Offline shell unavailable'
+    : offlineStatus === 'ready' ? '' : 'Offline shell unavailable'
   const [updateReady, setUpdateReady] = useState(isUpdateWaiting)
   const [updateError, setUpdateError] = useState('')
   const [activatingUpdate, setActivatingUpdate] = useState(false)

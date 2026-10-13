@@ -753,7 +753,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .statistics-panel p, .statistics-panel small { color: var(--text-muted); font-size: 11px; line-height: 1.8; }
 .statistics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 .heatmap-scroll { max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; padding: 3px; margin: 19px -3px 11px; }
-.review-heatmap { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.review-heatmap { display: grid; grid-template-columns: repeat(12, minmax(44px, 1fr)); gap: 6px; }
 .review-heatmap button { min-width: 0; height: 44px; padding: 3px; display: grid; border: 1px solid var(--border-subtle); background: color-mix(in srgb, var(--accent) calc(var(--activity) * 100%), var(--surface-panel)); cursor: pointer; }
 .heatmap-date { display: grid; place-content: center; gap: 1px; min-width: 0; background: var(--surface-panel); color: var(--text-primary); line-height: 1; letter-spacing: normal; }
 .heatmap-date span:first-child { font-size: 10px; }
@@ -791,7 +791,7 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
   .statistics-grid { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .statistics-metrics strong { font-size: 24px; }
   .statistics-metrics article { padding: 18px 12px; }
-  .review-heatmap { grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+  .review-heatmap { grid-template-columns: repeat(7, minmax(44px, 1fr)); gap: 4px; }
   .review-heatmap button { padding: 2px; }
   .heatmap-date span:first-child { font-size: clamp(7px, 2.4vw, 10px); }
   .heatmap-date span:last-child { font-size: clamp(12px, 3.8vw, 15px); }

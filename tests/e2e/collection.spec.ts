@@ -1,4 +1,5 @@
 import { openCollectionTools } from './collection-tools'
+import { expectNoOfflineStatus } from './offline-shell'
 import { expect, test } from '@playwright/test'
 import { nativeCanvasTest } from './phone-canvas'
 import { expectFixedReview, reviewGeometry } from './review-geometry'
@@ -289,7 +290,7 @@ for (const reopen of [false, true]) {
     await expectAudioReady(offlineAudio, browserName)
     await expect(offlineAudio).toHaveAttribute('controls', '')
     await expect(page.getByRole('button', { name: 'Replay audio' })).toHaveCount(0)
-    await expect(page.getByText('Offline shell active')).toBeVisible()
+    await expectNoOfflineStatus(page)
   })
 }
 
@@ -333,7 +334,7 @@ for (const reopen of [false, true]) {
       await expect.poll(() => offlineImage.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true)
       const offlineAudio = offlineReview.locator('audio')
       await expectAudioReady(offlineAudio, browserName)
-      await expect(phone.getByText('Offline shell active')).toBeVisible()
+      await expectNoOfflineStatus(phone)
     } finally {
       await phoneContext.close()
     }
@@ -839,7 +840,7 @@ for (const reopen of [false, true]) {
     await expect(page.getByText('NEW 0')).toBeVisible()
     await expect(page.getByText('LEARNING 1')).toBeVisible()
     await expect(page.getByText('REVIEWS 1')).toBeVisible()
-    await expect(page.getByText('Offline shell active')).toBeVisible()
+    await expectNoOfflineStatus(page)
   })
 }
 
