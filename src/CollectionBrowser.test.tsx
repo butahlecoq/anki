@@ -78,6 +78,8 @@ test('bulk note deletion requires reviewed counts and removes the selected ident
   const snapshot = await readAnkiExportSnapshot(collection)
   expect(snapshot.notes).toHaveLength(0)
   expect(snapshot.cards).toHaveLength(0)
+  await waitFor(() => expect(screen.getByText('0 cards · 0 selected')).toBeVisible())
+  await waitFor(() => expect(JSON.parse(localStorage.getItem('kiroku.collectionBrowser.v1') ?? '{}').selected?.cards).toEqual([]))
 })
 
 test('find/replace previews a selected field and preserves card IDs when applied', async () => {

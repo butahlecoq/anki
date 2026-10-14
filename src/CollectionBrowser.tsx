@@ -2,11 +2,10 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { collection, State, type Note } from './collection'
 import { userFacingStorageError } from './offline-storage'
-import { collectionDeckPaths, collectionSearchRows, compileCollectionSearch, plainField, SearchSyntaxError, type SearchRow } from './collection-search'
+import { collectionDeckPaths, compileCollectionSearch, projectBrowserResults, SearchSyntaxError } from './collection-search'
 import { applyBulkAction, applyFieldChanges, previewFieldChanges, selectionSummary, type BrowserSelection, type BulkAction, type FieldChange, type FieldOperation } from './browser-maintenance'
 import { unavailableReason } from './scheduler'
 import { ImageOcclusionEditor } from './ImageOcclusion'
-import { isRenderedCardDisplayable, renderNoteCard } from './card-rendering'
 import { useDialogKeyboard } from './use-dialog-keyboard'
 import { readBrowserCollectionSnapshot, readBrowserEditorSnapshot, readDeckList, readNoteType } from './collection-queries'
 
@@ -23,9 +22,6 @@ function savedPreferences(): BrowserPreferences {
     return { ...saved, selected: { cards: saved.selected.cards.filter((id) => typeof id === 'string'), notes: saved.selected.notes.filter((id) => typeof id === 'string') } }
   } catch { return defaultPreferences }
 }
-
-const frontText = (row: SearchRow) => plainField(Object.values(row.note.fields).find(Boolean) ?? '(empty note)')
-const rowId = (row: SearchRow, view: View) => view === 'cards' ? row.card!.id : row.note.id
 
 function NoteEditor({ note, onClose }: { note: Note; onClose: () => void }) {
   const dialogKeyboard = useDialogKeyboard(onClose)
@@ -144,40 +140,13 @@ export function CollectionBrowser() {
     try { localStorage.setItem(preferenceKey, JSON.stringify(persisted)) } catch { /* Selection remains available for this open session. */ }
   }, [preferences, data])
   useEffect(() => { const timer = window.setInterval(() => setNow(new Date()), 30_000); return () => window.clearInterval(timer) }, [])
-  const allRows = useMemo(() => data ? collectionSearchRows(data) : [], [data])
-  const duplicateIds = useMemo(() => {
-    const groups = new Map<string, string[]>()
-    for (const note of data?.notes ?? []) {
-      const first = plainField(Object.values(note.fields)[0] ?? '').normalize('NFKC').trim().toLocaleLowerCase()
-      if (!first) continue
-      const key = JSON.stringify([note.typeId, first]), group = groups.get(key) ?? []
-      group.push(note.id); groups.set(key, group)
-    }
-    return new Set([...groups.values()].filter((group) => group.length > 1).flat())
-  }, [data])
-  const rows = useMemo(() => {
-    const predicate = compileCollectionSearch(query, now)
-    let matches = allRows.filter(predicate).filter((row) => view === 'notes' || row.card)
-    if (report === 'duplicates') matches = matches.filter((row) => duplicateIds.has(row.note.id))
-    if (report === 'empty') matches = matches.filter((row) => {
-      if (!row.card) return true
-      const template = row.noteType?.templates.find((candidate) => candidate.id === row.card?.templateId)
-      if (!template || !row.noteType) return true
-      if (row.noteType.kind === 'image-occlusion') return false
-      return !isRenderedCardDisplayable(renderNoteCard(row.noteType, template, row.note.fields, row.card.clozeOrdinal, undefined, [], row.note.renderedHtmlFields), row.noteType.kind)
-    })
-    if (view === 'notes') matches = [...new Map(matches.map((row) => [row.note.id, row])).values()]
-    const cardCounts = new Map<string, number>()
-    for (const card of data?.cards ?? []) cardCounts.set(card.noteId, (cardCounts.get(card.noteId) ?? 0) + 1)
-    const value = (row: SearchRow): string | number => sort.key === 'deck' ? row.deckPath : sort.key === 'type' ? row.noteType?.name ?? '' : sort.key === 'state' ? row.card?.state ?? 0 : sort.key === 'due' ? row.card?.state === State.New ? '' : row.card?.due ?? '' : sort.key === 'flag' ? row.card?.flag ?? 0 : sort.key === 'template' ? row.noteType?.templates.find((template) => template.id === row.card?.templateId)?.name ?? '' : sort.key === 'reviews' ? row.reviews.length : sort.key === 'cards' ? cardCounts.get(row.note.id) ?? 0 : sort.key === 'tags' ? (row.note.tags ?? []).join(' ') : sort.key === 'updated' ? row.note.updatedAt : frontText(row)
-    const collator = new Intl.Collator('ja', { numeric: true, sensitivity: 'base' })
-    return matches.sort((left, right) => { const a = value(left), b = value(right); const order = typeof a === 'number' && typeof b === 'number' ? a - b : collator.compare(String(a), String(b)); return (sort.descending ? -order : order) || rowId(left, view).localeCompare(rowId(right, view)) })
-  }, [allRows, query, now, view, report, duplicateIds, sort, data])
-  const availableIds = new Set(view === 'cards' ? data?.cards.map((card) => card.id) : data?.notes.map((note) => note.id))
+  const projected = useMemo(() => data ? projectBrowserResults(data, { view, query, report, sort, page, now }) : null, [data, view, query, report, sort, page, now])
+  const rows = projected?.rows ?? []
+  const availableIds = projected?.availableIds ?? new Set<string>()
   const selected = new Set(preferences.selected[view].filter((id) => availableIds.has(id)))
   const selection: BrowserSelection = { view, ids: [...selected] }
-  const pages = Math.max(1, Math.ceil(rows.length / 50)), currentPage = Math.min(page, pages - 1)
-  const visible = rows.slice(currentPage * 50, currentPage * 50 + 50)
+  const pages = projected?.pages ?? 1, currentPage = projected?.currentPage ?? 0
+  const visible = projected?.pageRows ?? []
   const columns = view === 'cards' ? [['front', 'Expression'], ['deck', 'Deck'], ['type', 'Note type'], ['state', 'State'], ['due', 'Due'], ['flag', 'Flag'], ['template', 'Template'], ['reviews', 'Reviews']] : [['front', 'Expression'], ['deck', 'Deck'], ['type', 'Note type'], ['cards', 'Cards'], ['tags', 'Tags'], ['updated', 'Updated']]
   function select(ids: string[], checked: boolean) {
     setPreferences((current) => { const next = new Set(current.selected[view]); for (const id of ids) { if (checked) next.add(id); else next.delete(id) } return { ...current, selected: { ...current.selected, [view]: [...next] } } })
@@ -194,10 +163,10 @@ export function CollectionBrowser() {
     <details className="browser-search-help"><summary>Search syntax</summary><p>Text matches note fields. Combine terms with spaces (AND), OR, parentheses, and a leading - to exclude. Quote values with spaces. Operators: deck, tag, is, due, note, flag, card, rated, reviewed. Deck names include children. Field filters accept * and ? wildcards. Dates use local YYYY-MM-DD with optional &lt;, &lt;=, &gt;, &gt;=, or =.</p><p>Examples: tag:jlpt::* · note:"Basic reversed" · flag:3 · card:Recognition · is:due · due:&lt;2026-10-01 · rated:7:1 (Again in the last seven local days) · reviewed:2026-10-01. States: new, learn, learning, relearning, review, suspended, buried, due.</p></details>
     <div className="browser-controls"><label>Result view<select aria-label="Result view" value={view} onChange={(event) => { setPreferences((current) => ({ ...current, view: event.target.value as View, sort: { key: 'front', descending: false } })); setPage(0) }}><option value="cards">Cards</option><option value="notes">Notes</option></select></label><label>Report<select aria-label="Report" value={report} onChange={(event) => { setReport(event.target.value as typeof report); setPage(0) }}><option value="all">All matching records</option><option value="duplicates">Duplicate notes</option><option value="empty">Empty cards / notes without cards</option></select></label><span aria-live="polite">{rows.length} {view} · {selected.size} selected</span></div>
     {report === 'duplicates' && <p>Duplicates share a note type and normalized first field. Review the records before deleting.</p>}{report === 'empty' && <p>Empty fronts and missing templates appear here. Switch to Notes to include notes without generated cards. Template errors are reported in the editor.</p>}
-    <div className="browser-bulk-actions"><button className="text-button" type="button" onClick={() => select(rows.map((row) => rowId(row, view)), true)}>Select all results</button><button className="text-button" type="button" onClick={() => select([...selected], false)} disabled={!selected.size}>Clear selection</button>{(['tags', 'move', 'suspend', 'flag', 'delete'] as const).map((kind) => <button className={`text-button${kind === 'delete' ? ' danger' : ''}`} key={kind} type="button" disabled={!selected.size} onClick={() => setBulk({ selection, kind })}>{kind === 'tags' ? 'Tag selection' : kind === 'move' ? 'Move selection' : kind === 'suspend' ? 'Suspend / restore' : kind === 'flag' ? 'Flag selection' : 'Delete selection'}</button>)}<button className="text-button" type="button" disabled={!selected.size} onClick={() => setFields(selection)}>Find / replace / edit</button></div>
+    <div className="browser-bulk-actions"><button className="text-button" type="button" onClick={() => select(projected?.allIds ?? [], true)}>Select all results</button><button className="text-button" type="button" onClick={() => select([...selected], false)} disabled={!selected.size}>Clear selection</button>{(['tags', 'move', 'suspend', 'flag', 'delete'] as const).map((kind) => <button className={`text-button${kind === 'delete' ? ' danger' : ''}`} key={kind} type="button" disabled={!selected.size} onClick={() => setBulk({ selection, kind })}>{kind === 'tags' ? 'Tag selection' : kind === 'move' ? 'Move selection' : kind === 'suspend' ? 'Suspend / restore' : kind === 'flag' ? 'Flag selection' : 'Delete selection'}</button>)}<button className="text-button" type="button" disabled={!selected.size} onClick={() => setFields(selection)}>Find / replace / edit</button></div>
     <p className="browser-selection-note">Selection follows stable record IDs across sorting and reload. Selected records outside this search remain selected. Note actions affect all sibling cards.</p>
     {message && <p role="status">{message}</p>}
-    <div className="browser-table-scroll"><table className="browser-table" role="table"><caption>{view === 'cards' ? 'Card results' : 'Note results'} · page {currentPage + 1} of {pages}</caption><thead role="rowgroup"><tr role="row"><th role="columnheader"><input type="checkbox" aria-label="Select this page" checked={visible.length > 0 && visible.every((row) => selected.has(rowId(row, view)))} onChange={(event) => select(visible.map((row) => rowId(row, view)), event.target.checked)} /></th>{columns.map(([key, label]) => <th role="columnheader" key={key} aria-sort={sort.key === key ? sort.descending ? 'descending' : 'ascending' : 'none'}><button className="text-button" type="button" onClick={() => setPreferences((current) => ({ ...current, sort: { key, descending: current.sort.key === key && !current.sort.descending } }))}>{label}{sort.key === key ? sort.descending ? ' ↓' : ' ↑' : ''}</button></th>)}</tr></thead><tbody role="rowgroup">{visible.map((row) => <tr role="row" key={rowId(row, view)} className={selected.has(rowId(row, view)) ? 'selected' : ''}><td role="cell"><input type="checkbox" aria-label={`Select ${view === 'cards' ? 'card' : 'note'} ${rowId(row, view)}`} checked={selected.has(rowId(row, view))} onChange={(event) => select([rowId(row, view)], event.target.checked)} /></td><td role="cell"><button className="text-button browser-expression" type="button" onClick={() => setEditing(row.note)}>{frontText(row).slice(0, 100)}</button></td><td role="cell" data-label="Deck">{row.deckPath}{row.card && data.temporary.has(row.card.id) && <small className="temporary-membership">Custom session: {data.temporary.get(row.card.id)} (home deck unchanged)</small>}</td><td role="cell" data-label="Note type">{row.noteType?.name ?? 'Missing type'}</td>{view === 'cards' ? <><td role="cell" data-label="State">{unavailableReason(row.card!, now) ? 'Suspended' : State[row.card!.state]}</td><td role="cell" data-label="Due">{row.card!.state === State.New ? 'New' : new Date(row.card!.due).toLocaleString()}</td><td role="cell" data-label="Flag">{row.card!.flag ?? 0}</td><td role="cell" data-label="Template">{row.noteType?.templates.find((template) => template.id === row.card!.templateId)?.name ?? 'Missing template'}</td><td role="cell" data-label="Reviews">{row.reviews.length}</td></> : <><td role="cell" data-label="Cards">{data.cards.filter((card) => card.noteId === row.note.id).length}</td><td role="cell" data-label="Tags">{(row.note.tags ?? []).join(', ') || '—'}</td><td role="cell" data-label="Updated">{new Date(row.note.updatedAt).toLocaleString()}</td></>}</tr>)}</tbody></table></div>
+    <div className="browser-table-scroll"><table className="browser-table" role="table"><caption>{view === 'cards' ? 'Card results' : 'Note results'} · page {currentPage + 1} of {pages}</caption><thead role="rowgroup"><tr role="row"><th role="columnheader"><input type="checkbox" aria-label="Select this page" checked={visible.length > 0 && visible.every((item) => selected.has(item.id))} onChange={(event) => select(visible.map((item) => item.id), event.target.checked)} /></th>{columns.map(([key, label]) => <th role="columnheader" key={key} aria-sort={sort.key === key ? sort.descending ? 'descending' : 'ascending' : 'none'}><button className="text-button" type="button" onClick={() => setPreferences((current) => ({ ...current, sort: { key, descending: current.sort.key === key && !current.sort.descending } }))}>{label}{sort.key === key ? sort.descending ? ' ↓' : ' ↑' : ''}</button></th>)}</tr></thead><tbody role="rowgroup">{visible.map(({ row, id, front, cardCount }) => <tr role="row" key={id} className={selected.has(id) ? 'selected' : ''}><td role="cell"><input type="checkbox" aria-label={`Select ${view === 'cards' ? 'card' : 'note'} ${id}`} checked={selected.has(id)} onChange={(event) => select([id], event.target.checked)} /></td><td role="cell"><button className="text-button browser-expression" type="button" onClick={() => setEditing(row.note)}>{front.slice(0, 100)}</button></td><td role="cell" data-label="Deck">{row.deckPath}{row.card && data.temporary.has(row.card.id) && <small className="temporary-membership">Custom session: {data.temporary.get(row.card.id)} (home deck unchanged)</small>}</td><td role="cell" data-label="Note type">{row.noteType?.name ?? 'Missing type'}</td>{view === 'cards' ? <><td role="cell" data-label="State">{unavailableReason(row.card!, now) ? 'Suspended' : State[row.card!.state]}</td><td role="cell" data-label="Due">{row.card!.state === State.New ? 'New' : new Date(row.card!.due).toLocaleString()}</td><td role="cell" data-label="Flag">{row.card!.flag ?? 0}</td><td role="cell" data-label="Template">{row.noteType?.templates.find((template) => template.id === row.card!.templateId)?.name ?? 'Missing template'}</td><td role="cell" data-label="Reviews">{row.reviews.length}</td></> : <><td role="cell" data-label="Cards">{cardCount}</td><td role="cell" data-label="Tags">{(row.note.tags ?? []).join(', ') || '—'}</td><td role="cell" data-label="Updated">{new Date(row.note.updatedAt).toLocaleString()}</td></>}</tr>)}</tbody></table></div>
     {!rows.length && <p>No records match. Adjust the search or report, or add notes to begin.</p>}
     <div className="browser-pagination"><button className="text-button" type="button" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>Previous page</button><span>Page {currentPage + 1} of {pages}</span><button className="text-button" type="button" disabled={currentPage + 1 >= pages} onClick={() => setPage(currentPage + 1)}>Next page</button></div>
     {bulk && <BulkDialog {...bulk} onClose={() => setBulk(null)} onApplied={setMessage} />}{fields && <FieldDialog selection={fields} onClose={() => setFields(null)} onApplied={setMessage} />}{editing && <NoteEditor key={editing.id} note={editing} onClose={() => setEditing(null)} />}

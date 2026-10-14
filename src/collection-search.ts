@@ -1,5 +1,6 @@
 import { Rating, State, type CardRecord, type Deck, type Note, type NoteType, type ReviewEntry } from './collection'
 import { eligibleForStudy, isBuried, isSuspended } from './scheduler'
+import { isRenderedCardDisplayable, renderNoteCard } from './card-rendering'
 
 export class SearchSyntaxError extends Error {
   constructor(public readonly position: number, message: string) { super(message); this.name = 'SearchSyntaxError' }
@@ -206,4 +207,70 @@ export function collectionSearchRows(data: SearchCollection): SearchRow[] {
   }
   for (const note of data.notes) if (!represented.has(note.id)) rows.push({ note, noteType: types.get(note.typeId), deckPath: deckPath(note.deckId), reviews: [] })
   return rows
+}
+
+export type BrowserView = 'cards' | 'notes'
+export type BrowserReport = 'all' | 'duplicates' | 'empty'
+export interface BrowserResultRow { id: string; row: SearchRow; front: string; cardCount: number }
+export interface BrowserResultOptions {
+  view: BrowserView
+  query: string
+  report: BrowserReport
+  sort: { key: string; descending: boolean }
+  page: number
+  now: Date
+}
+
+/** Owns Browse's report policy, sorting, counts and pagination over one full snapshot. */
+export function projectBrowserResults(data: SearchCollection, options: BrowserResultOptions) {
+  const { view, query, report, sort, now } = options
+  const cardsPerNote = new Map<string, number>()
+  for (const card of data.cards) cardsPerNote.set(card.noteId, (cardsPerNote.get(card.noteId) ?? 0) + 1)
+
+  const duplicateIds = new Set<string>()
+  if (report === 'duplicates') {
+    const duplicateGroups = new Map<string, string[]>()
+    for (const note of data.notes) {
+      const first = plainField(Object.values(note.fields)[0] ?? '').normalize('NFKC').trim().toLocaleLowerCase()
+      if (!first) continue
+      const key = JSON.stringify([note.typeId, first])
+      const group = duplicateGroups.get(key) ?? []
+      group.push(note.id); duplicateGroups.set(key, group)
+    }
+    for (const group of duplicateGroups.values()) if (group.length > 1) for (const id of group) duplicateIds.add(id)
+  }
+  const isEmpty = (row: SearchRow) => {
+    if (!row.card) return true
+    const template = row.noteType?.templates.find((candidate) => candidate.id === row.card?.templateId)
+    if (!template || !row.noteType) return true
+    if (row.noteType.kind === 'image-occlusion') return false
+    return !isRenderedCardDisplayable(renderNoteCard(row.noteType, template, row.note.fields, row.card.clozeOrdinal, undefined, [], row.note.renderedHtmlFields), row.noteType.kind)
+  }
+
+  let matching = collectionSearchRows(data).filter(compileCollectionSearch(query, now)).filter((row) => view === 'notes' || row.card)
+  if (report === 'duplicates') matching = matching.filter((row) => duplicateIds.has(row.note.id))
+  if (report === 'empty') matching = matching.filter(isEmpty)
+  if (view === 'notes') matching = [...new Map(matching.map((row) => [row.note.id, row])).values()]
+
+  const decorated = matching.map((row) => {
+    const front = plainField(Object.values(row.note.fields).find(Boolean) ?? '(empty note)')
+    const cardCount = cardsPerNote.get(row.note.id) ?? 0
+    const sortKey: string | number = sort.key === 'deck' ? row.deckPath : sort.key === 'type' ? row.noteType?.name ?? '' : sort.key === 'state' ? row.card?.state ?? 0 : sort.key === 'due' ? row.card?.state === State.New ? '' : row.card?.due ?? '' : sort.key === 'flag' ? row.card?.flag ?? 0 : sort.key === 'template' ? row.noteType?.templates.find((template) => template.id === row.card?.templateId)?.name ?? '' : sort.key === 'reviews' ? row.reviews.length : sort.key === 'cards' ? cardCount : sort.key === 'tags' ? (row.note.tags ?? []).join(' ') : sort.key === 'updated' ? row.note.updatedAt : front
+    return { id: view === 'cards' ? row.card!.id : row.note.id, row, front, cardCount, sortKey }
+  })
+  const collator = new Intl.Collator('ja', { numeric: true, sensitivity: 'base' })
+  decorated.sort((left, right) => {
+    const a = left.sortKey, b = right.sortKey
+    const order = typeof a === 'number' && typeof b === 'number' ? a - b : collator.compare(String(a), String(b))
+    return (sort.descending ? -order : order) || left.id.localeCompare(right.id)
+  })
+  const rows: BrowserResultRow[] = decorated.map(({ id, row, front, cardCount }) => ({ id, row, front, cardCount }))
+  const pageSize = 50
+  const pages = Math.max(1, Math.ceil(rows.length / pageSize))
+  const currentPage = Math.max(0, Math.min(options.page, pages - 1))
+  return {
+    rows, pageRows: rows.slice(currentPage * pageSize, (currentPage + 1) * pageSize),
+    total: rows.length, pages, currentPage, allIds: rows.map((row) => row.id),
+    availableIds: new Set(view === 'cards' ? data.cards.map((card) => card.id) : data.notes.map((note) => note.id)),
+  }
 }
