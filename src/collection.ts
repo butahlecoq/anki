@@ -1,4 +1,5 @@
 import { assertOperationIdentity, orderCausalOperations, uniqueSyncOperations } from './sync-operation-rules'
+import { sameSyncConnection } from './sync-connection'
 import Dexie, { type EntityTable } from 'dexie'
 import { relatedEntities, recoverDeletionProvenance, inheritedDeletionBarrier, currentLifetime, decideOperationLifetime, restoredLifetime, validateRestorationEvidence, validateLifetimeMetadata, type EntityType, type EntityLifetimeMetadata, type DeletionCause } from '../entity-lifetimes'
 import { cardTemplateOwnerIds, cardWaitsForPendingNote, decideCardGenerationDependency, decideReviewGenerationDependency, occlusionSourceReady, validateOcclusionSource } from './sync-dependency-rules'
@@ -2388,8 +2389,13 @@ class DexieCollection extends Dexie {
     })
   }
 
-  async acknowledgeOperations(opIds: string[]) {
-    await this.outbox.bulkDelete(opIds)
+  async acknowledgeOperations(opIds: string[], expectedConnection?: SyncSettings) {
+    if (!expectedConnection) { await this.outbox.bulkDelete(opIds); return }
+    await this.transaction('rw', [this.outbox, this.settings], async () => {
+      const current = (await this.settings.get('sync'))?.value as SyncSettings | undefined
+      if (!sameSyncConnection(current, expectedConnection)) throw new Error('Paired PC connection changed during sync')
+      await this.outbox.bulkDelete(opIds)
+    })
   }
 
   async configureSync(settings: SyncSettings) {
@@ -2447,8 +2453,12 @@ class DexieCollection extends Dexie {
     return value
   }
 
-  async applyRemoteChanges(changes: SyncOperation[], cursor: number) {
+  async applyRemoteChanges(changes: SyncOperation[], cursor: number, expectedConnection?: SyncSettings) {
     await this.transaction('rw', [this.decks, this.deckOptionGroups, this.noteTypes, this.notes, this.cards, this.reviewEntries, this.noteMedia, this.receivedOperations, this.settings, this.deletedEntities, this.syncRevisions, this.syncConflicts, this.pendingRemoteOperations], async () => {
+      if (expectedConnection) {
+        const current = (await this.settings.get('sync'))?.value as SyncSettings | undefined
+        if (!sameSyncConnection(current, expectedConnection)) throw new Error('Paired PC connection changed during sync')
+      }
       const affectedNoteIds = new Set<string>()
       const affectedTypeIds = new Set<string>()
       const reviewedCardIds = new Set<string>()
