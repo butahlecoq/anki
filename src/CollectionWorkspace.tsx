@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties, type FormEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import {
   collection,
@@ -23,14 +23,13 @@ import { loadSampleDeck, removeSampleDeck, SAMPLE_DECK_NAME } from './sample-dec
 import { useRoute } from './route'
 import { useDialogKeyboard } from './use-dialog-keyboard'
 import { useDialogSubmit } from './use-dialog-submit'
-import { readCardsForNote, readDeckList, readDeckMediaReferences, readDeckMediaSnapshot, readDeckOptionGroups, readDeckWorkspaceSnapshot } from './collection-queries'
+import { readCardsForNote, readDeckList, readDeckOptionGroups, readDeckWorkspaceSnapshot } from './collection-queries'
 import { SyncControls } from './SyncControls'
 import { ImportDialog } from './ImportDialog'
 import { MoveNoteDialog, NoteDialog, ReviewSession } from './ReviewSession'
 import { ActivitySelection } from './ActivitySelection'
 import { DEFAULT_LEARNING_ACTIVITY_ID } from './learning-activities'
-import { syncCollection } from './sync-client'
-import { digestMedia } from './media'
+import { inspectDeckOfflineMedia, prepareDeckOfflineMedia } from './deck-media-readiness'
 import { userFacingStorageError } from './offline-storage'
 
 function CountStrip({ counts, reviews }: { counts: DeckCounts; reviews: number }) {
@@ -399,14 +398,7 @@ function DeckDetail({ deckId, onBack, onStudy, onPractice, onChooseActivity }: {
   const noteTypes = workspace?.noteTypes ?? []
   const summary = useLiveQuery(async () => (await collection.summaries()).find((item) => item.id === deckId), [deckId])
   const due = useLiveQuery(() => collection.reviewQueue(deckId, new Date()), [deckId])
-  const offlineReadiness = useLiveQuery(async () => {
-    const { references, blobs } = await readDeckMediaSnapshot(collection, deckId)
-    const digests = [...new Set(references.map((reference) => reference.digest))]
-    const available = await Promise.all(blobs.map(async (blob, index) => {
-      return Boolean(blob && await digestMedia(blob.blob) === digests[index])
-    }))
-    return { required: digests.length, missing: available.filter((isAvailable) => !isAvailable).length }
-  }, [deckId])
+  const offlineReadiness = useLiveQuery(() => inspectDeckOfflineMedia(collection, deckId), [deckId])
   const [deckDialog, setDeckDialog] = useState(false)
   const [childDialog, setChildDialog] = useState(false)
   const [moveDialog, setMoveDialog] = useState(false)
@@ -415,8 +407,13 @@ function DeckDetail({ deckId, onBack, onStudy, onPractice, onChooseActivity }: {
   const [moveNote, setMoveNote] = useState<Note | null>(null)
   const [manageCardsNote, setManageCardsNote] = useState<Note | null>(null)
   const [noteDialog, setNoteDialog] = useState<{ note?: Note } | null>(null)
-  const [preparingOffline, setPreparingOffline] = useState(false)
-  const [offlineMessage, setOfflineMessage] = useState('')
+  const [preparingDeckId, setPreparingDeckId] = useState<string | null>(null)
+  const [offlineFeedback, setOfflineFeedback] = useState<{ deckId: string; signature?: string; message: string } | null>(null)
+  const currentDeckId = useRef(deckId)
+  useEffect(() => {
+    currentDeckId.current = deckId
+  }, [deckId])
+  const preparationRequest = useRef(0)
   const [startingPractice, setStartingPractice] = useState(false)
   const [practiceError, setPracticeError] = useState('')
 
@@ -435,34 +432,17 @@ function DeckDetail({ deckId, onBack, onStudy, onPractice, onChooseActivity }: {
 
   async function prepareDeckOffline() {
     if (!offlineReadiness) return
-    setPreparingOffline(true)
-    setOfflineMessage('Checking this deck’s media before offline review…')
+    const request = ++preparationRequest.current
+    setPreparingDeckId(deckId)
     try {
-      const references = await readDeckMediaReferences(collection, deckId)
-      for (const digest of new Set(references.map((reference) => reference.digest))) {
-        const blob = await collection.verifiedMediaBlob(digest)
-        if (blob) await collection.discardCorruptMediaBlob(digest)
-      }
-      const initiallyMissing = new Set((await collection.missingReferencedMedia()).map((reference) => reference.digest))
-      const initiallyMissingFromDeck = new Set(references.map((reference) => reference.digest).filter((digest) => initiallyMissing.has(digest))).size
-      if (initiallyMissingFromDeck === 0) {
-        setOfflineMessage('This deck is ready for offline review. All referenced media is stored on this device.')
-        return
-      }
-      setOfflineMessage('Syncing the collection to download this deck’s missing media…')
-      const result = await syncCollection(collection)
-      const latestReferences = await readDeckMediaReferences(collection, deckId)
-      const missing = new Set((await collection.missingReferencedMedia()).map((reference) => reference.digest))
-      const deckMissing = new Set(latestReferences.map((reference) => reference.digest).filter((digest) => missing.has(digest))).size
-      if (deckMissing === 0) setOfflineMessage('This deck is ready for offline review. All referenced media is stored on this device.')
-      else if (result.state === 'authentication-required') setOfflineMessage(`This deck needs ${deckMissing} media file${deckMissing === 1 ? '' : 's'} from the paired PC. Connect to the PC, sync, and prepare the deck again.`)
-      else if (result.state === 'complete') setOfflineMessage(`${deckMissing} media file${deckMissing === 1 ? '' : 's'} could not be downloaded. Keep the PC reachable and try again before going offline.`)
-      else if (result.state === 'backup-failed') setOfflineMessage(result.message)
-      else setOfflineMessage(`This deck still needs ${deckMissing} media file${deckMissing === 1 ? '' : 's'}. The collection could not sync; try again while the PC is reachable.`)
-    } catch (error) {
-      setOfflineMessage(userFacingStorageError(error, 'This deck could not be checked. Free device storage and try again.'))
-    } finally { setPreparingOffline(false) }
+      const result = await prepareDeckOfflineMedia(collection, deckId, { onProgress: (update) => {
+        if (currentDeckId.current === deckId && preparationRequest.current === request) setOfflineFeedback(update)
+      } })
+      if (currentDeckId.current === deckId && preparationRequest.current === request) setOfflineFeedback({ deckId, signature: result.readiness?.signature, message: result.message })
+    } finally { setPreparingDeckId((current) => current === deckId ? null : current) }
   }
+
+  const offlineMessage = offlineFeedback?.deckId === deckId && (!offlineFeedback.signature || offlineFeedback.signature === offlineReadiness?.signature) ? offlineFeedback.message : ''
 
   return (
     <>
@@ -472,7 +452,7 @@ function DeckDetail({ deckId, onBack, onStudy, onPractice, onChooseActivity }: {
         <h1>{deck.name}</h1>
         <CountStrip counts={summary.counts} reviews={summary.reviewCount} />{deck.name === SAMPLE_DECK_NAME ? <p className="temporary-membership">A small sample collection for trying Japanese review. Remove it any time from this page.</p> : <p className="temporary-membership">{summary.sessionCount} home cards reserved for custom study. Home totals include them; today’s normal queue excludes them.</p>}
         <div className="deck-actions">
-          <button className="text-button" type="button" disabled={preparingOffline || !offlineReadiness} onClick={() => void prepareDeckOffline()}>{preparingOffline ? 'Preparing offline…' : 'Prepare this deck for offline use'}</button>
+          <button className="text-button" type="button" disabled={preparingDeckId === deckId || !offlineReadiness} onClick={() => void prepareDeckOffline()}>{preparingDeckId === deckId ? 'Preparing offline…' : 'Prepare this deck for offline use'}</button>
           <button className="primary-action" type="button" onClick={() => setNoteDialog({})}>Add note</button>
           <button className="primary-action study-action" type="button" disabled={!hasDueCards} onClick={onStudy}>Study now</button>
           {!hasDueCards && <button className="primary-action" type="button" disabled={startingPractice} onClick={() => void practiceAgain()}>{startingPractice ? 'Preparing practice…' : 'Practice again'}</button>}
