@@ -115,7 +115,15 @@ export async function inspectDeckOfflineMedia(collection: Collection, deckId: st
 
 /** Reuses a trusted content version after its bytes were verified; storage changes trigger a new read. */
 export async function readDeckOfflineMedia(collection: Collection, deckId: string): Promise<DeckOfflineReadiness> {
-  return verifyDeckMedia(collection, deckId, false)
+  try { return await verifyDeckMedia(collection, deckId, false) }
+  catch (error) {
+    if (!(error && typeof error === 'object' && 'name' in error && error.name === 'NotReadableError')) throw error
+    // WebKit can reject a Blob read at the instant its network context goes offline.
+    // Keep the reactive view mounted and require a later successful check for "ready".
+    const references = await readDeckMediaReferences(collection, deckId)
+    const required = new Set(references.map(({ digest }) => digest)).size
+    return { deckId, required, missing: required, state: required ? 'missing' : 'ready', signature: JSON.stringify([deckId, referencesKey(references), 'unreadable']) }
+  }
 }
 
 /** Owns verification, corrupt-cache eviction, sync and the final Deck-specific recount. */

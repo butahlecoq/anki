@@ -14,4 +14,6 @@ After an unrelated note-text edit, a second readiness read reports the same resu
 
 The in-memory verification cache retains at most 256 recent digests per Collection. Preparation evicts a corrupt body only if its stored content version still matches the bytes just checked; a concurrent replacement is rechecked on the next pass.
 
+If a browser temporarily cannot read a Blob (observed in WebKit while switching offline), reactive readiness reports the referenced media as unverified without caching a digest result. A later read can retry; explicit preparation still surfaces storage failures.
+
 The fixture compares the caller-visible result with the literal readiness expectations in `src/deck-media-readiness.test.ts` and `src/deck-readiness.test.tsx`. No elapsed-time or speedup claim is made. Run with `npx vitest run src/deck-media-verification.test.ts src/deck-media-readiness.test.ts src/deck-readiness.test.tsx`.

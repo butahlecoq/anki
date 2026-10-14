@@ -177,6 +177,16 @@ test('a failed worker releases the bounded run before a retry verifies the Deck'
   expect(await readDeckOfflineMedia(collection, deck.id)).toMatchObject({ required: 6, missing: 0, state: 'ready' })
 })
 
+test('a transient Blob read error keeps reactive readiness conservative and allows a retry', async () => {
+  const collection = database()
+  const deck = await collection.createDeck('Japanese')
+  const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
+  await collection.attachMedia(note.id, { file: new File(['cat image'], 'cat.png', { type: 'image/png' }), side: 'front' })
+  vi.spyOn(FileReader.prototype, 'readAsArrayBuffer').mockImplementationOnce(() => { throw new DOMException('The I/O read operation failed.', 'NotReadableError') })
+  expect(await readDeckOfflineMedia(collection, deck.id)).toMatchObject({ required: 1, missing: 1, state: 'missing' })
+  expect(await readDeckOfflineMedia(collection, deck.id)).toMatchObject({ required: 1, missing: 0, state: 'ready' })
+})
+
 test('explicit preparation verifies a shared unchanged body only once', async () => {
   const collection = database()
   const deck = await collection.createDeck('Japanese')
