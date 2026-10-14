@@ -1,4 +1,5 @@
 import 'fake-indexeddb/auto'
+import Dexie from 'dexie'
 import { readFile } from 'node:fs/promises'
 import { afterEach, expect, test } from 'vitest'
 import { createCollection, type Collection } from './collection'
@@ -22,6 +23,59 @@ test('Anki export returns one coherent snapshot with required collections', asyn
 
   expect(snapshot).toMatchObject({ decks: [], notes: [], cards: [], reviews: [], references: [], blobs: [] })
   expect(snapshot.types.map((type) => type.id)).toEqual(['basic', 'image-occlusion'])
+})
+
+test('selected Exchange snapshot reads one selected digest among 21 unrelated digests and omits media when disabled', async () => {
+  const collection = database()
+  const chosen = await collection.createDeck('Chosen')
+  const unrelated = await collection.createDeck('Unrelated')
+  const chosenNote = await collection.createBasicNote(chosen.id, { front: '猫', back: 'cat' })
+  const unrelatedNote = await collection.createBasicNote(unrelated.id, { front: '犬', back: 'dog' })
+  const chosenMedia = await collection.attachMedia(chosenNote.id, { file: new File([new Uint8Array([1, 2, 3])], 'chosen.png', { type: 'image/png' }), side: 'front' })
+  const unrelatedMedia = await collection.attachMedia(unrelatedNote.id, { file: new File([new Uint8Array([4, 5, 6])], 'unrelated.png', { type: 'image/png' }), side: 'front' })
+  await collection.attachMedia(chosenNote.id, { file: new File([new Uint8Array([1, 2, 3])], 'shared.png', { type: 'image/png' }), side: 'back' })
+  for (let index = 0; index < 20; index += 1) {
+    const note = await collection.createBasicNote(unrelated.id, { front: `other ${index}`, back: 'answer' })
+    await collection.attachMedia(note.id, { file: new File([new Uint8Array([index + 10])], `unrelated-${index}.png`, { type: 'image/png' }), side: 'front' })
+  }
+  // Profile the persistent adapter's materialized media rows, not elapsed time.
+  let mediaRowsRead = 0
+  const mediaTable = (collection as unknown as Dexie).table('mediaBlobs')
+  mediaTable.hook('reading', (row) => { mediaRowsRead += 1; return row })
+  expect((await readAnkiExportSnapshot(collection)).blobs).toHaveLength(22)
+  expect(mediaRowsRead).toBe(22)
+  mediaRowsRead = 0
+
+  const withMedia = await readAnkiExportSnapshot(collection, { deckId: chosen.id, media: true })
+  expect(withMedia.blobs.map((blob) => blob.digest)).toEqual([chosenMedia.digest])
+  expect(mediaRowsRead).toBe(1)
+  mediaRowsRead = 0
+  expect(withMedia.blobs.map((blob) => blob.digest)).not.toContain(unrelatedMedia.digest)
+  const withoutMedia = await readAnkiExportSnapshot(collection, { deckId: chosen.id, media: false })
+  expect(withoutMedia.blobs).toEqual([])
+  expect(mediaRowsRead).toBe(0)
+})
+
+test('selected Exchange metadata and media stay coherent when a writer begins during the snapshot', async () => {
+  const collection = database()
+  const deck = await collection.createDeck('Concurrent')
+  const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
+  const original = await collection.attachMedia(note.id, { file: new File([new Uint8Array([1])], 'first.png', { type: 'image/png' }), side: 'front' })
+  let writing: Promise<unknown> | undefined
+  const noteTable = (collection as unknown as Dexie).table('notes')
+  noteTable.hook('reading', (row) => {
+    if (!writing) writing = Dexie.ignoreTransaction(() => collection.attachMedia(note.id, { file: new File([new Uint8Array([2])], 'second.png', { type: 'image/png' }), side: 'back' }))
+    return row
+  })
+
+  const snapshot = await readAnkiExportSnapshot(collection, { deckId: deck.id, media: true })
+  expect(writing).toBeDefined()
+  expect(snapshot.references.map((reference) => reference.digest)).toEqual([original.digest])
+  expect(snapshot.blobs.map((blob) => blob.digest)).toEqual([original.digest])
+  await writing
+  const afterEdit = await readAnkiExportSnapshot(collection, { deckId: deck.id, media: true })
+  expect(afterEdit.references).toHaveLength(2)
+  expect(afterEdit.blobs).toHaveLength(2)
 })
 
 test('Anki import reads one consistent named snapshot and only looks up requested media digests', async () => {

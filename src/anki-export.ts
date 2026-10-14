@@ -9,6 +9,7 @@ import { nativeScheduleFingerprint, nativeReviewFingerprint } from './anki-sched
 import { validateMediaBytes } from './anki-import'
 import { derivedNativeId, nativeNumberOf } from './anki-identity'
 import { readAnkiExportSnapshot } from './collection-queries'
+import { selectAnkiExportDecks } from './anki-export-selection'
 import { unzipSync, zipSync } from 'fflate'
 import { templateMediaFields } from './template-renderer'
 
@@ -85,7 +86,7 @@ function boundExportFrameWindows(bytes: Uint8Array) {
 
 export async function exportAnkiPackage(collection: Collection, options: AnkiExportOptions) {
   const { Collection: AnkiCollection, Deck: AnkiDeck, Note: AnkiNote, Notetype, Package } = await import('ankipack')
-  const snapshot = await readAnkiExportSnapshot(collection)
+  const snapshot = await readAnkiExportSnapshot(collection, options)
   // Index only this transaction's snapshot so every relationship below observes
   // the same collection state and keeps the source array's first-match order.
   const typesById = new Map(snapshot.types.map((type) => [type.id, type]))
@@ -94,15 +95,7 @@ export async function exportAnkiPackage(collection: Collection, options: AnkiExp
   const referencesByNote = new Map<string, typeof snapshot.references>()
   for (const reference of snapshot.references) indexValue(referencesByNote, reference.noteId, reference)
   const blobsByDigest = new Map(snapshot.blobs.map((blob) => [blob.digest, blob]))
-  const decksById = new Map(snapshot.decks.map((deck) => [deck.id, deck]))
-  function path(id: string, seen = new Set<string>()): string {
-    const deck = decksById.get(id)
-    if (!deck || seen.has(id)) throw new Error('A deck relationship is missing or cyclic.')
-    seen.add(id)
-    return deck.parentId ? `${path(deck.parentId, seen)}::${deck.name}` : deck.name
-  }
-  const selectedPath = options.deckId ? path(options.deckId) : undefined
-  const selected = new Set(snapshot.decks.filter((deck) => !selectedPath || path(deck.id) === selectedPath || path(deck.id).startsWith(`${selectedPath}::`)).map((deck) => deck.id))
+  const { path, selected, selectedPath } = selectAnkiExportDecks(snapshot.decks, options.deckId)
   const notes = snapshot.notes.filter((note) => selected.has(note.deckId)).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
   if (!notes.length) throw new Error('There are no notes to export in this selection.')
   const noteIds = new Set(notes.map((note) => note.id))

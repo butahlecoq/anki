@@ -6,6 +6,7 @@ import { createCollection, Rating, type Collection } from './collection'
 import { exportAnkiPackage } from './anki-export'
 import { prepareAnkiImport } from './anki-import'
 import { readAnkiExportSnapshot, readCardsForNote, readSyncMediaReferences } from './collection-queries'
+import { damageIndexedDbMediaBlob } from '../tests/helpers/damage-indexeddb-media'
 
 let SQL: SqlJsStatic
 const databases: Collection[] = []
@@ -136,6 +137,36 @@ test('selected deck includes descendants and options reset cards and omit media 
   expect(native.data.revlog).toEqual([])
   expect(native.data.media).toEqual([])
 })
+test('selected Deck exports its verified media while unrelated missing media stays outside the package', async () => {
+  const source = database()
+  const selected = await source.createDeck('Selected')
+  const other = await source.createDeck('Other')
+  const selectedNote = await source.createNote(selected.id, 'basic', { front: '猫', back: 'cat' }, new Date('2026-10-01T12:00:00Z'), 'anki-note:stable-selected-guid')
+  const otherNote = await source.createBasicNote(other.id, { front: '犬', back: 'dog' })
+  const selectedCard = (await readCardsForNote(source, selectedNote.id))[0]!
+  await source.assignAnkiCardIdentity(selectedCard.id, 71_351)
+  const chosen = await source.attachMedia(selectedNote.id, { file: new File([png], 'cat.png', { type: 'image/png' }), side: 'front' })
+  const unrelated = await source.attachMedia(otherNote.id, { file: new File([new Uint8Array([1, 2, 3])], 'dog.png', { type: 'image/png' }), side: 'front' })
+  await source.evictCachedMedia(unrelated.digest)
+
+  const output = await exportAnkiPackage(source, { ...all, deckId: selected.id, SQL })
+  const native = AnkiCollection.open(output.bytes, SQL)
+  expect(native.data.notes.map((note) => note.guid)).toEqual(['stable-selected-guid'])
+  expect(native.deckNames()).toContain('Selected')
+  expect(native.data.media).toHaveLength(1)
+  expect(native.data.media[0]?.name).toBe(`${chosen.digest}.png`)
+  expect(native.data.cards.map((card) => card.id)).toEqual([71_351])
+  const exportedHash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', native.data.media[0]!.data.slice().buffer))].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+  expect(exportedHash).toBe('5fd4d7e331e0d162bd059c7573860f239ea9340d569f8b037de797c7abbf1b9d')
+  const target = database()
+  const plan = await prepareAnkiImport(new File([output.bytes.slice().buffer], 'selected.apkg'), target, { SQL })
+  expect(plan.issues.filter((issue) => issue.severity === 'error')).toEqual([])
+  await plan.commit()
+  expect((await readAnkiExportSnapshot(target)).notes.map((note) => note.id)).toEqual(['anki-note:stable-selected-guid'])
+  expect((await readAnkiExportSnapshot(target)).blobs.map((blob) => blob.digest)).toEqual(['5fd4d7e331e0d162bd059c7573860f239ea9340d569f8b037de797c7abbf1b9d'])
+  expect((await readAnkiExportSnapshot(target)).cards.map((card) => card.ankiId)).toEqual([71_351])
+})
+
 test('missing media blocks export before success', async () => {
   const source = database()
   const deck = await source.createDeck('Media')
@@ -145,6 +176,23 @@ test('missing media blocks export before success', async () => {
   const reference = (await readAnkiExportSnapshot(source)).references[0]!
   await source.evictCachedMedia(reference.digest)
   await expect(exportAnkiPackage(source, { ...all, SQL })).rejects.toThrow('Missing media')
+})
+
+test('selected corrupt media blocks export while unrelated corrupt media stays outside the package', async () => {
+  const source = database()
+  const selected = await source.createDeck('Selected')
+  const other = await source.createDeck('Other')
+  const selectedNote = await source.createBasicNote(selected.id, { front: '猫', back: 'cat' })
+  const otherNote = await source.createBasicNote(other.id, { front: '犬', back: 'dog' })
+  const chosen = await source.attachMedia(selectedNote.id, { file: new File([png], 'cat.png', { type: 'image/png' }), side: 'front' })
+  const unrelated = await source.attachMedia(otherNote.id, { file: new File([new Uint8Array([1, 2, 3])], 'dog.png', { type: 'image/png' }), side: 'front' })
+
+  await damageIndexedDbMediaBlob(source.databaseName, unrelated.digest)
+  const output = await exportAnkiPackage(source, { ...all, deckId: selected.id, SQL })
+  expect(AnkiCollection.open(output.bytes, SQL).data.media.map((item) => item.name)).toEqual([`${chosen.digest}.png`])
+
+  await damageIndexedDbMediaBlob(source.databaseName, chosen.digest)
+  await expect(exportAnkiPackage(source, { ...all, deckId: selected.id, SQL })).rejects.toThrow('Damaged media')
 })
 
 test('large note, card, and media relationship sets retain exported identities and media metadata', async () => {
