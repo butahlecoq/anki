@@ -78,17 +78,17 @@ test('literal display text decoding preserves non-HTML content without executing
 
 test('Browse projection owns stable result order, exact totals, paging and selection identities', () => {
   const data = { decks, notes, noteTypes, cards, reviews }
-  const result = projectBrowserResults(data, { view: 'cards', query: '', report: 'all', sort: { key: 'front', descending: false }, page: 0, pageSize: 2, now })
+  const result = projectBrowserResults(data, { view: 'cards', query: '', report: 'all', sort: { key: 'front', descending: false }, page: 0, now })
   expect(result.total).toBe(3)
-  expect(result.pages).toBe(2)
-  expect(result.pageRows.map((item) => item.id)).toEqual(['cat-back', 'cat-front'])
+  expect(result.pages).toBe(1)
+  expect(result.pageRows.map((item) => item.id)).toEqual(['cat-back', 'cat-front', 'dog-front'])
   expect(result.allIds).toEqual(['cat-back', 'cat-front', 'dog-front'])
   expect(result.availableIds).toEqual(new Set(['cat-back', 'cat-front', 'dog-front']))
-  expect(result.pageRows.map((item) => item.cardCount)).toEqual([2, 2])
-  const last = projectBrowserResults(data, { view: 'notes', query: '', report: 'all', sort: { key: 'front', descending: false }, page: 90, pageSize: 2, now })
-  expect(last.currentPage).toBe(1)
+  expect(result.pageRows.map((item) => item.cardCount)).toEqual([2, 2, 1])
+  const last = projectBrowserResults(data, { view: 'notes', query: '', report: 'all', sort: { key: 'front', descending: false }, page: 90, now })
+  expect(last.currentPage).toBe(0)
   expect(last.total).toBe(3)
-  expect(last.pageRows.map((item) => item.id)).toEqual(['dog'])
+  expect(last.pageRows.map((item) => item.id)).toEqual(last.allIds)
   expect(last.availableIds).toEqual(new Set(['cat', 'dog', 'empty']))
 })
 
@@ -113,7 +113,8 @@ test('Browse synthetic projection keeps 50-row pages and exact IDs over a whole 
   const syntheticNotes = Array.from({ length: 1_000 }, (_, index) => ({ ...notes[0], id: `note-${index}`, fields: { front: `語彙 ${String(index).padStart(4, '0')}`, back: 'meaning' } }))
   const syntheticCards = syntheticNotes.map((note, index) => card(`card-${index}`, note.id))
   const data = { decks, notes: syntheticNotes, noteTypes, cards: syntheticCards, reviews: [] }
-  const result = projectBrowserResults(data, { view: 'cards', query: '', report: 'all', sort: { key: 'front', descending: false }, page: 19, now })
+  const result = projectBrowserResults(data, { view: 'cards', query: '', report: 'all', sort: { key: 'front', descending: false }, page: 90, now })
+  expect(result.currentPage).toBe(19)
   expect({ notes: data.notes.length, cards: data.cards.length, total: result.total, pages: result.pages, pageRows: result.pageRows.length }).toEqual({ notes: 1_000, cards: 1_000, total: 1_000, pages: 20, pageRows: 50 })
   expect(result.pageRows.map((item) => item.id)).toEqual(Array.from({ length: 50 }, (_, index) => `card-${index + 950}`))
   expect(result.pageRows.map((item) => item.cardCount)).toEqual(Array(50).fill(1))

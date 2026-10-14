@@ -218,7 +218,6 @@ export interface BrowserResultOptions {
   report: BrowserReport
   sort: { key: string; descending: boolean }
   page: number
-  pageSize?: number
   now: Date
 }
 
@@ -266,7 +265,7 @@ export function projectBrowserResults(data: SearchCollection, options: BrowserRe
     return (sort.descending ? -order : order) || left.id.localeCompare(right.id)
   })
   const rows: BrowserResultRow[] = decorated.map(({ id, row, front, cardCount }) => ({ id, row, front, cardCount }))
-  const pageSize = options.pageSize ?? 50
+  const pageSize = 50
   const pages = Math.max(1, Math.ceil(rows.length / pageSize))
   const currentPage = Math.max(0, Math.min(options.page, pages - 1))
   return {
