@@ -4,6 +4,7 @@ import { studyDayWindow } from './study-day'
 import type { BrowserSelection } from './browser-maintenance'
 import type { CustomStudySession } from './custom-study-state'
 import { hasPendingDeckCycle } from './sync-dependency-rules'
+import { selectAnkiExportDecks } from './anki-export-selection'
 
 function storage(collection: Collection): CollectionStorage { return collection as unknown as CollectionStorage }
 
@@ -58,15 +59,7 @@ export function readAnkiExportSnapshot(collection: Collection, selection?: { dec
     if (!selection) return { decks, notes, types, cards, reviews, references, blobs: await db.mediaBlobs.toArray() }
     if (!selection.media) return { decks, notes, types, cards, reviews, references, blobs: [] }
 
-    const byId = new Map(decks.map((deck) => [deck.id, deck]))
-    function path(id: string, seen = new Set<string>()): string {
-      const deck = byId.get(id)
-      if (!deck || seen.has(id)) throw new Error('A deck relationship is missing or cyclic.')
-      seen.add(id)
-      return deck.parentId ? `${path(deck.parentId, seen)}::${deck.name}` : deck.name
-    }
-    const selectedPath = selection.deckId ? path(selection.deckId) : undefined
-    const selectedDeckIds = new Set(decks.filter((deck) => !selectedPath || path(deck.id) === selectedPath || path(deck.id).startsWith(`${selectedPath}::`)).map((deck) => deck.id))
+    const { selected: selectedDeckIds } = selectAnkiExportDecks(decks, selection.deckId)
     const noteIds = new Set(notes.filter((note) => selectedDeckIds.has(note.deckId)).map((note) => note.id))
     const digests = [...new Set(references.filter((reference) => noteIds.has(reference.noteId)).map((reference) => reference.digest))]
     const blobs = digests.length ? (await db.mediaBlobs.bulkGet(digests)).filter((blob) => blob !== undefined) : []

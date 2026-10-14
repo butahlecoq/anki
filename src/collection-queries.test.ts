@@ -1,4 +1,5 @@
 import 'fake-indexeddb/auto'
+import Dexie from 'dexie'
 import { readFile } from 'node:fs/promises'
 import { afterEach, expect, test } from 'vitest'
 import { createCollection, type Collection } from './collection'
@@ -37,13 +38,22 @@ test('selected Exchange snapshot reads one selected digest among 21 unrelated di
     const note = await collection.createBasicNote(unrelated.id, { front: `other ${index}`, back: 'answer' })
     await collection.attachMedia(note.id, { file: new File([new Uint8Array([index + 10])], `unrelated-${index}.png`, { type: 'image/png' }), side: 'front' })
   }
+  // Profile the persistent adapter's materialized media rows, not elapsed time.
+  let mediaRowsRead = 0
+  const mediaTable = (collection as unknown as Dexie).table('mediaBlobs')
+  mediaTable.hook('reading', (row) => { mediaRowsRead += 1; return row })
   expect((await readAnkiExportSnapshot(collection)).blobs).toHaveLength(22)
+  expect(mediaRowsRead).toBe(22)
+  mediaRowsRead = 0
 
   const withMedia = await readAnkiExportSnapshot(collection, { deckId: chosen.id, media: true })
   expect(withMedia.blobs.map((blob) => blob.digest)).toEqual([chosenMedia.digest])
+  expect(mediaRowsRead).toBe(1)
+  mediaRowsRead = 0
   expect(withMedia.blobs.map((blob) => blob.digest)).not.toContain(unrelatedMedia.digest)
   const withoutMedia = await readAnkiExportSnapshot(collection, { deckId: chosen.id, media: false })
   expect(withoutMedia.blobs).toEqual([])
+  expect(mediaRowsRead).toBe(0)
 })
 
 test('Anki import reads one consistent named snapshot and only looks up requested media digests', async () => {

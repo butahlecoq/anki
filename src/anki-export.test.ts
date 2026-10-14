@@ -142,6 +142,8 @@ test('selected Deck exports its verified media while unrelated missing media sta
   const other = await source.createDeck('Other')
   const selectedNote = await source.createBasicNote(selected.id, { front: '猫', back: 'cat' })
   const otherNote = await source.createBasicNote(other.id, { front: '犬', back: 'dog' })
+  const selectedCard = (await readCardsForNote(source, selectedNote.id))[0]!
+  await source.assignAnkiCardIdentity(selectedCard.id, 71_351)
   const chosen = await source.attachMedia(selectedNote.id, { file: new File([png], 'cat.png', { type: 'image/png' }), side: 'front' })
   const unrelated = await source.attachMedia(otherNote.id, { file: new File([new Uint8Array([1, 2, 3])], 'dog.png', { type: 'image/png' }), side: 'front' })
   await source.evictCachedMedia(unrelated.digest)
@@ -151,12 +153,16 @@ test('selected Deck exports its verified media while unrelated missing media sta
   expect(native.data.notes.map((note) => note.guid)).toEqual([selectedNote.id])
   expect(native.data.media).toHaveLength(1)
   expect(native.data.media[0]?.name).toBe(`${chosen.digest}.png`)
+  expect(native.data.cards.map((card) => card.id)).toEqual([71_351])
+  const exportedHash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', native.data.media[0]!.data.slice().buffer))].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+  expect(exportedHash).toBe('5fd4d7e331e0d162bd059c7573860f239ea9340d569f8b037de797c7abbf1b9d')
   const target = database()
   const plan = await prepareAnkiImport(new File([output.bytes.slice().buffer], 'selected.apkg'), target, { SQL })
   expect(plan.issues.filter((issue) => issue.severity === 'error')).toEqual([])
   await plan.commit()
   expect((await readAnkiExportSnapshot(target)).notes.map((note) => note.id)).toEqual([`anki-note:${selectedNote.id}`])
-  expect((await readAnkiExportSnapshot(target)).blobs.map((blob) => blob.digest)).toEqual([chosen.digest])
+  expect((await readAnkiExportSnapshot(target)).blobs.map((blob) => blob.digest)).toEqual(['5fd4d7e331e0d162bd059c7573860f239ea9340d569f8b037de797c7abbf1b9d'])
+  expect((await readAnkiExportSnapshot(target)).cards.map((card) => card.ankiId)).toEqual([71_351])
 })
 
 test('missing media blocks export before success', async () => {
