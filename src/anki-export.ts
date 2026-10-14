@@ -85,7 +85,7 @@ function boundExportFrameWindows(bytes: Uint8Array) {
 
 export async function exportAnkiPackage(collection: Collection, options: AnkiExportOptions) {
   const { Collection: AnkiCollection, Deck: AnkiDeck, Note: AnkiNote, Notetype, Package } = await import('ankipack')
-  const snapshot = await readAnkiExportSnapshot(collection)
+  const snapshot = await readAnkiExportSnapshot(collection, options)
   // Index only this transaction's snapshot so every relationship below observes
   // the same collection state and keeps the source array's first-match order.
   const typesById = new Map(snapshot.types.map((type) => [type.id, type]))

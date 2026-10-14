@@ -24,6 +24,28 @@ test('Anki export returns one coherent snapshot with required collections', asyn
   expect(snapshot.types.map((type) => type.id)).toEqual(['basic', 'image-occlusion'])
 })
 
+test('selected Exchange snapshot reads one selected digest among 21 unrelated digests and omits media when disabled', async () => {
+  const collection = database()
+  const chosen = await collection.createDeck('Chosen')
+  const unrelated = await collection.createDeck('Unrelated')
+  const chosenNote = await collection.createBasicNote(chosen.id, { front: '猫', back: 'cat' })
+  const unrelatedNote = await collection.createBasicNote(unrelated.id, { front: '犬', back: 'dog' })
+  const chosenMedia = await collection.attachMedia(chosenNote.id, { file: new File([new Uint8Array([1, 2, 3])], 'chosen.png', { type: 'image/png' }), side: 'front' })
+  const unrelatedMedia = await collection.attachMedia(unrelatedNote.id, { file: new File([new Uint8Array([4, 5, 6])], 'unrelated.png', { type: 'image/png' }), side: 'front' })
+  await collection.attachMedia(chosenNote.id, { file: new File([new Uint8Array([1, 2, 3])], 'shared.png', { type: 'image/png' }), side: 'back' })
+  for (let index = 0; index < 20; index += 1) {
+    const note = await collection.createBasicNote(unrelated.id, { front: `other ${index}`, back: 'answer' })
+    await collection.attachMedia(note.id, { file: new File([new Uint8Array([index + 10])], `unrelated-${index}.png`, { type: 'image/png' }), side: 'front' })
+  }
+  expect((await readAnkiExportSnapshot(collection)).blobs).toHaveLength(22)
+
+  const withMedia = await readAnkiExportSnapshot(collection, { deckId: chosen.id, media: true })
+  expect(withMedia.blobs.map((blob) => blob.digest)).toEqual([chosenMedia.digest])
+  expect(withMedia.blobs.map((blob) => blob.digest)).not.toContain(unrelatedMedia.digest)
+  const withoutMedia = await readAnkiExportSnapshot(collection, { deckId: chosen.id, media: false })
+  expect(withoutMedia.blobs).toEqual([])
+})
+
 test('Anki import reads one consistent named snapshot and only looks up requested media digests', async () => {
   const collection = database()
   const snapshot = await readAnkiImportSnapshot(collection, 'ankiPartialImport:source')

@@ -44,16 +44,34 @@ export function readAnkiImportMediaBlobs(collection: Collection, digests: string
 }
 
 /** Owns the transaction scope and table reads for package export. */
-export function readAnkiExportSnapshot(collection: Collection) {
-  return readSnapshot(collection, [storage(collection).decks, storage(collection).notes, storage(collection).noteTypes, storage(collection).cards, storage(collection).reviewEntries, storage(collection).noteMedia, storage(collection).mediaBlobs], async () => ({
-    decks: await storage(collection).decks.toArray(),
-    notes: await storage(collection).notes.toArray(),
-    types: await storage(collection).noteTypes.toArray(),
-    cards: await storage(collection).cards.toArray(),
-    reviews: await storage(collection).reviewEntries.toArray(),
-    references: await storage(collection).noteMedia.toArray(),
-    blobs: await storage(collection).mediaBlobs.toArray(),
-  }))
+export function readAnkiExportSnapshot(collection: Collection, selection?: { deckId?: string; media: boolean }) {
+  const db = storage(collection)
+  const tables: Table[] = [db.decks, db.notes, db.noteTypes, db.cards, db.reviewEntries, db.noteMedia]
+  if (!selection || selection.media) tables.push(db.mediaBlobs)
+  return readSnapshot(collection, tables, async () => {
+    const decks = await db.decks.toArray()
+    const notes = await db.notes.toArray()
+    const types = await db.noteTypes.toArray()
+    const cards = await db.cards.toArray()
+    const reviews = await db.reviewEntries.toArray()
+    const references = await db.noteMedia.toArray()
+    if (!selection) return { decks, notes, types, cards, reviews, references, blobs: await db.mediaBlobs.toArray() }
+    if (!selection.media) return { decks, notes, types, cards, reviews, references, blobs: [] }
+
+    const byId = new Map(decks.map((deck) => [deck.id, deck]))
+    function path(id: string, seen = new Set<string>()): string {
+      const deck = byId.get(id)
+      if (!deck || seen.has(id)) throw new Error('A deck relationship is missing or cyclic.')
+      seen.add(id)
+      return deck.parentId ? `${path(deck.parentId, seen)}::${deck.name}` : deck.name
+    }
+    const selectedPath = selection.deckId ? path(selection.deckId) : undefined
+    const selectedDeckIds = new Set(decks.filter((deck) => !selectedPath || path(deck.id) === selectedPath || path(deck.id).startsWith(`${selectedPath}::`)).map((deck) => deck.id))
+    const noteIds = new Set(notes.filter((note) => selectedDeckIds.has(note.deckId)).map((note) => note.id))
+    const digests = [...new Set(references.filter((reference) => noteIds.has(reference.noteId)).map((reference) => reference.digest))]
+    const blobs = digests.length ? (await db.mediaBlobs.bulkGet(digests)).filter((blob) => blob !== undefined) : []
+    return { decks, notes, types, cards, reviews, references, blobs }
+  })
 }
 
 /** Resolves the selected rows and their generated-card count for a fresh browser confirmation. */
