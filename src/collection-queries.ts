@@ -1,5 +1,6 @@
 import Dexie, { type Table } from 'dexie'
 import type { CardRecord, Collection, CollectionStorage, Note } from './collection'
+import { studyDayWindow } from './study-day'
 import type { BrowserSelection } from './browser-maintenance'
 import type { CustomStudySession } from './custom-study-state'
 import { hasPendingDeckCycle } from './sync-dependency-rules'
@@ -302,6 +303,27 @@ export function readStatisticsSnapshot(collection: Collection) {
 /** Reads the full review history for one statistics period. */
 export function readReviewHistory(collection: Collection) {
   return readLiveSnapshot(collection, storage(collection).reviewEntries, () => storage(collection).reviewEntries.toArray())
+}
+
+/** Reads only reviews in the current local study day, optionally scoped to recorded Deck IDs. */
+export function readTodayWorkloadReviews(collection: Collection, now: Date, deckIds?: Iterable<string>) {
+  return readLiveSnapshot(collection, storage(collection).reviewEntries, async () => {
+    const { start, end } = studyDayWindow(now)
+    const included = deckIds ? new Set(deckIds) : undefined
+    if (included?.size === 0) return []
+    // Local answers and Anki imports store UTC ISO strings. Synced reviews may
+    // retain a valid ISO offset, whose lexical date differs from its UTC date.
+    // ISO offsets (at most 14 hours) and local-zone rollover can shift the
+    // written calendar date by one day. Two days on either side cover both,
+    // then only keys representing matching instants materialize review rows.
+    const lower = new Date(start.getTime() - 2 * 86_400_000).toISOString().slice(0, 10)
+    const upper = new Date(end.getTime() + 2 * 86_400_000).toISOString().slice(0, 10)
+    const keys = await storage(collection).reviewEntries.where('reviewedAt').between(lower, upper, true, false).uniqueKeys()
+    const matching = keys.filter((key): key is string => typeof key === 'string' && Date.parse(key) >= start.getTime() && Date.parse(key) < end.getTime())
+    if (!matching.length) return []
+    const reviews = await storage(collection).reviewEntries.where('reviewedAt').anyOf(matching).toArray()
+    return included ? reviews.filter((entry) => included.has(entry.deckId)) : reviews
+  })
 }
 
 /** Reads media references for the sync upload pass. */
