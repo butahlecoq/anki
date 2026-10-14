@@ -32,3 +32,29 @@ test('a pending due queue does not present an empty deck or repeat-practice cont
     expect(screen.queryByRole('button', { name: 'Practice again' })).not.toBeInTheDocument()
   } finally { finish(queued) }
 })
+
+test('a pending preparation from another Deck cannot replace the current Deck readiness', async () => {
+  const first = await collection.createDeck(`Preparing ${crypto.randomUUID()}`)
+  const second = await collection.createDeck(`Current ${crypto.randomUUID()}`)
+  const note = await collection.createBasicNote(first.id, { front: '猫', back: 'cat' })
+  const media = await collection.attachMedia(note.id, { file: new File(['cat image'], 'cat.png', { type: 'image/png' }), side: 'front' })
+  await collection.evictCachedMedia(media.digest)
+  let release!: () => void
+  let began!: () => void
+  const held = new Promise<undefined>((resolve) => { release = () => resolve(undefined) })
+  const started = new Promise<void>((resolve) => { began = resolve })
+  vi.spyOn(collection, 'verifiedMediaBlob').mockImplementation(async () => { began(); return held })
+  window.location.hash = `#deck/${first.id}`
+  render(<CollectionWorkspace />)
+  try {
+    const prepare = await screen.findByRole('button', { name: 'Prepare this deck for offline use' })
+    await waitFor(() => expect(prepare).toBeEnabled())
+    prepare.click()
+    await started
+    await act(async () => { window.location.hash = `#deck/${second.id}`; window.dispatchEvent(new HashChangeEvent('hashchange')) })
+    expect(await screen.findByRole('heading', { name: second.name })).toBeVisible()
+    await act(async () => { release(); await new Promise((resolve) => setTimeout(resolve, 20)) })
+    expect(screen.getByText('Offline ready · 0 referenced media files available.')).toBeVisible()
+    expect(screen.queryByText(/needs 1 media file from the paired PC/)).not.toBeInTheDocument()
+  } finally { release(); cleanup(); await collection.deleteDeck(first.id, { mode: 'delete-subtree' }); await collection.deleteDeck(second.id, { mode: 'delete-subtree' }) }
+})
