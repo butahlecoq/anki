@@ -97,13 +97,16 @@ test('today workload reads only current study-day answers and keeps selected des
     const current = await db.createBasicNote(child.id, { front: 'current', back: 'back' }, now)
     const [currentCard] = await readCardsForNote(db, current.id)
     await db.answer(currentCard.id, Rating.Good, new Date(2026, 9, 1, 4))
+    await db.answer(currentCard.id, Rating.Again, new Date(2026, 9, 1, 4, 1), undefined, { allowEarly: true, reschedule: true })
+    const practice = await db.answer(currentCard.id, Rating.Good, new Date(2026, 9, 1, 4, 2), undefined, { allowEarly: true, reschedule: false })
+    expect(practice.rescheduled).toBe(false)
     const unrelated = await db.createBasicNote(other.id, { front: 'other', back: 'back' }, now)
     const [otherCard] = await readCardsForNote(db, unrelated.id)
     await db.answer(otherCard.id, Rating.Good, now)
     let materialized = 0
     ;(db as unknown as Dexie).table('reviewEntries').hook('reading', (row) => { materialized += 1; return row })
-    expect((await readTodayWorkloadReviews(db, now, [parent.id, child.id])).map((entry) => entry.cardId)).toEqual([currentCard.id])
-    expect(materialized).toBe(2)
+    expect((await readTodayWorkloadReviews(db, now, [parent.id, child.id])).map((entry) => entry.cardId)).toEqual([currentCard.id, currentCard.id, currentCard.id])
+    expect(materialized).toBe(4)
     expect(await readTodayWorkloadReviews(db, new Date(2026, 9, 1, 3, 59), [parent.id, child.id])).toEqual([])
     expect(await readTodayWorkloadReviews(db, now, [])).toEqual([])
   } finally { db.closeLocalCollection(); await db.removeLocalCollection() }

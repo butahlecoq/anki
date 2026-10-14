@@ -313,7 +313,9 @@ export function readTodayWorkloadReviews(collection: Collection, now: Date, deck
     if (included?.size === 0) return []
     // Local answers and Anki imports store UTC ISO strings. Synced reviews may
     // retain a valid ISO offset, whose lexical date differs from its UTC date.
-    // Read index keys from adjacent dates, then materialize only matching instants.
+    // ISO offsets (at most 14 hours) and local-zone rollover can shift the
+    // written calendar date by one day. Two days on either side cover both,
+    // then only keys representing matching instants materialize review rows.
     const lower = new Date(start.getTime() - 2 * 86_400_000).toISOString().slice(0, 10)
     const upper = new Date(end.getTime() + 2 * 86_400_000).toISOString().slice(0, 10)
     const keys = await storage(collection).reviewEntries.where('reviewedAt').between(lower, upper, true, false).uniqueKeys()

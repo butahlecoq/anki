@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, expect, test } from 'vitest'
 import { App } from './App'
 import { Statistics, TodayWorkload } from './Statistics'
-import { collection, Rating, State } from './collection'
+import { collection, createCollection, Rating, State } from './collection'
 import { localDayKey } from './progress-statistics'
 import { readCardsForNote } from './collection-queries'
 import { deleteIndexedDbFixtureRow } from '../tests/helpers/damage-indexeddb-media'
@@ -168,4 +168,23 @@ test('a selected deck workload excludes answers and cards from unrelated decks',
     await waitFor(() => expect(workload).toHaveTextContent('STUDIED 0'))
     expect(within(workload).queryByRole('link')).not.toBeInTheDocument()
   } finally { cleanup(); await collection.deleteDeck(selected.id, { mode: 'delete-subtree' }); await collection.deleteDeck(other.id, { mode: 'delete-subtree' }) }
+})
+
+test('a received review updates the mounted Today workload', async () => {
+  const source = createCollection(`today-remote-source-${crypto.randomUUID()}`)
+  const now = new Date()
+  const deck = await source.createDeck(`Received ${crypto.randomUUID()}`, now)
+  try {
+    const note = await source.createBasicNote(deck.id, { front: '猫', back: 'cat' }, now)
+    const [card] = await readCardsForNote(source, note.id)
+    const initial = await source.pendingOperations()
+    await collection.applyRemoteChanges(initial, initial.length)
+    render(<TodayWorkload deckId={deck.id} showLink={false} />)
+    const workload = screen.getByRole('region', { name: "Today's workload" })
+    await waitFor(() => expect(workload).toHaveTextContent('STUDIED 0'))
+    await source.answer(card.id, Rating.Good, now)
+    const changed = await source.pendingOperations()
+    await collection.applyRemoteChanges(changed, changed.length)
+    await waitFor(() => expect(workload).toHaveTextContent('STUDIED 1'))
+  } finally { cleanup(); await collection.deleteDeck(deck.id, { mode: 'delete-subtree' }); source.closeLocalCollection(); await source.removeLocalCollection() }
 })
