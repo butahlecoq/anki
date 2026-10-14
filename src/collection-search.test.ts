@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest'
 import { Rating, State, type CardRecord, type Deck, type Note, type NoteType, type ReviewEntry } from './collection'
-import { collectionSearchRows, compileCollectionSearch, plainField, SearchSyntaxError } from './collection-search'
+import { collectionSearchRows, compileCollectionSearch, plainField, projectBrowserResults, SearchSyntaxError } from './collection-search'
 
 const now = new Date(2026, 9, 1, 12)
 const timestamp = now.toISOString()
@@ -74,4 +74,47 @@ test('literal display text decoding preserves non-HTML content without executing
   expect(plainField('<b>猫</b> &amp; &#x72ac; &#34;')).toBe(' 猫  & 犬 "')
   expect(plainField('&#9999999999999;')).toBe('&#9999999999999;')
   expect(plainField('<'.repeat(65_536))).toBe('<'.repeat(65_536))
+})
+
+test('Browse projection owns stable result order, exact totals, paging and selection identities', () => {
+  const data = { decks, notes, noteTypes, cards, reviews }
+  const result = projectBrowserResults(data, { view: 'cards', query: '', report: 'all', sort: { key: 'front', descending: false }, page: 0, pageSize: 2, now })
+  expect(result.total).toBe(3)
+  expect(result.pages).toBe(2)
+  expect(result.pageRows.map((item) => item.id)).toEqual(['cat-back', 'cat-front'])
+  expect(result.allIds).toEqual(['cat-back', 'cat-front', 'dog-front'])
+  expect(result.availableIds).toEqual(new Set(['cat-back', 'cat-front', 'dog-front']))
+  expect(result.pageRows.map((item) => item.cardCount)).toEqual([2, 2])
+  const last = projectBrowserResults(data, { view: 'notes', query: '', report: 'all', sort: { key: 'front', descending: false }, page: 90, pageSize: 2, now })
+  expect(last.currentPage).toBe(1)
+  expect(last.total).toBe(3)
+  expect(last.pageRows.map((item) => item.id)).toEqual(['dog'])
+  expect(last.availableIds).toEqual(new Set(['cat', 'dog', 'empty']))
+})
+
+test('Browse projection applies Japanese search, duplicate, empty and image-occlusion report rules', () => {
+  const duplicate = { ...notes[0], id: 'cat-copy', fields: { ...notes[0].fields, front: '猫' } }
+  const occlusionType = { ...noteTypes[0], id: 'occlusion', kind: 'image-occlusion' as const, templates: [{ ...noteTypes[0].templates[0], id: 'mask', front: '', back: '' }] }
+  const occlusion = { ...notes[0], id: 'mask-note', typeId: 'occlusion', fields: { front: '', back: '' } }
+  const blank = { ...notes[1], id: 'blank', fields: { front: '', back: 'dog' } }
+  const mask = card('mask-card', 'mask-note', { templateId: 'mask' })
+  const blankCard = card('blank-card', 'blank')
+  const data = { decks, notes: [...notes, duplicate, occlusion, blank], noteTypes: [...noteTypes, occlusionType], cards: [...cards, mask, blankCard], reviews }
+  const options = { query: '', sort: { key: 'front', descending: false }, page: 0, now }
+
+  expect(projectBrowserResults(data, { ...options, view: 'cards', report: 'all', query: '猫' }).allIds).toEqual(['cat-back', 'cat-front'])
+  expect(projectBrowserResults(data, { ...options, view: 'notes', report: 'duplicates' }).allIds).toEqual(['cat', 'cat-copy'])
+  expect(projectBrowserResults(data, { ...options, view: 'cards', report: 'duplicates' }).allIds).toEqual(['cat-back', 'cat-front'])
+  expect(new Set(projectBrowserResults(data, { ...options, view: 'notes', report: 'empty' }).allIds)).toEqual(new Set(['empty', 'cat-copy', 'blank']))
+  expect(projectBrowserResults(data, { ...options, view: 'cards', report: 'empty' }).allIds).toEqual(['blank-card'])
+})
+
+test('Browse synthetic projection keeps 50-row pages and exact IDs over a whole snapshot', () => {
+  const syntheticNotes = Array.from({ length: 1_000 }, (_, index) => ({ ...notes[0], id: `note-${index}`, fields: { front: `語彙 ${String(index).padStart(4, '0')}`, back: 'meaning' } }))
+  const syntheticCards = syntheticNotes.map((note, index) => card(`card-${index}`, note.id))
+  const data = { decks, notes: syntheticNotes, noteTypes, cards: syntheticCards, reviews: [] }
+  const result = projectBrowserResults(data, { view: 'cards', query: '', report: 'all', sort: { key: 'front', descending: false }, page: 19, now })
+  expect({ notes: data.notes.length, cards: data.cards.length, total: result.total, pages: result.pages, pageRows: result.pageRows.length }).toEqual({ notes: 1_000, cards: 1_000, total: 1_000, pages: 20, pageRows: 50 })
+  expect(result.pageRows.map((item) => item.id)).toEqual(Array.from({ length: 50 }, (_, index) => `card-${index + 950}`))
+  expect(result.pageRows.map((item) => item.cardCount)).toEqual(Array(50).fill(1))
 })
