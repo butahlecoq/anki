@@ -295,7 +295,10 @@ interface SyncRevision extends SyncOperation { key: string }
 export interface SyncSettings { endpoint: string; token: string; cursor: number; collectionGeneration?: string }
 interface DeletionTombstone { key: string; entityType: SyncOperation['entityType']; entityId: string; occurredAt: string; causes?: DeletionCause[]; provenanceError?: string }
 export interface NoteMediaReference { id: string; noteId: string; digest: string; kind: MediaKind; mimeType: string; displayName: string; side: MediaSide; templateId?: string; inline?: boolean; playback: AudioPlayback; createdAt: string; updatedAt: string }
-export interface MediaBlob { digest: string; blob: Blob; byteLength: number; mimeType: string; verifiedAt: string }
+export interface MediaBlob { digest: string; blob: Blob; byteLength: number; mimeType: string; verifiedAt: string; contentVersion?: string }
+function versionedMediaBlob<T extends StoredMediaBlob>(blob: T): T {
+  return { ...blob, contentVersion: crypto.randomUUID() }
+}
 export interface MediaBytes extends Omit<MediaBlob, 'blob'> { bytes: ArrayBuffer }
 interface StoredMediaBlob extends Omit<MediaBlob, 'blob'> { blob: Blob | ArrayBuffer }
 export interface NoteMediaAttachment { file: File; side: MediaSide; playback?: AudioPlayback }
@@ -1094,7 +1097,7 @@ class DexieCollection extends Dexie {
     const blob: StoredMediaBlob = { digest, blob: storedImage, byteLength: input.image.size, mimeType: input.image.type, verifiedAt: createdAt }
     return this.transaction('rw', [this.decks, this.notes, this.cards, this.noteMedia, this.mediaBlobs, this.outbox, this.syncRevisions], async () => {
       if (!await this.decks.get(deckId)) throw new Error('Deck not found')
-      await this.mediaBlobs.put(blob)
+      await this.mediaBlobs.put(versionedMediaBlob(blob))
       await this.noteMedia.add(reference)
       await this.notes.add(note)
       const operations: SyncOperation[] = [
@@ -1128,7 +1131,7 @@ class DexieCollection extends Dexie {
         const reference = await this.noteMedia.get(original.sourceMediaId)
         if (!reference || reference.noteId !== noteId || reference.kind !== 'image') throw new Error('Source image reference is missing')
         const revised: NoteMediaReference = { ...reference, digest, mimeType: input.image.type, displayName: input.image.name, updatedAt: updated.updatedAt }
-        await this.mediaBlobs.put({ digest, blob: storedImage!, byteLength: input.image.size, mimeType: input.image.type, verifiedAt: updated.updatedAt })
+        await this.mediaBlobs.put(versionedMediaBlob({ digest, blob: storedImage!, byteLength: input.image.size, mimeType: input.image.type, verifiedAt: updated.updatedAt }))
         await this.noteMedia.put(revised)
         operations.push({ opId: id(), entityType: 'noteMedia', entityId: revised.id, action: 'update', occurredAt: updated.updatedAt, payload: revised })
       }
@@ -1234,7 +1237,7 @@ class DexieCollection extends Dexie {
       if (writes.updatedReviews.length) await this.reviewEntries.bulkPut(writes.updatedReviews)
       if (writes.references.length) await this.noteMedia.bulkPut(writes.references.map(({ value }) => value))
       if (writes.deletedReferences.length) await this.noteMedia.bulkDelete(writes.deletedReferences.map(({ id }) => id))
-      if (writes.blobs.length) await this.mediaBlobs.bulkPut(writes.blobs)
+      if (writes.blobs.length) await this.mediaBlobs.bulkPut(writes.blobs.map(versionedMediaBlob))
 
       const operations: SyncOperation[] = [
         ...writes.decks.map(({ value, action }) => operation('deck', value.id, action, value)),
@@ -1704,7 +1707,7 @@ class DexieCollection extends Dexie {
       await this.notes.add(note)
       await this.cards.add(card)
       if (references.length) await this.noteMedia.bulkAdd(references)
-      if (blobs.length) await this.mediaBlobs.bulkPut(blobs)
+      if (blobs.length) await this.mediaBlobs.bulkPut(blobs.map(versionedMediaBlob))
       await this.enqueueOperations([
         { opId: id(), entityType: 'note', entityId: note.id, action: 'create', occurredAt: note.createdAt, payload: note },
         { opId: id(), entityType: 'card', entityId: card.id, action: 'create', occurredAt: note.createdAt, payload: card },
@@ -1771,7 +1774,7 @@ class DexieCollection extends Dexie {
     }
     if (!references.length) return references
     await this.transaction('rw', this.noteMedia, this.mediaBlobs, this.outbox, this.syncRevisions, async () => {
-      await this.mediaBlobs.bulkPut(blobs)
+      await this.mediaBlobs.bulkPut(blobs.map(versionedMediaBlob))
       await this.noteMedia.bulkAdd(references)
       for (const reference of references) await this.enqueueOperation({ opId: id(), entityType: 'noteMedia', entityId: reference.id, action: 'create', occurredAt: reference.createdAt, payload: reference })
     })
@@ -1804,6 +1807,17 @@ class DexieCollection extends Dexie {
     })
   }
 
+  /** Evicts only the bytes that a verification run actually inspected. */
+  async evictCachedMediaIfVersion(digest: string, contentVersion: string | undefined): Promise<boolean> {
+    return this.transaction('rw', [this.noteMedia, this.mediaBlobs], async () => {
+      if (!await this.noteMedia.where('digest').equals(digest).count()) return false
+      const current = await this.mediaBlobs.get(digest)
+      if (!current || current.contentVersion !== contentVersion) return false
+      await this.mediaBlobs.delete(digest)
+      return true
+    })
+  }
+
   /** Removes bytes after checking their content address inside the storage boundary. */
   async discardCorruptMediaBlob(digest: string): Promise<boolean> {
     const stored = await this.mediaBlobs.get(digest)
@@ -1825,7 +1839,7 @@ class DexieCollection extends Dexie {
 
   async storeDownloadedMedia(digest: string, blob: Blob, now = new Date()) {
     if (await digestMedia(blob) !== digest) throw new Error('Downloaded media did not match its content digest.')
-    await this.mediaBlobs.put({ digest, blob: await mediaBytes(blob), byteLength: blob.size, mimeType: blob.type, verifiedAt: now.toISOString() })
+    await this.mediaBlobs.put(versionedMediaBlob({ digest, blob: await mediaBytes(blob), byteLength: blob.size, mimeType: blob.type, verifiedAt: now.toISOString() }))
   }
 
   async removeMedia(referenceId: string, now = new Date()) {

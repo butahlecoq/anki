@@ -43,12 +43,12 @@ test('a pending preparation from another Deck cannot replace the current Deck re
   let began!: () => void
   const held = new Promise<undefined>((resolve) => { release = () => resolve(undefined) })
   const started = new Promise<void>((resolve) => { began = resolve })
-  vi.spyOn(collection, 'verifiedMediaBlob').mockImplementation(async () => { began(); return held })
   window.location.hash = `#deck/${first.id}`
   render(<CollectionWorkspace />)
   try {
     const prepare = await screen.findByRole('button', { name: 'Prepare this deck for offline use' })
     await waitFor(() => expect(prepare).toBeEnabled())
+    vi.spyOn(collection, 'verifiedMediaBlob').mockImplementation(async () => { began(); return held })
     prepare.click()
     await started
     await act(async () => { window.location.hash = `#deck/${second.id}`; window.dispatchEvent(new HashChangeEvent('hashchange')) })

@@ -29,7 +29,7 @@ import { ImportDialog } from './ImportDialog'
 import { MoveNoteDialog, NoteDialog, ReviewSession } from './ReviewSession'
 import { ActivitySelection } from './ActivitySelection'
 import { DEFAULT_LEARNING_ACTIVITY_ID } from './learning-activities'
-import { inspectDeckOfflineMedia, prepareDeckOfflineMedia } from './deck-media-readiness'
+import { readDeckOfflineMedia, prepareDeckOfflineMedia } from './deck-media-readiness'
 import { userFacingStorageError } from './offline-storage'
 
 function CountStrip({ counts, reviews }: { counts: DeckCounts; reviews: number }) {
@@ -398,7 +398,7 @@ function DeckDetail({ deckId, onBack, onStudy, onPractice, onChooseActivity }: {
   const noteTypes = workspace?.noteTypes ?? []
   const summary = useLiveQuery(async () => (await collection.summaries()).find((item) => item.id === deckId), [deckId])
   const due = useLiveQuery(() => collection.reviewQueue(deckId, new Date()), [deckId])
-  const offlineReadiness = useLiveQuery(() => inspectDeckOfflineMedia(collection, deckId), [deckId])
+  const offlineReadiness = useLiveQuery(() => readDeckOfflineMedia(collection, deckId), [deckId])
   const [deckDialog, setDeckDialog] = useState(false)
   const [childDialog, setChildDialog] = useState(false)
   const [moveDialog, setMoveDialog] = useState(false)
