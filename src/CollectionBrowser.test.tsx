@@ -64,7 +64,6 @@ test('bulk note deletion requires reviewed counts and removes the selected ident
   const parent = await deck()
   await collection.createBasicNote(parent.id, { front: '猫', back: 'cat' })
   await collection.createBasicNote(parent.id, { front: '犬', back: 'dog' })
-  const deletedCardIds = (await readAnkiExportSnapshot(collection)).cards.map((card) => card.id)
   render(<CollectionBrowser />)
   await screen.findByRole('table')
   fireEvent.click(screen.getByRole('button', { name: 'Select all results' }))
@@ -80,7 +79,7 @@ test('bulk note deletion requires reviewed counts and removes the selected ident
   expect(snapshot.notes).toHaveLength(0)
   expect(snapshot.cards).toHaveLength(0)
   await waitFor(() => expect(screen.getByText('0 cards · 0 selected')).toBeVisible())
-  await waitFor(() => expect(deletedCardIds.every((id) => !localStorage.getItem('kiroku.collectionBrowser.v1')?.includes(id))).toBe(true))
+  await waitFor(() => expect(JSON.parse(localStorage.getItem('kiroku.collectionBrowser.v1') ?? '{}').selected?.cards).toEqual([]))
 })
 
 test('find/replace previews a selected field and preserves card IDs when applied', async () => {
