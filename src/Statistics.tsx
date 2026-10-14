@@ -3,7 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { collection, Rating, State, type CardRecord } from './collection'
 import { useDialogKeyboard } from './use-dialog-keyboard'
 import { localDayKey, periodWindow, reviewHeatmap, reviewStatistics, schedulingStatistics, type StatisticsPeriod } from './progress-statistics'
-import { readDeckList, readReviewHistory, readStatisticsSnapshot, readCardReviewHistory } from './collection-queries'
+import { readDeckList, readStatisticsSnapshot, readCardReviewHistory, readTodayWorkloadReviews } from './collection-queries'
 
 const heatmapMonth = new Intl.DateTimeFormat('en', { month: 'short' })
 
@@ -30,7 +30,7 @@ export function TodayWorkload({ deckId = '', showLink = true }: { deckId?: strin
       changed = false
       for (const deck of decks) if (deck.parentId && included.has(deck.parentId) && !included.has(deck.id)) { included.add(deck.id); changed = true }
     }
-    const today = reviewStatistics((await readReviewHistory(collection)).filter((entry) => !deckId || included.has(entry.deckId)), 'day', now)
+    const today = reviewStatistics(await readTodayWorkloadReviews(collection, now, deckId ? included : undefined), 'day', now)
     return { cards, today }
   }, [now.getTime(), deckId])
   return <section className="today-workload" aria-label="Today's workload">

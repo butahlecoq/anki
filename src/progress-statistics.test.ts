@@ -1,8 +1,10 @@
 import 'fake-indexeddb/auto'
+import Dexie from 'dexie'
 import { expect, test } from 'vitest'
 import { createCollection, Rating, State, type CardRecord, type ReviewEntry } from './collection'
 import { localDayKey, periodWindow, reviewHeatmap, reviewStatistics, schedulingStatistics } from './progress-statistics'
-import { readCardsForNote, readDeckOptionGroup, readReviewHistory } from './collection-queries'
+import { readCardsForNote, readDeckOptionGroup, readReviewHistory, readTodayWorkloadReviews } from './collection-queries'
+import { studyDayWindow } from './study-day'
 
 function review(id: string, date: Date, overrides: Partial<ReviewEntry> = {}): ReviewEntry {
   return { id, cardId: 'card', deckId: 'deck', reviewedAt: date.toISOString(), rating: Rating.Good, state: State.Review, due: date.toISOString(), stability: 10, difficulty: 5, elapsedDays: 2, lastElapsedDays: 2, scheduledDays: 10, learningSteps: 0, ...overrides }
@@ -80,6 +82,50 @@ test('offline answers, undo, and replayed synchronization retain exactly one tim
   } finally { source.closeLocalCollection(); remote.closeLocalCollection(); await source.removeLocalCollection(); await remote.removeLocalCollection() }
 })
 
+test('today workload reads only current study-day answers and keeps selected descendants', async () => {
+  const db = createCollection(`today-reviews-${crypto.randomUUID()}`)
+  const now = new Date(2026, 9, 1, 12)
+  try {
+    const parent = await db.createDeck('Parent', now)
+    const child = await db.createDeck('Parent::Child', now)
+    const other = await db.createDeck('Other', now)
+    for (let index = 0; index < 24; index++) {
+      const note = await db.createBasicNote(child.id, { front: `old-${index}`, back: 'back' }, now)
+      const [entry] = await readCardsForNote(db, note.id)
+      await db.answer(entry.id, Rating.Good, new Date(2026, 8, 1, 12, index))
+    }
+    const current = await db.createBasicNote(child.id, { front: 'current', back: 'back' }, now)
+    const [currentCard] = await readCardsForNote(db, current.id)
+    await db.answer(currentCard.id, Rating.Good, new Date(2026, 9, 1, 4))
+    const unrelated = await db.createBasicNote(other.id, { front: 'other', back: 'back' }, now)
+    const [otherCard] = await readCardsForNote(db, unrelated.id)
+    await db.answer(otherCard.id, Rating.Good, now)
+    let materialized = 0
+    ;(db as unknown as Dexie).table('reviewEntries').hook('reading', (row) => { materialized += 1; return row })
+    expect((await readTodayWorkloadReviews(db, now, [parent.id, child.id])).map((entry) => entry.cardId)).toEqual([currentCard.id])
+    expect(materialized).toBe(2)
+    expect(await readTodayWorkloadReviews(db, new Date(2026, 9, 1, 3, 59), [parent.id, child.id])).toEqual([])
+    expect(await readTodayWorkloadReviews(db, now, [])).toEqual([])
+  } finally { db.closeLocalCollection(); await db.removeLocalCollection() }
+})
+
+test('today workload accepts a synchronized ISO offset timestamp at the study-day boundary', async () => {
+  const source = createCollection(`offset-source-${crypto.randomUUID()}`)
+  const remote = createCollection(`offset-remote-${crypto.randomUUID()}`)
+  const now = new Date('2026-10-01T12:00:00.000Z')
+  try {
+    const deck = await source.createDeck('Offset', now)
+    const note = await source.createBasicNote(deck.id, { front: 'offset', back: 'back' }, now)
+    const [entry] = await readCardsForNote(source, note.id)
+    await source.answer(entry.id, Rating.Good, new Date('2026-10-01T04:00:00.000Z'))
+    const changes = (await source.pendingOperations()).map((operation) => operation.entityType === 'review'
+      ? { ...operation, occurredAt: '2026-10-01T06:00:00.000+02:00', payload: { ...(operation.payload as ReviewEntry), reviewedAt: '2026-10-01T06:00:00.000+02:00' } }
+      : operation)
+    await remote.applyRemoteChanges(changes, changes.length)
+    expect((await readTodayWorkloadReviews(remote, now)).map((review) => review.cardId)).toEqual([entry.id])
+  } finally { source.closeLocalCollection(); remote.closeLocalCollection(); await source.removeLocalCollection(); await remote.removeLocalCollection() }
+})
+
 test('dashboard queue shares daily limits and renderability with the reviewer', async () => {
   const db = createCollection(`stats-queue-${crypto.randomUUID()}`)
   const now = new Date(2026, 9, 1, 12)
@@ -99,4 +145,17 @@ test('dashboard queue shares daily limits and renderability with the reviewer', 
 test('heatmap dates use calendar arithmetic across daylight-saving transitions', () => {
   const now = new Date(2026, 2, 30, 12)
   expect(reviewHeatmap([], now, 3).map((day) => localDayKey(day.date))).toEqual(['2026-03-28', '2026-03-29', '2026-03-30'])
+})
+
+test('study-day window uses calendar rollover across a spring daylight-saving change', () => {
+  const originalZone = process.env.TZ
+  process.env.TZ = 'America/New_York'
+  try {
+    const before = studyDayWindow(new Date('2026-03-08T07:59:59.000Z'))
+    expect(before.start.toISOString()).toBe('2026-03-07T09:00:00.000Z')
+    expect(before.end.toISOString()).toBe('2026-03-08T08:00:00.000Z')
+    const at = studyDayWindow(new Date('2026-03-08T08:00:00.000Z'))
+    expect(at.start.toISOString()).toBe('2026-03-08T08:00:00.000Z')
+    expect(at.end.toISOString()).toBe('2026-03-09T08:00:00.000Z')
+  } finally { if (originalZone === undefined) delete process.env.TZ; else process.env.TZ = originalZone }
 })
