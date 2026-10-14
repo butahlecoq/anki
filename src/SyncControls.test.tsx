@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { collection } from './collection'
 import { readNote } from './collection-queries'
 import { SyncControls } from './SyncControls'
+import { syncCollection } from './sync-client'
 
 const pairCollection = vi.hoisted(() => vi.fn())
 const connectPrivatePc = vi.hoisted(() => vi.fn().mockResolvedValue({ state: 'manual' }))
@@ -138,6 +139,26 @@ describe('PC pairing dialog', () => {
     expect(screen.getAllByRole('dialog')).toHaveLength(1)
     expect(screen.getByLabelText('AnkiWeb username')).toHaveValue('')
     expect(await readNote(collection, note.id)).toBeDefined()
+  })
+
+  test('a delayed old-pairing result cannot replace the new connection status', async () => {
+    await collection.configureSync({ endpoint: 'https://old.example.test', token: 'old-token', cursor: 0 })
+    Object.defineProperty(navigator, 'serviceWorker', { configurable: true, value: {} })
+    let release!: () => void
+    let started!: () => void
+    const held = new Promise<void>((resolve) => { release = resolve })
+    const began = new Promise<void>((resolve) => { started = resolve })
+    vi.mocked(syncCollection).mockImplementationOnce(async () => { started(); await held; return { state: 'complete', accepted: 0, cursor: 9, changes: [] } })
+    render(<SyncControls offlineSyncAvailable />)
+    try {
+      fireEvent.click(await screen.findByRole('button', { name: 'Sync now' }))
+      await began
+      await collection.configureSync({ endpoint: 'https://new.example.test', token: 'new-token', cursor: 0 })
+      await waitFor(() => expect(screen.getByRole('region', { name: 'PC sync' })).not.toHaveTextContent('Syncing your collection'))
+      release()
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Sync now' })).toBeEnabled())
+      expect(screen.getByRole('region', { name: 'PC sync' })).not.toHaveTextContent(/cursor 9|Sync complete/)
+    } finally { release() }
   })
 
 })

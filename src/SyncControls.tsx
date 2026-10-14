@@ -3,6 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { collection } from './collection'
 import { formatStorageBytes, requestPersistentStorage, type PersistenceResult } from './offline-storage'
 import { createAndDownloadPcBackup, listPcBackups, pairCollection, previewPcBackupRestore, restorePcBackup, syncCollection, type PcBackup } from './sync-client'
+import { sameSyncConnection } from './sync-connection'
 import { supportsServiceWorkers } from './browser-capabilities'
 import { useDialogKeyboard } from './use-dialog-keyboard'
 import { AnkiWebAccountDialog } from './AnkiWebAccountDialog'
@@ -43,6 +44,11 @@ export function SyncControls({ offlineSyncAvailable, collectionActions }: { offl
   const [endpoint, setEndpoint] = useState('')
   const [code, setCode] = useState('')
   const [message, setMessage] = useState(SYNC_LOCAL_ONLY)
+  const displayedConnection = useRef(settings)
+  useEffect(() => {
+    if (displayedConnection.current && (!settings || !sameSyncConnection(displayedConnection.current, settings))) setMessage(SYNC_LOCAL_ONLY)
+    displayedConnection.current = settings
+  }, [settings])
   const [busy, setBusy] = useState(false)
   const offlineShellSupported = supportsServiceWorkers()
   const pairingKeyboard = useDialogKeyboard(closePairing, pairing)
@@ -118,29 +124,37 @@ export function SyncControls({ offlineSyncAvailable, collectionActions }: { offl
       else openPairing()
       return
     }
+    const connection = settings
+    const stillCurrent = async () => sameSyncConnection(await collection.syncSettings(), connection)
+    let messageSequence = 0
+    const showForConnection = (text: string) => {
+      const sequence = ++messageSequence
+      void stillCurrent().then((current) => { if (current && sequence === messageSequence) setMessage(text) })
+    }
     setBusy(true)
     setMessage('Syncing your collection…')
     try {
       const result = await syncCollection(collection, fetch.bind(window), (progress) => {
         switch (progress.phase) {
-          case 'records': setMessage(`Syncing records · ${progress.completed} accepted · ${progress.pending} local changes remain · cursor ${progress.cursor}.${progress.pendingIncomingOperations ? ` ${progress.pendingIncomingOperations} received changes waiting for related records.` : ''}${progress.remoteChangesPending ? ' More PC records are queued.' : ''}`); break
-          case 'upload': setMessage(`Uploading media · ${progress.completed} sent · ${progress.pending} waiting.`); break
-          case 'download': setMessage(`Downloading media · ${progress.completed} saved · ${progress.pending} waiting.`); break
+          case 'records': showForConnection(`Syncing records · ${progress.completed} accepted · ${progress.pending} local changes remain · cursor ${progress.cursor}.${progress.pendingIncomingOperations ? ` ${progress.pendingIncomingOperations} received changes waiting for related records.` : ''}${progress.remoteChangesPending ? ' More PC records are queued.' : ''}`); break
+          case 'upload': showForConnection(`Uploading media · ${progress.completed} sent · ${progress.pending} waiting.`); break
+          case 'download': showForConnection(`Downloading media · ${progress.completed} saved · ${progress.pending} waiting.`); break
           case 'retry': {
             const task = progress.task === 'records' ? 'collection changes' : 'media files'
-            setMessage(`Sync saved progress. ${progress.pending} ${task} remain for the next retry.`)
+            showForConnection(`Sync saved progress. ${progress.pending} ${task} remain for the next retry.`)
             break
           }
-          case 'complete': setMessage(syncOutcomeMessage({ state: 'complete', accepted: progress.accepted, media: progress.media, conflicts: progress.conflicts })); break
+          case 'complete': showForConnection(syncOutcomeMessage({ state: 'complete', accepted: progress.accepted, media: progress.media, conflicts: progress.conflicts })); break
         }
       })
+      if (!await stillCurrent()) return
       if (result.state === 'complete') {
-        if (settings) void listPcBackups(settings).then(({ backups: latest }) => setBackups(latest)).catch(() => {})
+        void listPcBackups(connection).then(async ({ backups: latest }) => { if (await stillCurrent()) setBackups(latest) }).catch(() => {})
         const { conflicts } = await readSyncProgressCounts(collection)
-        setMessage(syncOutcomeMessage({ ...result, conflicts }))
-      } else setMessage(syncOutcomeMessage(result))
+        showForConnection(syncOutcomeMessage({ ...result, conflicts }))
+      } else showForConnection(syncOutcomeMessage(result))
     } catch (error) {
-      setMessage(error instanceof Error ? `Sync stopped safely. ${error.message} Your local changes remain on this device; reconnect and retry.` : 'Sync stopped safely. Your local changes remain on this device; reconnect and retry.')
+      showForConnection(error instanceof Error ? `Sync stopped safely. ${error.message} Your local changes remain on this device; reconnect and retry.` : 'Sync stopped safely. Your local changes remain on this device; reconnect and retry.')
     } finally { setBusy(false) }
   }
 

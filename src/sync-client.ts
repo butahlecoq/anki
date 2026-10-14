@@ -2,6 +2,7 @@ import type { Collection, SyncOperation, SyncSettings } from './collection'
 import { CLIENT_COLLECTION_SCHEMA_VERSION, SYNC_OPERATION_BATCH_SIZE, SYNC_REQUESTS_PER_ATTEMPT, SYNC_PROTOCOL_VERSION, type IncompatibleSync, type SyncHealth } from '../sync-capabilities.js'
 import { digestMedia } from './media'
 import { readPendingDeckCycle, readSyncMediaReferences, readSyncProgressCounts } from './collection-queries'
+import { sameSyncConnection, syncConnectionKey } from './sync-connection'
 
 type Fetcher = typeof fetch
 type Change = { cursor: number; opId: string; entityType: string; entityId: string; action: string; occurredAt: string; payload: unknown }
@@ -233,14 +234,59 @@ export async function foregroundSync(settings: SyncSettings, operations: Partial
   }
 }
 
-export async function syncCollection(collection: Collection, fetcher: Fetcher = fetch, onProgress?: (progress: SyncProgress) => void): Promise<SyncResult> {
+type SyncAttempt = { key: string; promise: Promise<SyncResult>; observers: Set<(progress: SyncProgress) => void>; latest?: SyncProgress }
+const activeSyncAttempts = new WeakMap<Collection, SyncAttempt[]>()
+
+/** Same-Collection, same-connection callers share one durable attempt and its progress. */
+export async function syncCollection(collection: Collection, fetcher: Fetcher = fetch, onProgress?: (progress: SyncProgress) => void, observerSignal?: AbortSignal): Promise<SyncResult> {
   const settings = await collection.syncSettings()
   if (!settings) return { state: 'authentication-required' }
+  const key = syncConnectionKey(settings)
+  let attempts = activeSyncAttempts.get(collection)
+  if (!attempts) { attempts = []; activeSyncAttempts.set(collection, attempts) }
+  const active = attempts.find((attempt) => attempt.key === key)
+  if (active) {
+    const detach = observeAttempt(active, onProgress, observerSignal)
+    try { return await active.promise }
+    finally { detach() }
+  }
+  const attempt: SyncAttempt = { key, promise: undefined!, observers: new Set() }
+  const detach = observeAttempt(attempt, onProgress, observerSignal)
+  attempts.push(attempt)
+  const emit = (progress: SyncProgress) => {
+    attempt.latest = progress
+    for (const observer of attempt.observers) {
+      try { observer(progress) }
+      catch { attempt.observers.delete(observer) }
+    }
+  }
+  attempt.promise = performSyncCollection(collection, settings, fetcher, emit).finally(() => {
+    attempts.splice(attempts.indexOf(attempt), 1)
+    if (attempts.length === 0) activeSyncAttempts.delete(collection)
+  })
+  try { return await attempt.promise }
+  finally { detach() }
+}
+
+function observeAttempt(attempt: SyncAttempt, observer?: (progress: SyncProgress) => void, signal?: AbortSignal): () => void {
+  if (!observer || signal?.aborted) return () => {}
+  attempt.observers.add(observer)
+  if (attempt.latest) {
+    try { observer(attempt.latest) }
+    catch { attempt.observers.delete(observer) }
+  }
+  const detach = () => attempt.observers.delete(observer)
+  signal?.addEventListener('abort', detach, { once: true })
+  return () => { detach(); signal?.removeEventListener('abort', detach) }
+}
+
+async function performSyncCollection(collection: Collection, settings: SyncSettings, fetcher: Fetcher, onProgress: (progress: SyncProgress) => void): Promise<SyncResult> {
   // An in-flight upload may already hold a snapshot of pending operations.
   // Invalidate local-only undo before any network work can begin.
   await collection.beginSyncAttempt()
   const preflight = await preflightSync(settings, fetcher)
   if (preflight.state !== 'ready') return preflight
+  if (!sameSyncConnection(await collection.syncSettings(), settings)) return { state: 'authentication-required' }
   let uploaded = 0
   let downloaded = 0
   let uploadError: MediaSyncProgress['uploadError']
@@ -249,6 +295,7 @@ export async function syncCollection(collection: Collection, fetcher: Fetcher = 
   const localDigests = new Set(references.map((reference) => reference.digest))
   onProgress?.({ phase: 'upload', completed: 0, pending: localDigests.size })
   for (const digest of localDigests) {
+    if (!sameSyncConnection(await collection.syncSettings(), settings)) return { state: 'authentication-required' }
     const local = await collection.verifiedMediaBlob(digest)
     if (!local) continue
     try {
@@ -266,14 +313,23 @@ export async function syncCollection(collection: Collection, fetcher: Fetcher = 
   let rounds = 0
   let remoteChangesPending = false
   while (rounds < SYNC_REQUESTS_PER_ATTEMPT) {
+    if (!sameSyncConnection(await collection.syncSettings(), settings)) return { state: 'authentication-required' }
     const operations = await collection.captureSyncOperations(SYNC_OPERATION_BATCH_SIZE)
     const page = await foregroundSync({ ...settings, cursor }, operations, fetcher)
     if (page.state !== 'complete') {
       if (page.state === 'unreachable') onProgress?.({ phase: 'retry', task: 'records', completed: accepted, pending: (await readSyncProgressCounts(collection)).pending, cursor })
       return page
     }
-    await collection.applyRemoteChanges(page.changes as SyncOperation[], page.cursor)
-    await collection.acknowledgeOperations(operations.map((operation) => operation.opId))
+    try { await collection.applyRemoteChanges(page.changes as SyncOperation[], page.cursor, settings) }
+    catch (error) {
+      if (!sameSyncConnection(await collection.syncSettings(), settings)) return { state: 'authentication-required' }
+      throw error
+    }
+    try { await collection.acknowledgeOperations(operations.map((operation) => operation.opId), settings) }
+    catch (error) {
+      if (!sameSyncConnection(await collection.syncSettings(), settings)) return { state: 'authentication-required' }
+      throw error
+    }
     cursor = page.cursor
     accepted += page.accepted
     remoteChangesPending = page.hasMore === true
@@ -295,6 +351,7 @@ export async function syncCollection(collection: Collection, fetcher: Fetcher = 
     const missingDigests = new Set((await collection.missingReferencedMedia()).map((reference) => reference.digest))
     onProgress?.({ phase: 'download', completed: 0, pending: missingDigests.size, cursor })
     for (const digest of missingDigests) {
+      if (!sameSyncConnection(await collection.syncSettings(), settings)) return { state: 'authentication-required' }
       try {
         const blob = await downloadMedia(settings, digest, fetcher)
         await collection.storeDownloadedMedia(digest, blob)
