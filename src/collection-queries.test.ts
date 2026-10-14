@@ -56,6 +56,28 @@ test('selected Exchange snapshot reads one selected digest among 21 unrelated di
   expect(mediaRowsRead).toBe(0)
 })
 
+test('selected Exchange metadata and media stay coherent when a writer begins during the snapshot', async () => {
+  const collection = database()
+  const deck = await collection.createDeck('Concurrent')
+  const note = await collection.createBasicNote(deck.id, { front: '猫', back: 'cat' })
+  const original = await collection.attachMedia(note.id, { file: new File([new Uint8Array([1])], 'first.png', { type: 'image/png' }), side: 'front' })
+  let writing: Promise<unknown> | undefined
+  const noteTable = (collection as unknown as Dexie).table('notes')
+  noteTable.hook('reading', (row) => {
+    if (!writing) writing = Dexie.ignoreTransaction(() => collection.attachMedia(note.id, { file: new File([new Uint8Array([2])], 'second.png', { type: 'image/png' }), side: 'back' }))
+    return row
+  })
+
+  const snapshot = await readAnkiExportSnapshot(collection, { deckId: deck.id, media: true })
+  expect(writing).toBeDefined()
+  expect(snapshot.references.map((reference) => reference.digest)).toEqual([original.digest])
+  expect(snapshot.blobs.map((blob) => blob.digest)).toEqual([original.digest])
+  await writing
+  const afterEdit = await readAnkiExportSnapshot(collection, { deckId: deck.id, media: true })
+  expect(afterEdit.references).toHaveLength(2)
+  expect(afterEdit.blobs).toHaveLength(2)
+})
+
 test('Anki import reads one consistent named snapshot and only looks up requested media digests', async () => {
   const collection = database()
   const snapshot = await readAnkiImportSnapshot(collection, 'ankiPartialImport:source')

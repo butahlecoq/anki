@@ -140,7 +140,7 @@ test('selected Deck exports its verified media while unrelated missing media sta
   const source = database()
   const selected = await source.createDeck('Selected')
   const other = await source.createDeck('Other')
-  const selectedNote = await source.createBasicNote(selected.id, { front: '猫', back: 'cat' })
+  const selectedNote = await source.createNote(selected.id, 'basic', { front: '猫', back: 'cat' }, new Date('2026-10-01T12:00:00Z'), 'anki-note:stable-selected-guid')
   const otherNote = await source.createBasicNote(other.id, { front: '犬', back: 'dog' })
   const selectedCard = (await readCardsForNote(source, selectedNote.id))[0]!
   await source.assignAnkiCardIdentity(selectedCard.id, 71_351)
@@ -150,7 +150,8 @@ test('selected Deck exports its verified media while unrelated missing media sta
 
   const output = await exportAnkiPackage(source, { ...all, deckId: selected.id, SQL })
   const native = AnkiCollection.open(output.bytes, SQL)
-  expect(native.data.notes.map((note) => note.guid)).toEqual([selectedNote.id])
+  expect(native.data.notes.map((note) => note.guid)).toEqual(['stable-selected-guid'])
+  expect(native.deckNames()).toContain('Selected')
   expect(native.data.media).toHaveLength(1)
   expect(native.data.media[0]?.name).toBe(`${chosen.digest}.png`)
   expect(native.data.cards.map((card) => card.id)).toEqual([71_351])
@@ -160,7 +161,7 @@ test('selected Deck exports its verified media while unrelated missing media sta
   const plan = await prepareAnkiImport(new File([output.bytes.slice().buffer], 'selected.apkg'), target, { SQL })
   expect(plan.issues.filter((issue) => issue.severity === 'error')).toEqual([])
   await plan.commit()
-  expect((await readAnkiExportSnapshot(target)).notes.map((note) => note.id)).toEqual([`anki-note:${selectedNote.id}`])
+  expect((await readAnkiExportSnapshot(target)).notes.map((note) => note.id)).toEqual(['anki-note:stable-selected-guid'])
   expect((await readAnkiExportSnapshot(target)).blobs.map((blob) => blob.digest)).toEqual(['5fd4d7e331e0d162bd059c7573860f239ea9340d569f8b037de797c7abbf1b9d'])
   expect((await readAnkiExportSnapshot(target)).cards.map((card) => card.ankiId)).toEqual([71_351])
 })
